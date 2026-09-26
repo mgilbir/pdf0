@@ -5,14 +5,14 @@ each has exactly one home:
 
 | Question | Read | Code |
 | --- | --- | --- |
-| *How do I cap what a document costs?* — the twelve `With*` options, the defaults, which entry points take them | [architecture.md](architecture.md#resource-limits) | `limits.go` |
+| *How do I cap what a document costs?* — the ten `With*` options, the defaults, which entry points take them | [architecture.md](architecture.md#resource-limits) | `limits.go` |
 | *What happens when a limit trips?* — the `limit` rule, `IsCheckerFinding`, the per-guard classification | this document | `limits_report.go` |
 | *Why is it shaped this way?* — the measurements, the rejected alternatives, which limits were deliberately left internal | [proposals/configurable-limits.md](proposals/configurable-limits.md) | — |
 
 The defaults are stated in `limits.go`, which is the source of truth; the tables
 elsewhere restate them for a reader who is already there.
 
-The two meet in one place. Eleven of the guards below are configurable, so a
+The two meet in one place. Ten of the guards below are configurable, so a
 trip may be pdf0's own ceiling or the caller's; the trip message says which
 (`limitBound`), because "you hit the cap you set" and "you hit our default" call
 for different responses.
@@ -117,7 +117,7 @@ granularity; `cancel.go` carries the design record.
 | Reached | Not reached |
 | --- | --- |
 | All PDF/A, PDF/UA, PDF/UA-2, PDF/X, PDF/VT, PDF/R and DPart checks (each installs or joins a run). | The lexer and parser (`maxTokenGap`, `maxParseDepth`): they take bytes, not a `*Document`, and threading state through them for a guard that already surfaces as a parse error would be ceremony, not reach. |
-| Read-time object-stream budget trips, via `Document.readLimits`. | `ExtractImages` / `ExtractText`: they return no finding channel. Image decode failures, budget refusals (`image-pixels`) and recovered panics surface per image in `ExtractedImage.Note`; a page whose text is left out — the content budget ran out, or a recovered panic — is a `*PageTextError` in `ExtractText`'s error, never missing text alone. |
+| Read-time object-stream budget trips, via `Document.readLimits`. | `ExtractImages` / `ExtractText`: they return no finding channel. Image decode failures, budget refusals (`image-pixels`) and recovered panics surface per image in `ExtractedImage.Note`; a page whose text is left out — the work budget ran out, or a recovered panic — is a `*PageTextError` in `ExtractText`'s error, never missing text alone. |
 | Font-program guards, forwarded from the parsed program. | `Write` / `WriteIncremental`: these return errors, which is the loud class already. |
 | Nested embedded-PDF/A validation (6.9), as `embedded-pdfa`. | `object.Equal` / `DocumentEqual`: they return a `bool`, so there is nowhere to say "too deep to tell". `maxCompareDepth` is *silently wrong by construction* (see the parsing table) and stays that way; no validator rule compares structures that deep. |
 | Cancellation of any validation run, derived in `runLimitTrips`. | `ReadContext` / `WriteContext`: loud, an error wrapping `ctx.Err()`. `ExtractTextContext` / `ExtractImagesContext`: partial result plus that error. |
@@ -151,6 +151,92 @@ replaced a *fatal* stack overflow, which is unrecoverable and so could never hav
 been caught by the `recover()` pdf0 wraps `ValidateFacturX` in; an element-count
 cap; and a work budget on the VAT breakdown sums.
 
+## The work meter: one budget for a whole run
+
+Every guard in the inventory below bounds one unit of work: one stream's
+decode, one `/W` range, one table's grid, one XMP packet. None of them bounds
+the product, and the product is what a small hostile file controls: a
+structure every element names, a function evaluated for every pixel, a chain
+walked from every referrer, ranges that overlap two thousand times. The
+2026-09-22 audit found fifteen such files (T1; C10, C17-C19, C37-C42, C50-C53,
+C79, C84), each within every per-unit bound and each running for minutes, out
+of memory, or off the end of the stack.
+
+One mechanism answers all of them: a work meter on the run (`core.Meter`, in
+`internal/core/meter.go`). Every walk over the object graph, every expansion,
+every tokenisation, every function evaluation and every CMap or ToUnicode
+lookup charges it, and a charge is also where the run's context is polled, so a
+deadline stops a run inside a check rather than between checks. Text and image
+extraction run under a run too, so they are metered and share the run's memo of
+decoded streams and parsed CMaps.
+
+When the budget is spent the charge that notices **unwinds the check in
+progress**, and every check after it is refused. The unwound check reports
+nothing — what it had found so far it found on a partial walk, which is the
+"silently wrong" class this document exists to prevent — and the run reports
+the trip once, under `limit` with the guard `work`. Extraction stops with an
+error that matches `ErrWorkLimit`: a page left out is a `*PageTextError`, and an
+image an `ExtractedImage` with `Decoded` false and a `Note`. A cancelled context
+stops a run the same way and is reported as it always was
+(`context-canceled`).
+
+The budget is `WithMaxWork`; by default it is `core.DefaultMaxWork` plus
+`core.DefaultWorkPerSourceByte` a byte of the file the document was read from,
+because real work grows with the file and amplification does not.
+`TestWorkMeterHeadroom` measures every validator and both extractors over every
+corpus the suite can see and holds each run to an eighth of its file's default;
+the measurement the defaults were set from is in `internal/core/meter.go`.
+
+A budget is only half of the answer. A bounded worst case must also be rare on
+legitimate input, or the meter turns slowness into a refusal: a file that used
+to take twenty seconds and pass now takes twenty seconds and says `limit`. The
+shape that first did so is common — pages that share their content, a template
+or a stamped letterhead, each page with its own copy of the same resources —
+and every rule that read content read it once per page. A 104 KB file of twenty
+such pages over 50 MB of content ran 21 s at PDF/A-2b and ended in a `limit`
+finding. So what is derived from content is derived once per distinct content:
+a key per stream, and per distinct sequence of streams for a `/Contents` array
+(`View.ContentBytesAndKey`, which memoises the concatenation per run); and,
+where the answer depends on the resources the content is drawn with, once per
+distinct resources *value* — `core.ResMemo` matches a resource dictionary by
+`object.Equal`, and the content interpreter's memo key interns each resource
+sub-dictionary by value (`core.DictInterner`). The five PDF/A rules that judge
+content by its tokens alone (the content-stream limits, hexadecimal strings,
+inline-image filters and entries, marked-content ActualText) share one pass per
+stream (`pdfa/content_facts.go`), over each distinct content once. That file now
+validates in about two seconds at any page count, with a verdict.
+`TestHostileSharedContentIsReadOnce` holds every validator and text extraction
+over 200 pages sharing 8 MB of content — one stream, and one array per page —
+to a small multiple of one scan of that content, and to no `limit` finding; a
+per-page rescan planted back into any of the memoised rules fails it.
+
+The per-unit guards the meter measures the same thing as were folded into it
+rather than kept alongside: the per-chain `/RoleMap` step budget
+(`WithMaxRoleMapSteps`), the per-range `/W` span (`WithMaxCIDRangeSpan`), the
+per-evaluation PostScript step budget (`WithMaxPostScriptSteps`), the content
+interpreter's execution count and interpreted-bytes bounds, and the text
+extractor's content budget. What stayed local bounds something else — memory
+(`WithMaxTableGridFills`, `WithMaxCmapWork`, the decode and object-stream
+caps) or stack (the depth guards) — and says so where it is declared. One
+work budget stayed local too: the revision diff's, in signature verification,
+which is not a run — it has no finding channel, and a spent budget is a
+signature's "could not be analysed" verdict rather than a stopped run.
+
+### Depth: one guard for every walk
+
+A walk that recurses once per level of a structure the file controls needs a
+stack frame per level, and a visited set does not help: a chain of a hundred
+thousand distinct structure elements has no cycle to find, and overflowed a 64 MB
+stack (C84). Every recursive walker over the object graph now either is
+iterative (the structure tree, the PDF/UA structure walks, the DPM values, the
+field tree, the table rows, the object-graph scan) or calls the uniform depth
+guard `View.Descend`, which stops a walk deeper than `core.MaxWalkDepth` (1024)
+and, inside a run, stops the run as a spent budget does, reported as
+`walk-depth`. `TestRecursiveWalkersAreBounded` (`internal/lint`) finds every
+recursion over object-graph types and fails for one that neither calls
+`Descend` nor compares a depth parameter; the few bounded another way are
+listed with the reason.
+
 ## The inventory
 
 Guards are grouped by subsystem. "Consumer" names the rule that reads the
@@ -161,13 +247,13 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 | Guard | File | Class before | Consumer / finding at risk | Now |
 | --- | --- | --- | --- | --- |
 | cmap work budget (`WithMaxCmapWork`) | forme's `font/fontprog.go` | **Silently wrong** | `font.TrueTypeGID` → `simpleGlyphExists` / `isNotdefGlyph`: *"embedded TrueType font does not define a glyph referenced for rendering (code N)"*, *"text showing operator references the .notdef glyph"* | Fixed. `font.Program.CmapPartial`; the glyph and .notdef rules decline for that font; trip reported as `cmap-work` (one budget, charged by both expanding subtable formats — see [fonts.md](fonts.md#why-formats-4-and-12-share-one-budget)). |
-| CID `/W` range span (`WithMaxCIDRangeSpan`) | `fonts.go` | **Silently wrong** | `checkCIDFontConsistency`: a dropped `/W` range falls back to `/DW` (default 1000) and is compared against the program's real advance → *"width information for glyphs used for rendering is inconsistent"* | Fixed. `parseCIDWidths` reports completeness; the width rule declines; trip reported as `cid-width-range`. |
+| CID `/W` range span (was `WithMaxCIDRangeSpan`) | `fonts.go` | **Silently wrong** | `checkCIDFontConsistency`: a dropped `/W` range falls back to `/DW` (default 1000) and is compared against the program's real advance → *"width information for glyphs used for rendering is inconsistent"* | Gone. `/W` is no longer expanded: its entries are resolved once into disjoint CID segments (`core.ResolveSpans`) and looked up per CID shown, so a range of any width is read whole and nothing is dropped (audit 2026-09-22 C10: the span limit bounded one range, and 2,000 of them ran out of memory). |
 | predefined CJK CMap (`predefined-cmap`) | `cmap.go`, `fonts.go`, `pdfua.go` | **Silently skipped** | `checkCIDFontConsistency`, `checkFontSubsetCompleteness`, `checkUANotdefCID`: a font whose `/Encoding` names `UniJIS-UCS2-H` and the rest has no code-to-CID mapping here, so glyph coverage, `.notdef`, `/W` consistency and `/CIDSet` completeness cannot run. | Fixed. `core.LoadCMap`, the producer, answers `ReasonUnsupported` and reports the skip as `predefined-cmap`, once per font whichever check asked (it used to be noted by each consumer, once per check). It is not a budget — nothing can be raised to make it run, which is why its message reads *data not carried* rather than *resource limit reached*. The data itself is [#269](https://github.com/mgilbir/pdf0/issues/269). An embedded CMap that builds on another (`usecmap`, `/UseCMap`) is read, with its base: a base that is itself embedded is read in full, and one whose data is not carried is opaque, so the codes left to it decode as unknown and the skip is reported when a check first meets one — not for a CMap that defines every code the page shows (audit 2026-09-22 C75). |
 | font program, CIDSet, ToUnicode over a limit | `internal/core/fontuse.go`, `fonts.go`, `pdfua.go` | Was **silently wrong** | A program or CIDSet over `WithMaxContentStreamBytes` came back as the same nil as a damaged one: *"embedded %s font program is damaged and could not be parsed"*, *"CIDFont subset FontDescriptor contains an empty CIDSet stream"*, *"FontDescriptor CIDSet does not list all CIDs used for rendering"* (audit 2026-09-22 C47). | Fixed. `LoadFontProgram`, `DecodeCIDSet` and the ToUnicode parsers return a `core.Reason`; only `ReasonMalformed` is damage or emptiness, a declined reason declines the check, and the producer reports the trip as `content-stream-size` (or whichever bound stopped it). |
 | `font.ParseCmapSubtable` nil-on-unreadable | forme's `font/fontprog.go` | Silently lossy (deliberate) | The subtable is ignored rather than read as "maps nothing". | Unchanged; this is the contract the fix above extends. |
-| ToUnicode / CMap section scanners (`bfrange` ≥ 65536, unterminated sections) | `fonts.go` | Silently lossy | Missing `toUni[cid]` *suppresses* the empty-outline rule (fail-open). | Unchanged. |
+| ToUnicode / CMap section scanners (`bfrange` ≥ 65536, unterminated sections) | `fonts.go` | Silently lossy | Missing `toUni[cid]` *suppresses* the empty-outline rule (fail-open). | Unchanged. The mappings are no longer expanded into maps: a ToUnicode CMap's entries and a CID CMap's ranges are resolved once into disjoint segments and looked up by binary search (C52, C53), charged to the work meter. |
 | `maxTextFormDepth` | `text.go` | Silently lossy | `ExtractText` only — **no validator consumes it**. | Unchanged. |
-| text content budget (`WithMaxDecodedContentBytes`) | `text.go` | Unbounded before a form was extracted each time it is drawn (audit 2026-09-22 C87) | `ExtractText` only. Every content stream tokenized — each page's, and each form's each time it is drawn, at least 64 bytes apiece — is charged against the run's content budget, which a fan-out of forms drawing forms would otherwise make exponential. | **Loud**: the page and every one after it are left out and reported as `*PageTextError`, whose message names `decoded-content-total`. |
+| text extraction work (the run's work meter, `WithMaxWork`) | `text.go` | Unbounded before a form was extracted each time it is drawn (audit 2026-09-22 C87) | `ExtractText` only. Every content stream tokenized — each page's, and each form's each time it is drawn, with a floor for entering a stream — is charged to the run's work meter, which a fan-out of forms drawing forms would otherwise make exponential. It was charged against the decoded-content budget before extraction ran under a run. | **Loud**: the page and every one after it are left out and reported as `*PageTextError`, whose message names `work`. |
 | sfnt/CFF/Type1 structural bails (`return nil`) | forme's `font/fontprog.go` | Loud | `damagedFontProgramError`: *"embedded %s font program is damaged and could not be parsed"* | Unchanged: a bail is `ReasonMalformed`, reported as a damaged program, which is the loud class. |
 
 ### Content scanning
@@ -183,8 +269,8 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 | ICC profile size (`WithMaxICCProfileBytes`) | `internal/core/color.go`, `pdfa.go`, `pdfx.go` | Was **silently lossy**, fail-open by design | `getOutputIntentCoverage` sets `hasRGB=hasCMYK=true` on an unreadable profile precisely to avoid a false positive — and nothing said the profile had not been read, so a lowered bound turned every ICC rule off with no finding (audit 2026-09-22 C109). | Fixed. `View.ICCProfileData` reports the trip as `icc-profile-size`; the consumers still fail open. It also decodes through the full filter chain now, not Flate alone. |
 | XMP packet size (`WithMaxXMPPacketBytes`), XMP nesting depth (`xmp.MaxDepth`, no knob) | `internal/core/xmp.go` (`DocumentXMPPacket`) | Was **silently lossy** | Over the cap `checkXMPProperties` read "no properties to check", and the identification scrapers read the text anyway. | Fixed (audit 2026-09-22). One model, one gate: over either bound the packet is not modelled, an `xmp-packet-size` / `xmp-depth` trip is noted (a "limit" finding), and every reader — property checks, pdfaid/pdfuaid/pdfxid/pdfvtid/fx identification, Info↔XMP — declines rather than guessing or reporting a property missing. Never a violation. Well-formedness still runs: `xmpWellFormed` is O(n) over the token stream and needs no tree. The metadata writers refuse to edit such a packet. |
 | embedded PDF/A validation (no bound of its own) | `final_rules.go` | Was **silently wrong** | `checkEmbeddedPDFA` treated *any* non-empty result from the nested validation as non-conformance, so a guard trip or a recovered panic inside the embedded document became *"an embedded PDF file is not compliant with PDF/A"* (6.9). | Fixed. `embeddedPDFACompliant` returns completeness alongside the verdict; a nested `IsCheckerFinding` declines the 6.9 finding and reports `embedded-pdfa` instead. The nested read and validation now also inherit the outer document's resolved limits rather than the defaults — the one place a hostile file could otherwise spend a whole second document's budget unconfigured. Because that makes a *lowered* ceiling a possible cause of "did not read" and "declares no level", those two exits also withhold the verdict whenever the limits in force are not the defaults, which is fail-open (a missed finding, never a manufactured one). Under the defaults nothing changes. |
-| Device-colour and executed-content seen-sets | `pdfa.go`, `content_operators.go`, `pdfx/pdfx_color.go` | Silently lossy | A second visit can only add usage, so dropping it hides findings. | Device colour and font usage: replaced by the content interpreter's memo (`internal/core/interp.go`), keyed by (stream, resources, inherited graphics state), so a second visit in a different state is executed, not dropped; a result computed while a caller was still in progress (a cycle) is not memoised. `content_operators.go`: unchanged. |
-| content interpreter work (`maxExecDepth` 64, `maxExecs` 2²⁰, 4× `WithMaxDecodedContentBytes` interpreted) | `internal/core/interp.go` | Loud | Device-colour and font-usage rules over content not executed. | Reported as `content-state-work`. The q/Q stack is capped at 256 entries with deeper pushes counted, so it costs a counter rather than memory. |
+| Device-colour and executed-content seen-sets | `pdfa.go`, `content_operators.go`, `pdfx/pdfx_color.go` | Silently lossy | A second visit can only add usage, so dropping it hides findings. | Device colour and font usage: replaced by the content interpreter's memo (`internal/core/interp.go`), keyed by (stream, resources, inherited graphics state), so a second visit in a different state is executed, not dropped; a result computed while a caller was still in progress (a cycle) is not memoised. The resources in the key are interned by value, so pages that each write their own copy of the same `/Font` dictionary share an entry. `content_operators.go`: the containers walked keep their seen-set; each stream's tokens are read once and judged once per distinct resources value, which reports what a scan per container reported. |
+| content interpreter depth (`maxExecDepth` 64) | `internal/core/interp.go` | Loud | Device-colour and font-usage rules over content not executed. | Reported as `content-state-work`. It bounds the stack; the interpreter's work — its executions and the bytes they read, which had bounds of their own — is charged to the run's work meter. The q/Q stack is capped at 256 entries with deeper pushes counted, so it costs a counter rather than memory. |
 | embedded CMap building on a CMap that is neither predefined nor embedded | `internal/core/cmap.go` | Was **silently skipped** | Glyph coverage, `.notdef`, widths, CIDSet for the codes left to that CMap. | Reported as `embedded-cmap` when a check first meets such a code. A CMap past its bounds is `cmap-size` (above); one with no codespace is malformed, the file's fault, and not a skip. |
 
 ### Structure and PDF/UA
@@ -192,7 +278,7 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 | Guard | File | Class before | Consumer / finding at risk | Now |
 | --- | --- | --- | --- | --- |
 | table grid fills (`WithMaxTableGridFills`) | `pdfua/pdfua_tablegrid.go` | Silently lossy (correctly designed) | Abandons the layout and discards even the defects already found, rather than reporting a half-laid-out grid. | Reported as `table-grid-fills`; `gridDefects` returns a completeness flag so "no defects" cannot be mistaken for "clean". |
-| `/RoleMap` chain steps (`WithMaxRoleMapSteps`) | `pdfua/pdfua.go`, `pdfua/pdfua_struct.go` | Silently lossy | Remaining `/RoleMap` keys are never examined: *"/RoleMap remaps standard structure type"*, *"contains a circular mapping"* go unreported. | Reported as `rolemap-work`. Type resolution (`resolveRoleMapChain`) shares the same budget and returns a completeness flag; on a trip `checkUARoleMap` declines rather than reporting *"neither standard nor mapped"*. |
+| `/RoleMap` chain steps (was `WithMaxRoleMapSteps`) | `internal/core/structtree.go`, `pdfua/pdfua.go` | Silently lossy | Remaining `/RoleMap` keys were never examined: *"/RoleMap remaps standard structure type"*, *"contains a circular mapping"* went unreported. | Gone. Each type is resolved once per run (the answer is memoised for every type a chain crosses), so the whole role map costs one walk, charged to the work meter (audit 2026-09-22 C41: the per-chain budget let 2,000 elements each walk a 100,000-long chain). A run that cannot afford it is stopped, not handed a partial answer. |
 | `maxFieldTreeDepth` (64) | `signatures.go`, `sign.go` | Silently lossy | Truncates a reported `sign.Result.Field` name; never flips `Valid` or `CoversWholeDocument`. | Unchanged. |
 | `maxPageTreeDepth` (64) | `sign.go` | Loud | `signingTarget` refuses. | Unchanged. |
 | Struct-tree / table-row seen-sets | `pdfua/pdfua_struct.go`, `pdfua/pdfua_tablegrid.go` | Silently lossy on well-formed input | An element reachable twice is not a valid structure tree, so these only bite malformed files. | Unchanged (see *Left deliberately*). |
@@ -228,13 +314,14 @@ allocation sized from an image's geometry; a refusal's `Note` names the
 `image-pixels` guard. The JBIG2 package constants are ceilings the budget
 cannot raise, not separate knobs. See [images.md](images.md#resource-budgets).
 
-The type-4 budget is in this list because of who calls it, not where it lives.
-The type-4 (PostScript calculator) work budget — `WithMaxPostScriptSteps`, the
-eleventh configurable limit — bounds `psExec`, and `evalFunction` is reached only
-from `images/imagecolor.go`'s tint-transform rendering. The PDF/A tint-transform rule
-compares function *objects* (`object.Equal`), it never evaluates one, so a trip costs
-pixel fidelity and no finding. This is why the budget reports no trip: there is
-no rule to decline.
+The type-4 (PostScript calculator) work is in this list because of who calls it,
+not where it lives: `evalFunction` is reached only from
+`images/imagecolor.go`'s tint-transform rendering, and the PDF/A tint-transform
+rule compares function *objects* (`object.Equal`), it never evaluates one. Every
+operator executed is charged to the run's work meter; the per-evaluation budget
+it replaced (`WithMaxPostScriptSteps`) bounded one evaluation and not the image
+(audit 2026-09-22 C51). The tint is also evaluated once per distinct input, not
+once per pixel. An evaluation outside any run is still held to 2^20 operators.
 
 One exception, now fixed: `decodeGenericMMR` indexed `decodeCCITT`'s output as if
 it held every row. `decodeCCITT` stops early when its data runs out and still
@@ -260,10 +347,9 @@ Arlington `5` on 1071 conformant files, `2896` files parsed with 0 failures.
   declared the type unmapped, firing *"structure type /X is neither standard nor
   mapped in /RoleMap"* and then, because every dependent rule saw the raw type, a
   spray of 7.2 nesting findings on a conformant tree. **Fixed:**
-  `resolveRoleMapChain` follows the chain, reusing the `WithMaxRoleMapSteps`
-  budget rather than inventing a second knob, with a seen-set so a cyclic map
-  terminates. It returns a completeness flag, so a budget trip declines the
-  finding instead of manufacturing one (the rule at the top of this document).
+  `resolveRoleMapChain` follows the chain, with a seen-set so a cyclic map
+  terminates. It was bounded by the `/RoleMap` step budget then; it is now
+  memoised per run and charged to the work meter (above).
 - **forme's `font/fontprog.go`'s Type 1 CharStrings loop broke on
   `strings.Contains(name, "end")`** after a *successful* glyph parse, truncating
   the glyph list at the first font defining `endash` (or

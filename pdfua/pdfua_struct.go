@@ -75,6 +75,7 @@ func walkStructElems(d core.View, cat *object.Dictionary, fn func(elem *object.D
 func checkUAStructNesting(d core.View, cat *object.Dictionary) []Violation {
 	nodes := structTree(d, cat)
 	var v []Violation
+	disallowed := map[nestingKey][]object.Name{}
 	// inTree[i]: node i and all its ancestors are structure elements.
 	inTree := make([]bool, len(nodes))
 	for i, n := range nodes {
@@ -93,16 +94,37 @@ func checkUAStructNesting(d core.View, cat *object.Dictionary) []Violation {
 			v = append(v, Violation{Clause: "7.2", Message: "<" + string(t) + "> element must be contained in a " + orList(parents) + " element, not <" + string(parentType) + ">", Object: 0})
 		}
 
-		// Child constraint: check each structure-element child's type.
+		// Child constraint: check each structure-element child's type. The
+		// disallowed types are found once per (type, child-type slice) —
+		// elements sharing one /K array share the slice (C18) — and each is
+		// reported once per element, not once per child.
 		if allowed, ok := uaAllowedChildren[t]; ok {
-			for _, ct := range n.ChildTypes {
-				if !allowed[ct] {
-					v = append(v, Violation{Clause: "7.2", Message: "<" + string(t) + "> element must not contain a <" + string(ct) + "> element", Object: 0})
+			k := nestingKey{t, n.ChildTypesKey()}
+			bad, known := disallowed[k]
+			if !known || k.kids == nil {
+				d.Charge(len(n.ChildTypes))
+				bad = nil
+				seen := map[object.Name]bool{}
+				for _, ct := range n.ChildTypes {
+					if !allowed[ct] && !seen[ct] {
+						seen[ct] = true
+						bad = append(bad, ct)
+					}
 				}
+				disallowed[k] = bad
+			}
+			for _, ct := range bad {
+				v = append(v, Violation{Clause: "7.2", Message: "<" + string(t) + "> element must not contain a <" + string(ct) + "> element", Object: 0})
 			}
 		}
 	}
 	return v
+}
+
+// nestingKey is a structure type and the child types it is checked against.
+type nestingKey struct {
+	t    object.Name
+	kids *object.Name
 }
 
 // checkUATableListStructure enforces the well-formedness rules for Table, List
@@ -110,26 +132,46 @@ func checkUAStructNesting(d core.View, cat *object.Dictionary) []Violation {
 // typing (UA profile / ISO 32000-1 14.8.4.3): at most one Caption/THead/TFoot,
 // a THead or TFoot requires a TBody, and a Caption must sit in the permitted
 // position (first-or-last for a Table, first for a List or TOC).
+//
+// Elements that share one /K array share its ChildTypes slice, and the
+// verdict on it is computed once per (type, slice) — reading the whole slice
+// once per element was quadratic in a file whose elements all name one array
+// (audit 2026-09-22 C18).
 func checkUATableListStructure(d core.View, cat *object.Dictionary) []Violation {
 	var v []Violation
+	memo := map[nestingKey][]Violation{}
 	for _, n := range structTree(d, cat) {
 		kids := n.ChildTypes
 		switch n.StdType {
+		case "Table", "L", "TOC":
+		default:
+			continue
+		}
+		k := nestingKey{n.StdType, n.ChildTypesKey()}
+		if found, ok := memo[k]; ok && k.kids != nil {
+			v = append(v, found...)
+			continue
+		}
+		d.Charge(len(kids))
+		var found []Violation
+		switch n.StdType {
 		case "Table":
-			v = append(v, tableStructErrors(kids)...)
+			found = tableStructErrors(kids)
 		case "L":
 			if c := countName(kids, "Caption"); c > 1 {
-				v = append(v, Violation{Clause: "7.2", Message: "list (L) has more than one Caption", Object: 0})
+				found = append(found, Violation{Clause: "7.2", Message: "list (L) has more than one Caption", Object: 0})
 			} else if c == 1 && firstIndexName(kids, "Caption") != 0 {
-				v = append(v, Violation{Clause: "7.2", Message: "list (L) Caption must be the first child", Object: 0})
+				found = append(found, Violation{Clause: "7.2", Message: "list (L) Caption must be the first child", Object: 0})
 			}
 		case "TOC":
 			if c := countName(kids, "Caption"); c > 1 {
-				v = append(v, Violation{Clause: "7.2", Message: "table of contents (TOC) has more than one Caption", Object: 0})
+				found = append(found, Violation{Clause: "7.2", Message: "table of contents (TOC) has more than one Caption", Object: 0})
 			} else if c == 1 && firstIndexName(kids, "Caption") != 0 {
-				v = append(v, Violation{Clause: "7.2", Message: "table of contents (TOC) Caption must be the first child", Object: 0})
+				found = append(found, Violation{Clause: "7.2", Message: "table of contents (TOC) Caption must be the first child", Object: 0})
 			}
 		}
+		memo[k] = found
+		v = append(v, found...)
 	}
 	return v
 }

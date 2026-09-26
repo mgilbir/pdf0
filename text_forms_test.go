@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/hostile"
 	"github.com/mgilbir/pdf0/object"
 )
@@ -64,8 +65,9 @@ func fanOut(n int) []byte {
 
 // Once forms extract every time they are drawn, a fan-out is exponential:
 // thirty forms that each draw the next twice ask for 2^30 extractions. The
-// run's content budget is what bounds it, and running out is an error naming
-// the page, with the budget's own message.
+// run's work budget is what bounds it (WithMaxWork; it was the content budget
+// before extraction ran under a run's work meter), and running out is an error
+// naming the page, with the budget's own message.
 func TestExtractTextFormFanOutIsBudgeted(t *testing.T) {
 	check := func(t *testing.T, opts ...Option) {
 		pdf := fanOut(30)
@@ -77,8 +79,8 @@ func TestExtractTextFormFanOutIsBudgeted(t *testing.T) {
 		text, err := doc.ExtractText()
 		t.Logf("refused after %v", time.Since(start))
 		var pe *PageTextError
-		if !errors.As(err, &pe) || pe.Page != 1 || !strings.Contains(pe.Error(), "resource limit reached (decoded-content-total)") {
-			t.Fatalf("err = %v, want page 1 left out at the content budget", err)
+		if !errors.As(err, &pe) || pe.Page != 1 || !strings.Contains(pe.Error(), "resource limit reached (work)") || !errors.Is(err, core.ErrWorkLimit) {
+			t.Fatalf("err = %v, want page 1 left out at the work budget", err)
 		}
 		if text != "" {
 			t.Errorf("the page's partial text was returned: %d bytes", len(text))
@@ -86,13 +88,13 @@ func TestExtractTextFormFanOutIsBudgeted(t *testing.T) {
 	}
 	t.Run("a configured budget", func(t *testing.T) {
 		hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: 30 * time.Second}, func(t *testing.T) {
-			check(t, WithMaxDecodedContentBytes(1<<20))
+			check(t, WithMaxWork(1<<24))
 		})
 	})
-	// About five seconds: the default budget is 512 MB of content, which is
-	// what tokenizing takes that long, and each of the eleven-byte streams is
-	// charged at minContentCharge. Charged at their length, the same fan-out
-	// ran for half a minute, which the timeout catches.
+	// Some seconds: each of the eleven-byte streams is charged at least
+	// minContentCharge, so the default budget for a file this small is the
+	// same bound in time as it is for tokenizing. Charged at their length, the
+	// same fan-out ran for half a minute, which the timeout catches.
 	t.Run("the default budget", func(t *testing.T) {
 		hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: 20 * time.Second}, func(t *testing.T) {
 			check(t)

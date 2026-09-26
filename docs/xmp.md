@@ -276,8 +276,10 @@ touch one.
   packet there is 1,639,865 bytes — 25x the corpus maximum, and 78% of the old
   cap. It is 4 MiB rather than 8 because building the old tree was quadratic
   (a 14 MB packet took ~37 s, from string concatenation and GC over the live
-  tree); the model's construction is linear, but the bound stays until it has
-  been measured again.
+  tree). The model's construction is linear — measured again for audit
+  2026-09-22 C40: a 4 MiB packet of 520,000 comment-interrupted text runs builds
+  in 0.4 s — so what the bound limits now is memory: that packet holds some
+  300 MB of nodes while it is read.
 - **Streaming well-formedness.** `xmpWellFormed` answers "well-formed?" and
   "has a properly namespaced `rdf:RDF`?" from the token stream with no tree, so
   it stays O(n) and those two rules still apply to a packet too big to analyse

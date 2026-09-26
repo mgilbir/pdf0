@@ -95,10 +95,10 @@ func checkContentStreamOperators(doc core.View, level Level) []Violation {
 	// Only EXECUTED content is validated: an operator inside a form XObject
 	// that no content stream invokes does not appear on the page (the
 	// corpus passes an UnknownOperator in an uninvoked form).
-	seenContainer := map[*object.Dictionary]bool{}
+	w := &contentWalk{containers: map[*object.Dictionary]bool{}, facts: map[*object.Stream]*contentTokenFacts{}}
 	for _, page := range doc.Pages(catalog.Get("Pages")) {
 		data, key, _ := doc.ContentBytesAndKey(page.Dict.Get("Contents")) // reason: presence-only; the producer recorded any declined trip
-		walkExecutedContent(doc, page.Dict, data, key, page.ObjNum, seenContainer, add)
+		walkExecutedContent(doc, page.Dict, data, key, page.ObjNum, w, add, 0)
 	}
 
 	// Annotation appearance streams (their /AP /N) are executed content too:
@@ -106,7 +106,7 @@ func checkContentStreamOperators(doc core.View, level Level) []Violation {
 	// there (ISO 19005-1 6.2.10; Isartor 6.2.10-t01-fail-c).
 	for _, ap := range collectAppearanceStreams(doc) {
 		if data, _ := doc.Content(ap.stream); data != nil { // reason: presence-only; the producer recorded any declined trip
-			checkContentTokens(data, doc.ResolveDict(ap.stream.Dict.Get("Resources")), doc, ap.objNum, add)
+			w.tokens(doc, data, ap.stream, doc.ResolveDict(ap.stream.Dict.Get("Resources")), ap.objNum, add)
 		}
 	}
 
@@ -126,7 +126,7 @@ func checkContentStreamOperators(doc core.View, level Level) []Violation {
 		for cpVal := range cps.Values() {
 			if cp, ok := doc.Resolve(cpVal).(*object.Stream); ok {
 				if cpData, _ := doc.Content(cp); cpData != nil { // reason: presence-only; the producer recorded any declined trip
-					checkContentTokens(cpData, res, doc, u.ObjNum, add)
+					w.tokens(doc, cpData, cp, res, u.ObjNum, add)
 				}
 			}
 		}
@@ -169,19 +169,69 @@ func collectAppearanceStreams(doc core.View) []appearanceStream {
 	return out
 }
 
+// contentWalk is the state of one checkContentStreamOperators run: the
+// containers already walked, what each stream's tokens say (contentTokenFacts),
+// and what each (stream, resources) pair was found to lack.
+//
+// A scan's findings depend on nothing but the stream's tokens and the
+// resource dictionary its names resolve in, and every finding is reported
+// once per message. So a stream is tokenised once, whoever draws it, and what
+// its names need of a resource dictionary is judged once per distinct
+// dictionary. It used to be tokenised once per referrer: one 16 MB appearance
+// stream named by a hundred annotations was tokenised a hundred times,
+// eighteen seconds for a 37 KB file (audit 2026-09-22 C39), and pages sharing
+// a content stream each with its own copy of the same resources were
+// tokenised once per page.
+type contentWalk struct {
+	containers map[*object.Dictionary]bool
+	facts      map[*object.Stream]*contentTokenFacts
+	judged     core.ResMemo[[]string]
+}
+
+// tokens reports a content stream's undefined operators, custom rendering
+// intents and unresolved named resource references for (data, res), tokenising
+// each stream once (key; a nil key is tokenised every time) and judging its
+// resource references once per distinct resource dictionary.
+func (w *contentWalk) tokens(doc core.View, data []byte, key *object.Stream, res *object.Dictionary, objNum int, add func(string, int)) {
+	if msgs, ok := w.judged.Get(doc, key, res); ok {
+		for _, m := range msgs {
+			add(m, objNum)
+		}
+		return
+	}
+	f := w.facts[key]
+	if f == nil {
+		f = scanContentTokens(doc.Cancel, data)
+		if key != nil && !doc.Cancel.Stopped() {
+			w.facts[key] = f
+		}
+	}
+	msgs := f.judge(doc, res)
+	for _, m := range msgs {
+		add(m, objNum)
+	}
+	if !doc.Cancel.Stopped() {
+		w.judged.Put(key, res, msgs)
+	}
+}
+
 // walkExecutedContent validates a content stream and recurses into the form
 // XObjects and tiling patterns it actually invokes.
-func walkExecutedContent(doc core.View, container *object.Dictionary, data []byte, key *object.Stream, objNum int, seen map[*object.Dictionary]bool, add func(string, int)) {
+func walkExecutedContent(doc core.View, container *object.Dictionary, data []byte, key *object.Stream, objNum int, w *contentWalk, add func(string, int), depth int) {
+	if !doc.Descend(depth) {
+		return
+	}
+	doc.Charge(1)
 	// One invocation scans one content stream and recurses into the forms and
 	// patterns it draws, so this is the per-stream cancellation boundary of the
 	// executed-content model (cancel.go).
-	if container == nil || seen[container] || doc.Cancel.Stopped() {
+	if container == nil || w.containers[container] || doc.Cancel.Stopped() {
 		return
 	}
-	seen[container] = true
+	w.containers[container] = true
 	res := doc.Resources(container)
 	if data != nil {
-		checkContentTokens(data, res, doc, objNum, add)
+		w.tokens(doc, data, key, res, objNum, add)
 	}
 	if res == nil {
 		return
@@ -207,7 +257,7 @@ func walkExecutedContent(doc core.View, container *object.Dictionary, data []byt
 						add("a drawn form XObject dictionary contains a /PS entry", xnum)
 					}
 					data, _ := doc.Content(s) // reason: presence-only; the producer recorded any declined trip
-					walkExecutedContent(doc, &s.Dict, data, s, xnum, seen, add)
+					walkExecutedContent(doc, &s.Dict, data, s, xnum, w, add, depth+1)
 				}
 			}
 		}
@@ -223,17 +273,70 @@ func walkExecutedContent(doc core.View, container *object.Dictionary, data []byt
 			}
 			if s, ok := doc.Resolve(pref).(*object.Stream); ok {
 				data, _ := doc.Content(s) // reason: presence-only; the producer recorded any declined trip
-				walkExecutedContent(doc, &s.Dict, data, s, resolveObjNum(doc, pref), seen, add)
+				walkExecutedContent(doc, &s.Dict, data, s, resolveObjNum(doc, pref), w, add, depth+1)
 			}
 		}
 	}
 }
 
-// checkContentTokens scans one content stream for undefined operators, custom
-// rendering intents, and unresolved named resource references.
-func checkContentTokens(data []byte, res *object.Dictionary, doc core.View, objNum int, add func(string, int)) {
+// contentTokenFacts is what one content stream's tokens say for rule 6.2.2,
+// in the order the stream says it: a finding that holds whatever the
+// resources (an undefined operator, a non-standard rendering intent), or a
+// named resource the stream uses, whose presence depends on the resources it
+// is drawn with. Each distinct fact is kept once, at its first occurrence.
+type contentTokenFacts struct {
+	events []contentTokenEvent
+}
+
+type contentTokenEvent struct {
+	msg      string // a finding; empty for a resource reference
+	category string // the resource category a reference names (XObject, Font, …)
+	name     string
+}
+
+// resourceAbsentMsg is the finding for a named resource absent from its
+// category's dictionary.
+var resourceAbsentMsg = map[string]string{
+	"XObject":    "content stream references an XObject that is absent from the resource dictionary",
+	"Shading":    "content stream references a shading that is absent from the resource dictionary",
+	"ExtGState":  "content stream references an ExtGState that is absent from the resource dictionary",
+	"ColorSpace": "content stream references a colour space that is absent from the resource dictionary",
+	"Font":       "content stream references a font that is absent from the resource dictionary",
+}
+
+// judge is the findings of the stream drawn with res, in the order a scan
+// would have reported them.
+func (f *contentTokenFacts) judge(doc core.View, res *object.Dictionary) []string {
+	var out []string
+	for _, e := range f.events {
+		doc.Charge(1)
+		if e.msg != "" {
+			out = append(out, e.msg)
+		} else if !namedResourcePresent(doc, res, e.category, e.name) {
+			out = append(out, resourceAbsentMsg[e.category])
+		}
+	}
+	return out
+}
+
+// scanContentTokens tokenises one content stream into its contentTokenFacts.
+func scanContentTokens(cancel core.Canceler, data []byte) *contentTokenFacts {
+	f := &contentTokenFacts{}
+	seen := map[contentTokenEvent]bool{}
+	add := func(e contentTokenEvent) {
+		if !seen[e] {
+			seen[e] = true
+			f.events = append(f.events, e)
+		}
+	}
+	ref := func(category, name string) {
+		// No name captured: nothing to look up, and nothing to flag.
+		if name != "" {
+			add(contentTokenEvent{category: category, name: name})
+		}
+	}
 	var lastName string
-	lx := core.NewContentLexer(doc.Cancel, data)
+	lx := core.NewContentLexer(cancel, data)
 	var t core.ContentTok
 	for lx.Next(&t) {
 		switch t.Kind {
@@ -254,38 +357,31 @@ func checkContentTokens(data []byte, res *object.Dictionary, doc core.View, objN
 			continue
 		}
 		if !contentOperators[s] {
-			add(fmt.Sprintf("content stream contains an operator %q not defined in ISO 32000", s), objNum)
+			add(contentTokenEvent{msg: fmt.Sprintf("content stream contains an operator %q not defined in ISO 32000", s)})
 			continue
 		}
 		switch s {
 		case "ri":
 			if lastName != "" && !standardRenderingIntents[lastName] {
-				add(fmt.Sprintf("rendering intent operator (ri) uses a non-standard value /%s", lastName), objNum)
+				add(contentTokenEvent{msg: fmt.Sprintf("rendering intent operator (ri) uses a non-standard value /%s", lastName)})
 			}
 		case "Do":
-			if !namedResourcePresent(doc, res, "XObject", lastName) {
-				add("content stream references an XObject that is absent from the resource dictionary", objNum)
-			}
+			ref("XObject", lastName)
 		case "sh":
-			if !namedResourcePresent(doc, res, "Shading", lastName) {
-				add("content stream references a shading that is absent from the resource dictionary", objNum)
-			}
+			ref("Shading", lastName)
 		case "gs":
-			if !namedResourcePresent(doc, res, "ExtGState", lastName) {
-				add("content stream references an ExtGState that is absent from the resource dictionary", objNum)
-			}
+			ref("ExtGState", lastName)
 		case "cs", "CS":
 			// The colour-space operand is either a built-in device space or
 			// a name defined in the Resources /ColorSpace dictionary.
-			if !builtinColorSpaceName[lastName] && !namedResourcePresent(doc, res, "ColorSpace", lastName) {
-				add("content stream references a colour space that is absent from the resource dictionary", objNum)
+			if !builtinColorSpaceName[lastName] {
+				ref("ColorSpace", lastName)
 			}
 		case "Tf":
-			if !namedResourcePresent(doc, res, "Font", lastName) {
-				add("content stream references a font that is absent from the resource dictionary", objNum)
-			}
+			ref("Font", lastName)
 		}
 	}
+	return f
 }
 
 // isContentOperand reports whether a content token is an operand (number,
@@ -350,17 +446,13 @@ func checkContentStreamLimits(doc core.View, level Level, lim implLimits, errs *
 	add := func(msg string, obj int) {
 		found.add(Violation{Rule: lim.rule, Level: level, Message: msg, Object: obj})
 	}
-	for num, data := range collectContentStreamData(doc) {
-		lx := core.NewContentLexer(doc.Cancel, data)
-		var t core.ContentTok
-		for lx.Next(&t) {
-			switch t.Kind {
-			case core.ContentNumber:
-				checkContentNumberLimit(string(t.Raw), lim, num, add)
-			case core.ContentString, core.ContentHexString:
-				if v := t.Bytes(); len(v) > lim.stringLen {
-					add(fmt.Sprintf("a content-stream string of %d bytes exceeds the maximum length %d", len(v), lim.stringLen), num)
-				}
+	for num, f := range contentBytesFactsOf(doc) {
+		for _, s := range f.bigNumbers {
+			checkContentNumberLimit(s, lim, num, add)
+		}
+		for _, n := range f.longStrings {
+			if n > lim.stringLen {
+				add(fmt.Sprintf("a content-stream string of %d bytes exceeds the maximum length %d", n, lim.stringLen), num)
 			}
 		}
 	}
@@ -437,7 +529,7 @@ func checkICCProfileIdentity(doc core.View, level Level) []Violation {
 		}
 		data, key, _ := doc.ContentBytesAndKey(page.Dict.Get("Contents")) // reason: presence-only; the producer recorded any declined trip
 		blend := groupBlendProfile(doc, page.Dict)
-		walkICCIdentity(doc, page.Dict, data, key, page.ObjNum, oiProfile, blend, seenC, add)
+		walkICCIdentity(doc, page.Dict, data, key, page.ObjNum, oiProfile, blend, seenC, add, 0)
 	}
 	return errs
 }
@@ -463,7 +555,11 @@ func pdfaOutputIntentProfile(doc core.View, container *object.Dictionary) *objec
 	return nil
 }
 
-func walkICCIdentity(doc core.View, container *object.Dictionary, data []byte, key *object.Stream, objNum int, oi, blend *object.Stream, seen map[*object.Dictionary]bool, add func(string, int)) {
+func walkICCIdentity(doc core.View, container *object.Dictionary, data []byte, key *object.Stream, objNum int, oi, blend *object.Stream, seen map[*object.Dictionary]bool, add func(string, int), depth int) {
+	if !doc.Descend(depth) {
+		return
+	}
+	doc.Charge(1)
 	if container == nil || seen[container] || data == nil {
 		return
 	}
@@ -472,7 +568,7 @@ func walkICCIdentity(doc core.View, container *object.Dictionary, data []byte, k
 	if res == nil {
 		return
 	}
-	usage := scanContentColorUsage(doc.Cancel, data)
+	usage := contentColorUsageOf(doc, data, key)
 	csDict := doc.ResolveDict(res.Get("ColorSpace"))
 	checkName := func(name string) {
 		if csDict == nil {
@@ -516,7 +612,7 @@ func walkICCIdentity(doc core.View, container *object.Dictionary, data []byte, k
 				childBlend = gp
 			}
 			data, _ := doc.Content(s) // reason: presence-only; the producer recorded any declined trip
-			walkICCIdentity(doc, &s.Dict, data, s, resolveObjNum(doc, xref), oi, childBlend, seen, add)
+			walkICCIdentity(doc, &s.Dict, data, s, resolveObjNum(doc, xref), oi, childBlend, seen, add, depth+1)
 		}
 	}
 }

@@ -61,14 +61,16 @@ so a `/K` pointing back at an ancestor terminates —
 custom types (`MyPara → Para → P`), so both users of the map follow chains rather
 than a single hop. `checkUARoleMapIntegrity` walks each key's chain to detect a
 cycle; `core.ResolveStructType` walks it to resolve a type, across namespaces.
-Both are bounded by a seen-set, so a cyclic map terminates, and by
-`WithMaxRoleMapSteps` (2^20 steps) — `checkUARoleMapIntegrity` capping its
-*total* work across keys and the resolver capping one chain — since an
-adversarial role map was an O(N³) CPU sink before dictionaries were indexed
-(audit C20). The resolver also reports whether it ran to completion: on a
-budget trip the mapping is unknown, so `checkUARoleMap` declines to report
-*"neither standard nor mapped"* rather than manufacturing a finding from a
-truncated walk
+Both are bounded by a seen-set, so a cyclic map terminates, and both answer
+each type once: a role map is a function, so every type a walk crosses shares
+the walk's answer, and the answers are memoised — per run for the resolution
+(for a chain in the default namespace; a namespaced type's answer is memoised
+for the type itself), per check for the cycle test. The whole map costs
+O(keys), charged to the run's work meter (audit 2026-09-22 C41: a per-chain
+step budget let 2,000 elements each walk a 100,000-long chain, for ninety
+seconds, without ever tripping). A run whose budget runs out while a chain is
+followed is stopped, and the check unwound, so `checkUARoleMap` never reports
+*"neither standard nor mapped"* from a truncated walk
 (`TestRoleMapChainResolves`, `TestRoleMapChainTerminates`,
 `TestRoleMapChainBudgetDeclines`). **Mutation:** `validatePDFUA` installs the cache on a
 **shallow copy** of the `Document`, so the caller's document is never touched
@@ -209,9 +211,11 @@ rows × columns area, so a genuinely large sparse table is unaffected while a ce
 claiming a two-billion-column span trips the budget and the table is skipped
 rather than laid out — and the trip is reported, as `table-grid-fills` under the
 reserved clause `limit`, so "no grid defects" cannot be read as "clean" when the
-grid was never built ([limits.md](limits.md)). The `/RoleMap` step budget
-(`rolemap-work`) and a cancelled `ValidatePDFUAContext` run report through the
-same clause. `TestGridDefectsSpanBomb` throws four shapes at it (huge
+grid was never built ([limits.md](limits.md)). Tables that share one `/K`
+array are laid out once, and the slots every layout fills are charged to the
+run's work meter, so many tables each near the per-table bound still cost the
+run what they cost. The work meter (`work`) and a cancelled
+`ValidatePDFUAContext` run report through the same clause. `TestGridDefectsSpanBomb` throws four shapes at it (huge
 ColSpan, huge RowSpan, near-int-max spans that must not overflow the budget
 arithmetic, and many moderate cells that cumulatively blow it) and requires a
 return within 25 s. `TestGridDefectsSparseHuge` builds 60 000 × 30 000 and

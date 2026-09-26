@@ -129,8 +129,11 @@ func validatePDFABudget(cancel core.Canceler, doc *Document, level pdfa.Level, b
 	// goroutines and at several levels at once — without a data race.
 	//
 	// This is the boundary: everything below reads a view.
-	runDoc := *doc // dictcopy: a shallow per-run copy; it shares Objects and Trailer by design and the validators never write either
-	runDoc.valCache = newValidationCache(cancel)
+	//
+	// A Document that already carries a run (only ever an internal one: the
+	// cache lives on these shallow copies, never on a caller's Document) joins
+	// it, as beginRunCancel says.
+	runDoc := beginRunCancel(doc, cancel)
 	v := runDoc.view()
 
 	// The target profile. LevelDeclared becomes the level the document
@@ -149,13 +152,16 @@ func validatePDFABudget(cancel core.Canceler, doc *Document, level pdfa.Level, b
 	}
 	pdfaSetEmbeddedChecker(v, embeddedPDFAChecker(budget))
 
-	errs := pdfaValidateView(v, target)
+	// The checks each stop at their own boundary when the run's work meter
+	// ends the run; Contain is the boundary for the work done between them.
+	var errs []pdfa.Violation
+	core.Contain(func() { errs = pdfaValidateView(v, target) })
 
 	// Any resource guard that tripped during the run (or while the file was
 	// read) is reported under the "limit" rule: the checks that depended on the
 	// truncated result declined to assert, so the result is "unknown", not
 	// "conformant". Read-time trips live on the Document, so this is here.
-	errs = append(errs, limitPDFAViolations(&runDoc, target)...)
+	errs = append(errs, limitPDFAViolations(runDoc, target)...)
 	finding.Sort(errs)
 	return errs
 }

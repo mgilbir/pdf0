@@ -91,10 +91,17 @@ func (e Violation) Error() string {
 // other validators' equivalents also use: "internal" is a reserved identifier
 // naming the checker rather than the document (IsCheckerFinding), so every
 // boundary in the package has to spell it the same way.
+//
+// It is also where the run's work meter unwinds to (core.Meter): a check the
+// meter stopped reports nothing, because what it had found so far was found
+// on a partial walk, and the trip that stopped it is reported for the run.
 func runCheck(doc core.View, level Level, check func(core.View, Level) []Violation) (out []Violation) {
 	defer func() {
 		if r := recover(); r != nil {
-			out = []Violation{{Rule: finding.InternalRule, Level: level, Message: finding.InternalMessage(r)}}
+			out = nil
+			if !core.IsAbort(r) {
+				out = []Violation{{Rule: finding.InternalRule, Level: level, Message: finding.InternalMessage(r)}}
+			}
 		}
 	}()
 	return check(doc, level)
@@ -107,7 +114,10 @@ func runCheck(doc core.View, level Level, check func(core.View, Level) []Violati
 func runByteCheck(f *core.FileRecord, level Level, check func(*core.FileRecord, Level) []Violation) (out []Violation) {
 	defer func() {
 		if r := recover(); r != nil {
-			out = []Violation{{Rule: finding.InternalRule, Level: level, Message: finding.InternalMessage(r)}}
+			out = nil
+			if !core.IsAbort(r) {
+				out = []Violation{{Rule: finding.InternalRule, Level: level, Message: finding.InternalMessage(r)}}
+			}
 		}
 	}()
 	return check(f, level)
@@ -1362,11 +1372,15 @@ func checkOneFontEmbedded(doc core.View, fontDict *object.Dictionary, objNum int
 // -2"... (audit 2026-09-22 C138).
 func collectFonts(doc core.View, pageTreeRef object.Object) map[*object.Dictionary]int {
 	fonts := make(map[*object.Dictionary]int)
-	collectFontsRecursive(doc, pageTreeRef, fonts, make(map[int]bool))
+	collectFontsRecursive(doc, pageTreeRef, fonts, make(map[int]bool), 0)
 	return fonts
 }
 
-func collectFontsRecursive(doc core.View, ref object.Object, fonts map[*object.Dictionary]int, seen map[int]bool) {
+func collectFontsRecursive(doc core.View, ref object.Object, fonts map[*object.Dictionary]int, seen map[int]bool, depth int) {
+	if !doc.Descend(depth) {
+		return
+	}
+	doc.Charge(1)
 	if r, ok := ref.(object.IndirectRef); ok {
 		if seen[r.Number] {
 			return // cycle in the page tree
@@ -1384,7 +1398,7 @@ func collectFontsRecursive(doc core.View, ref object.Object, fonts map[*object.D
 		kidsObj := doc.Resolve(node.Get("Kids"))
 		if kids, ok := kidsObj.(object.Array); ok {
 			for _, kid := range kids {
-				collectFontsRecursive(doc, kid, fonts, seen)
+				collectFontsRecursive(doc, kid, fonts, seen, depth+1)
 			}
 		}
 		collectFontsFromResources(doc, node, fonts)
@@ -1895,11 +1909,12 @@ func checkNeedAppearances(doc core.View, level Level) []Violation {
 
 // --- Action checks (6.6) ---
 
-// Forbidden action types by level per ISO 19005.
-// Rule 6.6.1-1.
-func isForbiddenAction(s object.Name, level Level) bool {
-	// Universally forbidden across all PDF/A levels:
-	universallyForbidden := map[object.Name]bool{
+// Forbidden action types by level per ISO 19005, rule 6.6.1-1. The tables are
+// package variables: building them on every call was about a quarter of the
+// CPU of a document with many actions (audit 2026-09-22 C37).
+var (
+	// Universally forbidden across all PDF/A levels.
+	universallyForbiddenActions = map[object.Name]bool{
 		"Launch":     true,
 		"Sound":      true,
 		"Movie":      true,
@@ -1909,22 +1924,32 @@ func isForbiddenAction(s object.Name, level Level) bool {
 		"Rendition":  true,
 		"Trans":      true,
 	}
-	if universallyForbidden[s] {
+	// Additionally forbidden in parts 1-3.
+	forbiddenActions123 = map[object.Name]bool{
+		"JavaScript":  true,
+		"SetOCGState": true,
+		"GoTo3DView":  true,
+		"GoToDp":      true,
+		"SetState":    true,
+		"NOP":         true,
+	}
+	// Additionally forbidden in part 4.
+	forbiddenActions4 = map[object.Name]bool{
+		"SetOCGState": true,
+		"GoTo3DView":  true,
+		"SetState":    true,
+		"NOP":         true,
+	}
+)
+
+func isForbiddenAction(s object.Name, level Level) bool {
+	if universallyForbiddenActions[s] {
 		return true
 	}
 
 	switch level.Part() {
 	case 1, 2, 3:
-		// Additionally forbidden in parts 1-3:
-		forbidden123 := map[object.Name]bool{
-			"JavaScript":  true,
-			"SetOCGState": true,
-			"GoTo3DView":  true,
-			"GoToDp":      true,
-			"SetState":    true,
-			"NOP":         true,
-		}
-		return forbidden123[s]
+		return forbiddenActions123[s]
 	case 4:
 		// PDF/A-4e permits the 3D/multimedia navigation actions SetOCGState and
 		// GoTo3DView; plain PDF/A-4 forbids them. SetState/NOP (deprecated) stay
@@ -1932,13 +1957,7 @@ func isForbiddenAction(s object.Name, level Level) bool {
 		if level.variant() == "E" {
 			return s == "SetState" || s == "NOP"
 		}
-		forbidden4 := map[object.Name]bool{
-			"SetOCGState": true,
-			"GoTo3DView":  true,
-			"SetState":    true,
-			"NOP":         true,
-		}
-		return forbidden4[s]
+		return forbiddenActions4[s]
 	}
 	return false
 }
@@ -1971,6 +1990,7 @@ func checkNoForbiddenActions(doc core.View, level Level) []Violation {
 	dicts := doc.ReachableDicts()
 	viaA := map[*object.Dictionary]bool{}
 	for _, r := range dicts {
+		doc.Charge(1)
 		if r.Stream != nil {
 			continue
 		}
@@ -1979,6 +1999,7 @@ func checkNoForbiddenActions(doc core.View, level Level) []Violation {
 		}
 	}
 	for _, r := range dicts {
+		doc.Charge(1)
 		dict, num := r.Dict, r.ObjNum
 		if r.Stream != nil || viaA[dict] {
 			continue
@@ -2010,29 +2031,41 @@ func checkActionObject(doc core.View, ref object.Object, objNum int, level Level
 // checkActionChain validates one action dictionary and follows its /Next
 // entry (a single action or an array of actions), which previous versions
 // ignored entirely — a legal action whose /Next launches JavaScript passed.
+//
+// The walk is iterative, in the order the recursive one took (a /Next array's
+// actions pushed in reverse): a /Next chain is as long as the file makes it,
+// and a 20,000-long one overflowed a 16 MB stack (audit 2026-09-22 C37). Each
+// action visited is charged to the run's work meter; seen, shared by every
+// holder in checkNoForbiddenActions, is what visits each action once.
 func checkActionChain(doc core.View, ref object.Object, objNum int, level Level, errs *[]Violation, seen map[*object.Dictionary]bool) {
-	// ref might be an action dict or an array (for OpenAction destination)
-	actionDict := doc.ResolveDict(ref)
-	if actionDict == nil || seen[actionDict] {
-		return // destination array, unresolvable, or a /Next cycle
-	}
-	seen[actionDict] = true
+	stack := []object.Object{ref}
+	for len(stack) > 0 {
+		ref := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		doc.Charge(1)
+		// ref might be an action dict or an array (for OpenAction destination)
+		actionDict := doc.ResolveDict(ref)
+		if actionDict == nil || seen[actionDict] {
+			continue // destination array, unresolvable, or a /Next cycle
+		}
+		seen[actionDict] = true
 
-	if s, ok := doc.ResolveName(actionDict.Get("S")); ok && isForbiddenAction(s, level) {
-		*errs = append(*errs, Violation{
-			Rule:    annotActionClause("forbidden", level),
-			Level:   level,
-			Message: fmt.Sprintf("forbidden action type /%s", string(s)),
-			Object:  objNum,
-		})
-	}
+		if s, ok := doc.ResolveName(actionDict.Get("S")); ok && isForbiddenAction(s, level) {
+			*errs = append(*errs, Violation{
+				Rule:    annotActionClause("forbidden", level),
+				Level:   level,
+				Message: fmt.Sprintf("forbidden action type /%s", string(s)),
+				Object:  objNum,
+			})
+		}
 
-	switch next := doc.Resolve(actionDict.Get("Next")).(type) {
-	case *object.Dictionary:
-		checkActionChain(doc, next, objNum, level, errs, seen)
-	case object.Array:
-		for _, el := range next {
-			checkActionChain(doc, el, objNum, level, errs, seen)
+		switch next := doc.Resolve(actionDict.Get("Next")).(type) {
+		case *object.Dictionary:
+			stack = append(stack, next)
+		case object.Array:
+			for i := len(next) - 1; i >= 0; i-- {
+				stack = append(stack, next[i])
+			}
 		}
 	}
 }
@@ -2282,7 +2315,7 @@ func checkNoTransparency(doc core.View, level Level) []Violation {
 	if catalog != nil {
 		seen := map[*object.Dictionary]bool{}
 		for _, page := range doc.Pages(catalog.Get("Pages")) {
-			find1bTransparencyXObjects(doc, page.Dict, level, seen, &errs)
+			find1bTransparencyXObjects(doc, page.Dict, level, seen, &errs, 0)
 		}
 	}
 
@@ -3203,7 +3236,11 @@ func transparencyGroupNotRequired(doc core.View, catalog *object.Dictionary, pag
 // soft masks and form transparency groups. Unlike resourcesUseTransparency
 // (tuned for the 2b+ blending-group question, which treats a self-contained
 // form group as not propagating), presence alone is a violation here.
-func find1bTransparencyXObjects(doc core.View, container *object.Dictionary, level Level, seen map[*object.Dictionary]bool, errs *[]Violation) {
+func find1bTransparencyXObjects(doc core.View, container *object.Dictionary, level Level, seen map[*object.Dictionary]bool, errs *[]Violation, depth int) {
+	if !doc.Descend(depth) {
+		return
+	}
+	doc.Charge(1)
 	if seen[container] {
 		return
 	}
@@ -3244,7 +3281,7 @@ func find1bTransparencyXObjects(doc core.View, container *object.Dictionary, lev
 						})
 					}
 				}
-				find1bTransparencyXObjects(doc, &stream.Dict, level, seen, errs)
+				find1bTransparencyXObjects(doc, &stream.Dict, level, seen, errs, depth+1)
 			}
 		}
 	}
@@ -3252,7 +3289,7 @@ func find1bTransparencyXObjects(doc core.View, container *object.Dictionary, lev
 	if patDict := doc.ResolveDict(res.Get("Pattern")); patDict != nil {
 		for val := range patDict.Values() {
 			if stream, ok := doc.Resolve(val).(*object.Stream); ok {
-				find1bTransparencyXObjects(doc, &stream.Dict, level, seen, errs)
+				find1bTransparencyXObjects(doc, &stream.Dict, level, seen, errs, depth+1)
 			}
 		}
 	}
@@ -3261,7 +3298,7 @@ func find1bTransparencyXObjects(doc core.View, container *object.Dictionary, lev
 		for val := range fontDict.Values() {
 			if fd := doc.ResolveDict(val); fd != nil {
 				if st, _ := doc.ResolveName(fd.Get("Subtype")); st == "Type3" {
-					find1bTransparencyXObjects(doc, fd, level, seen, errs)
+					find1bTransparencyXObjects(doc, fd, level, seen, errs, depth+1)
 				}
 			}
 		}
@@ -3815,8 +3852,18 @@ func checkPageSizeLimits(doc core.View, level Level, errs *[]Violation) {
 func checkQNestingDepth(doc core.View, level Level, rule string, errs *[]Violation) {
 	const maxQDepth = 28
 
-	report := func(data []byte, objNum int) {
-		if d := qNestingMaxDepth(doc.Cancel, data); d > maxQDepth {
+	// The depth is a property of the bytes alone, so content that several
+	// pages share is measured once; each page is still reported.
+	depths := map[*object.Stream]int{}
+	report := func(data []byte, key *object.Stream, objNum int) {
+		d, ok := depths[key]
+		if !ok || key == nil {
+			d = qNestingMaxDepth(doc.Cancel, data)
+			if key != nil {
+				depths[key] = d
+			}
+		}
+		if d > maxQDepth {
 			*errs = append(*errs, Violation{
 				Rule:    rule,
 				Level:   level,
@@ -3843,8 +3890,8 @@ func checkQNestingDepth(doc core.View, level Level, rule string, errs *[]Violati
 		if contentsRef == nil {
 			continue
 		}
-		if data, _ := core.ContentStreamData(doc, contentsRef); data != nil { // reason: presence-only; the producer recorded any declined trip
-			report(data, page.ObjNum)
+		if data, key, _ := doc.ContentBytesAndKey(contentsRef); data != nil { // reason: presence-only; the producer recorded any declined trip
+			report(data, key, page.ObjNum)
 		}
 	}
 }
@@ -4348,10 +4395,14 @@ func checkDictForSepDeviceN(doc core.View, dict *object.Dictionary, objNum int, 
 }
 
 func checkColorSpaceValue(doc core.View, csObj object.Object, objNum int, level Level, errs *[]Violation) {
-	checkColorSpaceValueSeen(doc, csObj, objNum, level, errs, make(map[int]bool))
+	checkColorSpaceValueSeen(doc, csObj, objNum, level, errs, make(map[int]bool), 0)
 }
 
-func checkColorSpaceValueSeen(doc core.View, csObj object.Object, objNum int, level Level, errs *[]Violation, seen map[int]bool) {
+func checkColorSpaceValueSeen(doc core.View, csObj object.Object, objNum int, level Level, errs *[]Violation, seen map[int]bool, depth int) {
+	if !doc.Descend(depth) {
+		return
+	}
+	doc.Charge(1)
 	if r, ok := csObj.(object.IndirectRef); ok {
 		if seen[r.Number] {
 			return // cycle through an indirect color-space reference
@@ -4376,7 +4427,7 @@ func checkColorSpaceValueSeen(doc core.View, csObj object.Object, objNum int, le
 		}
 	case "Indexed":
 		// [/Indexed base hival lookup] — validate the base space too.
-		checkColorSpaceValueSeen(doc, arr[1], objNum, level, errs, seen)
+		checkColorSpaceValueSeen(doc, arr[1], objNum, level, errs, seen, depth+1)
 	case "Separation":
 		// [/Separation name alternateSpace tintTransform]
 		if len(arr) < 4 {
@@ -4509,7 +4560,7 @@ func checkColorSpaceValueSeen(doc core.View, csObj object.Object, objNum int, le
 						}
 						// Recursively check Colorant entries
 						for cval := range colorantsDict.Values() {
-							checkColorSpaceValueSeen(doc, cval, objNum, level, errs, seen)
+							checkColorSpaceValueSeen(doc, cval, objNum, level, errs, seen, depth+1)
 						}
 					}
 				}
@@ -4612,10 +4663,14 @@ func isProcessColorant(name object.Name) bool {
 // (must be CIE-based). For 2b/3b/4, device alternates are handled by checkDeviceColorSpaces
 // which verifies OutputIntent coverage.
 func checkAlternateCS(doc core.View, altCS object.Object, objNum int, level Level, errs *[]Violation) {
-	checkAlternateCSSeen(doc, altCS, objNum, level, errs, make(map[int]bool))
+	checkAlternateCSSeen(doc, altCS, objNum, level, errs, make(map[int]bool), 0)
 }
 
-func checkAlternateCSSeen(doc core.View, altCS object.Object, objNum int, level Level, errs *[]Violation, seen map[int]bool) {
+func checkAlternateCSSeen(doc core.View, altCS object.Object, objNum int, level Level, errs *[]Violation, seen map[int]bool, depth int) {
+	if !doc.Descend(depth) {
+		return
+	}
+	doc.Charge(1)
 	if r, ok := altCS.(object.IndirectRef); ok {
 		if seen[r.Number] {
 			return // cycle through an indirect alternate color-space reference
@@ -4675,7 +4730,7 @@ func checkAlternateCSSeen(doc core.View, altCS object.Object, objNum int, level 
 			if csType == "Separation" || csType == "DeviceN" {
 				// Nested Separation/DeviceN - check their alternates too
 				if len(arr) >= 3 {
-					checkAlternateCSSeen(doc, arr[2], objNum, level, errs, seen)
+					checkAlternateCSSeen(doc, arr[2], objNum, level, errs, seen, depth+1)
 				}
 			}
 		}
@@ -4696,6 +4751,31 @@ type contentColorUsage struct {
 	strokeCS map[string]bool
 	gsNames  map[string]bool
 }
+
+// contentColorUsageOf is scanContentColorUsage(data), once per content (key,
+// from View.ContentBytesAndKey or the stream itself) per run: the usage is a
+// property of the bytes alone, and the rules that ask for it walk every
+// container, so content that many pages share was otherwise scanned once per
+// page. A nil key is scanned every time.
+func contentColorUsageOf(doc core.View, data []byte, key *object.Stream) contentColorUsage {
+	memo := core.Slot[map[*object.Stream]contentColorUsage](doc.Run, contentColorUsageSlot{})
+	if key != nil {
+		if u, ok := (*memo)[key]; ok {
+			doc.Charge(1)
+			return u
+		}
+	}
+	u := scanContentColorUsage(doc.Cancel, data)
+	if key != nil && !doc.Cancel.Stopped() {
+		if *memo == nil {
+			*memo = map[*object.Stream]contentColorUsage{}
+		}
+		(*memo)[key] = u
+	}
+	return u
+}
+
+type contentColorUsageSlot struct{}
 
 func scanContentColorUsage(cancel core.Canceler, data []byte) contentColorUsage {
 	u := contentColorUsage{

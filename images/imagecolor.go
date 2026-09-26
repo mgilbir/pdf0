@@ -517,6 +517,13 @@ func (r *csResolver) indexed(cs object.Array) (*imgColorSpace, error) {
 	}, nil
 }
 
+// The tint-transform memo's bounds: inputs of at most tintMemoArity
+// components are memoised, and at most maxTintMemo of them per colour space.
+const (
+	tintMemoArity = 8
+	maxTintMemo   = 1 << 16
+)
+
 // tint builds an imgColorSpace with ncomp tint components (one for Separation,
 // one per colorant for DeviceN) whose toRGB runs the tint-transform function
 // into the alternate space's toRGB. It refuses the space if the tint function
@@ -541,17 +548,42 @@ func (r *csResolver) tint(ncomp int, altObj, tintFn object.Object) (*imgColorSpa
 	for i := 0; i < ncomp; i++ {
 		decode[2*i], decode[2*i+1] = 0, 1
 	}
+	// The tint transform is evaluated once per distinct input, not once per
+	// pixel. An image's samples take few distinct values — an 8-bit
+	// Separation has 256 — and a type-4 program of half a million steps,
+	// evaluated for each of a million pixels, was hours of work (audit
+	// 2026-09-22 C51). The memo is bounded (maxTintMemo entries, for inputs of
+	// at most tintMemoArity components); past it, inputs are evaluated as
+	// before, each evaluation charged to the run's work meter.
+	type tintKey [tintMemoArity]float64
+	type rgb struct{ r, g, b uint8 }
+	memo := map[tintKey]rgb{}
+	eval := func(c []float64) (uint8, uint8, uint8) {
+		comps, ok := d.EvalFunction(tintFn, c)
+		if !ok || len(comps) != alt.ncomp {
+			return 0, 0, 0
+		}
+		return alt.toRGB(comps)
+	}
 	return &imgColorSpace{
 		ncomp:  ncomp,
 		tintFn: tintFn,
 		alt:    alt,
 		decode: decode,
 		toRGB: func(c []float64) (uint8, uint8, uint8) {
-			comps, ok := d.EvalFunction(tintFn, c)
-			if !ok || len(comps) != alt.ncomp {
-				return 0, 0, 0
+			if len(c) > tintMemoArity {
+				return eval(c)
 			}
-			return alt.toRGB(comps)
+			var k tintKey
+			copy(k[:], c)
+			if v, ok := memo[k]; ok {
+				return v.r, v.g, v.b
+			}
+			r, g, b := eval(c)
+			if len(memo) < maxTintMemo {
+				memo[k] = rgb{r, g, b}
+			}
+			return r, g, b
 		},
 	}, nil
 }

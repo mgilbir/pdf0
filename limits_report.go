@@ -173,13 +173,19 @@ func reportLimits(doc *Document, add func(rule, msg string, obj int)) {
 // every guard reports through and the cancellation signal every loop consults.
 // The three (now seven) call sites that start a run share it so a new per-run
 // field cannot be initialized in one and forgotten in another.
-func newValidationCache(cancel core.Canceler) *validationCache {
+//
+// The run's work meter (core.Meter) is built here too, with the document's
+// work budget, and the run's canceler carries it: every scanner and decoder
+// handed that canceler charges the same budget as the walks that charge the
+// view.
+func newValidationCache(doc *Document, cancel core.Canceler) *validationCache {
 	rec := &core.Recorder{}
+	run, metered := core.NewDocumentRun(rec, doc.lim(), doc.Source().Len(), cancel)
 	return &validationCache{
 		run: runState{
 			limits: rec,
-			cancel: cancel,
-			shared: core.NewRun(rec),
+			cancel: metered,
+			shared: run,
 		},
 	}
 }
@@ -211,6 +217,6 @@ func beginRunCancel(doc *Document, cancel core.Canceler) *Document {
 		return doc
 	}
 	runDoc := *doc // dictcopy: a shallow per-run copy; it shares Objects and Trailer by design and the validators never write either
-	runDoc.valCache = newValidationCache(cancel)
+	runDoc.valCache = newValidationCache(doc, cancel)
 	return &runDoc
 }

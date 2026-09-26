@@ -148,7 +148,9 @@ const (
 // resKey identifies a resource dictionary by the sub-dictionaries the
 // interpreter reads. Two pages whose /Resources are different dictionaries
 // referring to the same /Font, /XObject … dictionaries execute a shared
-// content stream identically, and must share its memo entry.
+// content stream identically, and must share its memo entry. In a memo key
+// each sub-dictionary is its value's representative (memoKey), so two pages
+// that each write their own copy of the same /Font dictionary share it too.
 type resKey struct {
 	font, xobj, cs, pat, sh, gs *object.Dictionary
 }
@@ -164,27 +166,28 @@ type execKey struct {
 	annot bool
 }
 
-// Bounds on the interpreter's own work. A form nested deeper than
-// maxExecDepth is not entered, and a run that has executed maxExecs content
-// streams, or interpreted execBytesFactor times the run's decoded-content
-// budget (memo hits are free), executes no more; each is reported
-// (GuardContentState). Real documents are far inside all three: forms nest a
-// few deep, and a stream is executed once per distinct inherited state. The
-// byte bound is what stops a file that makes executions unmemoisable — cycles
-// through a branching chain of forms — from re-reading large streams without
-// end.
+// Bounds on the interpreter. A form nested deeper than maxExecDepth is not
+// entered, and the trip is reported (GuardContentState): execution recurses
+// once per level of nesting, so this bounds the stack. Real documents nest
+// forms a few deep.
+//
+// The work — every execution, and every byte executed — is charged to the
+// run's work meter, by the lexer each execution builds and by run itself for
+// memo hits. That is what stops a file that makes executions unmemoisable,
+// cycles through a branching chain of forms, from re-reading large streams
+// without end. It used to have two bounds of its own, a count of executions
+// and four times the decoded-content budget in bytes, which measured the same
+// thing as the meter now does for the whole run (audit 2026-09-22 T1).
 const (
-	maxExecDepth    = 64
-	maxExecs        = 1 << 20
-	execBytesFactor = 4
+	maxExecDepth = 64
 	// maxQDepth bounds the q/Q stack. Pushes past it are counted, not
 	// stored, so a stream of a million q costs a counter, and Q still pairs
 	// with the right q.
 	maxQDepth = 256
 )
 
-// GuardContentState is the interpreter's work bound.
-const GuardContentState = "content-state-work" // maxExecDepth, maxExecs; see interp.go
+// GuardContentState is the interpreter's depth bound.
+const GuardContentState = "content-state-work" // maxExecDepth; see interp.go
 
 // contentEngine executes content for one run. It lives in the run's memo slot
 // when there is a run, so the device-colour rules of every page and the
@@ -199,7 +202,6 @@ type contentEngine struct {
 	states   []gstate
 	stateIdx map[gstate]int32
 	execs    int
-	bytes    int64
 	depth    int
 	tripped  bool
 
@@ -208,6 +210,8 @@ type contentEngine struct {
 	allPagesDone bool
 	allAnnotDone bool
 	type3Enc     map[*object.Dictionary]map[byte]object.Name
+	// canon interns resource sub-dictionaries by value for memo keys.
+	canon DictInterner
 
 	// csUsed is every colour-space value executed content has used, each
 	// once (csSeen), in the order first used; see noteColourSpace.
@@ -264,6 +268,21 @@ func (e *contentEngine) resKeyOf(res *object.Dictionary) resKey {
 		pat:  d.ResolveDict(res.Get("Pattern")),
 		sh:   d.ResolveDict(res.Get("Shading")),
 		gs:   d.ResolveDict(res.Get("ExtGState")),
+	}
+}
+
+// memoKey is rk with each sub-dictionary replaced by its value's
+// representative. Only the memo key is interned: an execution reads the
+// dictionaries it was given, and one that is a memo hit reads none.
+func (e *contentEngine) memoKey(rk resKey) resKey {
+	d := e.doc
+	return resKey{
+		font: e.canon.Of(d, rk.font),
+		xobj: e.canon.Of(d, rk.xobj),
+		cs:   e.canon.Of(d, rk.cs),
+		pat:  e.canon.Of(d, rk.pat),
+		sh:   e.canon.Of(d, rk.sh),
+		gs:   e.canon.Of(d, rk.gs),
 	}
 }
 
@@ -373,8 +392,9 @@ func setOverprint(d View, gs *object.Dictionary, st *gstate) {
 // cancellation. data is the decoded content; stream is its memo key, nil for a
 // page's array of streams.
 func (e *contentEngine) run(data []byte, stream *object.Stream, res *object.Dictionary, entry gstate, kind execKind, annot bool) (devSet, int) {
+	e.doc.Charge(1)
 	rk := e.resKeyOf(res)
-	key := execKey{stream: stream, res: rk, entry: entry, kind: kind, annot: annot}
+	key := execKey{stream: stream, res: e.memoKey(rk), entry: entry, kind: kind, annot: annot}
 	if stream != nil {
 		if d, ok := e.inProg[key]; ok {
 			return 0, d // a cycle back to the execution at depth d
@@ -392,16 +412,7 @@ func (e *contentEngine) run(data []byte, stream *object.Stream, res *object.Dict
 		e.trip(fmt.Sprintf("content invokes forms, patterns or Type 3 glyphs nested more than %d deep", maxExecDepth))
 		return 0, partial
 	}
-	if e.execs >= maxExecs {
-		e.trip(fmt.Sprintf("executing the document's content needed more than %d content-stream executions", maxExecs))
-		return 0, partial
-	}
-	if limit := execBytesFactor * e.doc.Limits.DecodedContentBytes; e.bytes+int64(len(data)) > limit {
-		e.trip(fmt.Sprintf("executing the document's content needed more than %d bytes of interpretation, %d times the decoded-content budget", limit, execBytesFactor))
-		return 0, partial
-	}
 	e.execs++
-	e.bytes += int64(len(data))
 	e.depth++
 	depth := e.depth
 	if stream != nil {

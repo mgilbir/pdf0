@@ -30,9 +30,15 @@ import (
 // and the file that contains it costs nothing to make. The bounds are far above
 // any real CMap: Adobe's largest published one, UniJIS-UCS2-HW-V, has some
 // thousands of entries.
+//
+// maxCodespaceRanges bounds the codespace ranges, which are consulted for
+// every code a string is cut into. ISO 32000-2 9.7.6.2 allows at most 100 in
+// one begincodespacerange section, and real CMaps have a handful; a CMap with
+// more is refused like one past maxCMapEntries.
 const (
-	maxCMapEntries   = 1 << 16
-	maxCMapRangeSpan = 1 << 16
+	maxCMapEntries     = 1 << 16
+	maxCMapRangeSpan   = 1 << 16
+	maxCodespaceRanges = 256
 )
 
 // CMap maps character codes to CIDs, and knows how wide a code is.
@@ -47,6 +53,13 @@ type CMap struct {
 	// different codes.
 	single map[cmapKey]int
 	ranges []cidRange
+	// byWidth and notdefByWidth index ranges and notdefRanges by code width
+	// (1 to 4 bytes): disjoint segments naming, for each code, the first
+	// range that maps it (ResolveSpans), so a lookup is a binary search.
+	// Scanning every range for every code was 65,000 ranges times a million
+	// shown codes in a 295 KB file, eighty seconds of PDF/A-1b validation
+	// (audit 2026-09-22 C52). Built by index.
+	byWidth, notdefByWidth [5]Spans
 	// notdefSingle and notdefRanges are the notdef mappings (9.7.6.3): what a
 	// code the CID mappings leave unmapped stands for.
 	notdefSingle map[cmapKey]int
@@ -65,6 +78,31 @@ type CMap struct {
 	opaque     bool
 	unknownWhy cmapRefusal
 	onUnknown  func()
+	// cancel carries the run's work meter, which Decode charges.
+	cancel Canceler
+}
+
+// index builds byWidth and notdefByWidth.
+func (c *CMap) index() {
+	build := func(ranges []cidRange, out *[5]Spans) {
+		for w := 1; w <= 4; w++ {
+			var spans []Span
+			var pos []int
+			for i, r := range ranges {
+				if r.bytes == w {
+					spans = append(spans, Span{Lo: r.lo, Hi: r.hi})
+					pos = append(pos, i)
+				}
+			}
+			s := ResolveSpans(spans, false)
+			for k := range s {
+				s[k].Idx = pos[s[k].Idx]
+			}
+			out[w] = s
+		}
+	}
+	build(c.ranges, &c.byWidth)
+	build(c.notdefRanges, &c.notdefByWidth)
 }
 
 type codespaceRange struct {
@@ -117,6 +155,8 @@ func (c *CMap) Decode(s []byte) []Code {
 	if c == nil || len(c.codespace) == 0 {
 		return nil
 	}
+	// Cutting a code consults every codespace range.
+	c.cancel.ChargeScan(len(s) * (1 + len(c.codespace)))
 	out := make([]Code, 0, len(s))
 	for i := 0; i < len(s); {
 		n, v, ok := c.codeAt(s[i:])
@@ -233,10 +273,9 @@ func (c *CMap) lookup(v uint32, n int) (cid int, mapped, unknown bool) {
 	if cid, ok := c.single[cmapKey{v, uint8(n)}]; ok {
 		return cid, true, false
 	}
-	for _, r := range c.ranges {
-		if r.bytes == n && v >= r.lo && v <= r.hi {
-			return r.cid + int(v-r.lo), true, false
-		}
+	if sp, ok := c.byWidth[n].Find(v); ok {
+		r := c.ranges[sp.Idx]
+		return r.cid + int(v-r.lo), true, false
 	}
 	if c.base != nil {
 		if cid, mapped, unknown := c.base.lookup(v, n); mapped || unknown {
@@ -246,11 +285,9 @@ func (c *CMap) lookup(v uint32, n int) (cid int, mapped, unknown bool) {
 	if cid, ok := c.notdefSingle[cmapKey{v, uint8(n)}]; ok {
 		return cid, true, false
 	}
-	for _, r := range c.notdefRanges {
-		if r.bytes == n && v >= r.lo && v <= r.hi {
-			// A notdef range maps every code in it to the one CID.
-			return r.cid, true, false
-		}
+	if sp, ok := c.notdefByWidth[n].Find(v); ok {
+		// A notdef range maps every code in it to the one CID.
+		return c.notdefRanges[sp.Idx].cid, true, false
 	}
 	return 0, false, false
 }
@@ -276,8 +313,34 @@ func (c *CMap) Identity() bool { return c != nil && c.identity }
 // to that base decodes as Code.Unknown. The skip is recorded when a check
 // first meets such a code, and not before — a CMap that defines every code
 // the document shows was checked in full.
+//
+// The result is memoised per font for the run: the PDF/A and PDF/UA checks
+// that need a font's CMap each asked for it, and each parsed it again.
 func LoadCMap(doc View, fontDict *object.Dictionary) (*CMap, Reason) {
+	type loaded struct {
+		c *CMap
+		r Reason
+	}
+	memo := Slot[map[*object.Dictionary]loaded](doc.Run, loadCMapSlot{})
+	if l, ok := (*memo)[fontDict]; ok {
+		doc.Charge(1)
+		return l.c, l.r
+	}
+	c, r := loadCMap(doc, fontDict)
+	if *memo == nil {
+		*memo = map[*object.Dictionary]loaded{}
+	}
+	(*memo)[fontDict] = loaded{c, r}
+	return c, r
+}
+
+type loadCMapSlot struct{}
+
+func loadCMap(doc View, fontDict *object.Dictionary) (*CMap, Reason) {
 	c, r, why := resolveCMap(doc, doc.Resolve(fontDict.Get("Encoding")), 0, map[*object.Stream]bool{})
+	if c != nil {
+		c.cancel = doc.Cancel
+	}
 	switch {
 	case c != nil:
 		if w := c.unknownWhy; w.guard != "" {
@@ -504,12 +567,17 @@ func parseCMap(cancel Canceler, data []byte) (*CMap, []string, Reason) {
 		},
 		useCMap: func(name string) { uses = append(uses, name) },
 	})
+	if len(c.codespace) > maxCodespaceRanges {
+		over = true
+	}
 	if over {
 		return nil, nil, ReasonLimit
 	}
 	if cancel.Stopped() {
 		return nil, nil, ReasonCanceled
 	}
+	c.index()
+	cancel.Charge(len(c.ranges) + len(c.notdefRanges))
 	return c, uses, ReasonOK
 }
 

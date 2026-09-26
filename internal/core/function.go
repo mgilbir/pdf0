@@ -221,32 +221,48 @@ func evalType0(d View, stream *object.Stream, dict *object.Dictionary, domain []
 		e[i] = clampRange(ev, 0, float64(size[i]-1))
 	}
 
+	// Multilinear interpolation over the corners of the grid cell containing
+	// e. Only the dimensions in which e falls strictly between two samples
+	// contribute a choice: in any other, the corner past e has weight zero (or
+	// is clamped onto the same sample), so it adds nothing. The corners
+	// enumerated are the 2^k of those k dimensions, not the 2^m of all of
+	// them — a 40-colorant DeviceN image whose samples sit on grid points was
+	// 2^40 corners per pixel, a run that did not end (audit 2026-09-22 C50) —
+	// and they are charged to the run's work meter, which is what bounds a
+	// function whose inputs really are all fractional.
+	lo := make([]int, m)
+	frac := make([]float64, m)
+	stride := make([]int, m)
+	var live []int // the dimensions with a fractional coordinate
+	s := 1
+	for i := 0; i < m; i++ {
+		lo[i] = int(math.Floor(e[i]))
+		frac[i] = e[i] - float64(lo[i])
+		stride[i] = s
+		s *= size[i]
+		if frac[i] > 0 && lo[i]+1 <= size[i]-1 {
+			live = append(live, i)
+		}
+	}
+	if len(live) >= 62 {
+		return nil, false // more corners than an int can count
+	}
+	corners := 1 << uint(len(live))
+	d.Charge(corners * (n + m))
 	out := make([]float64, n)
-	// Iterate over the 2^m corners of the cell containing e.
-	corners := 1 << uint(m)
 	for c := 0; c < corners; c++ {
 		weight := 1.0
 		flat := 0
-		stridE := 1
 		for i := 0; i < m; i++ {
-			lo := int(math.Floor(e[i]))
-			frac := e[i] - float64(lo)
-			var idx int
-			if c&(1<<uint(i)) != 0 {
-				idx = lo + 1
-				weight *= frac
+			flat += min(max(lo[i], 0), size[i]-1) * stride[i]
+		}
+		for b, i := range live {
+			if c&(1<<uint(b)) != 0 {
+				flat += stride[i] // lo+1, which is in range for a live dimension
+				weight *= frac[i]
 			} else {
-				idx = lo
-				weight *= 1 - frac
+				weight *= 1 - frac[i]
 			}
-			if idx > size[i]-1 {
-				idx = size[i] - 1
-			}
-			if idx < 0 {
-				idx = 0
-			}
-			flat += idx * stridE
-			stridE *= size[i]
 		}
 		if weight == 0 {
 			continue

@@ -69,7 +69,10 @@ type reachableMemo struct {
 //
 // The walk is iterative, so no file can exhaust the stack, and it visits each
 // indirect object and each dictionary once, so its cost is the size of the
-// graph whatever the file's references look like.
+// graph whatever the file's references look like. Every value visited is
+// charged to the run's work meter; a run stopped during the walk — its budget
+// spent or its context ended — is unwound (core.Meter) rather than handed a
+// truncated list, which the memo would otherwise keep for every later rule.
 func (v View) ReachableDicts() []ReachableDict {
 	m := Slot[reachableMemo](v.Run, reachableSlot{})
 	if m.valid {
@@ -126,7 +129,11 @@ func (v View) walkReachable() ([]ReachableDict, []int) {
 	}
 	push(dictValues(v.Trailer), 0, 1)
 	for len(stack) > 0 {
+		v.Charge(1)
 		if v.Cancel.Stopped() {
+			// Outside a run nothing is metered, and the walk stops; inside
+			// one this does not return.
+			v.CheckStopped()
 			break
 		}
 		it := stack[len(stack)-1]

@@ -288,6 +288,7 @@ func walk(d core.View, yield func(ExtractedImage) bool) {
 		// their own resources, a common home for images (stamps, form fields).
 		if annots, ok := d.Resolve(pg.Dict.Get("Annots")).(object.Array); ok {
 			for _, a := range annots {
+				d.Charge(1)
 				ad := d.ResolveDict(a)
 				if ad == nil {
 					continue
@@ -354,6 +355,7 @@ func collectImagesFrom(d core.View, res *object.Dictionary, seen map[int]bool, d
 		return true
 	}
 	for _, ref := range xobjs.All() {
+		d.Charge(1)
 		st, ok := d.Resolve(ref).(*object.Stream)
 		if !ok {
 			continue
@@ -394,10 +396,16 @@ var extractImageHook func(num int)
 func extractImageSafely(d core.View, st *object.Stream, num int) (img ExtractedImage) {
 	defer func() {
 		if r := recover(); r != nil {
+			note := fmt.Sprintf("internal error while decoding the image, which was not decoded: %v", r)
+			if core.IsAbort(r) {
+				// The run's work budget ran out, or its context ended, during
+				// this image: it was not decoded, and the walk stops after it.
+				note = fmt.Sprintf("the image was not decoded: the extraction stopped: %v", d.Cancel.Cause())
+			}
 			img = ExtractedImage{
 				ObjNum:  num,
 				Encoded: st.Data,
-				Note:    fmt.Sprintf("internal error while decoding the image, which was not decoded: %v", r),
+				Note:    note,
 			}
 		}
 	}()

@@ -132,38 +132,42 @@ func TestCmapWorkBudgetDoesNotCondemnGlyphs(t *testing.T) {
 	})
 }
 
-// --- the CID /W range span limit (limits.cidRangeSpan, WithMaxCIDRangeSpan) ---
+// --- /W read without expansion (audit 2026-09-22 C10) ---
 
-// TestCIDWidthRangeBudgetReportsPartial pins the parse-level contract: an
-// over-wide /W range is dropped, and the map says so rather than looking like a
-// font that simply declares no width for those CIDs.
-func TestCIDWidthRangeBudgetReportsPartial(t *testing.T) {
+// TestCIDWidthRangeIsCompleteWithoutExpansion pins the parse-level contract: a
+// /W range of any width is read — not expanded, and not dropped — so the widths
+// it declares are complete. (A per-range span limit used to drop it and mark
+// the widths incomplete.)
+func TestCIDWidthRangeIsCompleteWithoutExpansion(t *testing.T) {
 	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
 		doc := mkV(core.View{Objects: map[int]*object.IndirectObject{}})
-		if _, complete := parseCIDWidths(doc, object.Array{object.Integer(0), object.Integer(2_000_000_000), object.Real(500)}); complete {
-			t.Error("an over-wide /W range was dropped but the map claims to be complete")
+		w, complete := parseCIDWidths(doc, object.Array{object.Integer(0), object.Integer(2_000_000_000), object.Real(500)})
+		if !complete {
+			t.Error("a wide /W range is read in full, and the widths are complete")
+		}
+		if got, ok := w.width(1_999_999_999); !ok || got != 500 {
+			t.Errorf("width(1999999999) = %v, %v; want 500, true", got, ok)
 		}
 		// A malformed (inverted) range declares nothing, so nothing is missing.
 		if _, complete := parseCIDWidths(doc, object.Array{object.Integer(100), object.Integer(10), object.Real(500)}); !complete {
-			t.Error("an inverted /W range is malformed input, not a budget trip")
+			t.Error("an inverted /W range is malformed input, and declares nothing")
 		}
-		if _, complete := parseCIDWidths(doc, object.Array{object.Integer(0), object.Integer(65535), object.Real(500)}); !complete {
-			t.Error("a full-CID-space /W range fits the budget and must count as complete")
+		// A /W that is not an array cannot be read.
+		if _, complete := parseCIDWidths(doc, object.Integer(3)); complete {
+			t.Error("a /W that is not an array claims to be complete")
 		}
 	})
 }
 
-// TestCIDWidthBudgetDoesNotReportWidthMismatch is the false positive: with the
-// range dropped, every CID in it falls back to /DW (default 1000) and is then
-// compared against the font program's real advance, emitting "width information
-// ... is inconsistent" against a file whose /W says exactly the right thing.
+// TestCIDWidthWideRangeIsCompared is the false positive the span limit was
+// guarding against and the check it gave up: a font whose /W states every
+// width correctly, as one range wider than any expansion budget, is not
+// reported (its CIDs do not fall back to /DW), and one that states them
+// wrongly, the same way, is.
 //
-// Before the fix this failed with:
-//
-//	width rule fired on a font whose /W was dropped by the range budget:
-//	[width information for glyphs used for rendering is inconsistent in
-//	CIDFontType2 font]
-func TestCIDWidthBudgetDoesNotReportWidthMismatch(t *testing.T) {
+// When a span limit dropped the range, the width check was skipped for the
+// font altogether, so the wrong widths were never reported.
+func TestCIDWidthWideRangeIsCompared(t *testing.T) {
 	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
 		// A CIDFontType2 program whose glyph 1 advances 500 units.
 		head := make([]byte, 54)
@@ -193,31 +197,35 @@ func TestCIDWidthBudgetDoesNotReportWidthMismatch(t *testing.T) {
 		desc.Set("Subtype", object.Name("CIDFontType2"))
 		desc.Set("FontDescriptor", fd)
 		desc.Set("CIDToGIDMap", object.Name("Identity"))
-		// The file declares width 500 for every CID — correctly — but as one range
-		// wider than the guard will expand.
-		desc.Set("W", object.Array{object.Integer(0), object.Integer(2_000_000_000), object.Real(500)})
-		font := &object.Dictionary{}
-		font.Set("Subtype", object.Name("Type0"))
-		font.Set("Encoding", object.Name("Identity-H"))
-		font.Set("DescendantFonts", object.Array{desc})
-		doc := mkV(core.View{Objects: map[int]*object.IndirectObject{
-			1: {Number: 1, Value: font},
-			9: {Number: 9, Value: &object.Stream{Dict: object.Dictionary{}, Data: prog}},
-		}})
-
-		u := &core.FontTextUsage{ObjNum: 1, Strings: [][]byte{{0x00, 0x01}}, Modes: map[int]bool{0: true}}
-		msgs := errMessages(checkCIDFontConsistency(doc, PDFA1b, "6.3", font, u))
-		var bad []string
-		for _, m := range msgs {
-			if strings.Contains(m, "width information") {
-				bad = append(bad, m)
+		widthFindings := func(declared float64) []string {
+			// The file declares one width for every CID as one range, wider
+			// than any expansion could afford.
+			desc.Set("W", object.Array{object.Integer(0), object.Integer(2_000_000_000), object.Real(declared)})
+			font := &object.Dictionary{}
+			font.Set("Subtype", object.Name("Type0"))
+			font.Set("Encoding", object.Name("Identity-H"))
+			font.Set("DescendantFonts", object.Array{desc})
+			doc := mkV(core.View{Objects: map[int]*object.IndirectObject{
+				1: {Number: 1, Value: font},
+				9: {Number: 9, Value: &object.Stream{Dict: object.Dictionary{}, Data: prog}},
+			}})
+			u := &core.FontTextUsage{ObjNum: 1, Strings: [][]byte{{0x00, 0x01}}, Modes: map[int]bool{0: true}}
+			var bad []string
+			for _, m := range errMessages(checkCIDFontConsistency(doc, PDFA1b, "6.3", font, u)) {
+				if strings.Contains(m, "width information") {
+					bad = append(bad, m)
+				}
 			}
+			if trips := doc.Run.Trips.Snapshot(); len(trips) != 0 {
+				t.Errorf("declared %v: a /W read in full reported a trip: %v", declared, trips)
+			}
+			return bad
 		}
-		if len(bad) > 0 {
-			t.Errorf("width rule fired on a font whose /W was dropped by the range budget: %v", bad)
+		if bad := widthFindings(500); len(bad) > 0 {
+			t.Errorf("width rule fired on a font whose wide /W range states the right width: %v", bad)
 		}
-		if trips := doc.Run.Trips.Snapshot(); len(trips) == 0 || trips[0].Guard() != core.GuardCIDWidthRange {
-			t.Errorf("/W range budget trip was not reported: %v", trips)
+		if bad := widthFindings(700); len(bad) == 0 {
+			t.Error("width rule did not fire on a font whose wide /W range states the wrong width")
 		}
 	})
 }

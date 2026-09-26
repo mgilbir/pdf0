@@ -218,17 +218,17 @@ func TestStreamKeywordFormat(t *testing.T) {
 
 func TestInlineImageFilters(t *testing.T) {
 	// LZW abbreviation.
-	f := inlineImageFilters([]byte("BI /W 1 /H 1 /F /LZW ID xx EI"))
+	f := inlineImageFilters(core.Canceler{}, []byte("BI /W 1 /H 1 /F /LZW ID xx EI"))
 	if len(f) != 1 || f[0][0] != "LZW" {
 		t.Errorf("LZW filter not extracted: %v", f)
 	}
 	// object.Array form.
-	f = inlineImageFilters([]byte("BI /W 1 /F [/AHx /LZW] ID xx EI"))
+	f = inlineImageFilters(core.Canceler{}, []byte("BI /W 1 /F [/AHx /LZW] ID xx EI"))
 	if len(f) != 1 || len(f[0]) != 2 || f[0][1] != "LZW" {
 		t.Errorf("array filter not extracted: %v", f)
 	}
 	// Full Filter name.
-	f = inlineImageFilters([]byte("BI /Filter /FlateDecode ID xx EI"))
+	f = inlineImageFilters(core.Canceler{}, []byte("BI /Filter /FlateDecode ID xx EI"))
 	if len(f) != 1 || f[0][0] != "FlateDecode" {
 		t.Errorf("full filter name not extracted: %v", f)
 	}

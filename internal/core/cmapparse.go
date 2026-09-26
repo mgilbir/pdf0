@@ -68,6 +68,11 @@ const maxCMapArray = maxCMapRangeSpan
 // are the begin…/end… pairs of Table 121 and 9.10.3; an entry is the operands
 // between them taken two or three at a time, in order, with no regard to lines.
 func scanCMap(cancel Canceler, data []byte, v cmapVisitor) {
+	// A tokenisation (see NewContentLexer), at four times a content stream's
+	// rate: a CMap is almost all hexadecimal strings and numbers, and measured
+	// over the corpora (2026-09-23) its scan cost 102 ns per content-rate unit
+	// where a content stream's cost 26 and inflating a stream 25.
+	cancel.ChargeScan(4 * len(data))
 	lx := &ContentLexer{data: data, cancel: cancel, noInline: true}
 	var t ContentTok
 

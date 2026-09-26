@@ -206,7 +206,9 @@ func validateContext(ctx context.Context, doc core.View) (res Result) {
 	// sorted but the container ones are appended after and the rule engine has
 	// an order of its own.
 	defer func() {
-		if r := recover(); r != nil {
+		// The work meter ending the run is not a fault: its trip is
+		// reported by flushTrips like any other (core.IsAbort).
+		if r := recover(); r != nil && !core.IsAbort(r) {
 			add(finding.InternalRule, finding.InternalMessage(r), 0)
 		}
 		flushTrips(doc, add)

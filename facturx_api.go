@@ -20,7 +20,7 @@ import (
 // on their own.
 func facturxRun(ctx context.Context, doc *Document) core.View {
 	runDoc := *doc // dictcopy: a shallow per-run copy; it shares Objects and Trailer by design and the validators never write either
-	runDoc.valCache = newValidationCache(core.NewCanceler(ctx))
+	runDoc.valCache = newValidationCache(doc, core.NewCanceler(ctx))
 	v := runDoc.view()
 	facturxSetPDFAChecker(v, func(core.View) []pdfa.Violation {
 		// PDF/A-3b: what a Factur-X or Order-X container is required to be.

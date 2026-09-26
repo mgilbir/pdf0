@@ -234,15 +234,98 @@ func (d View) ContentUsedNamesCached(data []byte, key *object.Stream) UsedResour
 }
 
 // ContentBytesAndKey resolves a container's content reference to its decoded
-// bytes and, when the reference is a single stream, that stream (usable as a
-// per-stream memoization key). object.Array contents are container-specific
-// concatenations and get no key. The Reason is ContentStreamData's.
+// bytes and a key that stands for those bytes, for memoising what is derived
+// from them: the stream itself when the reference is one stream, and for an
+// array of streams one key per distinct sequence of streams in the run, so
+// pages that share a /Contents array — each its own array, naming the same
+// streams — share a key too. Outside a run an array has no key (nil), and
+// what is derived from it is not memoised. The key of an array is a stream
+// that is not in the file: it identifies the bytes and nothing else, so only
+// its identity may be used. The Reason is ContentStreamData's.
 func (d View) ContentBytesAndKey(ref object.Object) ([]byte, *object.Stream, Reason) {
-	data, r := ContentStreamData(d, ref)
-	if s, ok := d.Resolve(ref).(*object.Stream); ok {
-		return data, s, r
+	switch v := d.Resolve(ref).(type) {
+	case *object.Stream:
+		data, r := d.Content(v)
+		return data, v, r
+	case object.Array:
+		e := contentArray(d, v)
+		return e.data, e.key, e.reason
 	}
-	return data, nil, r
+	return nil, nil, ReasonAbsent
+}
+
+// contentArrays is the run's memo of concatenated /Contents arrays, by the
+// sequence of streams they name.
+type contentArrays struct {
+	ids   map[*object.Stream]uint32
+	byKey map[string]contentArrayEntry
+}
+
+type contentArrayEntry struct {
+	data   []byte
+	reason Reason
+	key    *object.Stream
+}
+
+type contentArraysSlot struct{}
+
+// contentArray concatenates the streams a /Contents array names, once per
+// distinct sequence of streams per run. A letterhead or template drawn on
+// every page is commonly one array per page naming the same streams; without
+// the memo its bytes were copied, and everything derived from them was
+// recomputed, once per page.
+func contentArray(doc View, arr object.Array) contentArrayEntry {
+	parts := make([]*object.Stream, 0, len(arr))
+	for _, elem := range arr {
+		doc.Charge(1)
+		if s, ok := doc.Resolve(elem).(*object.Stream); ok {
+			parts = append(parts, s)
+		}
+	}
+	if doc.Run == nil {
+		data, r := concatContent(doc, parts)
+		return contentArrayEntry{data: data, reason: r}
+	}
+	m := Slot[contentArrays](doc.Run, contentArraysSlot{})
+	if m.byKey == nil {
+		m.ids = map[*object.Stream]uint32{}
+		m.byKey = map[string]contentArrayEntry{}
+	}
+	k := make([]byte, 0, 4*len(parts))
+	for _, s := range parts {
+		id, ok := m.ids[s]
+		if !ok {
+			id = uint32(len(m.ids))
+			m.ids[s] = id
+		}
+		k = append(k, byte(id), byte(id>>8), byte(id>>16), byte(id>>24))
+	}
+	if e, ok := m.byKey[string(k)]; ok {
+		return e
+	}
+	data, r := concatContent(doc, parts)
+	e := contentArrayEntry{data: data, reason: r, key: &object.Stream{}}
+	m.byKey[string(k)] = e
+	return e
+}
+
+// concatContent joins the decoded parts of a /Contents array, each preceded by
+// a space so that no token spans two parts. The result is every part that
+// decoded, and the Reason is the worst of the parts (Reason.Worse).
+func concatContent(doc View, parts []*object.Stream) ([]byte, Reason) {
+	var result []byte
+	reason := ReasonOK
+	for _, stream := range parts {
+		data, r := doc.Content(stream)
+		reason = reason.Worse(r)
+		if data != nil {
+			result = append(result, ' ')
+			result = append(result, data...)
+		}
+	}
+	// The concatenation is a copy.
+	doc.ChargeCopy(len(result))
+	return result, reason
 }
 
 // ContentStreamData extracts and concatenates content stream data.
@@ -258,20 +341,8 @@ func ContentStreamData(doc View, contentsRef object.Object) ([]byte, Reason) {
 	case *object.Stream:
 		return doc.Content(v)
 	case object.Array:
-		var result []byte
-		reason := ReasonOK
-		for _, elem := range v {
-			streamObj := doc.Resolve(elem)
-			if stream, ok := streamObj.(*object.Stream); ok {
-				data, r := doc.Content(stream)
-				reason = reason.Worse(r)
-				if data != nil {
-					result = append(result, ' ')
-					result = append(result, data...)
-				}
-			}
-		}
-		return result, reason
+		e := contentArray(doc, v)
+		return e.data, e.reason
 	}
 	return nil, ReasonAbsent
 }

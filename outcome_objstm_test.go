@@ -48,8 +48,9 @@ func TestPNGPredictorObjectStreamsDoNotAllocate(t *testing.T) {
 
 // amplifiedObjStmPDF is the audit's 403 KB file (C9): k containers, each a
 // 90 MB array of "1 0 R" compressed to about 130 KB, behind an xref stream
-// placing object 100+i in container 3+i.
-func amplifiedObjStmPDF(k int) []byte {
+// placing object 100+i in container 3+i. It returns the file and how many
+// bytes its containers decode to.
+func amplifiedObjStmPDF(k int) (file []byte, decoded int) {
 	bodies := []string{"<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>"}
 	var arr bytes.Buffer
 	arr.WriteString("[")
@@ -60,7 +61,9 @@ func amplifiedObjStmPDF(k int) []byte {
 	for i := 0; i < k; i++ {
 		hdr := fmt.Sprintf("%d 0 ", 100+i)
 		hdr += strings.Repeat(" ", 8-len(hdr))
-		enc := zlibBytes(append([]byte(hdr), arr.Bytes()...))
+		plain := append([]byte(hdr), arr.Bytes()...)
+		decoded += len(plain)
+		enc := zlibBytes(plain)
 		bodies = append(bodies, fmt.Sprintf("<< /Type /ObjStm /N 1 /First 8 /Filter /FlateDecode /Length %d >>\nstream\n%s\nendstream", len(enc), enc))
 	}
 	head, offs := numberedPDF(bodies)
@@ -85,7 +88,24 @@ func amplifiedObjStmPDF(k int) []byte {
 	fmt.Fprintf(&b, "%d 0 obj\n<< /Type /XRef /Size %d /Index [0 %d 100 %d] /W [1 3 1] /Root 1 0 R /Length %d >>\nstream\n", 3+k, 100+k, 4+k, k, len(ent))
 	b.Write(ent)
 	fmt.Fprintf(&b, "\nendstream\nendobj\nstartxref\n%d\n%%%%EOF\n", xoff)
-	return b.Bytes()
+	return b.Bytes(), decoded
+}
+
+// assertAmplifies fails a hostile test whose fixture no longer shows what the
+// test is about: a small file that asks for large work. It asserts the
+// property, not a size: the file is under maxFile, and what it decodes to is
+// at least minRatio times the file. compress/flate's output is not a stable
+// contract — Go 1.27 compresses these fixtures to twice what Go 1.26 does — so
+// an exact or tight bound on the compressed size breaks with the toolchain,
+// while the amplification it stands for does not.
+func assertAmplifies(t *testing.T, what string, file []byte, decoded, minRatio, maxFile int) {
+	t.Helper()
+	if len(file) > maxFile {
+		t.Fatalf("%s is %d bytes; the point is a small file (at most %d)", what, len(file), maxFile)
+	}
+	if decoded < minRatio*len(file) {
+		t.Fatalf("%s is %d bytes decoding to %d, %dx; the point is at least %dx", what, len(file), decoded, decoded/max(len(file), 1), minRatio)
+	}
 }
 
 // TestAmplifiedObjectStreamsStayInsideTheBudget is audit 2026-09-22 C9: three
@@ -96,10 +116,9 @@ func amplifiedObjStmPDF(k int) []byte {
 // unpacked, so the read stops inside it and says so.
 func TestAmplifiedObjectStreamsStayInsideTheBudget(t *testing.T) {
 	hostile.Run(t, hostile.Limits{MaxRSS: 1536 << 20, Timeout: 3 * time.Minute}, func(t *testing.T) {
-		file := amplifiedObjStmPDF(3)
-		if len(file) > 450<<10 {
-			t.Fatalf("fixture is %d bytes; the audit's is 403 KB", len(file))
-		}
+		// The audit's file is 403 KB decoding to 283 MB, 700x.
+		file, decoded := amplifiedObjStmPDF(3)
+		assertAmplifies(t, "the fixture", file, decoded, 250, 1<<20)
 		doc, err := Read(bytes.NewReader(file), int64(len(file)))
 		if err != nil {
 			t.Fatalf("Read: %v", err)

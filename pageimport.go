@@ -586,7 +586,16 @@ func actionType(v core.View, d *object.Dictionary) object.Name {
 
 // dropsOut reports whether a dictionary is a link or an action whose only
 // purpose was to lead to a page that is not being imported.
-func (g *pageImporter) dropsOut(d *object.Dictionary) bool {
+func (g *pageImporter) dropsOut(d *object.Dictionary) bool { return g.dropsOutAt(d, 0) }
+
+// dropsOutAt is dropsOut at depth levels down a chain of links whose /A names
+// the next one. The chain is as long as the file makes it, so it is held to
+// the uniform depth guard (core.View.Descend): a link past it is kept, which
+// is what the importer does with a link it cannot judge.
+func (g *pageImporter) dropsOutAt(d *object.Dictionary, depth int) bool {
+	if !g.sg.Descend(depth) {
+		return false
+	}
 	switch actionType(g.sg, d) {
 	case "GoTo":
 		_, ok := g.resolveDest(d.Get("D"))
@@ -603,22 +612,22 @@ func (g *pageImporter) dropsOut(d *object.Dictionary) bool {
 	}
 	if a := d.Get("A"); a != nil {
 		if ref, isRef := a.(object.IndirectRef); isRef {
-			return g.refDropsOut(ref)
+			return g.refDropsOut(ref, depth+1)
 		}
 		if ad, ok := a.(*object.Dictionary); ok {
-			return g.dropsOut(ad)
+			return g.dropsOutAt(ad, depth+1)
 		}
 	}
 	return false
 }
 
-func (g *pageImporter) refDropsOut(ref object.IndirectRef) bool {
+func (g *pageImporter) refDropsOut(ref object.IndirectRef, depth int) bool {
 	if v, ok := g.droppedRef[ref.Number]; ok {
 		return v
 	}
 	g.droppedRef[ref.Number] = false // a cycle through /A is not a drop
 	d := g.sg.ResolveDict(ref)
-	drop := d != nil && g.dropsOut(d)
+	drop := d != nil && g.dropsOutAt(d, depth)
 	g.droppedRef[ref.Number] = drop
 	return drop
 }

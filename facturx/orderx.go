@@ -139,7 +139,9 @@ func validateOrderContext(ctx context.Context, doc core.View) (res OrderXResult)
 	// half may have reported, and a deterministic order on the way out — as in
 	// ValidateFacturXContext, whose structure this mirrors (audit C27).
 	defer func() {
-		if r := recover(); r != nil {
+		// The work meter ending the run is not a fault: its trip is
+		// reported by flushTrips like any other (core.IsAbort).
+		if r := recover(); r != nil && !core.IsAbort(r) {
 			add(finding.InternalRule, finding.InternalMessage(r), 0)
 		}
 		flushTrips(doc, add)

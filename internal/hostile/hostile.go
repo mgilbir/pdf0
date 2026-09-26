@@ -156,6 +156,11 @@ func Run(t *testing.T, lim Limits, fn func(t *testing.T)) {
 	t.Fatalf("hostile: %s", out)
 }
 
+// RaceScale is the factor Run scales MaxRSS and Timeout by: 8 under the race
+// detector, 1 otherwise. A test that asserts a wall-clock bound inside fn,
+// which Run does not scale, multiplies the bound by it.
+const RaceScale = raceScale
+
 // InChild reports whether this process is a hostile child. Code after a run
 // call executes in the child too; the self-tests use this to keep their
 // assertions on the Outcome in the parent.

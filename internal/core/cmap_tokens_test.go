@@ -125,10 +125,10 @@ func TestToUnicodeArrayBFRangeKeepsStep(t *testing.T) {
 	if HasForbiddenUnicodeTargets(v, st) {
 		t.Error("an array-form bfrange followed by a <0000> source code was reported as a mapping to U+0000")
 	}
-	runes, _ := ParseToUnicodeRunes(v, toUnicodeFont()) // reason: an unfiltered stream in a test; the map is what is asserted
+	tu, _ := ParseToUnicode(v, toUnicodeFont()) // reason: an unfiltered stream in a test; the map is what is asserted
 	for code, want := range map[int]string{0: " ", 1: "A", 2: "B"} {
-		if string(runes[code]) != want {
-			t.Errorf("code %d maps to %q, want %q", code, string(runes[code]), want)
+		if rs, _ := tu.Runes(code); string(rs) != want {
+			t.Errorf("code %d maps to %q, want %q", code, string(rs), want)
 		}
 	}
 	// And a real forbidden target is still found, in an array too.

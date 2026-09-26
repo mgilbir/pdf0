@@ -48,12 +48,10 @@ func TestEveryOptionAppliesAndIsIsolated(t *testing.T) {
 		{"ContentStreamBytes", WithMaxContentStreamBytes(4567), func(l core.Limits) int64 { return int64(l.ContentStreamBytes) }, 4567},
 		{"ICCProfileBytes", WithMaxICCProfileBytes(5678), func(l core.Limits) int64 { return int64(l.ICCProfileBytes) }, 5678},
 		{"XMPPacketBytes", WithMaxXMPPacketBytes(6789), func(l core.Limits) int64 { return int64(l.XMPPacketBytes) }, 6789},
-		{"CIDRangeSpan", WithMaxCIDRangeSpan(7890), func(l core.Limits) int64 { return int64(l.CIDRangeSpan) }, 7890},
-		{"RoleMapSteps", WithMaxRoleMapSteps(8901), func(l core.Limits) int64 { return int64(l.RoleMapSteps) }, 8901},
 		{"TableGridFills", WithMaxTableGridFills(9012), func(l core.Limits) int64 { return l.TableGridFills }, 9012},
-		{"PostScriptSteps", WithMaxPostScriptSteps(1357), func(l core.Limits) int64 { return int64(l.PostScriptSteps) }, 1357},
 		{"CmapWork", WithMaxCmapWork(2468), func(l core.Limits) int64 { return int64(l.CmapWork) }, 2468},
 		{"ImagePixels", WithMaxImagePixels(3579), func(l core.Limits) int64 { return l.ImagePixels }, 3579},
+		{"Work", WithMaxWork(4680), func(l core.Limits) int64 { return l.Work }, 4680},
 	}
 	def := core.DefaultLimits()
 	for _, tc := range cases {

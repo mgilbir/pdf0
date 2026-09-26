@@ -132,8 +132,8 @@ func checkImageIntentAndInterpolate(doc core.View, level Level) []Violation {
 
 	// Inline images: /I (Interpolate) must not be true; /Intent must be a
 	// standard rendering intent.
-	for num, data := range collectContentStreamData(doc) {
-		for _, e := range inlineImageEntries(data) {
+	for num, f := range contentBytesFactsOf(doc) {
+		for _, e := range f.inlineEntries {
 			if e["I"] == "true" || e["Interpolate"] == "true" {
 				add(interpRule, "an inline image uses Interpolate true", num)
 			}
@@ -174,29 +174,8 @@ func checkFileTrailerID(doc core.View, level Level) []Violation {
 // inlineImageEntries returns the parameter dictionary of every inline image
 // in a content stream as key -> first-value-token maps: a name without its
 // slash, a bareword or number as written, and "[array]" for an array.
-func inlineImageEntries(data []byte) []map[string]string {
-	var out []map[string]string
-	lx := core.NewContentLexer(core.Canceler{}, data)
-	var t core.ContentTok
-	for lx.Next(&t) {
-		if t.Kind != core.ContentInlineImage {
-			continue
-		}
-		entries := map[string]string{}
-		for _, p := range core.ParseInlineImageParams(t.Params) {
-			switch {
-			case p.Array:
-				entries[p.Key] = "[array]"
-			case len(p.Value) == 0:
-			case p.Value[0].Kind == core.ContentName:
-				entries[p.Key] = p.Value[0].Name()
-			default:
-				entries[p.Key] = string(p.Value[0].Raw)
-			}
-		}
-		out = append(out, entries)
-	}
-	return out
+func inlineImageEntries(cancel core.Canceler, data []byte) []map[string]string {
+	return scanContentBytes(cancel, data).inlineEntries
 }
 
 // forbiddenAAEvents are the additional-action trigger events prohibited by
@@ -285,8 +264,8 @@ func checkActualTextPUA(doc core.View, level Level) []Violation {
 
 	// Marked-content property lists inside content streams
 	// (/Tag << /ActualText <...> >> BDC).
-	for num, data := range collectContentStreamData(doc) {
-		for _, v := range contentActualTexts(data) {
+	for num, f := range contentBytesFactsOf(doc) {
+		for _, v := range f.actualTexts {
 			if stringHasPUA(v) {
 				add("an ActualText entry in a marked-content property list contains a Unicode Private Use Area value", num)
 			}
@@ -299,18 +278,8 @@ func checkActualTextPUA(doc core.View, level Level) []Violation {
 // appearing in a content stream's inline marked-content property lists: a
 // name token /ActualText followed by a string. Dictionaries are read token by
 // token, not skipped, because that is where the entry lives.
-func contentActualTexts(data []byte) [][]byte {
-	var out [][]byte
-	lx := core.NewContentLexer(core.Canceler{}, data)
-	var t core.ContentTok
-	afterKey := false
-	for lx.Next(&t) {
-		if afterKey && (t.Kind == core.ContentString || t.Kind == core.ContentHexString) {
-			out = append(out, t.Bytes())
-		}
-		afterKey = t.Kind == core.ContentName && t.Name() == "ActualText"
-	}
-	return out
+func contentActualTexts(cancel core.Canceler, data []byte) [][]byte {
+	return scanContentBytes(cancel, data).actualTexts
 }
 
 // primaryColorants are the process colorants whose Type 5 halftone
@@ -380,8 +349,12 @@ func collectAppliedHalftones(doc core.View) []*object.Dictionary {
 	var out []*object.Dictionary
 	seenHT := map[*object.Dictionary]bool{}
 	seenC := map[*object.Dictionary]bool{}
-	var walk func(container *object.Dictionary, data []byte, key *object.Stream)
-	walk = func(container *object.Dictionary, data []byte, key *object.Stream) {
+	var walk func(container *object.Dictionary, data []byte, key *object.Stream, depth int)
+	walk = func(container *object.Dictionary, data []byte, key *object.Stream, depth int) {
+		if !doc.Descend(depth) {
+			return
+		}
+		doc.Charge(1)
 		if container == nil || seenC[container] || data == nil {
 			return
 		}
@@ -391,7 +364,7 @@ func collectAppliedHalftones(doc core.View) []*object.Dictionary {
 			return
 		}
 		used := doc.ContentUsedNamesCached(data, key)
-		gsNames := scanContentColorUsage(doc.Cancel, data).gsNames
+		gsNames := contentColorUsageOf(doc, data, key).gsNames
 		if gsDict := doc.ResolveDict(res.Get("ExtGState")); gsDict != nil {
 			for key, gref := range gsDict.All() {
 				if !gsNames[string(key)] {
@@ -415,7 +388,7 @@ func collectAppliedHalftones(doc core.View) []*object.Dictionary {
 				if s, ok := doc.Resolve(xref).(*object.Stream); ok {
 					if st, _ := doc.ResolveName(s.Dict.Get("Subtype")); st == "Form" {
 						data, _ := doc.Content(s) // reason: presence-only; the producer recorded any declined trip
-						walk(&s.Dict, data, s)
+						walk(&s.Dict, data, s, depth+1)
 					}
 				}
 			}
@@ -423,7 +396,7 @@ func collectAppliedHalftones(doc core.View) []*object.Dictionary {
 	}
 	for _, page := range doc.Pages(catalog.Get("Pages")) {
 		data, key, _ := doc.ContentBytesAndKey(page.Dict.Get("Contents")) // reason: presence-only; the producer recorded any declined trip
-		walk(page.Dict, data, key)
+		walk(page.Dict, data, key, 0)
 	}
 	return out
 }
@@ -489,6 +462,12 @@ func checkEmbeddedPDFA(doc core.View, level Level) []Violation {
 				continue
 			}
 			compliant, complete := embeddedChecker(doc)(doc.Cancel, data, doc.Limits, doc.EmbeddedDepth+1)
+			// The nested validation shares this run's work meter. If it
+			// spent the budget, or the context ended, its verdict is a
+			// partial one — its reading of the file may have been refused
+			// for that reason — so this check is unwound rather than allowed
+			// to draw a conclusion from it (core.Meter).
+			doc.CheckStopped()
 			if !complete {
 				// The nested run reported a checker finding of its own — a guard
 				// tripped inside it, a check panicked, or the shared context

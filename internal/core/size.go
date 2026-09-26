@@ -44,6 +44,15 @@ type LimitError struct {
 	def   int64
 }
 
+// Unwrap makes the run's work meter's refusals — the work budget and the
+// depth guard — match ErrWorkLimit.
+func (e *LimitError) Unwrap() error {
+	if e.Guard == GuardWork || e.Guard == GuardWalkDepth {
+		return ErrWorkLimit
+	}
+	return nil
+}
+
 func (e *LimitError) Error() string {
 	prov := "pdf0's default"
 	if e.Bound != e.def {
@@ -60,13 +69,6 @@ func (e *LimitError) Error() string {
 // a fax stream with no /Rows, a JBIG2 stream whose regions add up.
 func (l Limits) ImageBudgetError(what string) error {
 	return &LimitError{Guard: GuardImagePixels, What: what, Unit: "pixels", Need: -1, Bound: l.ImagePixelBound(), def: DefaultMaxImagePixels}
-}
-
-// ContentBudgetError is the error for work the run's content budget
-// (Limits.DecodedContentBytes, WithMaxDecodedContentBytes) refused, for an
-// operation that reports by error rather than by trip — text extraction.
-func (l Limits) ContentBudgetError(what string) error {
-	return &LimitError{Guard: GuardContentTotal, What: what, Unit: "bytes", Need: -1, Bound: l.WithDefaults().DecodedContentBytes, def: DefaultMaxDecodedContentBytes}
 }
 
 // ImagePixelBound is the resolved pixel budget.

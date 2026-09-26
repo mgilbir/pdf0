@@ -234,10 +234,21 @@ func checkUAHeadings(d core.View, cat *object.Dictionary) []Violation {
 
 // checkUAOneHPerNode enforces 7.4.4: in a weakly structured document each
 // structure node may contain at most one child <H> heading.
+//
+// Nodes that share one /K array share its ChildTypes slice, which is counted
+// once (audit 2026-09-22 C18).
 func checkUAOneHPerNode(d core.View, cat *object.Dictionary) []Violation {
 	var v []Violation
+	counted := map[*object.Name]bool{}
 	for _, n := range structTree(d, cat) {
-		if countName(n.ChildTypes, "H") > 1 {
+		k := n.ChildTypesKey()
+		many, ok := counted[k]
+		if !ok || k == nil {
+			d.Charge(len(n.ChildTypes))
+			many = countName(n.ChildTypes, "H") > 1
+			counted[k] = many
+		}
+		if many {
 			v = append(v, Violation{Clause: "7.4.4", Message: "a structure node contains more than one child <H> heading", Object: 0})
 		}
 	}
@@ -380,45 +391,49 @@ func checkUARoleMapIntegrity(d core.View, cat *object.Dictionary) []Violation {
 		return nil
 	}
 	var v []Violation
-	// Bound the total chain-following work. Get is O(1) once the dictionary is
-	// indexed, so this loop is at worst O(n^2) over a crafted /RoleMap; the cap
-	// keeps that from being a CPU DoS on a large map while never triggering on a
-	// real one (audit C20).
-	work := 0
+	// Whether following the mapping from a key reaches a cycle. A role map is
+	// a function — each key names one type — so every type on a walk shares
+	// the walk's answer, and each type is walked once: the whole map costs
+	// O(keys), charged to the run's work meter. Walking each key's chain in
+	// full was O(keys²) over a crafted map, and the step budget that bounded
+	// it left the keys after it unchecked (audit 2026-09-22 C41).
+	reachesCycle := map[object.Name]bool{}
 	for key := range roleMap.Keys() {
 		if standardStructTypes[key] {
 			v = append(v, Violation{Clause: "7.1", Message: "/RoleMap remaps standard structure type <" + string(key) + ">", Object: 0})
 		}
 		// Follow the mapping chain from key; a repeat is a cycle.
 		seen := map[object.Name]bool{key: true}
+		path := []object.Name{key}
 		cur := key
+		cyclic := false
 		for {
-			work++
-			if work > d.Limits.RoleMapSteps {
-				// Every key not yet examined goes unchecked, including the
-				// cheap standard-type test, so the remaining keys are
-				// unknown rather than clean.
-				d.Note(core.GuardRoleMapWork, fmt.Sprintf("following the /RoleMap chains cost more than %s steps; the remaining keys were not checked for standard-type remapping or cycles", core.LimitBound(int64(d.Limits.RoleMapSteps), core.DefaultMaxRoleMapSteps)), 0)
-				return v
+			d.Charge(1)
+			if r, ok := reachesCycle[cur]; ok {
+				cyclic = r
+				break
 			}
 			next, ok := d.Resolve(roleMap.Get(cur)).(object.Name)
 			if !ok || next == "" {
 				break
 			}
 			if seen[next] {
-				v = append(v, Violation{Clause: "7.1", Message: "/RoleMap contains a circular mapping involving <" + string(key) + ">", Object: 0})
+				cyclic = true
 				break
 			}
 			seen[next] = true
+			path = append(path, next)
 			cur = next
+		}
+		for _, t := range path {
+			reachesCycle[t] = cyclic
+		}
+		if cyclic {
+			v = append(v, Violation{Clause: "7.1", Message: "/RoleMap contains a circular mapping involving <" + string(key) + ">", Object: 0})
 		}
 	}
 	return v
 }
-
-// The total number of /RoleMap chain-follow steps across all keys defaults to
-// defaultMaxRoleMapSteps; a caller can change it with WithMaxRoleMapSteps. The
-// bound stops a crafted role map driving super-linear validation work.
 
 // checkUASecurity flags an encrypted document that lacks a /P entry or whose
 // permissions disable text extraction for accessibility (Matterhorn 26-001/002).
@@ -1046,22 +1061,37 @@ func checkUAFieldDescription(d core.View, cat *object.Dictionary) []Violation {
 	}
 	var v []Violation
 	seen := map[int]bool{}
-	var walk func(node object.Object)
-	walk = func(node object.Object) {
+	// The field tree is walked iteratively, in the order the recursive walk
+	// took (kids pushed in reverse): it is as deep as the file says (audit
+	// 2026-09-22 C84). Each field visited is charged to the run's work meter,
+	// and a /Kids array named by reference is descended once: a tree never
+	// shares one, and N fields sharing one of N kids would otherwise push N².
+	var stack []object.Object
+	expanded := map[int]bool{}
+	if fields, ok := d.Resolve(form.Get("Fields")).(object.Array); ok {
+		for i := len(fields) - 1; i >= 0; i-- {
+			stack = append(stack, fields[i])
+		}
+	}
+	for len(stack) > 0 {
+		node := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		d.Charge(1)
 		if ref, ok := node.(object.IndirectRef); ok {
 			if seen[ref.Number] {
-				return
+				continue
 			}
 			seen[ref.Number] = true
 		}
 		fd := d.ResolveDict(node)
 		if fd == nil {
-			return
+			continue
 		}
 		_, hasFT := d.ResolveName(fd.Get("FT"))
 		kids, _ := d.Resolve(fd.Get("Kids")).(object.Array)
 		if hasFT && !d.NonEmptyStringOrLocked(fd.Get("TU")) {
 			for _, kr := range kids {
+				d.Charge(1)
 				kd := d.ResolveDict(kr)
 				if kd == nil {
 					continue
@@ -1078,13 +1108,14 @@ func checkUAFieldDescription(d core.View, cat *object.Dictionary) []Violation {
 				}
 			}
 		}
-		for _, kr := range kids {
-			walk(kr)
+		if kref, ok := fd.Get("Kids").(object.IndirectRef); ok {
+			if expanded[kref.Number] {
+				continue
+			}
+			expanded[kref.Number] = true
 		}
-	}
-	if fields, ok := d.Resolve(form.Get("Fields")).(object.Array); ok {
-		for _, fr := range fields {
-			walk(fr)
+		for i := len(kids) - 1; i >= 0; i-- {
+			stack = append(stack, kids[i])
 		}
 	}
 	return v
@@ -1293,10 +1324,16 @@ func checkFigureAlt(d core.View, cat *object.Dictionary) []Violation {
 	return v
 }
 
+// RunCheck runs one check behind a recover boundary: a panic becomes an
+// "internal" finding, and a check the run's work meter stopped reports nothing
+// (see pdfa's runCheck).
 func RunCheck(check func() []Violation) (out []Violation) {
 	defer func() {
 		if r := recover(); r != nil {
-			out = []Violation{{Clause: finding.InternalRule, Message: finding.InternalMessage(r)}}
+			out = nil
+			if !core.IsAbort(r) {
+				out = []Violation{{Clause: finding.InternalRule, Message: finding.InternalMessage(r)}}
+			}
 		}
 	}()
 	return check()

@@ -37,7 +37,7 @@ func TestFontUsageCacheMatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	uncached := core.CollectFontTextUsage(doc.view())
-	doc.valCache = newValidationCache(core.Canceler{})
+	doc.valCache = newValidationCache(doc, core.Canceler{})
 	first := core.CollectFontTextUsage(doc.view())
 	second := core.CollectFontTextUsage(doc.view())
 	if len(uncached) != len(first) || len(first) != len(second) {
