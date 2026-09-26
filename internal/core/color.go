@@ -44,26 +44,8 @@ func PageUsesTransparency(doc View, page *object.Dictionary) bool {
 		if annotDict == nil {
 			continue
 		}
-		// Check /BM on annotation itself
-		if bm := annotDict.Get("BM"); bm != nil {
-			if n, ok := bm.(object.Name); ok && n != "Normal" && n != "Compatible" {
-				return true
-			}
-		}
-		// Check /CA or /ca on annotation
-		for _, key := range []object.Name{"CA", "ca"} {
-			if v := annotDict.Get(key); v != nil {
-				fval := 1.0
-				switch tv := v.(type) {
-				case object.Real:
-					fval = float64(tv)
-				case object.Integer:
-					fval = float64(tv)
-				}
-				if math.Abs(fval-1.0) > 1e-6 {
-					return true
-				}
-			}
+		if blendOrAlphaIsTransparent(doc, annotDict) {
+			return true
 		}
 		// Check appearance streams for transparency
 		ap := annotDict.Get("AP")
@@ -236,33 +218,37 @@ func extGStateUsesTransparency(doc View, res *object.Dictionary) bool {
 		if gs == nil {
 			continue
 		}
-		// Check CA/ca for non-opaque values
-		for _, key := range []object.Name{"CA", "ca"} {
-			v := gs.Get(key)
-			if v != nil {
-				fval := 1.0
-				switch tv := v.(type) {
-				case object.Real:
-					fval = float64(tv)
-				case object.Integer:
-					fval = float64(tv)
-				}
-				if math.Abs(fval-1.0) > 1e-6 {
-					return true
-				}
-			}
+		if blendOrAlphaIsTransparent(doc, gs) {
+			return true
 		}
-		// Non-Normal blend modes are transparency features
-		if bm := gs.Get("BM"); bm != nil {
-			if n, ok := bm.(object.Name); ok && n != "Normal" && n != "Compatible" {
-				return true
-			}
-		}
-		// Check SMask for non-None values
-		if smask := gs.Get("SMask"); smask != nil {
+		// A soft mask other than /None is a transparency feature.
+		if smask := doc.Resolve(gs.Get("SMask")); smask != nil {
 			if n, ok := smask.(object.Name); !ok || n != "None" {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+// blendOrAlphaIsTransparent reports whether a graphics-state or annotation
+// dictionary selects a blend mode other than Normal/Compatible, or a constant
+// alpha (/CA or /ca) other than 1. Each value is resolved first: any of them
+// may be written as an indirect reference.
+func blendOrAlphaIsTransparent(doc View, d *object.Dictionary) bool {
+	if n, ok := doc.ResolveName(d.Get("BM")); ok && n != "Normal" && n != "Compatible" {
+		return true
+	}
+	for _, key := range []object.Name{"CA", "ca"} {
+		fval := 1.0
+		switch tv := doc.Resolve(d.Get(key)).(type) {
+		case object.Real:
+			fval = float64(tv)
+		case object.Integer:
+			fval = float64(tv)
+		}
+		if math.Abs(fval-1.0) > 1e-6 {
+			return true
 		}
 	}
 	return false
@@ -353,21 +339,21 @@ func ClassifyCalibratedCS(doc View, csObj object.Object) (coversRGB, coversCMYK,
 	if !ok || len(arr) < 2 {
 		return
 	}
-	csType, _ := arr[0].(object.Name)
+	csType, _ := doc.ResolveName(arr[0])
 	switch csType {
 	case "ICCBased":
-		profileObj := doc.Resolve(arr[1])
-		if stream, ok := profileObj.(*object.Stream); ok {
-			if nObj := stream.Dict.Get("N"); nObj != nil {
-				if n, ok := nObj.(object.Integer); ok {
-					switch int(n) {
-					case 1:
-						coversGray = true
-					case 3:
-						coversRGB = true
-					case 4:
-						coversCMYK = true
-					}
+		// /N may be indirect like any other value; reading it only when direct
+		// lost the group's coverage and reported its device colour as
+		// uncovered (audit 2026-09-22 C152).
+		if stream, ok := doc.Resolve(arr[1]).(*object.Stream); ok {
+			if n, ok := doc.ResolveInt(stream.Dict.Get("N")); ok {
+				switch int(n) {
+				case 1:
+					coversGray = true
+				case 3:
+					coversRGB = true
+				case 4:
+					coversCMYK = true
 				}
 			}
 		}
@@ -408,7 +394,7 @@ func checkCSForDeviceSeen(doc View, csObj object.Object, usesRGB, usesCMYK, uses
 		return
 	}
 	if arr, ok := resolved.(object.Array); ok && len(arr) >= 2 {
-		csType, _ := arr[0].(object.Name)
+		csType, _ := doc.ResolveName(arr[0])
 		switch csType {
 		case "Indexed":
 			// [/Indexed base hival lookup] - check base
@@ -433,292 +419,4 @@ func checkCSForDeviceSeen(doc View, csObj object.Object, usesRGB, usesCMYK, uses
 			}
 		}
 	}
-}
-
-// ScanStreamForDeviceOps scans decoded content stream bytes for device color operators.
-// Uses a simple tokenizer that handles inline images (BI/ID/EI) to avoid
-// scanning binary image data.
-//
-// The scan stops when cancel fires, checked every cancelScanBytes of input
-// like the other content scanners; see cancel.go.
-func ScanStreamForDeviceOps(cancel Canceler, data []byte) (usesRGB, usesCMYK, usesGray bool) {
-	n := len(data)
-	var lastName string
-	sawColorOp := false
-	paints := false
-	defer func() {
-		// Painting without ever selecting a colour uses the initial colour:
-		// DeviceGray black (ISO 32000-1, 8.4.1).
-		if paints && !sawColorOp {
-			usesGray = true
-		}
-	}()
-	// Scan for operators at word boundaries.
-	// An operator token is an alphabetic sequence preceded by whitespace (or BOF)
-	// and followed by whitespace, delimiter, or EOF.
-	i := 0
-	nextCancelCheck := 0 // poll before the first token, then per cancelScanBytes
-	for i < n {
-		if i >= nextCancelCheck {
-			if cancel.Stopped() {
-				return
-			}
-			nextCancelCheck = i + CancelScanBytes
-		}
-		// Skip whitespace
-		for i < n && IsContentWS(data[i]) {
-			i++
-		}
-		if i >= n {
-			break
-		}
-
-		b := data[i]
-
-		// Skip comments
-		if b == '%' {
-			for i < n && data[i] != '\n' && data[i] != '\r' {
-				i++
-			}
-			continue
-		}
-
-		// Skip string literals (...)
-		if b == '(' {
-			depth := 1
-			i++
-			for i < n && depth > 0 {
-				if data[i] == '\\' {
-					i++ // skip escape char
-					if i >= n {
-						break
-					}
-				} else if data[i] == '(' {
-					depth++
-				} else if data[i] == ')' {
-					depth--
-				}
-				i++
-			}
-			continue
-		}
-
-		// Skip hex strings and dict markers
-		if b == '<' {
-			i++
-			if i < n && data[i] == '<' {
-				i++ // <<
-			} else {
-				for i < n && data[i] != '>' {
-					i++
-				}
-				if i < n {
-					i++
-				}
-			}
-			continue
-		}
-		if b == '>' {
-			i++
-			if i < n && data[i] == '>' {
-				i++
-			}
-			continue
-		}
-
-		// Skip array/proc delimiters, and a stray ')' (a delimiter that would
-		// otherwise stall the token scan below on untrusted content).
-		if b == '[' || b == ']' || b == '{' || b == '}' || b == ')' {
-			i++
-			continue
-		}
-
-		// PDF names (/object.Name): remember the last one seen, so a following
-		// cs/CS operator can be checked for direct device selection.
-		if b == '/' {
-			i++
-			nameStart := i
-			for i < n && !IsContentWS(data[i]) && !IsContentDelim(data[i]) {
-				i++
-			}
-			lastName = string(data[nameStart:i])
-			continue
-		}
-
-		// Read a token
-		start := i
-		for i < n && !IsContentWS(data[i]) && !IsContentDelim(data[i]) {
-			i++
-		}
-		// A run longer than this is binary data, not a token: no PDF operator
-		// or operand keyword is anywhere near this long. Discarding it whole is
-		// what matters — cutting it at the cap and letting the scan re-enter
-		// mid-run turns the tail into further "tokens", and a fragment of
-		// binary read as an operator is a violation the file does not commit
-		// (a stray 'k'/'g' fragment reads as DeviceCMYK/DeviceGray use).
-		if i-start > MaxContentTokenLen {
-			continue
-		}
-
-		tokLen := i - start
-
-		// Skip names (start with /)
-		if tokLen > 0 && data[start] == '/' {
-			continue
-		}
-
-		switch string(data[start:i]) {
-		case "rg", "RG", "g", "G", "k", "K", "cs", "CS", "sc", "scn", "SC", "SCN":
-			sawColorOp = true
-		case "f", "F", "f*", "S", "s", "B", "B*", "b", "b*", "Tj", "TJ", "'", "\"", "sh":
-			paints = true
-		}
-
-		// Handle inline images: BI <dict> ID <binary> EI
-		// Check for BI (begin inline image), parse dict for CS, then skip binary
-		if tokLen == 2 && data[start] == 'B' && data[start+1] == 'I' {
-			// Parse inline image dict until ID token
-			// Look for /CS or /ColorSpace keys with device CS values
-			foundID := false
-			for i < n && !foundID {
-				// Skip whitespace
-				for i < n && IsContentWS(data[i]) {
-					i++
-				}
-				if i >= n {
-					break
-				}
-				// Check for ID token (end of inline image dict)
-				if data[i] == 'I' && i+1 < n && data[i+1] == 'D' &&
-					(i+2 >= n || IsContentWS(data[i+2])) {
-					i += 2
-					// Skip one whitespace byte after ID
-					if i < n && IsContentWS(data[i]) {
-						i++
-					}
-					foundID = true
-					break
-				}
-				// Read key or value token
-				if data[i] == '/' {
-					// Read name
-					keyStart := i + 1
-					i++
-					for i < n && !IsContentWS(data[i]) && !IsContentDelim(data[i]) {
-						i++
-					}
-					key := string(data[keyStart:i])
-					// If key is CS or ColorSpace, check the next value
-					if key == "CS" || key == "ColorSpace" {
-						// Skip whitespace
-						for i < n && IsContentWS(data[i]) {
-							i++
-						}
-						// Read value - could be /object.Name or /abbreviation
-						if i < n && data[i] == '/' {
-							valStart := i + 1
-							i++
-							for i < n && !IsContentWS(data[i]) && !IsContentDelim(data[i]) {
-								i++
-							}
-							csVal := string(data[valStart:i])
-							switch csVal {
-							case "RGB", "DeviceRGB":
-								usesRGB = true
-							case "CMYK", "DeviceCMYK":
-								usesCMYK = true
-							case "G", "DeviceGray":
-								usesGray = true
-							}
-						}
-					}
-				} else {
-					// Skip non-name token (numbers, arrays, etc.)
-					prev := i
-					if data[i] == '[' || data[i] == ']' || data[i] == '(' || data[i] == ')' ||
-						data[i] == '<' || data[i] == '>' {
-						i++ // skip single delimiter
-					} else {
-						for i < n && !IsContentWS(data[i]) && !IsContentDelim(data[i]) {
-							i++
-						}
-					}
-					// Safety: if no progress, advance by 1
-					if i == prev {
-						i++
-					}
-				}
-			}
-			// Now skip binary data until EI at word boundary
-			if foundID {
-				for i < n {
-					if data[i] == 'E' && i+1 < n && data[i+1] == 'I' {
-						atBoundary := (i == 0 || IsContentWS(data[i-1]))
-						endBoundary := (i+2 >= n || IsContentWS(data[i+2]) || IsContentDelim(data[i+2]))
-						if atBoundary && endBoundary {
-							i += 2
-							break
-						}
-					}
-					i++
-				}
-			}
-			continue
-		}
-
-		// Handle ID token outside of BI context (shouldn't happen, but be safe)
-		if tokLen == 2 && data[start] == 'I' && data[start+1] == 'D' {
-			// Skip one whitespace byte after ID
-			if i < n && IsContentWS(data[i]) {
-				i++
-			}
-			// Scan for EI at word boundary
-			for i < n {
-				if data[i] == 'E' && i+1 < n && data[i+1] == 'I' {
-					atBoundary := (i == 0 || IsContentWS(data[i-1]))
-					endBoundary := (i+2 >= n || IsContentWS(data[i+2]) || IsContentDelim(data[i+2]))
-					if atBoundary && endBoundary {
-						i += 2
-						break
-					}
-				}
-				i++
-			}
-			continue
-		}
-
-		// Check for device color operators (only short alphabetic tokens)
-		if tokLen == 2 {
-			if data[start] == 'r' && data[start+1] == 'g' {
-				usesRGB = true
-			} else if data[start] == 'R' && data[start+1] == 'G' {
-				usesRGB = true
-			} else if (data[start] == 'c' && data[start+1] == 's') ||
-				(data[start] == 'C' && data[start+1] == 'S') {
-				// Direct device selection: /DeviceRGB cs (etc.). Named
-				// resource selections (/CS0 cs) are covered by the
-				// resource-dictionary walk.
-				switch lastName {
-				case "DeviceRGB":
-					usesRGB = true
-				case "DeviceCMYK":
-					usesCMYK = true
-				case "DeviceGray":
-					usesGray = true
-				}
-			}
-		} else if tokLen == 1 {
-			switch data[start] {
-			case 'g':
-				usesGray = true
-			case 'G':
-				usesGray = true
-			case 'k':
-				usesCMYK = true
-			case 'K':
-				usesCMYK = true
-			}
-		}
-	}
-	return
 }

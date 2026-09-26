@@ -6,7 +6,6 @@ import (
 	"github.com/mgilbir/pdf0/internal/checked"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
-	"math"
 	"strings"
 	"unicode"
 )
@@ -17,40 +16,6 @@ import (
 // encodings (9.6.6.4), embedding, and ToUnicode restrictions.
 
 // --- content walking: text usage per font ---
-
-// core.ContentItemKind classifies items reported by core.ForEachContentItem.
-
-// core.DecodeContentLiteralString decodes a (...) string starting at open paren;
-// returns the decoded bytes and the index just past the closing paren.
-
-// decodeHexBytes decodes hex-string content (whitespace tolerated, odd
-// length padded with 0).
-func decodeHexBytes(b []byte) []byte {
-	var digits []byte
-	for _, c := range b {
-		switch {
-		case c >= '0' && c <= '9', c >= 'a' && c <= 'f', c >= 'A' && c <= 'F':
-			digits = append(digits, c)
-		}
-	}
-	if len(digits)%2 == 1 {
-		digits = append(digits, '0')
-	}
-	out := make([]byte, len(digits)/2)
-	hv := func(c byte) byte {
-		switch {
-		case c <= '9':
-			return c - '0'
-		case c >= 'a':
-			return c - 'a' + 10
-		}
-		return c - 'A' + 10
-	}
-	for i := 0; i < len(out); i++ {
-		out[i] = hv(digits[2*i])<<4 | hv(digits[2*i+1])
-	}
-	return out
-}
 
 // --- predefined CMaps (ISO 32000-1, 9.7.5.2, Table 118) ---
 
@@ -274,45 +239,24 @@ func pdfTextString(doc core.View, v object.Object) (string, bool) {
 	return s, r != core.ReasonLocked
 }
 
-// cmapContentWMode extracts "/WMode N def" from an embedded CMap stream.
+// cmapContentWMode is the writing mode an embedded CMap program sets with
+// "/WMode n def", read as tokens: the words in a comment are not a definition.
 func cmapContentWMode(doc core.View, stream *object.Stream) (int, bool) {
 	data, _ := doc.Content(stream) // reason: presence-only; the producer recorded any declined trip
 	if data == nil {
 		return 0, false
 	}
-	idx := strings.Index(string(data), "/WMode")
-	if idx < 0 {
-		return 0, false
-	}
-	var mode int
-	if _, err := fmt.Sscanf(string(data[idx:]), "/WMode %d", &mode); err != nil {
-		return 0, false
-	}
-	return mode, true
+	return core.CMapWMode(doc.Cancel, data)
 }
 
-// cmapUseCMap extracts a "/Name usecmap" reference from an embedded CMap.
+// cmapUseCMap is the "/Name usecmap" reference of an embedded CMap: the
+// operator, not the word in a comment (audit 2026-09-22 C75).
 func cmapUseCMap(doc core.View, stream *object.Stream) (string, bool) {
 	data, _ := doc.Content(stream) // reason: presence-only; the producer recorded any declined trip
 	if data == nil {
 		return "", false
 	}
-	s := string(data)
-	idx := strings.Index(s, "usecmap")
-	if idx < 0 {
-		return "", false
-	}
-	// Walk back to the /Name operand.
-	head := strings.TrimRight(s[:idx], " \t\r\n")
-	slash := strings.LastIndexByte(head, '/')
-	if slash < 0 {
-		return "", false
-	}
-	name := strings.TrimSpace(head[slash+1:])
-	if cut := strings.IndexAny(name, " \t\r\n"); cut >= 0 {
-		name = name[:cut]
-	}
-	return name, name != ""
+	return core.CMapUseCMap(doc.Cancel, data)
 }
 
 // checkTrueTypeEncoding enforces the PDF/A TrueType encoding rules
@@ -906,6 +850,11 @@ func checkCIDFontConsistency(doc core.View, level Level, rule string, fontDict *
 			report("glyph", fmt.Sprintf("embedded %s font does not define a glyph referenced for rendering (incomplete character code)", string(cidSub)))
 		}
 		for _, code := range cmap.Decode([]byte(s)) {
+			if code.Unknown {
+				// Left to a CMap whose data is not carried; the CMap has
+				// reported that these codes were not checked.
+				continue
+			}
 			if !code.Mapped {
 				// A code the document wrote and its own CMap does not define.
 				// It names no glyph, so every check below would be about CID 0
@@ -1250,15 +1199,14 @@ func type3GlyphWidth(doc core.View, cp *object.Stream) (float64, bool) {
 	var nums []float64
 	found := false
 	var w float64
-	core.ForEachContentItem(doc.Cancel, data, func(kind core.ContentItemKind, payload []byte) {
-		if found {
-			return
-		}
-		switch kind {
-		case core.ItemNumber:
-			nums = append(nums, numVal(parseNumberToken(payload)))
-		case core.ItemOperator:
-			switch string(payload) {
+	lx := core.NewContentLexer(doc.Cancel, data)
+	var t core.ContentTok
+	for !found && lx.Next(&t) {
+		switch t.Kind {
+		case core.ContentNumber:
+			nums = append(nums, numVal(parseNumberToken(t.Raw)))
+		case core.ContentOperator:
+			switch string(t.Raw) {
 			case "d0", "d1":
 				if len(nums) >= 1 {
 					w = nums[0]
@@ -1267,10 +1215,13 @@ func type3GlyphWidth(doc core.View, cp *object.Stream) (float64, bool) {
 			default:
 				nums = nums[:0]
 			}
+		case core.ContentDictStart:
+			lx.SkipDict(&t)
+			nums = nums[:0]
 		default:
 			nums = nums[:0]
 		}
-	})
+	}
 	return w, found
 }
 
@@ -1441,7 +1392,7 @@ func checkCMapCIDLimit(doc core.View, level Level) []Violation {
 		if data == nil {
 			continue
 		}
-		if maxCMapCID(data) > 65535 && !seen[num] {
+		if core.CMapMaxCID(doc.Cancel, data) > 65535 && !seen[num] {
 			seen[num] = true
 			errs = append(errs, Violation{
 				Rule:    rule,
@@ -1452,62 +1403,6 @@ func checkCMapCIDLimit(doc core.View, level Level) []Violation {
 		}
 	}
 	return errs
-}
-
-// maxCMapCID returns the largest CID mapped by a CMap's cidrange and cidchar
-// sections.
-func maxCMapCID(data []byte) int {
-	max := 0
-	consider := func(v int) {
-		if v > max {
-			max = v
-		}
-	}
-	// cidrange: <lo> <hi> startCID  -> max CID = startCID + (hi - lo)
-	s := string(data)
-	scanRanges := func(begin, end string, isRange bool) {
-		rest := s
-		for {
-			b := strings.Index(rest, begin)
-			if b < 0 {
-				return
-			}
-			e := strings.Index(rest[b:], end)
-			if e < 0 {
-				return
-			}
-			lo, hi := b+len(begin), b+e
-			if lo > hi {
-				rest = rest[b+e+len(end):]
-				continue
-			}
-			section := rest[lo:hi]
-			for _, line := range strings.Split(section, "\n") {
-				fields := strings.Fields(line)
-				if isRange && len(fields) >= 3 {
-					lo := core.HexVal4(fields[0])
-					hi := core.HexVal4(fields[1])
-					cid := atoiSafe(fields[2])
-					if lo >= 0 && hi >= lo {
-						consider(cid + (hi - lo))
-					}
-				} else if !isRange && len(fields) >= 2 {
-					consider(atoiSafe(fields[1]))
-				}
-			}
-			rest = rest[b+e+len(end):]
-		}
-	}
-	scanRanges("begincidrange", "endcidrange", true)
-	scanRanges("begincidchar", "endcidchar", false)
-	return max
-}
-
-// atoiSafe reads the leading decimal digits of s, saturating at MaxInt rather
-// than wrapping.
-func atoiSafe(s string) int {
-	v, _, _ := checked.Decimal(s)
-	return int(min(v, math.MaxInt))
 }
 
 // checkCIDSetProgramComplete enforces the stricter PDF/A-1 subset rule

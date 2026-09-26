@@ -159,22 +159,20 @@ func TestOverlongTokenIsNotAnOperator(t *testing.T) {
 	run := append(bytes.Repeat([]byte("A"), 514), []byte("k")...)
 	data := append([]byte("q "), run...)
 	data = append(data, []byte(" Q")...)
-	rgb, cmyk, gray := core.ScanStreamForDeviceOps(core.Canceler{}, data)
-	if cmyk || rgb {
-		t.Errorf("a %d-byte binary run was tokenized into colour operators: rgb=%v cmyk=%v gray=%v", len(run), rgb, cmyk, gray)
-	}
 
-	// The tokenizer used by the operator whitelist must not manufacture an
-	// operator out of the tail either.
+	// The content lexer — which the operator whitelist and the device-colour
+	// interpreter both read through (internal/core TestOverlongRunPaintsNothing
+	// pins the colour outcome) — must not manufacture an operator out of the
+	// tail.
 	var ops []string
-	core.ForEachContentToken(core.Canceler{}, data, func(tok []byte, isName bool) {
-		if !isName {
-			ops = append(ops, string(tok))
-		}
-	})
+	lx := core.NewContentLexer(core.Canceler{}, data)
+	var tk core.ContentTok
+	for lx.Next(&tk) {
+		ops = append(ops, string(tk.Raw))
+	}
 	for _, op := range ops {
 		if op != "q" && op != "Q" {
-			t.Errorf("core.ForEachContentToken produced %q from an over-long binary run", op)
+			t.Errorf("the content lexer produced %q from an over-long binary run", op)
 		}
 	}
 }

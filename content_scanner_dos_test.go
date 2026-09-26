@@ -32,8 +32,19 @@ func TestContentScannersTerminateOnStrayParen(t *testing.T) {
 		}
 		for _, in := range inputs {
 			in := in
-			run("core.ForEachContentItem", func() { core.ForEachContentItem(core.Canceler{}, in, func(core.ContentItemKind, []byte) {}) })
-			run("core.ForEachContentToken", func() { core.ForEachContentToken(core.Canceler{}, in, func([]byte, bool) {}) })
+			run("core.ContentLexer", func() {
+				lx := core.NewContentLexer(core.Canceler{}, in)
+				var tk core.ContentTok
+				for lx.Next(&tk) {
+					if tk.Kind == core.ContentDictStart {
+						lx.SkipDict(&tk)
+					}
+				}
+			})
+			run("core.TokenizeContent", func() {
+				for range core.TokenizeContent(core.Canceler{}, in) {
+				}
+			})
 			run("core.ContentUsedNames", func() { core.ContentUsedNames(core.Canceler{}, in) })
 		}
 	})

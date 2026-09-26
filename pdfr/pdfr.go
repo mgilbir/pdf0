@@ -64,16 +64,20 @@ func CheckPage(d core.View, page *object.Dictionary, objNum int, add func(rule, 
 	// The page content must draw raster images only — no text or vector marks.
 	data, _ := core.ContentStreamData(d, page.Get("Contents")) // reason: presence-only; the producer recorded any declined trip
 	flagged := map[string]bool{}
-	core.ForEachContentToken(d.Cancel, data, func(tok []byte, isName bool) {
-		if isName {
-			return
+	lx := core.NewContentLexer(d.Cancel, data)
+	var t core.ContentTok
+	for lx.Next(&t) {
+		switch t.Kind {
+		case core.ContentDictStart:
+			lx.SkipDict(&t)
+		case core.ContentOperator:
+			op := string(t.Raw)
+			if pdfrTextOrVectorOps[op] && !flagged[op] {
+				flagged[op] = true
+				add("raster-only", fmt.Sprintf("page content uses a non-raster operator %q; a PDF/R page shall contain only raster images", op), objNum)
+			}
 		}
-		op := string(tok)
-		if pdfrTextOrVectorOps[op] && !flagged[op] {
-			flagged[op] = true
-			add("raster-only", fmt.Sprintf("page content uses a non-raster operator %q; a PDF/R page shall contain only raster images", op), objNum)
-		}
-	})
+	}
 
 	// Every XObject the page carries must be an image using a permitted filter;
 	// a form XObject (vector container) is not allowed.

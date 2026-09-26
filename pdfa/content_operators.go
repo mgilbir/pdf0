@@ -205,7 +205,7 @@ func walkExecutedContent(doc core.View, container *object.Dictionary, data []byt
 				if st == "PS" {
 					add("a drawn PostScript XObject is not permitted", xnum)
 				} else if st == "Form" {
-					if s2, _ := s.Dict.Get("Subtype2").(object.Name); s2 == "PS" {
+					if s2, _ := doc.ResolveName(s.Dict.Get("Subtype2")); s2 == "PS" {
 						add("a drawn form XObject has /Subtype2 /PS (PostScript)", xnum)
 					}
 					if s.Dict.Get("PS") != nil {
@@ -239,18 +239,29 @@ func walkExecutedContent(doc core.View, container *object.Dictionary, data []byt
 // rendering intents, and unresolved named resource references.
 func checkContentTokens(data []byte, res *object.Dictionary, doc core.View, objNum int, add func(string, int)) {
 	var lastName string
-	core.ForEachContentToken(doc.Cancel, data, func(tok []byte, isName bool) {
-		if isName {
-			lastName = string(tok)
-			return
+	lx := core.NewContentLexer(doc.Cancel, data)
+	var t core.ContentTok
+	for lx.Next(&t) {
+		switch t.Kind {
+		case core.ContentName:
+			lastName = t.Name()
+			continue
+		case core.ContentDictStart:
+			// A property list is one operand; what is inside it is not an
+			// operator.
+			lx.SkipDict(&t)
+			continue
+		case core.ContentOperator:
+		default:
+			continue
 		}
-		s := string(tok)
+		s := string(t.Raw)
 		if isContentOperand(s) {
-			return
+			continue
 		}
 		if !contentOperators[s] {
 			add(fmt.Sprintf("content stream contains an operator %q not defined in ISO 32000", s), objNum)
-			return
+			continue
 		}
 		switch s {
 		case "ri":
@@ -280,7 +291,7 @@ func checkContentTokens(data []byte, res *object.Dictionary, doc core.View, objN
 				add("content stream references a font that is absent from the resource dictionary", objNum)
 			}
 		}
-	})
+	}
 }
 
 // isContentOperand reports whether a content token is an operand (number,
@@ -346,16 +357,18 @@ func checkContentStreamLimits(doc core.View, level Level, lim implLimits, errs *
 		found.add(Violation{Rule: lim.rule, Level: level, Message: msg, Object: obj})
 	}
 	for num, data := range collectContentStreamData(doc) {
-		core.ForEachContentItem(doc.Cancel, data, func(kind core.ContentItemKind, payload []byte) {
-			switch kind {
-			case core.ItemNumber:
-				checkContentNumberLimit(string(payload), lim, num, add)
-			case core.ItemString:
-				if len(payload) > lim.stringLen {
-					add(fmt.Sprintf("a content-stream string of %d bytes exceeds the maximum length %d", len(payload), lim.stringLen), num)
+		lx := core.NewContentLexer(doc.Cancel, data)
+		var t core.ContentTok
+		for lx.Next(&t) {
+			switch t.Kind {
+			case core.ContentNumber:
+				checkContentNumberLimit(string(t.Raw), lim, num, add)
+			case core.ContentString, core.ContentHexString:
+				if v := t.Bytes(); len(v) > lim.stringLen {
+					add(fmt.Sprintf("a content-stream string of %d bytes exceeds the maximum length %d", len(v), lim.stringLen), num)
 				}
 			}
-		})
+		}
 	}
 }
 

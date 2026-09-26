@@ -245,3 +245,32 @@ endcmap`
 		}
 	}
 }
+
+// TestUseCMapIsAnOperatorNotAWord is C75's second symptom: the CMap-legality
+// rule looked for "usecmap" anywhere in the program and walked back to the
+// nearest '/', so a comment mentioning the word made the CMap "reference" the
+// /ProcSet of its own boilerplate. Only the operator is a reference; the
+// /WMode definition likewise.
+func TestUseCMapIsAnOperatorNotAWord(t *testing.T) {
+	stream := func(body string) *object.Stream {
+		st := &object.Stream{Dict: object.Dictionary{}, Data: []byte(body)}
+		st.Dict.Set("Length", object.Integer(len(body)))
+		return st
+	}
+	doc := mkView(map[int]*object.IndirectObject{}, nil)
+	commented := stream("/CIDInit /ProcSet findresource begin\n" +
+		"% this CMap does not usecmap anything, nor /WMode 1 def\n" +
+		"12 dict begin begincmap /CMapName /Test-H def /WMode 0 def\n" +
+		"1 begincodespacerange <00> <FF> endcodespacerange endcmap end end\n")
+	if name, found := cmapUseCMap(doc, commented); found {
+		t.Errorf("a comment was read as a usecmap of /%s", name)
+	}
+	if m, found := cmapContentWMode(doc, commented); !found || m != 0 {
+		t.Errorf("WMode = %d, %v; want the definition, 0, not the comment's 1", m, found)
+	}
+	real := stream("/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n" +
+		"/UniJIS-UCS2-H usecmap\n/CMapName /Test-H def\nendcmap end end\n")
+	if name, found := cmapUseCMap(doc, real); !found || name != "UniJIS-UCS2-H" {
+		t.Errorf("usecmap = %q, %v; want UniJIS-UCS2-H", name, found)
+	}
+}

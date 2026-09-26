@@ -3,7 +3,6 @@ package pdfua
 import (
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
-	"github.com/mgilbir/pdf0/syntax"
 )
 
 // This file owns the content-stream side of PDF/UA validation (ISO 14289-1
@@ -189,7 +188,7 @@ func checkUAFormXObjectMCID(d core.View) []Violation {
 		if st, _ := d.ResolveName(s.Dict.Get("Subtype")); st != "Form" {
 			continue
 		}
-		if data, _ := d.Content(s); bytesContainsToken(data, "/MCID") { // reason: presence-only; the producer recorded any declined trip
+		if data, _ := d.Content(s); containsNameToken(d.Cancel, data, "MCID") { // reason: presence-only; the producer recorded any declined trip
 			mcidForm[num] = true
 		}
 	}
@@ -249,33 +248,18 @@ func checkUAFormXObjectMCID(d core.View) []Violation {
 	return v
 }
 
-// bytesContainsToken reports whether tok appears in data followed by a
-// delimiter/whitespace (so "/MCID" does not match "/MCIDExtra").
-func bytesContainsToken(data []byte, tok string) bool {
-	for i := 0; ; {
-		j := indexBytes(data[i:], tok)
-		if j < 0 {
-			return false
-		}
-		end := i + j + len(tok)
-		if end >= len(data) || syntax.IsWhitespace(data[end]) || core.IsContentDelim(data[end]) {
+// containsNameToken reports whether a content stream contains the name token
+// /name — as the content lexer reads it, so a "/MCID" inside a string, a
+// comment or inline-image data is not one, and neither is "/MCIDExtra".
+func containsNameToken(cancel core.Canceler, data []byte, name string) bool {
+	lx := core.NewContentLexer(cancel, data)
+	var t core.ContentTok
+	for lx.Next(&t) {
+		if t.Kind == core.ContentName && t.Name() == name {
 			return true
 		}
-		i = i + j + 1
 	}
-}
-
-func indexBytes(b []byte, s string) int {
-	n := len(s)
-	if n == 0 {
-		return 0
-	}
-	for i := 0; i+n <= len(b); i++ {
-		if string(b[i:i+n]) == s {
-			return i
-		}
-	}
-	return -1
+	return false
 }
 
 func sortedInts(m map[int]bool) []int {

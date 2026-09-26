@@ -645,67 +645,15 @@ func checkHexStringFormat(doc core.View, level Level, raw []byte) []Violation {
 }
 
 // scanContentHexStrings reports the raw content of each hexadecimal string
-// operand in a content stream, skipping literal strings, comments, names,
-// and inline-image binary data (BI ... ID <binary> EI).
+// operand in a content stream — inside dictionary operands too — as the
+// content lexer reads them, so strings, comments and inline-image data are
+// never mistaken for one.
 func scanContentHexStrings(data []byte, fn func(content []byte)) {
-	n := len(data)
-	i := 0
-	for i < n {
-		switch b := data[i]; {
-		case core.IsContentWS(b):
-			i++
-		case b == '%':
-			for i < n && data[i] != '\n' && data[i] != '\r' {
-				i++
-			}
-		case b == '(':
-			depth := 1
-			i++
-			for i < n && depth > 0 {
-				switch data[i] {
-				case '\\':
-					i++
-				case '(':
-					depth++
-				case ')':
-					depth--
-				}
-				i++
-			}
-		case b == '<':
-			if i+1 < n && data[i+1] == '<' {
-				i += 2
-				continue
-			}
-			start := i + 1
-			j := start
-			for j < n && data[j] != '>' {
-				j++
-			}
-			fn(data[start:j])
-			i = j + 1
-		case b == '>':
-			i++
-			if i < n && data[i] == '>' {
-				i++
-			}
-		case b == '/' || b == '[' || b == ']' || b == '{' || b == '}' || b == ')':
-			i++
-		default:
-			start := i
-			for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
-				i++
-			}
-			if i == start {
-				i++ // unhandled delimiter (e.g. stray ')'): guarantee progress
-				continue
-			}
-			if i-start > core.MaxContentTokenLen {
-				continue // binary run, not a token; see core.ScanStreamForDeviceOps
-			}
-			if i-start == 2 && data[start] == 'B' && data[start+1] == 'I' {
-				core.SkipInlineImage(data, &i)
-			}
+	lx := core.NewContentLexer(core.Canceler{}, data)
+	var t core.ContentTok
+	for lx.Next(&t) {
+		if t.Kind == core.ContentHexString {
+			fn(t.HexBody())
 		}
 	}
 }
@@ -1000,66 +948,26 @@ func checkInlineImageIntent(doc core.View, level Level) []Violation {
 // inlineImageIntents extracts the /Intent value of every inline image.
 func inlineImageIntents(data []byte) []string {
 	var out []string
-	n := len(data)
-	i := 0
-	for i < n {
-		if data[i] == 'B' && i+1 < n && data[i+1] == 'I' &&
-			(i == 0 || core.IsContentWS(data[i-1]) || core.IsContentDelim(data[i-1])) &&
-			(i+2 >= n || core.IsContentWS(data[i+2]) || core.IsContentDelim(data[i+2])) {
-			i += 2
-			if v := inlineImageDictValue(data, &i, "Intent"); v != "" {
-				out = append(out, v)
+	forEachInlineImage(data, func(params []core.InlineImageParam) {
+		for _, p := range params {
+			if p.Key == "Intent" && !p.Array && len(p.Value) == 1 && p.Value[0].Kind == core.ContentName {
+				out = append(out, p.Value[0].Name())
 			}
-			continue
 		}
-		i++
-	}
+	})
 	return out
 }
 
-// inlineImageDictValue reads the named key's name value from an inline image
-// parameter dictionary, advancing past ID.
-func inlineImageDictValue(data []byte, pos *int, key string) string {
-	n := len(data)
-	i := *pos
-	var pendingKey, value string
-	readName := func() string {
-		i++
-		start := i
-		for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
-			i++
-		}
-		return string(data[start:i])
-	}
-	for i < n {
-		switch b := data[i]; {
-		case core.IsContentWS(b):
-			i++
-		case b == '/':
-			name := readName()
-			if pendingKey == key {
-				value = name
-				pendingKey = ""
-			} else {
-				pendingKey = name
-			}
-		case b == 'I' && i+1 < n && data[i+1] == 'D':
-			*pos = i + 2
-			core.SkipInlineImage(data, pos)
-			return value
-		default:
-			start := i
-			for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
-				i++
-			}
-			if i == start {
-				i++ // delimiter or other single byte
-			}
-			pendingKey = ""
+// forEachInlineImage calls fn with the parameter entries of every inline image
+// in a content stream.
+func forEachInlineImage(data []byte, fn func([]core.InlineImageParam)) {
+	lx := core.NewContentLexer(core.Canceler{}, data)
+	var t core.ContentTok
+	for lx.Next(&t) {
+		if t.Kind == core.ContentInlineImage {
+			fn(core.ParseInlineImageParams(t.Params))
 		}
 	}
-	*pos = i
-	return value
 }
 
 // checkInlineImageFilters verifies that every inline image's /F (Filter)
@@ -1094,88 +1002,26 @@ func checkInlineImageFilters(doc core.View, level Level) []Violation {
 }
 
 // inlineImageFilters extracts the /F (or /Filter) filter name(s) of every
-// inline image in a content stream.
+// inline image in a content stream that declares any.
 func inlineImageFilters(data []byte) [][]string {
 	var out [][]string
-	n := len(data)
-	i := 0
-	for i < n {
-		// Find a BI token at a boundary.
-		if data[i] == 'B' && i+1 < n && data[i+1] == 'I' &&
-			(i == 0 || core.IsContentWS(data[i-1]) || core.IsContentDelim(data[i-1])) &&
-			(i+2 >= n || core.IsContentWS(data[i+2]) || core.IsContentDelim(data[i+2])) {
-			i += 2
-			filters := parseInlineImageFilter(data, &i) // advances past ID
-			if filters != nil {
-				out = append(out, filters)
+	forEachInlineImage(data, func(params []core.InlineImageParam) {
+		var filters []string
+		for _, p := range params {
+			if p.Key != "F" && p.Key != "Filter" {
+				continue
 			}
-			continue
+			for _, v := range p.Value {
+				if v.Kind == core.ContentName {
+					filters = append(filters, v.Name())
+				}
+			}
 		}
-		i++
-	}
+		if filters != nil {
+			out = append(out, filters)
+		}
+	})
 	return out
-}
-
-// parseInlineImageFilter reads the inline-image parameter dictionary up to
-// the ID keyword, returning the /F (or /Filter) value as a list of names.
-func parseInlineImageFilter(data []byte, pos *int) []string {
-	n := len(data)
-	i := *pos
-	var filters []string
-	var pendingKey string
-	readName := func() string {
-		i++ // past '/'
-		start := i
-		for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
-			i++
-		}
-		return string(data[start:i])
-	}
-	for i < n {
-		switch b := data[i]; {
-		case core.IsContentWS(b):
-			i++
-		case b == '/':
-			name := readName()
-			if pendingKey == "F" || pendingKey == "Filter" {
-				filters = append(filters, name)
-				pendingKey = ""
-			} else {
-				pendingKey = name
-			}
-		case b == '[':
-			i++
-			if pendingKey == "F" || pendingKey == "Filter" {
-				for i < n && data[i] != ']' {
-					if data[i] == '/' {
-						filters = append(filters, readName())
-					} else {
-						i++
-					}
-				}
-				if i < n {
-					i++ // past ']'
-				}
-				pendingKey = ""
-			}
-		case b == 'I' && i+1 < n && data[i+1] == 'D':
-			*pos = i + 2
-			core.SkipInlineImage(data, pos)
-			return filters
-		default:
-			// numbers, booleans, etc. — a value clears any pending key.
-			start := i
-			for i < n && !core.IsContentWS(data[i]) && !core.IsContentDelim(data[i]) {
-				i++
-			}
-			if i == start {
-				i++
-			}
-			pendingKey = ""
-		}
-	}
-	*pos = i
-	return filters
 }
 
 // checkStreamLength enforces that a stream's /Length entry equals the actual

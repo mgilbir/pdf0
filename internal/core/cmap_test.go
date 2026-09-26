@@ -165,19 +165,40 @@ func TestACMapWithNoCodespaceIsRefused(t *testing.T) {
 	}
 }
 
-// TestACMapThatDefersToAnotherIsRefused: usecmap names a predefined CMap, which
-// is data this module does not carry. The result would be a map with holes and
-// no way to tell a hole from a code the document really left undefined.
-func TestACMapThatDefersToAnotherIsRefused(t *testing.T) {
+// TestACMapThatDefersToAnotherKnowsWhatItDoesNotKnow: usecmap names a
+// predefined CMap, which is data this module does not carry. The CMap used to
+// be refused whole, because the result would be a map with holes and no way to
+// tell a hole from a code the document really left undefined. That way now
+// exists: a code the CMap's own entries define is mapped, and one it leaves to
+// the base is Unknown — never "undefined".
+func TestACMapThatDefersToAnotherKnowsWhatItDoesNotKnow(t *testing.T) {
 	src := `begincmap
 /UniJIS-UCS2-H usecmap
 1 begincodespacerange
-<0000> <FFFF>
+<0000> <7FFF>
 endcodespacerange
+1 begincidchar
+<0041> 34
+endcidchar
 endcmap`
-	if _, r := ParseCMap(src); r != ReasonUnsupported {
-		t.Error("a CMap deferring to a predefined one was accepted; the codes it " +
-			"does not define would read as undefined rather than unknown")
+	c, r := ParseCMap(src)
+	if r != ReasonOK {
+		t.Fatal("the CMap was refused")
+	}
+	got := c.Decode([]byte{0x00, 0x41, 0x00, 0x42, 0x90, 0x00})
+	if len(got) != 3 {
+		t.Fatalf("%d codes, want 3: %+v", len(got), got)
+	}
+	if !got[0].Mapped || got[0].CID != 34 || got[0].Unknown {
+		t.Errorf("<0041>, which the CMap defines, decoded to %+v", got[0])
+	}
+	if got[1].Mapped || !got[1].Unknown {
+		t.Errorf("<0042>, which it leaves to UniJIS-UCS2-H, decoded to %+v; want Unknown, not undefined", got[1])
+	}
+	// 90 is outside this CMap's codespace and may be inside the base's, so
+	// neither its length nor anything after it can be known.
+	if !got[2].Unknown || got[2].Bytes != 2 {
+		t.Errorf("a byte outside the known codespace decoded to %+v; want one Unknown code for the rest", got[2])
 	}
 }
 

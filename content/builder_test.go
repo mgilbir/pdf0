@@ -320,19 +320,13 @@ func TestEveryOperatorIsOneISO32000Defines(t *testing.T) {
 
 	// Collect the operators the tokenizer sees.
 	var ops []string
-	core.ForEachContentToken(core.Canceler{}, data, func(tok []byte, isName bool) {
-		if isName {
-			return
+	lx := core.NewContentLexer(core.Canceler{}, data)
+	var tk core.ContentTok
+	for lx.Next(&tk) {
+		if tk.Kind == core.ContentOperator {
+			ops = append(ops, string(tk.Raw))
 		}
-		if len(tok) == 0 {
-			return
-		}
-		// Operands are numbers, strings and arrays; operators are bare keywords.
-		if c := tok[0]; c == '(' || c == '[' || c == '<' || c == '+' || c == '-' || c == '.' || (c >= '0' && c <= '9') {
-			return
-		}
-		ops = append(ops, string(tok))
-	})
+	}
 	if len(ops) < 40 {
 		t.Fatalf("only %d operators were tokenized from %d bytes; the fixture is not exercising the package", len(ops), len(data))
 	}
@@ -379,11 +373,13 @@ func TestOperatorOracleHasTeeth(t *testing.T) {
 		t.Fatal("the fixture table is wrong")
 	}
 	var found bool
-	core.ForEachContentToken(core.Canceler{}, []byte("1 2 Zz\n"), func(tok []byte, isName bool) {
-		if !isName && string(tok) == "Zz" {
+	lx := core.NewContentLexer(core.Canceler{}, []byte("1 2 Zz\n"))
+	var tk core.ContentTok
+	for lx.Next(&tk) {
+		if tk.Is("Zz") {
 			found = true
 		}
-	})
+	}
 	if !found {
 		t.Error("the tokenizer did not surface an undefined operator, so the check could never fire")
 	}

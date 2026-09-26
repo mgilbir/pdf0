@@ -4076,49 +4076,20 @@ func inheritedPageAttr(doc core.View, page *object.Dictionary, key object.Name) 
 	return doc.InheritedPageAttr(page, key)
 }
 
-// scanContentsForDeviceOps scans a page's Contents (stream or array of streams)
-// for device color operators (rg/RG, k/K, g/G).
-func scanContentsForDeviceOps(doc core.View, contentsRef object.Object) (usesRGB, usesCMYK, usesGray bool) {
-	resolved := doc.Resolve(contentsRef)
-	switch v := resolved.(type) {
-	case *object.Stream:
-		data, _ := doc.Content(v) // reason: presence-only; the producer recorded any declined trip
-		if data == nil {
-			return
-		}
-		r, c, g := core.ScanStreamForDeviceOps(doc.Cancel, data)
-		usesRGB = usesRGB || r
-		usesCMYK = usesCMYK || c
-		usesGray = usesGray || g
-	case object.Array:
-		for _, elem := range v {
-			streamObj := doc.Resolve(elem)
-			if s, ok := streamObj.(*object.Stream); ok {
-				data, _ := doc.Content(s) // reason: presence-only; the producer recorded any declined trip
-				if data == nil {
-					continue
-				}
-				r, c, g := core.ScanStreamForDeviceOps(doc.Cancel, data)
-				usesRGB = usesRGB || r
-				usesCMYK = usesCMYK || c
-				usesGray = usesGray || g
-			}
+// forEachContentOperator calls fn for each operator of a decoded content
+// stream, as the content lexer reads them: bytes inside strings, comments,
+// dictionary operands and inline-image data are never operators.
+func forEachContentOperator(cancel core.Canceler, data []byte, fn func(op []byte)) {
+	lx := core.NewContentLexer(cancel, data)
+	var t core.ContentTok
+	for lx.Next(&t) {
+		switch t.Kind {
+		case core.ContentOperator:
+			fn(t.Raw)
+		case core.ContentDictStart:
+			lx.SkipDict(&t)
 		}
 	}
-	return
-}
-
-// forEachContentOperator tokenizes a decoded content stream and calls fn for
-// each operator-position token (anything that is not a string, hex string,
-// dictionary marker, array/procedure delimiter, comment, or name). String
-// literals, comments, and inline-image binary data (BI ... ID <binary> EI)
-// are skipped, so operator bytes occurring inside them are never reported.
-func forEachContentOperator(cancel core.Canceler, data []byte, fn func(op []byte)) {
-	core.ForEachContentToken(cancel, data, func(tok []byte, isName bool) {
-		if !isName {
-			fn(tok)
-		}
-	})
 }
 
 // --- ICCBased color space checks (6.2.4.2) ---
@@ -4737,12 +4708,21 @@ func scanContentColorUsage(cancel core.Canceler, data []byte) contentColorUsage 
 		gsNames:  make(map[string]bool),
 	}
 	var lastName string
-	core.ForEachContentToken(cancel, data, func(tok []byte, isName bool) {
-		if isName {
-			lastName = string(tok)
-			return
+	lx := core.NewContentLexer(cancel, data)
+	var t core.ContentTok
+	for lx.Next(&t) {
+		switch t.Kind {
+		case core.ContentName:
+			lastName = t.Name()
+			continue
+		case core.ContentDictStart:
+			lx.SkipDict(&t)
+			continue
+		case core.ContentOperator:
+		default:
+			continue
 		}
-		switch string(tok) {
+		switch string(t.Raw) {
 		case "cs":
 			u.fillCS[lastName] = true
 		case "CS":
@@ -4760,7 +4740,7 @@ func scanContentColorUsage(cancel core.Canceler, data []byte) contentColorUsage 
 			// Text defaults to fill rendering mode.
 			u.paintsFill = true
 		}
-	})
+	}
 	return u
 }
 

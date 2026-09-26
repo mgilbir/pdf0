@@ -104,12 +104,12 @@ func (d *Document) checkUncoloredXObject(name object.Name, xo object.Object, dep
 }
 
 // checkUncoloredForm scans a form's content for the operators an uncoloured
-// cell ignores, following its gs and Do names through its own resources.
-//
-// Inline images are not seen: the shared content tokenizer steps over them
-// without reporting them. A form built with AddForm cannot contain one — the
-// Builder has no inline-image operator — but a form carried over from a read
-// document can.
+// cell ignores, following its gs and Do names through its own resources. It
+// reads the content with the shared content lexer, whose inline-image hook
+// reports each inline image whole: one that is not a stencil mask (/IM true)
+// is an image a reader ignores there too. A form built with AddForm cannot
+// contain one — the Builder has no inline-image operator — but a form carried
+// over from a read document can.
 func (d *Document) checkUncoloredForm(name object.Name, form *object.Stream, depth int, seen map[*object.Stream]bool) error {
 	data, err := d.StreamData(form)
 	if err != nil {
@@ -124,24 +124,38 @@ func (d *Document) checkUncoloredForm(name object.Name, form *object.Stream, dep
 		return d.ResolveDict(res.Get(kind))
 	}
 	var operand object.Name // the name operand just before an operator
-	for tok := range core.TokenizeContent(core.Canceler{}, data) {
-		if tok.Kind == core.KindName {
-			operand = object.Name(tok.Name)
+	lx := core.NewContentLexer(core.Canceler{}, data)
+	var tok core.ContentTok
+	for lx.Next(&tok) {
+		switch tok.Kind {
+		case core.ContentName:
+			operand = object.Name(tok.Name())
 			continue
-		}
-		if tok.Kind != core.KindOp {
+		case core.ContentInlineImage:
+			if !inlineImageIsMask(tok.Params) {
+				return errUncolored(fmt.Sprintf("an inline image (in the form %v) that is not a stencil mask (/IM true),", name))
+			}
+			operand = ""
+			continue
+		case core.ContentDictStart:
+			lx.SkipDict(&tok)
+			operand = ""
+			continue
+		case core.ContentOperator:
+		default:
 			operand = ""
 			continue
 		}
+		op := string(tok.Raw)
 		var failure error
 		switch {
-		case uncoloredIgnoredOps[tok.Op]:
-			failure = errUncolored(fmt.Sprintf("the %s operator (in the form %v)", tok.Op, name))
-		case tok.Op == "gs" && operand != "":
+		case uncoloredIgnoredOps[op]:
+			failure = errUncolored(fmt.Sprintf("the %s operator (in the form %v)", op, name))
+		case op == "gs" && operand != "":
 			if gs := sub("ExtGState"); gs != nil {
 				failure = d.checkUncoloredExtGState(operand, gs.Get(operand))
 			}
-		case tok.Op == "Do" && operand != "":
+		case op == "Do" && operand != "":
 			if xo := sub("XObject"); xo != nil {
 				failure = d.checkUncoloredXObject(operand, xo.Get(operand), depth, seen)
 			}
@@ -152,4 +166,15 @@ func (d *Document) checkUncoloredForm(name object.Name, form *object.Stream, dep
 		operand = ""
 	}
 	return nil
+}
+
+// inlineImageIsMask reports whether an inline image's parameters declare it a
+// stencil mask: /IM (or /ImageMask) true.
+func inlineImageIsMask(params []byte) bool {
+	for _, p := range core.ParseInlineImageParams(params) {
+		if (p.Key == "IM" || p.Key == "ImageMask") && !p.Array && len(p.Value) == 1 && p.Value[0].Is("true") {
+			return true
+		}
+	}
+	return false
 }

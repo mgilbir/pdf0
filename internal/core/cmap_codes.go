@@ -27,13 +27,18 @@ type FontCodes struct {
 // LoadFontCodes returns the code cutter for a Type 0 font, and false when the
 // font's /Encoding gives no way to cut its strings.
 //
-// It prefers LoadCMap's full CMap — Identity, or an embedded one it can read.
-// A predefined CMap whose mapping data this module does not carry still has a
-// codespace, from the table in cmap_predefined.go, and an embedded CMap that
-// LoadCMap refuses (one that defers to another with usecmap, say) still
-// declares its own codespace ranges, to which the named parent's are added.
-// Either is enough to cut codes, though not to map them to CIDs, and the
-// returned value is not a CMap a caller could ask for CIDs.
+// It prefers LoadCMap's full CMap — Identity, or an embedded one it can read,
+// including one that builds on a CMap whose mapping is not carried (whose
+// codespace comes from the table in cmap_predefined.go). A predefined CMap
+// named directly still has a codespace from that table, and an embedded CMap
+// that LoadCMap refuses still declares its own codespace ranges, to which the
+// named parent's are added. Either is enough to cut codes, though not to map
+// them to CIDs, and the returned value is not a CMap a caller could ask for
+// CIDs.
+//
+// Cutting a code is not a skipped check, so the returned cutter never records
+// the "codes left to a CMap not carried" trip LoadCMap's CMap records when a
+// check meets one.
 func LoadFontCodes(doc View, fontDict *object.Dictionary) (FontCodes, bool) {
 	switch e := doc.Resolve(fontDict.Get("Encoding")).(type) {
 	case object.Name:
@@ -52,6 +57,7 @@ func LoadFontCodes(doc View, fontDict *object.Dictionary) (FontCodes, bool) {
 		return FontCodes{cmap: &CMap{codespace: ranges}, unicode: uni}, true
 	case *object.Stream:
 		if c, r := LoadCMap(doc, fontDict); r == ReasonOK {
+			c.onUnknown = nil
 			return FontCodes{cmap: c}, true
 		}
 		// Through the same producer: a declined decode is recorded there.
@@ -59,13 +65,20 @@ func LoadFontCodes(doc View, fontDict *object.Dictionary) (FontCodes, bool) {
 		if r != ReasonOK {
 			return FontCodes{}, false
 		}
+		// The codespace ranges alone, read by the same token-level CMap
+		// reader, plus those of the CMap it names as its base.
 		c := &CMap{}
-		parseCodespaces(c, string(data))
+		scanCMap(doc.Cancel, data, cmapVisitor{
+			codespace: func(lo, hi cmapCode) bool {
+				c.codespace = append(c.codespace, codespaceRange{bytes: lo.n, lo: lo.v, hi: hi.v})
+				return len(c.codespace) <= maxCMapEntries
+			},
+			useCMap: func(name string) {
+				c.codespace = append(c.codespace, predefinedCodespaces[name]...)
+			},
+		})
 		if parent, ok := doc.ResolveName(e.Dict.Get("UseCMap")); ok {
 			c.codespace = append(c.codespace, predefinedCodespaces[string(parent)]...)
-		}
-		for _, name := range usecmapNames(string(data)) {
-			c.codespace = append(c.codespace, predefinedCodespaces[name]...)
 		}
 		if len(c.codespace) == 0 {
 			return FontCodes{}, false
@@ -73,19 +86,6 @@ func LoadFontCodes(doc View, fontDict *object.Dictionary) (FontCodes, bool) {
 		return FontCodes{cmap: c}, true
 	}
 	return FontCodes{}, false
-}
-
-// usecmapNames returns the names that "/Name usecmap" invokes in a CMap
-// program.
-func usecmapNames(src string) []string {
-	var out []string
-	fields := strings.Fields(src)
-	for i := 1; i < len(fields); i++ {
-		if fields[i] == "usecmap" && strings.HasPrefix(fields[i-1], "/") {
-			out = append(out, fields[i-1][1:])
-		}
-	}
-	return out
 }
 
 // TwoByteFontCodes cuts every string into two-byte codes, as Identity-H does.

@@ -94,22 +94,21 @@ applies everywhere except PDF/A-4, which has no implementation-limits clause.
 
 Font rules are evaluated over the executed-content model
 ([ADR 0004](adr/0004-executed-content-model.md)): a font declared in
-`/Resources` but never used to show text is not checked. `collectFontTextUsage`
-walks each page's content, recurses into the form XObjects invoked with `Do` and
-the tiling patterns selected with `scn`, and returns
-`map[*Dictionary]*fontTextUsage` — per font dictionary, the raw shown string
+`/Resources` but never used to show text is not checked.
+`core.CollectFontTextUsage` reads the content interpreter
+(`internal/core/interp.go`), which executes each page's content with a graphics
+state — a q/Q stack holding the current font and text rendering mode — and
+follows what it invokes: form XObjects drawn with `Do` (which start in their
+caller's state, font and mode included), tiling patterns painted with, and the
+glyph descriptions of the Type 3 fonts it shows text in. It returns
+`map[*Dictionary]*FontTextUsage` — per font dictionary, the raw shown string
 bytes plus the set of text rendering modes in force when they were shown.
+Because `Tr` and `Tf` are graphics state, `q 3 Tr Q` leaves the mode it found.
 
-Tokenization is separated from attribution. `buildFontEvents` turns a decoded
-stream into a container-independent skeleton of `evTf` / `evTr` / `evShow`
-events, deliberately keeping the `Tf` *operand name* rather than resolving it,
-because resolution depends on the container's `/Resources`. Replaying that
-skeleton against a container reproduces exactly what a direct walk would
-attribute, and it is cached per `*Stream`; an `sfKey{stream, fontRes}` set then
-skips re-attributing a (content stream, `/Font` dictionary) pair already
-processed, so one content stream shared by thousands of pages does not
-accumulate the same text thousands of times. Show operators are `Tj`, `TJ`, `'`
-and `"`; any other operator clears the pending string operands.
+Executions are memoised per (content stream, resources, inherited state), so
+one content stream shared by thousands of pages in the same state runs, and
+records its text, once. Show operators are `Tj`, `TJ`, `'` and `"`; any other
+operator clears the pending string operands.
 
 **Rendering modes 3 and 7 are exempt.** `rendersVisibly(u)` returns false only
 when every recorded mode is 3 (invisible) or 7 (add to clip, paint nothing) —
@@ -323,7 +322,7 @@ CIDs whose glyphs exist only as padding or composite components.
 
 | File | Owns | Governing spec |
 |------|------|----------------|
-| `pdfa/fonts.go`, `internal/core/fontuse.go` | Content walking (`forEachContentItem`, `buildFontEvents`, `collectFontTextUsage`), all font rule functions, the predefined-CMap table, encoding/AGL validation, CID width parsing, CIDSet/CharSet, ToUnicode parsing | ISO 32000-2 clause 9 (9.6 simple fonts, 9.7 composite, 9.10 Unicode mapping)<br/>ISO 19005-1 6.3, -2/-3 6.2.11, -4 6.2.10 |
+| `pdfa/fonts.go`, `internal/core/fontuse.go`, `internal/core/interp.go`, `internal/core/cmap.go`, `internal/core/cmapparse.go`, `internal/core/tounicode.go` | Content execution (`CollectFontTextUsage`), all font rule functions, the predefined-CMap table, encoding/AGL validation, CID width parsing, CIDSet/CharSet, CMap and ToUnicode parsing | ISO 32000-2 clause 9 (9.6 simple fonts, 9.7 composite, 9.10 Unicode mapping)<br/>ISO 19005-1 6.3, -2/-3 6.2.11, -4 6.2.10 |
 | forme `font/fontprog.go` | `font.Program` plus `font.ParseSFNT`, `font.ParseCFF`, `font.ParseType1`, and `parseSFNTCFF` for OpenType/CFF | OpenType/sfnt spec (`head`, `maxp`, `hhea`, `hmtx`, `loca`, `glyf`, `cmap`)<br/>Adobe TN #5176 (CFF), TN #5177 (Type 2 charstrings), TN #5015 (Type 1) |
 | forme `font/font_encodings.go` | Generated: `standardEncodingNames`, `macRomanEncodingNames`, `winAnsiEncodingNames` | ISO 32000-1 Annex D.2 |
 | forme `font/cff_strings.go` | Generated: `cffStandardStrings`, 391 entries indexed by SID | Adobe TN #5176 Appendix A |

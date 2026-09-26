@@ -95,9 +95,10 @@ func TestFontUsageSharedStreamDedup(t *testing.T) {
 		if !u.Modes[0] {
 			t.Error("render mode 0 not recorded")
 		}
-		// The single shared stream should have been tokenized once.
-		if n := doc.Run.FontEventsMemoSize(); n != 1 {
-			t.Errorf("fontEvents cache holds %d streams, want 1", n)
+		// The single shared stream should have been executed once: every page
+		// shows it in the same state, with the same /Font dictionary.
+		if n := doc.Run.ContentExecutions(); n != 1 {
+			t.Errorf("the content interpreter executed %d streams, want 1", n)
 		}
 	})
 }

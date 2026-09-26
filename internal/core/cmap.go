@@ -2,8 +2,6 @@ package core
 
 import (
 	"fmt"
-
-	"github.com/mgilbir/pdf0/internal/checked"
 	"strings"
 
 	"github.com/mgilbir/pdf0/object"
@@ -20,8 +18,9 @@ import (
 // has it, not to compare its width, not to notice .notdef.
 //
 // ISO 32000-2 9.7.6. What is implemented is the CID half — codespace ranges,
-// cidrange and cidchar — because that is what turns a string into glyph
-// references. The rest of the CMap grammar is PostScript and is not run.
+// cidrange and cidchar, and the CMap one builds on with usecmap — because that
+// is what turns a string into glyph references. The program is read as a token
+// stream (cmapparse.go); the rest of the grammar is PostScript and is not run.
 
 // maxCMapEntries bounds a CMap's mappings, and maxCMapRangeSpan bounds one
 // range.
@@ -43,13 +42,29 @@ type CMap struct {
 	// it can decode nothing.
 	codespace []codespaceRange
 	// single and ranges are the mapping. A range is kept as a range rather than
-	// expanded because expanding is what a hostile file would ask for.
-	single map[uint32]int
+	// expanded because expanding is what a hostile file would ask for. A
+	// single code is keyed with its width, like a range: <00> and <0000> are
+	// different codes.
+	single map[cmapKey]int
 	ranges []cidRange
+	// notdefSingle and notdefRanges are the notdef mappings (9.7.6.3): what a
+	// code the CID mappings leave unmapped stands for.
+	notdefSingle map[cmapKey]int
+	notdefRanges []cidRange
 	// identity is the built-in CMap, where the CID is the code. It is a flag
 	// rather than a filled-in map for the same reason: sixty-five thousand
 	// entries nobody needs.
 	identity bool
+	// base is the CMap this one names with usecmap (or /UseCMap), whose
+	// mappings stand wherever this one's do not (9.7.5.3).
+	base *CMap
+	// opaque marks a base whose data this module does not have: a predefined
+	// CMap, or one that cannot be read. A code that falls through to it is
+	// Unknown — neither mapped nor undefined — and unknownWhy says why, for
+	// the report onUnknown makes the first time a check meets one.
+	opaque     bool
+	unknownWhy cmapRefusal
+	onUnknown  func()
 }
 
 type codespaceRange struct {
@@ -83,6 +98,12 @@ type Code struct {
 	// caller may want to report.
 	CID    int
 	Mapped bool
+	// Unknown says the code falls to a CMap this one builds on whose data this
+	// module does not carry. It is neither mapped nor undefined, and a check
+	// must skip it; the CMap reports the skip itself (LoadCMap). When the rest
+	// of a string cannot even be cut into codes without that data, one Unknown
+	// code covers all of it.
+	Unknown bool
 }
 
 // Decode cuts a string into codes.
@@ -100,17 +121,34 @@ func (c *CMap) Decode(s []byte) []Code {
 	for i := 0; i < len(s); {
 		n, v, ok := c.codeAt(s[i:])
 		if !ok {
+			if c.unknownWhy.guard != "" {
+				// It may be in the codespace of the CMap this one builds on,
+				// which is not known, so where this code ends — and every code
+				// after it — is not known either.
+				out = append(out, Code{Value: uint32(s[i]), Bytes: len(s) - i, Unknown: true})
+				c.noteUnknown()
+				break
+			}
 			// Not in any codespace. One byte, so that the scan advances and a
 			// malformed string costs its length rather than an infinite loop.
 			out = append(out, Code{Value: uint32(s[i]), Bytes: 1})
 			i++
 			continue
 		}
-		cid, mapped := c.lookup(v, n)
-		out = append(out, Code{Value: v, Bytes: n, CID: cid, Mapped: mapped})
+		cid, mapped, unknown := c.lookup(v, n)
+		if unknown {
+			c.noteUnknown()
+		}
+		out = append(out, Code{Value: v, Bytes: n, CID: cid, Mapped: mapped, Unknown: unknown})
 		i += n
 	}
 	return out
+}
+
+func (c *CMap) noteUnknown() {
+	if c.onUnknown != nil {
+		c.onUnknown()
+	}
 }
 
 // codeAt reads the next code, and how many bytes it took.
@@ -183,20 +221,38 @@ func codeValue(code []byte) uint32 {
 	return acc
 }
 
-// lookup is the code's CID.
-func (c *CMap) lookup(v uint32, n int) (int, bool) {
-	if c.identity {
-		return int(v), true
+// lookup is the code's CID, whether the CMap maps it, and whether it falls to
+// an opaque base instead.
+func (c *CMap) lookup(v uint32, n int) (cid int, mapped, unknown bool) {
+	if c.opaque {
+		return 0, false, true
 	}
-	if cid, ok := c.single[v]; ok {
-		return cid, true
+	if c.identity {
+		return int(v), true, false
+	}
+	if cid, ok := c.single[cmapKey{v, uint8(n)}]; ok {
+		return cid, true, false
 	}
 	for _, r := range c.ranges {
 		if r.bytes == n && v >= r.lo && v <= r.hi {
-			return r.cid + int(v-r.lo), true
+			return r.cid + int(v-r.lo), true, false
 		}
 	}
-	return 0, false
+	if c.base != nil {
+		if cid, mapped, unknown := c.base.lookup(v, n); mapped || unknown {
+			return cid, mapped, unknown
+		}
+	}
+	if cid, ok := c.notdefSingle[cmapKey{v, uint8(n)}]; ok {
+		return cid, true, false
+	}
+	for _, r := range c.notdefRanges {
+		if r.bytes == n && v >= r.lo && v <= r.hi {
+			// A notdef range maps every code in it to the one CID.
+			return r.cid, true, false
+		}
+	}
+	return 0, false, false
 }
 
 // Identity reports whether this is the built-in CMap, for a caller that has a
@@ -207,232 +263,298 @@ func (c *CMap) Identity() bool { return c != nil && c.identity }
 // there is none when there is none.
 //
 // Three shapes. Identity-H and Identity-V are built in. A stream is a CMap
-// program embedded in the document, which is parsed. Any other name is one of
-// Adobe's predefined CMaps — data this module does not carry, so the answer is
-// ReasonUnsupported and the caller skips rather than guesses — or a name that
-// is no CMap at all, which is ReasonMalformed (the CMap-legality rule reports
-// it). A caller that needs the CMap only calls this for a font it is about to
-// check: a declined outcome is recorded here, by the producer, once per font.
+// program embedded in the document, which is parsed, along with the CMap it
+// builds on (the stream's /UseCMap, or its usecmap operator). Any other name is
+// one of Adobe's predefined CMaps — data this module does not carry, so the
+// answer is ReasonUnsupported and the caller skips rather than guesses — or a
+// name that is no CMap at all, ReasonMalformed (the CMap-legality rule reports
+// it).
+//
+// Every declined outcome is recorded here, by the producer, once per font or
+// stream (audit 2026-09-22 T2, C75). A CMap that builds on one this module
+// cannot read is ReasonOK: its own entries are checked, and a code it leaves
+// to that base decodes as Code.Unknown. The skip is recorded when a check
+// first meets such a code, and not before — a CMap that defines every code
+// the document shows was checked in full.
 func LoadCMap(doc View, fontDict *object.Dictionary) (*CMap, Reason) {
-	switch e := doc.Resolve(fontDict.Get("Encoding")).(type) {
-	case object.Name:
-		if e == "Identity-H" || e == "Identity-V" {
-			return IdentityCMap(), ReasonOK
+	c, r, why := resolveCMap(doc, doc.Resolve(fontDict.Get("Encoding")), 0, map[*object.Stream]bool{})
+	switch {
+	case c != nil:
+		if w := c.unknownWhy; w.guard != "" {
+			c.onUnknown = func() {
+				doc.noteDeclinedFor(fontDict, doc.DictObjNum(fontDict), w.reason, w.guard, w.detail+
+					"; the checks that need a code-to-CID mapping (glyph coverage, .notdef, widths, "+
+					"CIDSet) were skipped for the codes it leaves to that CMap, rather than run against a guess")
+			}
 		}
-		if _, known := PredefinedCMaps[string(e)]; !known {
-			return nil, ReasonMalformed
+	case why.guard != "":
+		if why.source == nil {
+			why.source, why.obj = fontDict, doc.DictObjNum(fontDict)
 		}
-		doc.noteDeclinedFor(fontDict, doc.DictObjNum(fontDict), ReasonUnsupported, GuardPredefinedCMap, fmt.Sprintf("the font's CMap /%s is "+
-			"predefined and its code-to-CID data is not carried, so the checks that "+
-			"need it (glyph coverage, .notdef, width consistency, /CIDSet completeness) "+
-			"were skipped for that font rather than run against a guess", string(e)))
-		return nil, ReasonUnsupported
-	case *object.Stream:
-		// Through the same budgeted decode every other stream goes through: a
-		// CMap is compressed like anything else, and a compression bomb in one
-		// is a bomb.
-		data, r := doc.Content(e)
-		if r != ReasonOK {
-			return nil, r
-		}
-		c, r := ParseCMap(string(data))
-		switch r {
-		case ReasonUnsupported:
-			// usecmap is not resolved, and deliberately not recorded here yet:
-			// ParseCMap still detects it as a substring (audit 2026-09-22 C75,
-			// whose fix gives the CMap a token parser), and a conforming corpus
-			// file (TWG A025-pdfa2-pass-a, "/KSCms-UHC-H usecmap") would gain a
-			// checker finding it cannot be allowed. The consumers decline on the
-			// Reason; recording the trip is left to the usecmap fix.
-		case ReasonLimit:
-			doc.noteDeclinedFor(e, doc.StreamObjNum(e), r, GuardCMapSize, "an embedded CMap declares more code ranges, or wider ones, than pdf0 expands, so the checks that need its code-to-CID mapping were skipped for that font")
-		}
-		return c, r
+		doc.noteDeclinedFor(why.source, why.obj, r, why.guard, why.detail+
+			"; the checks that need a code-to-CID mapping (glyph coverage, .notdef, widths, CIDSet) "+
+			"were skipped for that font rather than run against a guess")
 	}
-	return nil, ReasonMalformed
+	return c, r
 }
 
-// ParseCMap reads the CID half of a CMap program.
-//
-// The grammar is PostScript and this is not an interpreter: it finds the
-// begin/end blocks and reads the hex tokens inside them, which is what the
-// ToUnicode reader beside it does and for the same reason — the operators that
-// matter are declarative and everything around them is boilerplate a font tool
-// wrote.
-//
-// A CMap that names another with usecmap is not resolved. Nearly every embedded
-// one that does so names a predefined CMap, which is data this module does not
-// have, so the result would be a map with holes in it that reported nothing.
-// Saying no is the honest answer (ReasonUnsupported) and the caller skips the
-// font. A CMap with no codespace is ReasonMalformed; one whose ranges exceed
-// the fixed expansion bounds is ReasonLimit.
-func ParseCMap(src string) (*CMap, Reason) {
-	if strings.Contains(src, "usecmap") {
-		return nil, ReasonUnsupported
+// cmapRefusal says what could not be read and why: the reason and the guard to
+// report it under, what was missing in the file's terms, and the object the
+// report attaches to. A zero guard means there is nothing to report — the
+// outcome is ReasonOK, or it is the file's fault (malformed) and a rule reports
+// it, or the producer below already did.
+type cmapRefusal struct {
+	reason        Reason
+	guard, detail string
+	source        any
+	obj           int
+}
+
+// maxCMapChain bounds how many CMaps one can build on in turn through
+// /UseCMap streams. Real ones build on one predefined CMap, directly.
+const maxCMapChain = 8
+
+// resolveCMap reads the CMap enc names or carries. depth and seen guard a chain
+// of embedded CMaps that use each other.
+func resolveCMap(doc View, enc object.Object, depth int, seen map[*object.Stream]bool) (*CMap, Reason, cmapRefusal) {
+	switch e := enc.(type) {
+	case object.Name:
+		if e == "Identity-H" || e == "Identity-V" {
+			return IdentityCMap(), ReasonOK, cmapRefusal{}
+		}
+		if _, known := PredefinedCMaps[string(e)]; known {
+			return nil, ReasonUnsupported, cmapRefusal{reason: ReasonUnsupported, guard: GuardPredefinedCMap,
+				detail: fmt.Sprintf("the font's CMap %s is predefined and its code-to-CID data is not carried", e)}
+		}
+		return nil, ReasonMalformed, cmapRefusal{}
+	case *object.Stream:
+		if seen[e] || depth >= maxCMapChain {
+			// A CMap that builds on itself, or a chain no real file has.
+			return nil, ReasonMalformed, cmapRefusal{}
+		}
+		seen[e] = true
+		// Through the same budgeted decode every other stream goes through: a
+		// CMap is compressed like anything else, and a compression bomb in one
+		// is a bomb. Content records its own declined outcomes.
+		data, r := doc.Content(e)
+		if r != ReasonOK {
+			return nil, r, cmapRefusal{}
+		}
+		c, uses, r := parseCMap(doc.Cancel, data)
+		if r == ReasonLimit {
+			return nil, r, cmapRefusal{reason: r, guard: GuardCMapSize, source: e, obj: doc.StreamObjNum(e),
+				detail: "an embedded CMap declares more code ranges, or wider ones, than pdf0 expands, so it was not read rather than read in part"}
+		}
+		if r != ReasonOK {
+			return nil, r, cmapRefusal{}
+		}
+		// The CMap it builds on. The stream dictionary's /UseCMap names it or
+		// carries it (Table 118), and the program's usecmap operator names it
+		// too; when both are present the dictionary is read first, because a
+		// stream there is the base itself and the operator can only name it.
+		if len(uses) > 1 {
+			return nil, ReasonMalformed, cmapRefusal{}
+		}
+		var baseRef object.Object
+		if u := doc.Resolve(e.Dict.Get("UseCMap")); u != nil {
+			baseRef = u
+		} else if len(uses) == 1 {
+			baseRef = object.Name(uses[0])
+		}
+		if baseRef != nil {
+			base, br, why := resolveCMap(doc, baseRef, depth+1, seen)
+			if base == nil {
+				// The CMap it builds on cannot be read. Its own entries still
+				// stand, and a code they define is checked; a code they leave
+				// to the base is Unknown, and is reported when met.
+				if br.Declined() && why.guard == "" {
+					// Already recorded where it happened (a declined decode).
+					return nil, br, cmapRefusal{}
+				}
+				opaque := &CMap{opaque: true}
+				switch {
+				case why.guard != "":
+					why.detail = "the font's embedded CMap builds on another CMap, and " + strings.TrimPrefix(why.detail, "the font's ")
+					opaque.unknownWhy = why
+					if n, ok := baseRef.(object.Name); ok {
+						// Its codespace is carried even where its mapping is
+						// not, so codes are still cut in the right places.
+						opaque.codespace = predefinedCodespaces[string(n)]
+					}
+				default:
+					// Neither built in, predefined nor embedded: the CMap
+					// legality rule reports the name; what the codes left to it
+					// map to is unknown.
+					opaque.unknownWhy = cmapRefusal{reason: ReasonUnsupported, guard: GuardEmbeddedCMap,
+						detail: fmt.Sprintf("the font's embedded CMap builds on %v, which is neither predefined nor embedded", baseRef)}
+				}
+				base = opaque
+			}
+			c.base = base
+			c.codespace = append(c.codespace, base.codespace...)
+			if base.unknownWhy.guard != "" {
+				c.unknownWhy = base.unknownWhy
+			}
+		}
+		if len(c.codespace) == 0 {
+			// Without a codespace nothing can be cut into codes. A CMap is
+			// required to have one; a file that omits it has not said how to
+			// read itself — or, building on a CMap whose data is not carried,
+			// has left that to data this module does not have.
+			if c.unknownWhy.guard != "" {
+				w := c.unknownWhy
+				return nil, w.reason, w
+			}
+			return nil, ReasonMalformed, cmapRefusal{}
+		}
+		return c, ReasonOK, cmapRefusal{}
 	}
-	c := &CMap{single: map[uint32]int{}}
-	parseCodespaces(c, src)
-	if len(c.codespace) == 0 {
-		// Without a codespace nothing can be cut into codes. A CMap is required
-		// to have one; a file that omits it has not said how to read itself.
+	return nil, ReasonMalformed, cmapRefusal{}
+}
+
+// ParseCMap reads the CID half of a CMap program on its own: codespace ranges,
+// cidrange and cidchar, notdefrange and notdefchar. A CMap that builds on
+// another with usecmap has that base read when it is Identity-H or Identity-V;
+// any other base is opaque (its codespace taken from the predefined table when
+// it has one), and the codes left to it decode as Unknown. LoadCMap, which has
+// the document, also follows a /UseCMap stream and reports what it cannot
+// read.
+//
+// ReasonMalformed is a CMap with no codespace, or more than one usecmap;
+// ReasonLimit one past the fixed expansion bounds.
+func ParseCMap(src string) (*CMap, Reason) {
+	c, uses, r := parseCMap(Canceler{}, []byte(src))
+	if r != ReasonOK {
+		return nil, r
+	}
+	if len(uses) > 1 {
 		return nil, ReasonMalformed
 	}
-	if !parseCIDMappings(c, src) {
-		return nil, ReasonLimit
+	if len(uses) == 1 {
+		if uses[0] == "Identity-H" || uses[0] == "Identity-V" {
+			c.base = IdentityCMap()
+		} else {
+			c.base = &CMap{opaque: true, codespace: predefinedCodespaces[uses[0]],
+				unknownWhy: cmapRefusal{reason: ReasonUnsupported, guard: GuardPredefinedCMap, detail: "the CMap builds on /" + uses[0]}}
+			c.unknownWhy = c.base.unknownWhy
+		}
+		c.codespace = append(c.codespace, c.base.codespace...)
+	}
+	if len(c.codespace) == 0 {
+		return nil, ReasonMalformed
 	}
 	return c, ReasonOK
 }
 
-// parseCodespaces reads begincodespacerange blocks.
-func parseCodespaces(c *CMap, src string) {
-	eachBlock(src, "begincodespacerange", "endcodespacerange", func(body string) bool {
-		for _, line := range strings.Split(body, "\n") {
-			f := AngleTokens(line)
-			for i := 0; i+1 < len(f); i += 2 {
-				lo, nlo := hexCode(f[i])
-				hi, nhi := hexCode(f[i+1])
-				if nlo == 0 || nlo != nhi || lo > hi {
-					continue
-				}
-				c.codespace = append(c.codespace, codespaceRange{bytes: nlo, lo: lo, hi: hi})
-			}
+// parseCMap reads the CID half of one CMap program, returning it with the
+// names it builds on. A CMap that runs past maxCMapEntries mappings, or has a
+// range wider than maxCMapRangeSpan codes, is refused (ReasonLimit) rather than
+// truncated: a partial map answers "this code has no CID" for codes it simply
+// did not reach, and a caller cannot tell that from a code the document really
+// left undefined.
+func parseCMap(cancel Canceler, data []byte) (*CMap, []string, Reason) {
+	c := &CMap{single: map[cmapKey]int{}, notdefSingle: map[cmapKey]int{}}
+	var uses []string
+	over := false
+	entries := func() int {
+		return len(c.ranges) + len(c.single) + len(c.codespace) + len(c.notdefRanges) + len(c.notdefSingle)
+	}
+	within := func() bool {
+		if entries() > maxCMapEntries {
+			over = true
 		}
-		return len(c.codespace) < maxCMapEntries
-	})
-}
-
-// parseCIDMappings reads begincidrange and begincidchar, and reports whether it
-// stayed inside its bounds.
-//
-// A CMap that runs past them is refused rather than truncated: a partial map
-// answers "this code has no CID" for codes it simply did not reach, and a
-// caller cannot tell that from a code the document really left undefined.
-func parseCIDMappings(c *CMap, src string) bool {
-	within := true
-	eachBlock(src, "begincidrange", "endcidrange", func(body string) bool {
-		for _, line := range strings.Split(body, "\n") {
-			f := AngleTokens(line)
-			// "<lo> <hi> cid" — the CID is a plain integer, so it is not an
-			// angle token and is read from the tail of the line.
-			if len(f) < 2 {
-				continue
+		return !over
+	}
+	scanCMap(cancel, data, cmapVisitor{
+		codespace: func(lo, hi cmapCode) bool {
+			c.codespace = append(c.codespace, codespaceRange{bytes: lo.n, lo: lo.v, hi: hi.v})
+			return within()
+		},
+		cidRange: func(lo, hi cmapCode, cid int) bool {
+			if cid > maxCID {
+				return true
 			}
-			lo, nlo := hexCode(f[0])
-			hi, nhi := hexCode(f[1])
-			cid, ok := trailingInt(line)
-			if nlo == 0 || nlo != nhi || lo > hi || !ok {
-				continue
-			}
-			if uint64(hi-lo) >= maxCMapRangeSpan {
-				within = false
+			if uint64(hi.v-lo.v) >= maxCMapRangeSpan {
+				over = true
 				return false
 			}
-			c.ranges = append(c.ranges, cidRange{lo: lo, hi: hi, bytes: nlo, cid: cid})
-			if len(c.ranges)+len(c.single) >= maxCMapEntries {
-				within = false
-				return false
+			c.ranges = append(c.ranges, cidRange{lo: lo.v, hi: hi.v, bytes: lo.n, cid: cid})
+			return within()
+		},
+		cidChar: func(code cmapCode, cid int) bool {
+			if cid > maxCID {
+				return true
 			}
-		}
-		return true
+			c.single[cmapKey{code.v, uint8(code.n)}] = cid
+			return within()
+		},
+		notdefRange: func(lo, hi cmapCode, cid int) bool {
+			if cid > maxCID {
+				return true
+			}
+			c.notdefRanges = append(c.notdefRanges, cidRange{lo: lo.v, hi: hi.v, bytes: lo.n, cid: cid})
+			return within()
+		},
+		notdefChar: func(code cmapCode, cid int) bool {
+			if cid > maxCID {
+				return true
+			}
+			c.notdefSingle[cmapKey{code.v, uint8(code.n)}] = cid
+			return within()
+		},
+		useCMap: func(name string) { uses = append(uses, name) },
 	})
-	if !within {
-		return false
+	if over {
+		return nil, nil, ReasonLimit
 	}
-	eachBlock(src, "begincidchar", "endcidchar", func(body string) bool {
-		for _, line := range strings.Split(body, "\n") {
-			f := AngleTokens(line)
-			if len(f) < 1 {
-				continue
+	if cancel.Stopped() {
+		return nil, nil, ReasonCanceled
+	}
+	return c, uses, ReasonOK
+}
+
+// CMapMaxCID is the largest CID an embedded CMap program's cidrange and
+// cidchar entries map, or 0.
+func CMapMaxCID(cancel Canceler, data []byte) int64 {
+	var max int64
+	scanCMap(cancel, data, cmapVisitor{
+		cidRange: func(lo, hi cmapCode, cid int) bool {
+			if top := int64(cid) + int64(hi.v-lo.v); top > max {
+				max = top
 			}
-			code, n := hexCode(f[0])
-			cid, ok := trailingInt(line)
-			if n == 0 || !ok {
-				continue
+			return true
+		},
+		cidChar: func(_ cmapCode, cid int) bool {
+			if int64(cid) > max {
+				max = int64(cid)
 			}
-			c.single[code] = cid
-			if len(c.ranges)+len(c.single) >= maxCMapEntries {
-				within = false
-				return false
-			}
-		}
-		return true
+			return true
+		},
 	})
-	return within
+	return max
 }
 
-// eachBlock calls f with the body of every begin/end pair, stopping when f
-// returns false.
-func eachBlock(src, begin, end string, f func(body string) bool) {
-	rest := src
-	for {
-		b := strings.Index(rest, begin)
-		if b < 0 {
-			return
+// CMapWMode is the writing mode an embedded CMap program sets with
+// "/WMode n def", and whether it sets one.
+func CMapWMode(cancel Canceler, data []byte) (int, bool) {
+	mode, found := 0, false
+	scanCMap(cancel, data, cmapVisitor{wmode: func(m int) {
+		if !found {
+			mode, found = m, true
 		}
-		after := rest[b+len(begin):]
-		e := strings.Index(after, end)
-		if e < 0 {
-			return
-		}
-		if !f(after[:e]) {
-			return
-		}
-		rest = after[e+len(end):]
-	}
+	}})
+	return mode, found
 }
 
-// hexCode reads a <hh...> token as a code and its width in bytes.
-//
-// The width is the point: <00> and <0000> are different codes in a CMap, one
-// byte and two, and a reader that treated both as zero would cut every string
-// in the wrong places.
-func hexCode(tok string) (uint32, int) {
-	s := strings.TrimPrefix(strings.TrimSuffix(tok, ">"), "<")
-	if len(s) == 0 || len(s)%2 != 0 || len(s) > 8 {
-		return 0, 0
-	}
-	var v uint32
-	for i := 0; i < len(s); i++ {
-		d := hexDigit(s[i])
-		if d < 0 {
-			return 0, 0
+// CMapUseCMap is the name an embedded CMap program builds on with usecmap, and
+// whether it names one. The operator counts only as an operator: the word in a
+// comment, or in a string, is not a reference to anything.
+func CMapUseCMap(cancel Canceler, data []byte) (string, bool) {
+	name, found := "", false
+	scanCMap(cancel, data, cmapVisitor{useCMap: func(n string) {
+		if !found {
+			name, found = n, true
 		}
-		v = v<<4 | uint32(d)
-	}
-	return v, len(s) / 2
-}
-
-func hexDigit(b byte) int {
-	switch {
-	case b >= '0' && b <= '9':
-		return int(b - '0')
-	case b >= 'a' && b <= 'f':
-		return int(b-'a') + 10
-	case b >= 'A' && b <= 'F':
-		return int(b-'A') + 10
-	}
-	return -1
-}
-
-// trailingInt reads the decimal integer after the last '>' on a line, which is
-// where cidrange and cidchar put the CID.
-func trailingInt(line string) (int, bool) {
-	i := strings.LastIndexByte(line, '>')
-	if i < 0 {
-		return 0, false
-	}
-	s := strings.TrimSpace(line[i+1:])
-	if s == "" {
-		return 0, false
-	}
-	n, digits, fits := checked.Decimal(s)
-	if digits == 0 {
-		return 0, false
-	}
-	if !fits || n > 1<<21 {
-		// Far past any CID in any published collection, and past what a
-		// glyph index can be. A number this large is a malformed file.
-		return 0, false
-	}
-	return int(n), true
+	}})
+	return name, found
 }

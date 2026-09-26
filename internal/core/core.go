@@ -21,6 +21,22 @@ import (
 
 // Default values for every configurable limit. These are the values in force
 // when a caller passes no options.
+//
+// DefaultMaxContentStreamBytes is the largest decoded content stream the
+// content scanners will look at; View.Content refuses a larger one and reports
+// it (GuardContentStream), so every content-driven rule then sees nothing from
+// that stream and says so. The previous 1 MB cap, with Flate-only decoding,
+// hid ordinary content silently: an oversize or [/FlateDecode]-wrapped stream
+// full of DeviceRGB validated clean.
+//
+// DefaultMaxDecodedContentBytes bounds the content one run decodes in total.
+// The per-stream cap stops a single stream from exploding, but a small file can
+// carry many content streams that each decompress near it: 100 pages whose
+// contents each inflate to ~60 MB is a ~12 MB file that would otherwise decode
+// and tokenize ~6 GB, driving validation past 9 GB of memory. Once the budget is
+// spent further streams are refused (GuardContentTotal). Real documents decode
+// far less — the heaviest measured across the veraPDF corpus and a Common Crawl
+// sample needs 218 MB — so only pathologically amplified input reaches it.
 const (
 	DefaultMaxDecodedStreamBytes  = 100 << 20 // 100 MB
 	DefaultMaxDecodedContentBytes = 512 << 20 // 512 MB
@@ -295,6 +311,11 @@ func (t Trip) Message() string {
 	if t.guard == GuardLocked {
 		return fmt.Sprintf("not decrypted (%s): %s; the checks that depend on it were skipped, so this file is neither confirmed conformant nor non-conformant in that respect", t.guard, t.detail)
 	}
+	if t.guard == GuardEmbeddedCMap {
+		// The CMap an embedded one builds on is missing from the file: no
+		// budget was reached, and there is nothing a caller can raise.
+		return fmt.Sprintf("data could not be read (%s): %s; the checks that depend on it were skipped, so this file is neither confirmed conformant nor non-conformant in that respect", t.guard, t.detail)
+	}
 	if t.guard == GuardPredefinedCMap {
 		// No budget was reached, so saying one was would send a reader to the
 		// limits knobs to raise something that does not exist.
@@ -303,15 +324,15 @@ func (t Trip) Message() string {
 	return fmt.Sprintf("resource limit reached (%s): %s; the checks that depend on it were skipped, so this file is neither confirmed conformant nor non-conformant in that respect", t.guard, t.detail)
 }
 
-// NewTrip records one guard trip: which guard, what it left incomplete, and the
-// object the incompleteness attaches to (0 when it is document-wide). The
-// fields stay unexported so that a Trip cannot be assembled half-populated
-// outside this package — Message reads all three.
 // Guard returns the identifier of the guard that tripped. It is an accessor
 // rather than an exported field so that a Trip can only be built through
 // NewTrip, which is what keeps Message's three inputs consistent.
 func (t Trip) Guard() string { return t.guard }
 
+// NewTrip records one guard trip: which guard, what it left incomplete, and the
+// object the incompleteness attaches to (0 when it is document-wide). The
+// fields stay unexported so that a Trip cannot be assembled half-populated
+// outside this package — Message reads all three.
 func NewTrip(guard, detail string, obj int) Trip {
 	return Trip{guard: guard, detail: detail, Obj: obj}
 }
