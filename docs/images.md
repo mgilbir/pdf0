@@ -1,8 +1,7 @@
 # Images
 
 pdf0 can pull the raster images back out of a PDF and hand you `image.Image`
-values. This subsystem — about 4,500 lines across fifteen files — is the image
-XObject traversal plus in-tree decoders for the codecs Go's standard library
+values. This subsystem is the image XObject traversal plus in-tree decoders for the codecs Go's standard library
 does not cover: CCITT Group 3/4 fax, JBIG2, and the PDF colour-space machinery
 (Indexed palettes, Lab, Separation/DeviceN tint transforms) that turns samples
 into RGB. Reach for it to extract page artwork or scanned pages, to inspect what
@@ -15,8 +14,10 @@ rest of the library see the [README](../README.md) and
 Two entry points, both on `*Document`:
 
 ```go
-imgs := doc.ExtractImages()      // []ExtractedImage — every image at once
-for img := range doc.Images() {  // iter.Seq[ExtractedImage] — one at a time
+imgs := doc.ExtractImages()     // []images.ExtractedImage — every image at once
+for img := range doc.Images() { // iter.Seq[images.ExtractedImage] — one at a time
+	_ = img
+}
 ```
 
 They yield the same images in the same order. The difference is the memory

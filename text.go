@@ -101,7 +101,7 @@ func (d *Document) extractText(cancel core.Canceler) (string, error) {
 	var errs []error
 	for i, pg := range pages {
 		// Per page: the coarse boundary. Within a page the tokenizer stops every
-		// cancelScanBytes, so a single enormous page is interruptible too.
+		// core.CancelScanBytes, so a single enormous page is interruptible too.
 		if err := stop.StopErr("extracting text"); err != nil {
 			return b.String(), errors.Join(append(errs, err)...)
 		}

@@ -785,24 +785,30 @@ func checkType1CharSet(d core.View, fontDict *object.Dictionary) []Violation {
 }
 
 // checkCIDFontCIDSet verifies a subset CIDFontType2 font's /CIDSet identifies
-// every CID present in the embedded program. A CID is "present" when its glyph
-// carries an outline, EXCEPT glyphs that appear only as composite-glyph
-// components (e.g. an accent reused across letters): such a glyph carries an
-// outline as a building block but is not a directly mapped CID, so a conformant
-// /CIDSet does not list it. Only the Identity CIDToGIDMap case (CID == GID) is
-// handled; a mapping stream would need inversion and is left alone.
+// every CID present in the embedded program: every CID whose glyph — the one
+// its CIDToGIDMap selects (core.CIDGlyphMap), the same selection PDF/A's glyph
+// and CIDSet rules use — carries an outline.
+//
+// With an Identity map the CIDs are the glyph indices, and a glyph that serves
+// only as a composite-glyph component (an accent reused across letters) is
+// exempt: it carries an outline as a building block, and no CID was meant to
+// show it, so a conformant /CIDSet does not list it. With a stream map a CID
+// names its glyph explicitly, so the CIDs to list are the ones the map sends
+// to a glyph with an outline, whatever else the glyph is used for. The check
+// used to decline every stream map (audit 2026-09-22 C68). A map pdf0 did not
+// read names no glyph, and nothing is said.
 func checkCIDFontCIDSet(d core.View, fontDict *object.Dictionary) []Violation {
 	desc := core.Type0Descendant(d, fontDict)
 	if desc == nil {
 		return nil
 	}
-	if cs, _ := d.ResolveName(desc.Get("Subtype")); cs != "CIDFontType2" {
+	cs, _ := d.ResolveName(desc.Get("Subtype"))
+	if cs != "CIDFontType2" {
 		return nil
 	}
-	if m := d.Resolve(desc.Get("CIDToGIDMap")); m != nil {
-		if n, ok := m.(object.Name); !ok || n != "Identity" {
-			return nil
-		}
+	gmap := core.LoadCIDGlyphMap(d, desc, cs)
+	if !gmap.Readable() {
+		return nil
 	}
 	fd := d.ResolveDict(desc.Get("FontDescriptor"))
 	if fd == nil {
@@ -824,6 +830,16 @@ func checkCIDFontCIDSet(d core.View, fontDict *object.Dictionary) []Violation {
 		// is malformed does not list the glyphs, and the rule says so below.
 		return nil
 	}
+	missing := []Violation{{Clause: "7.21.4.2", Message: "FontDescriptor /CIDSet does not list all CIDs present in the embedded font program", Object: d.ObjNumOf(fontDict)}}
+	if gmap.Stream() {
+		for cid := 1; cid < gmap.StreamCIDs(); cid++ {
+			gid, _ := gmap.Glyph(cid)
+			if gid > 0 && gid < len(fp.GlyphNonEmpty) && fp.GlyphNonEmpty[gid] && !present.Has(cid) {
+				return missing
+			}
+		}
+		return nil
+	}
 	for gid, nonEmpty := range fp.GlyphNonEmpty {
 		if !nonEmpty || gid == 0 {
 			continue
@@ -832,7 +848,7 @@ func checkCIDFontCIDSet(d core.View, fontDict *object.Dictionary) []Violation {
 			continue // outline serves only as a composite component
 		}
 		if !present.Has(gid) {
-			return []Violation{{Clause: "7.21.4.2", Message: "FontDescriptor /CIDSet does not list all CIDs present in the embedded font program", Object: d.ObjNumOf(fontDict)}}
+			return missing
 		}
 	}
 	return nil

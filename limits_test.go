@@ -193,9 +193,9 @@ func TestDecodedStreamLimitIsEnforced(t *testing.T) {
 // stream. It is a Flate stream the file controls like any other, so a caller who
 // lowered the decompression-bomb ceiling for untrusted uploads has to get that
 // ceiling applied here too; parseXRefSection used to hand parseXRefStream a
-// fresh defaultLimits(), silently bypassing the caller's configuration.
+// fresh core.DefaultLimits(), silently bypassing the caller's configuration.
 //
-// Nothing changes under the defaults: doc.lim() is then defaultLimits() field
+// Nothing changes under the defaults: doc.lim() is then core.DefaultLimits() field
 // for field, and the largest cross-reference stream measured across the veraPDF
 // corpus, the Cal Poly PDF/VT suite, the WTPDF set, the Factur-X invoices and
 // the PDF 2.0 reference files decodes to 430,350 bytes — 0.4% of the 100 MB

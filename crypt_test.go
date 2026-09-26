@@ -91,7 +91,7 @@ func TestDecryptRoundTrip(t *testing.T) {
 
 // TestAESDecryptFailureIsNotPlaintext pins what happens when AES decryption
 // fails under a key that is known good. A wrong password never reaches decrypt
-// — buildStdSecurityHandler returns no handler and the document reports Locked
+// — crypt.Open returns no handler and the document reports Locked
 // — so a padding failure here means the blob is corrupt or was never encrypted.
 // Returning it unchanged, as this used to, dressed high-entropy ciphertext as a
 // /Title, a content stream or an XMP packet and handed it to the parser and

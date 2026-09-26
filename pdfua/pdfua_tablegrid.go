@@ -13,7 +13,7 @@ import (
 // defects are flagged so a well-formed table never raises a false positive.
 
 // The number of grid slots gridDefects will fill for one table defaults to
-// defaultMaxTableGridFills; a caller can change it with WithMaxTableGridFills.
+// core.DefaultMaxTableGridFills; a caller can change it with WithMaxTableGridFills.
 // It caps the work a pathological table (huge RowSpan/ColSpan values) can force.
 // It counts actually-filled slots, so a large but sparse table is unaffected;
 // the largest real tables observed fill well under a million.

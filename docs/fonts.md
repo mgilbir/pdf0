@@ -65,10 +65,10 @@ the descendant CIDFont's — everything downstream follows from that pair.
 
 | Font | Program stream | Declared widths | Code → glyph in pdf0 | Subset set |
 |------|----------------|-----------------|----------------------|------------|
-| `Type1` / `MMType1` | `/FontFile` (Type 1) or `/FontFile3` `/Type1C` (CFF) | `/Widths` + `/FirstChar`, else descriptor `/MissingWidth` | code → glyph *name* via the encoding, name → charstring (`glyphNames`, `widthByName`) | `/CharSet` |
+| `Type1` / `MMType1` | `/FontFile` (Type 1) or `/FontFile3` `/Type1C` (CFF) | `/Widths` + `/FirstChar`, else descriptor `/MissingWidth` | code → glyph *name* via the encoding, name → charstring (`font.Program.GlyphNames`, `font.Program.WidthByName`) | `/CharSet` |
 | `TrueType` | `/FontFile2` (sfnt) or `/FontFile3` `/OpenType` | same as Type 1 | code → GID through the program's `cmap` subtables (`font.TrueTypeGID`) | — |
-| `Type0` → `CIDFontType0` | descendant's `/FontFile3` (CID-keyed CFF) or `/OpenType` | `/W` array + `/DW` (default 1000) | 2-byte code → CID → CFF charset entry (`cidGIDs`, `widthByCID`) | `/CIDSet` |
-| `Type0` → `CIDFontType2` | descendant's `/FontFile2` | `/W` + `/DW` | 2-byte code → CID → GID via `/CIDToGIDMap` → `glyf` entry | `/CIDSet` |
+| `Type0` → `CIDFontType0` | descendant's `/FontFile3` (CID-keyed CFF) or `/OpenType` | `/W` array + `/DW` (default 1000) | code (cut by the CMap) → CID → CFF charset entry (`font.Program.CIDGIDs`, `font.Program.WidthByCID`) | `/CIDSet` |
+| `Type0` → `CIDFontType2` | descendant's `/FontFile2` | `/W` + `/DW` | code (cut by the CMap) → CID → GID via `/CIDToGIDMap` → `glyf` entry | `/CIDSet` |
 | `Type3` | none — `/CharProcs` content streams | `/Widths` in glyph space, scaled by `/FontMatrix` | code → glyph name → CharProc, width from the `d0`/`d1` operand | — |
 
 **Type 3 is exempt from embedding** (`checkOneFontEmbedded` returns early) but
@@ -113,7 +113,7 @@ operator clears the pending string operands.
 **Rendering modes 3 and 7 are exempt.** `rendersVisibly(u)` returns false only
 when every recorded mode is 3 (invisible) or 7 (add to clip, paint nothing) —
 glyph shape is never painted in either. That gates the embedding rule
-(`checkFontsEmbedded` builds an `exemptInvisible` set), glyph coverage, the
+(`checkFontsEmbedded`, in `pdfa/pdfa.go`, builds an `exemptInvisible` set), glyph coverage, the
 width rules, the damaged-program rule, `checkCIDSetProgramComplete` and the
 Type 3 width check. A font with no recorded modes is treated as visible.
 
@@ -124,19 +124,22 @@ its own `onlyInvisible` flag testing `m != 3`, ignoring mode 7, because the
 corpus passes a mode-3 font at 1b. That is the one place in the subsystem where
 the invisibility test is not `rendersVisibly`.
 
-Two font checks bypass the model and scan `doc.Objects` directly —
-`checkCMapEmbedded` and `checkCMapCIDLimit` — because both are about the CMap
-object, not about shown glyphs. The usage map is shared well beyond PDF/A: nine
-PDF/UA checks iterate it, `content_operators.go` uses it to find Type 3 glyph
-procedures. Text extraction (`text.go`) reads ToUnicode with
-`core.ParseToUnicodeRunes`, the full destination rather than its first rune,
+Two font checks bypass the model and walk every dictionary the trailer reaches
+(`core.View.ReachableDicts`) — `checkCMapEmbedded` and `checkCMapCIDLimit` —
+because both are about the CMap object, not about shown glyphs. The usage map
+is shared well beyond PDF/A: the PDF/UA font checks iterate it too. Text
+extraction (`text.go`) reads ToUnicode with
+`core.ParseToUnicode` and asks each code for its full destination
+(`core.ToUnicode.Runes`) rather than its first rune,
 because a ligature's entry is several characters. PDF/X
 is the outlier — `pdfxCheckFontsEmbedded` scans resources itself.
 
 ## Font program parsing (forme's `font/fontprog.go`)
 
-`loadFontProgram` picks the parser from the descriptor key, and everything
-converges on one `font.Program` struct.
+The parsers belong to forme, and their documentation is forme's `font` package;
+this section is what the PDF/A and PDF/UA rules rely on them for.
+`core.LoadFontProgram` picks the parser from the descriptor key, and everything
+converges on one `font.Program`.
 
 ```mermaid
 flowchart TD
@@ -149,7 +152,7 @@ flowchart TD
     FD -->|"/FontFile"| P1["font.ParseType1 — PFB unwrap, eexec decrypt"]
     FD -->|"/FontFile2"| P2["font.ParseSFNT — table directory"]
     FD -->|"/FontFile3"| OT{"stream /Subtype is /OpenType?"}
-    OT -->|yes| PSC["parseSFNTCFF — CFF table<br/>falls back to font.ParseSFNT"]
+    OT -->|yes| PSC["core.ParseSFNTCFF — CFF table<br/>falls back to font.ParseSFNT"]
     OT -->|no| PC["font.ParseCFF — Type1C or CIDFontType0C"]
     P1 --> FP["font.Program"]
     P2 --> FP
@@ -157,13 +160,12 @@ flowchart TD
     PC --> FP
 ```
 
-**sfnt (`font.ParseSFNT`).** Accepts tag `0x00010000`, `true` or `OTTO`. Reads `head`
-for `unitsPerEm` and the loca format flag, `maxp` for `numGlyphs`, `hhea` +
-`hmtx` for advance widths, `loca` + `glyf` for outline extents, and `cmap` for
-code→GID: the best Unicode subtable into `Cmap`, `(3,0)` into `SymbolCmap`
-(queried with the `0xF000` prefix first), `(1,0)` into `macCmap`.
-`cmapSubtableCount` is kept because ISO 19005-1 6.3.7 requires a symbolic
-TrueType font to declare exactly one subtable.
+**sfnt (`font.ParseSFNT`).** Advance widths, outline extents and code→GID come
+from the font's own tables: the best Unicode `cmap` subtable into
+`font.Program.Cmap`, `(3,0)` into `font.Program.SymbolCmap` (queried with the
+`0xF000` prefix first), `(1,0)` into `font.Program.MacCmap`.
+`font.Program.CmapSubtableCount` is kept because ISO 19005-1 6.3.7 requires a
+symbolic TrueType font to declare exactly one subtable.
 
 **Which Unicode subtable wins** (`unicodeCmapRank`). A font may carry several, so
 the choice is ranked rather than "last one seen": `(3,10)` Windows full
@@ -171,25 +173,18 @@ repertoire, then `(3,1)` Windows BMP, then `(0,4)`/`(0,6)` Unicode full
 repertoire, then any other `(0,x)`. `(3,10)` outranks `(3,1)` because it is a
 superset that reaches past the BMP; the Windows platform outranks the Unicode
 platform at equal coverage because ISO 32000-1 9.6.6.4 describes code→GID in
-terms of the Windows subtables, and because that keeps the choice unchanged for
-every font whose subtables are the `(3,1)`/`(3,0)`/`(1,0)` trio. Equal ranks
-resolve to the later subtable, as the un-ranked code always did. An unreadable
-higher-ranked subtable never displaces a readable lower-ranked one — nor does a
-higher-ranked one that is perfectly well formed but maps nothing, which amounts
-to the same thing and is why "maps nothing" is folded into "unreadable" below.
+terms of the Windows subtables. An unreadable higher-ranked subtable never
+displaces a readable lower-ranked one — nor does one that is well formed but
+maps nothing.
 
-**Subtable formats.** 0 (byte table), 4 (segment mapping), 6 (trimmed table) and
-12 (segmented coverage) are parsed; formats 2, 8, 10, 13 and 14 are not. Format
-12 is the only one whose keys can exceed `0xFFFF`, and in practice it is where a
-`(3,10)`/`(0,4)` subtable's supra-BMP coverage lives. An unparseable subtable —
-unknown format, truncated body, a declared `length`/`nGroups` the buffer cannot
-back — yields `nil`, never an empty map: `font.TrueTypeGID` treats a non-nil `cmap` as
-authoritative, so an empty one would read as "every code is `.notdef`" instead of
-"unknown". So does a subtable that parses cleanly and maps nothing at all, which
-is not a theoretical shape: sixteen bytes of format-12 header declaring
-`nGroups` 0, a lone `0xFFFF` format-4 sentinel, or a table whose every group
-lies outside Unicode all reach the end of the parse holding no mapping.
-`FuzzCmapSubtable` found the last of those, and pins the invariant.
+**Subtable formats.** `font.ParseCmapSubtable` reads every format whose codes
+are Unicode code points; its documentation lists them and says why format 2
+(legacy CJK encodings, never at a Unicode platform/encoding pair) and format 14
+(variation sequences, a different function altogether) are not among them. An
+unparseable subtable — or one that parses cleanly and maps nothing — yields
+`nil`, never an empty map: `font.TrueTypeGID` treats a non-nil `cmap` as
+authoritative, so an empty one would read as "every code is `.notdef`" instead
+of "unknown". forme's own `FuzzCmapSubtable` pins that invariant.
 
 **Empty glyph is not missing glyph.** This distinction is the trap, and it is
 why two parallel arrays exist. `glyphPresent[gid]` means the loca entry is
@@ -202,32 +197,25 @@ is a violation — *except* for whitespace, where a blank glyph is correct.
 reports an existing-but-empty glyph only when `toUni[cid]` maps to a
 non-whitespace rune (`isGlyphWhitespace` accepts `unicode.IsSpace`, U+200B and
 U+FEFF). Collapsing the two predicates false-positives on every space in every
-subset font. A third array, `componentGID[gid]`, is filled by `markComposite`:
+subset font. A third array, `componentGID[gid]`, is filled by `font.MarkComposite`:
 a glyph referenced as a component of a composite (an accent reused across
 letters) carries an outline solely as a building block and is not a directly
 mapped CID, so `checkCIDFontCIDSet` skips those or a conformant `/CIDSet` looks
-incomplete.
+incomplete. The three arrays are `font.Program.GlyphPresent`,
+`font.Program.GlyphNonEmpty` and `font.Program.ComponentGID`.
 
-**CFF (`font.ParseCFF`).** Parses the INDEX structures (names, top DICTs, strings,
-charstrings), the top DICT operators, and the charset. `_, isCID := top[1230]`
-(the `ROS` operator) splits the two worlds: a CID-keyed font fills `cidGIDs` and
-`widthByCID` keyed by the charset's CIDs, a name-keyed font fills `glyphNames`
-and `widthByName` via `cffSIDName`. Widths come from the optional leading
-operand of a Type 2 charstring (`type2CharstringWidth`, detected by an operand
-count exceeding what the first stack-clearing operator takes), offset by the
-Private DICT's `nominalWidthX`, defaulting to `defaultWidthX`.
-
-**Type 1 (`font.ParseType1`).** Unwraps PFB segment framing, reads the cleartext
-`/FontMatrix`, finds `eexec`, decodes the hex form when the payload starts with
-four hex digits, decrypts with r=55665, then walks `/CharStrings` decrypting
-each charstring with r=4330 (skipping `lenIV` bytes) and taking the width from
-`hsbw` or `sbw`. The walk stops at the standalone `end` token that closes the
-CharStrings dictionary (`type1CharStringsEnd`, Type 1 Font Format 10.3), read
-from the byte stream after each entry's `ND`/`|-`. It is not a test on the glyph
-*name*: `endash`, `enfilledcircbullet` and `endescender` are ordinary glyphs, and
-breaking on a name containing "end" truncated the glyph list at the first one, so
-every glyph defined after it read as missing from a font that in fact defines
-them (`TestType1CharStringsEndTerminator`).
+**CFF (`font.ParseCFF`) and Type 1 (`font.ParseType1`).** A CID-keyed CFF (one
+with the `ROS` operator) fills `font.Program.CIDGIDs` and
+`font.Program.WidthByCID` keyed by its charset's CIDs; a name-keyed CFF or a
+Type 1 program fills `font.Program.GlyphNames` and `font.Program.WidthByName`.
+Widths come from the charstrings — the optional leading width operand of a
+Type 2 charstring, read through the glyph's own Private DICT and its
+subroutines, or `hsbw`/`sbw` in Type 1. The Type 1 reader stops at the
+standalone `end` token that closes the CharStrings dictionary
+(`font.Type1CharStringsEnd`, Type 1 Font Format 10.3), never at a glyph *name*
+containing "end": `endash` and `endescender` are ordinary glyphs, and breaking
+on the name once truncated the glyph list, so every glyph after it read as
+missing from a font that defines it (`TestType1CharStringsEndTerminator`).
 
 **Widths are always normalised to 1/1000 text-space units**, because that is
 what `/Widths` and `/W` are in: sfnt scales by `1000 / unitsPerEm`, CFF and
@@ -240,25 +228,23 @@ program parses, so this raises no false positive.
 
 ## Encodings and character mapping
 
-Two generated tables back the encoding machinery, and their headers name their
-provenance. **forme's `font/font_encodings.go`** — "generated from ISO 32000-1 Annex D.2
-(spec/pdf1.7)" — holds `standardEncodingNames`, `macRomanEncodingNames` and
-`winAnsiEncodingNames`, consumed only by `simpleFontCodeToName`, which layers a
+Two generated tables in forme back the encoding machinery, and their headers
+name their provenance: `font/font_encodings.go` ("generated from ISO 32000-1
+Annex D.2") holds `font.StandardEncodingNames`, `font.MacRomanEncodingNames` and
+`font.WinAnsiEncodingNames`, consumed by `simpleFontCodeToName`, which layers a
 base encoding (named, or `StandardEncoding` implicitly for a non-symbolic font)
-with `/Differences` to produce `map[byte]string`. **forme's `font/cff_strings.go`** — "the
-391 predefined CFF strings (Adobe Technical Note #5176, Appendix A), indexed by
-SID" — is consumed only by `cffSIDName`: SIDs below 391 index this table, higher
-SIDs index the font's own string INDEX. Neither has a generator committed in
-`cmd/`. A third table, `aglNames` in `fonts.go`, is a hand-maintained Adobe
-Glyph List subset validating `/Differences` names on non-symbolic TrueType
-fonts; `aglGlyphName` also accepts the algorithmic `uniXXXX`/`uXXXX` forms.
+with `/Differences` to produce `map[byte]string`; `font/cff_strings.go` holds
+the 391 predefined CFF strings (Adobe Technical Note #5176, Appendix A). A
+third table, `aglNames` in `pdfa/fonts.go`, is a hand-maintained Adobe Glyph
+List subset validating `/Differences` names on non-symbolic TrueType fonts;
+`aglGlyphName` also accepts the algorithmic `uniXXXX`/`uXXXX` forms.
 
 For a Type 0 font the path from bytes to glyph is longer:
 
 ```mermaid
 flowchart LR
-    S["Shown string bytes"] --> C["Two-byte code — Identity-H or Identity-V"]
-    C --> CID["CID = high byte times 256 plus low byte"]
+    S["Shown string bytes"] --> C["Codes, cut by the CMap — core.LoadFontCodes"]
+    C --> CID["CID — the code itself for Identity, the CMap's mapping otherwise"]
     CID --> K{"descendant /Subtype"}
     K -->|CIDFontType2| G["cidToGID via /CIDToGIDMap<br/>/Identity or 2-byte-per-CID stream"]
     G --> GL["glyf entry — glyphPresent, glyphNonEmpty"]
@@ -267,9 +253,9 @@ flowchart LR
     CH --> W2["advance from charstring by CID"]
 ```
 
-**Only Identity decoding is handled precisely.** `checkCIDFontConsistency` skips
-the per-glyph loop for any non-Identity CMap, because decoding a shown string
-under an arbitrary predefined CMap needs that CMap's own code-space ranges.
+Identity CMaps and embedded CMaps are decoded; a predefined CMap other than
+Identity is data this module does not carry, so the font is skipped and the
+skip reported (see [CMaps](#cmaps) below).
 
 **Identity-H/V codes are exactly two bytes**, so a shown string of odd length
 ends in an incomplete code that cannot reference a defined glyph (ISO 32000-1
@@ -278,39 +264,42 @@ it sounds — a stray one-byte literal inside an otherwise well-formed Identity
 run is what a veraPDF fail case tests, and it is easy to misdiagnose as an
 empty-outline problem.
 
-**ToUnicode and CMap scanning.** `parseToUnicodeMap` builds code → first rune
-from `beginbfchar`/`beginbfrange`, using `angleTokens` to pick out `<hhhh>`
-groups (often written with no separating whitespace, e.g. `<0003><0003><0020>`).
-`hasForbiddenUnicodeTargets` scans the same sections for U+0000/U+FEFF/U+FFFE —
-bfchar destinations are every second hex token, bfrange every third. `maxCMapCID`
-scans `begincidrange`/`begincidchar` for the implementation-limit rule, and
-`cmapContentWMode` / `cmapUseCMap` pull `/WMode` and the `usecmap` operand out
-of an embedded CMap body to cross-check against the stream dictionary.
+**ToUnicode and CMap reading.** Every CMap program — a ToUnicode CMap or an
+embedded CID CMap — is read as a token stream by one reader
+(`internal/core/cmapparse.go`), through the same lexer the content streams use,
+and the data-carrying operators are interpreted. `core.ParseToUnicode` reads a
+font's map once per run; `core.ToUnicode.First` gives a code's first rune and
+`core.ToUnicode.Runes` the whole destination, which text extraction and the Private Use Area rule need because a
+ligature's entry is several characters. `core.HasForbiddenUnicodeTargets` finds
+the U+0000/U+FEFF/U+FFFE targets PDF/A-4 forbids, reading an array-form
+`bfrange` destination as one operand. `core.CMapMaxCID` gives the largest CID a
+CMap declares, for the implementation-limit rule, and `cmapContentWMode` /
+`cmapUseCMap` (over `core.CMapWMode` / `core.CMapUseCMap`) pull `/WMode` and the
+`usecmap` operand out of an embedded CMap to cross-check against the stream
+dictionary.
 
-All of this runs over untrusted bytes. Each section scanner computes
-`lo, hi := b+len(begin), b+e` and **continues past the section when `lo > hi`**:
-a malformed stream whose end marker overlaps the begin marker would otherwise
-slice with low > high and panic. Range expansion is bounded separately — a
-`bfrange` only materialises when `hi >= lo && hi-lo < 65536`, the 16-bit CID
-ceiling — without which one crafted `beginbfrange` line expands to billions of
-map inserts.
+The reader replaced a family of text searches that each failed on something a
+token stream cannot: a keyword inside a comment, several entries on a line, CR
+alone between lines, an array-form destination throwing a count out of step. It
+runs over untrusted bytes, so expansion is bounded: no range may span more than
+65,536 codes, and one CMap may declare no more than 65,536 mappings.
 
 ## CIDSet and CharSet
 
 Both are subset-completeness declarations in the `FontDescriptor`, and "present
 glyph" means something different per font type. `/CharSet` (Type 1 / MMType1) is
-a string of `/name` tokens, parsed by `parseCharSet`. `/CIDSet` is a bitmap
+a string of `/name` tokens, parsed by `core.ParseCharSet`. `/CIDSet` is a bitmap
 stream: bit *i*, MSB-first within each byte, means CID *i* is present. It is
-`type cidSet []byte` and membership is tested directly against the bytes —
-deliberately, because materialising a set of every present CID turned a 64 MB
-CIDSet (512 M bits) into roughly 70 seconds of validation. `cidSet.has`/`empty`
-are pinned by `cidset_test.go`, including a 16 MiB all-ones timing guard.
+`core.CIDSet` and membership (`core.CIDSet.Has`) is tested directly against the
+bytes — deliberately, because materialising a set of every present CID turned a
+64 MB CIDSet (512 M bits) into roughly 70 seconds of validation. That is pinned
+by `cidset_test.go`, including a 16 MiB all-ones guard.
 
 | Check | Level | What it asserts |
 |-------|-------|-----------------|
-| `checkFontSubsets` (`pdfa.go`) | 1b only | A subset font (`ABCDEF+` BaseFont prefix) must *have* `/CharSet` or `/CIDSet`. Parts 2+ only constrain the sets when present. |
+| `checkFontSubsets` (`pdfa/pdfa.go`) | 1b only | A subset font (`ABCDEF+` BaseFont prefix) must *have* `/CharSet` or `/CIDSet`. Parts 2+ only constrain the sets when present. |
 | `checkFontSubsetCompleteness` | all | When present, the set must list every glyph name / CID **used for rendering**. |
-| `checkCIDSetProgramComplete` | 1b only | The `/CIDSet` must be non-empty and enumerate every glyph **present in the program**: CID-keyed CFF charset CIDs, or every `glyphNonEmpty` index for `CIDFontType2` with an Identity `/CIDToGIDMap`. |
+| `checkCIDSetProgramComplete` | 1b only | The `/CIDSet` must be non-empty and enumerate every glyph **present in the program**: CID-keyed CFF charset CIDs, or, for `CIDFontType2`, every CID whose glyph (through its `/CIDToGIDMap`) has an outline. |
 
 The PDF/UA counterpart `checkType1CharSet` is stricter — it checks both
 directions, program→CharSet and CharSet→program. Its sibling
@@ -322,13 +311,13 @@ CIDs whose glyphs exist only as padding or composite components.
 
 | File | Owns | Governing spec |
 |------|------|----------------|
-| `pdfa/fonts.go`, `internal/core/fontuse.go`, `internal/core/interp.go`, `internal/core/cmap.go`, `internal/core/cmapparse.go`, `internal/core/tounicode.go` | Content execution (`CollectFontTextUsage`), all font rule functions, the predefined-CMap table, encoding/AGL validation, CID width parsing, CIDSet/CharSet, CMap and ToUnicode parsing | ISO 32000-2 clause 9 (9.6 simple fonts, 9.7 composite, 9.10 Unicode mapping)<br/>ISO 19005-1 6.3, -2/-3 6.2.11, -4 6.2.10 |
-| forme `font/fontprog.go` | `font.Program` plus `font.ParseSFNT`, `font.ParseCFF`, `font.ParseType1`, and `parseSFNTCFF` for OpenType/CFF | OpenType/sfnt spec (`head`, `maxp`, `hhea`, `hmtx`, `loca`, `glyf`, `cmap`)<br/>Adobe TN #5176 (CFF), TN #5177 (Type 2 charstrings), TN #5015 (Type 1) |
-| forme `font/font_encodings.go` | Generated: `standardEncodingNames`, `macRomanEncodingNames`, `winAnsiEncodingNames` | ISO 32000-1 Annex D.2 |
-| forme `font/cff_strings.go` | Generated: `cffStandardStrings`, 391 entries indexed by SID | Adobe TN #5176 Appendix A |
+| `pdfa/fonts.go`, `internal/core/fontuse.go`, `internal/core/interp.go`, `internal/core/cmap.go`, `internal/core/cmapparse.go`, `internal/core/cmap_predefined.go`, `internal/core/tounicode.go` | Content execution (`core.CollectFontTextUsage`), the font rule functions, the predefined-CMap codespace table, encoding/AGL validation, CID width parsing, CIDSet/CharSet, CMap and ToUnicode reading | ISO 32000-2 clause 9 (9.6 simple fonts, 9.7 composite, 9.10 Unicode mapping)<br/>ISO 19005-1 6.3, -2/-3 6.2.11, -4 6.2.10 |
+| forme `font/fontprog.go` | `font.Program` plus `font.ParseSFNT`, `font.ParseCFF`, `font.ParseType1` | OpenType/sfnt spec (`head`, `maxp`, `hhea`, `hmtx`, `loca`, `glyf`, `cmap`)<br/>Adobe TN #5176 (CFF), TN #5177 (Type 2 charstrings), TN #5015 (Type 1) |
+| forme `font/font_encodings.go` | Generated: `font.StandardEncodingNames`, `font.MacRomanEncodingNames`, `font.WinAnsiEncodingNames` | ISO 32000-1 Annex D.2 |
+| forme `font/cff_strings.go` | Generated: the 391 CFF standard strings, indexed by SID | Adobe TN #5176 Appendix A |
 
 Font findings are also produced outside these files: `checkFontsEmbedded` and
-`checkFontSubsets` live in `pdfa.go`, the clause-7.21 PDF/UA font family in
+`checkFontSubsets` live in `pdfa/pdfa.go`, the clause-7.21 PDF/UA font family in
 `pdfua/pdfua.go`, and `pdfxCheckFontsEmbedded` in `pdfx/pdfx.go`.
 
 ## DoS guards
@@ -343,12 +332,12 @@ One of these is configurable per document; see
   disjoint CID segments and `width` looks a CID up by binary search, so
   `[0 2000000000 500]` costs one entry, not two billion map inserts, and 2,000
   overlapping full-space ranges cost 2,000 (audit 2026-07-26 C1, 2026-09-22
-  C10; `fonts_wrange_test.go`). It runs *before* the visible-render gate, so
+  C10; `pdfa/fonts_wrange_test.go`). It runs *before* the visible-render gate, so
   merely selecting a Type 0 font with `Tf` reaches it. A `/W` named by
   reference is read once per run however many fonts share it.
 - **cmap format 4 total work** (`WithMaxCmapWork`, default `1 << 18`) — a valid
   subtable partitions the BMP in ~65536 iterations, a hostile one with many
-  full-range segments is O(segments × 65535) (audit C10). On trip the partial
+  full-range segments is O(segments × 65535) (2026-07-26 audit C10). On trip the partial
   map is returned and marked partial (`font.Program.CmapPartial`), the glyph rules
   decline, and the trip is reported — see [limits.md](limits.md).
 - **cmap format 12 total work** (the same `WithMaxCmapWork` budget, charged
@@ -363,8 +352,8 @@ One of these is configurable per document; see
 
 ### Why formats 4 and 12 share one budget
 
-They were separate constants (`maxCmapFormat4Work`, `maxCmapFormat12Work`), both
-`1 << 18`, and were collapsed into the single `WithMaxCmapWork`. The obvious
+They were two separate constants, both `1 << 18`, and were collapsed into the
+single `WithMaxCmapWork`. The obvious
 objection is that format 12 can address sixteen times as many code points as
 format 4 — the whole of Unicode rather than the BMP — so it might warrant more
 room.
@@ -385,14 +374,14 @@ several does not have them compete.
 
 If a real font is ever found that needs different room per format, the split is
 a second field and a second option; nothing here forecloses it.
-- **`bfrange` span** (`hi - lo < 65536`), **section-marker overlap** (the
-  `lo > hi` continue), and **CIDSet membership without materialisation**
-  (`cidSet` tests bits in place) — all described above.
-- **Content tokenizer progress** — `forEachContentItem` consumes a stray
-  unbalanced `)` (leaked inline-image sample data would otherwise spin forever),
-  skips `BI … EI` inline images, always advances on an unhandled delimiter, and
-  caps non-numeric keyword tokens at 256 bytes while letting numeric tokens run
-  to full Annex C precision.
+- **CMap range span and entry count** and **CIDSet membership without
+  materialisation** (`core.CIDSet` tests bits in place) — both described above.
+- **Content lexer progress** — `core.ContentLexer`, the one content-stream
+  lexer, consumes at least one byte per step (a stray `)` included, so leaked
+  inline-image sample data cannot stall it), steps over `BI … EI` inline images
+  honouring a declared `/L`, and drops a run of regular bytes longer than
+  `core.MaxContentTokenLen` that is not a number while letting numeric tokens
+  run to full Annex C precision.
 - **Per-run memoization** — the validation cache holds the font-usage map, the
   per-stream event skeletons and the per-stream used-name sets.
 
@@ -496,9 +485,9 @@ nearly everywhere; they part on GB 18030 (`GBK2K-H`), whose two- and four-byte
 ranges share first bytes, where `81 30 81 30` is one four-byte code.
 
 Text extraction and the PDF/A Level A Private Use scan cut codes the same way,
-through `core.LoadFontCodes`: the full CMap where `LoadCMap` reads one, and
+through `core.LoadFontCodes`: the full CMap where `core.LoadCMap` reads one, and
 otherwise the codespace alone — a predefined CMap's, from a table transcribed
-from Adobe's published CMaps (`cmap_predefined.go`), or an embedded CMap's own
+from Adobe's published CMaps (`internal/core/cmap_predefined.go`), or an embedded CMap's own
 ranges plus those of the predefined CMap it names with `usecmap`. A codespace is
 enough to cut codes, which is all those two readers need before looking each
 code up in the ToUnicode map; the codes of the `Uni*-UCS2` and `Uni*-UTF16`
@@ -514,9 +503,12 @@ A code the document writes and its own CMap does not define is reported as
 that, and not as CID 0 — a `.notdef` reference is something the document did on
 purpose and this is not.
 
-A CMap using `usecmap` is refused rather than half-read: it names a predefined
-CMap, so the result would be a map with holes that reports "undefined" for
-codes it simply never learned.
+A CMap that builds on another with `usecmap` is read together with it when that
+one is embedded too. When it names a predefined CMap this module does not carry,
+its own entries are still read and checked, and a code it leaves to that base
+decodes as unknown rather than undefined: no rule asserts against it, and the
+skip is reported when a check first meets such a code — a CMap that defines
+every code the document shows was checked in full.
 
 The parser is bounded, because a CMap arrives in a document: `<0000> <FFFFFFFF>
 1` is eleven bytes asking for four billion inserts. Ranges are kept as ranges,
@@ -528,22 +520,15 @@ same budget as any other.
 - **Predefined CMaps are not decoded.** A Type 0 font whose `/Encoding` names
   one of Adobe's published CMaps — `UniJIS-UCS2-H` and the rest — is checked at
   the dictionary level only, because the mapping is data this module does not
-  carry. Identity and *embedded* CMaps are decoded; see below. Five of the
-  corpus's 223 Type 0 fonts name a predefined CMap, against 69 that embed one.
-- **cmap formats 2, 8, 10, 13 and 14 are not parsed** — a font whose only
-  Unicode subtable is one of those has no `cmap` at all (`nil`, so the lookup
-  falls through to the Mac and symbol tables rather than reporting `.notdef`).
-  Format 14 in particular means variation sequences are invisible. Format 12's
-  groups are read as written: they are required to be sorted and non-overlapping,
-  and neither is enforced — an overlap resolves to the last group.
-- **CFF local/global subrs are parsed but unused** (`_ = localSubrs`), so a
-  width expressed only through a subroutine call is not recovered; Expert
-  charsets (ids 1 and 2) fall back to identity SIDs. **No standard-14 metrics**,
-  so only the embedding rule fires on an unembedded standard font.
-- **`font.GlyphNameToRune` covers the common cases only** — `uniXXXX`/`uXXXX` plus
-  ASCII and Latin-1-high identity, so codes 0x80–0x9F under WinAnsi resolve only
-  via a `uni`/`u` glyph name.
+  carry; the skip is reported. Identity and *embedded* CMaps are decoded (see
+  [CMaps](#cmaps)).
+- **cmap formats 2 and 14 are not parsed** — see `font.ParseCmapSubtable` for
+  why. Format 14 in particular means variation sequences are invisible.
+  Format 12's groups are read as written: they are required to be sorted and
+  non-overlapping, and neither is enforced — an overlap resolves to the last
+  group.
+- **No standard-14 metrics in validation**, so only the embedding rule fires on
+  an unembedded standard font.
 - **`simpleGlyphExists` treats GID 0 as non-existent** for TrueType, merging
   "code maps to `.notdef`" with "code maps to nothing"; only `isNotdefGlyph`
-  separates them. **PFB segment lengths are read as `int`**, so a length above
-  2^31 is negative on a 32-bit build (audit C46).
+  separates them.

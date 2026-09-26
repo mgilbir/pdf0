@@ -276,7 +276,7 @@ func (d View) CatalogPages() object.Object {
 	return nil
 }
 
-// validBCP47 reports whether tag is a syntactically well-formed BCP 47 (RFC
+// ValidBCP47 reports whether tag is a syntactically well-formed BCP 47 (RFC
 // 5646) language tag. It validates the subtag structure rather than a registry:
 // a non-empty primary language of 2–8 letters (or an x-/i- private/grandfathered
 // singleton), followed by subtags of 1–8 alphanumerics each.
@@ -403,7 +403,7 @@ func DecodePDFTextString(b []byte) string {
 	return pdfdoc.Decode(b)
 }
 
-// sortedObjectNums returns every object number in doc.Objects in ascending
+// SortedObjectNums returns every object number in doc.Objects in ascending
 // order. Checks that must be reproducible iterate it instead of ranging the map
 // directly: Go randomises map iteration order on every run, so any check whose
 // output depends on WHICH object it reaches first — rather than on the set of
@@ -428,7 +428,7 @@ type CMSSignedData struct {
 	SignerInfoCount int  // number of SignerInfo entries
 }
 
-// parseCMSSignedData decodes a DER-encoded CMS/PKCS#7 SignedData structure far
+// ParseCMSSignedData decodes a DER-encoded CMS/PKCS#7 SignedData structure far
 // enough to report whether it embeds a signing certificate and how many
 // SignerInfos it contains. It never errors: a blob that is not SignedData (or is
 // truncated) simply comes back with parsed=false, since the raw signature bytes

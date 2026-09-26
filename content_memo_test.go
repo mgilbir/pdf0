@@ -11,7 +11,7 @@ import (
 // contentHeavyPDF builds a document whose pages carry large content streams that
 // invoke device colours and named resources (ExtGState, ColorSpace, a form
 // XObject, a font). Several independent PDF/A rules each scan this content for
-// the resource names it uses; the per-stream memoization in contentUsedNamesCached
+// the resource names it uses; the per-stream memoization in ContentUsedNamesCached
 // means each stream is tokenized once per run rather than once per rule.
 func contentHeavyPDF(pages int) []byte {
 	var body strings.Builder

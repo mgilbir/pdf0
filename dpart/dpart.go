@@ -36,7 +36,7 @@ func (v Violation) Error() string {
 	return fmt.Sprintf("DPart %s: %s", v.Rule, v.Message)
 }
 
-// validateDPartHierarchy runs the ISO 32000-2 14.12 checks, reporting through
+// validateHierarchy runs the ISO 32000-2 14.12 checks, reporting through
 // add. It is the body of ValidateDParts, split out so the panic boundary and
 // the result ordering live in one place.
 func validateHierarchy(doc core.View, add func(rule, msg string, obj int)) {

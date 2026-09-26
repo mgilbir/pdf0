@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-// jbig2CCITTImage decodes the single JBIG2 image from a sample PDF and returns it.
+// jbig2Image decodes the single JBIG2 image from a sample PDF and returns it.
 func jbig2Image(t *testing.T, path string) images.ExtractedImage {
 	t.Helper()
 	data, err := os.ReadFile(path)

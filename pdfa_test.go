@@ -804,7 +804,7 @@ func TestValidatePDFA_MetadataVersion(t *testing.T) {
 }
 
 // addExtGStateToDoc adds an ExtGState dict to the test doc's page Resources.
-// It creates a page (obj 20) with Resources/ExtGState referencing gsObj (obj 10).
+// It creates a page (obj 20) with Resources/ExtGState referencing the ExtGState, as obj 10.
 func addExtGStateToDoc(doc *Document, gs *object.Dictionary) {
 	doc.Objects[10] = &object.IndirectObject{Number: 10, Value: gs}
 	reference(doc, 10)

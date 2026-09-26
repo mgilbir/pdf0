@@ -524,7 +524,7 @@ func fieldObjNum(v uint64) int {
 }
 
 // The maximum size of decompressed stream data defaults to
-// defaultMaxDecodedStreamBytes; a caller can change it with
+// core.DefaultMaxDecodedStreamBytes; a caller can change it with
 // WithMaxDecodedStreamBytes. This prevents decompression bombs from consuming
 // excessive memory.
 

@@ -2,6 +2,9 @@
 
 Three inputs — a document, a stylesheet, a sheet of paper — and a PDF.
 
+<!-- snippet
+var document, stylesheet string
+-->
 ```go
 out, err := htmlpdf.Render(htmlpdf.Input{
     HTML: document,

@@ -141,7 +141,7 @@ func TestContentLexerHostile(t *testing.T) {
 
 // TestConsumersSeeTheSameStrings is C150's scenario: the PDF/UA content pass
 // and text extraction (TokenizeContent) and the font-usage walk the PDF/A
-// glyph rules read (then buildFontEvents) used to decode the same string operand
+// glyph rules read (then a font-event builder of its own) used to decode the same string operand
 // differently, so the two validators judged different glyph codes. Each input
 // here decoded differently under at least one pair of the old tokenizers.
 func TestConsumersSeeTheSameStrings(t *testing.T) {

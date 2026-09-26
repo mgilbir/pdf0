@@ -32,15 +32,16 @@ dictionary is `object.Dictionary`, a PDF/A finding is `pdfa.Violation`, a
 conformance level is `pdfa.PDFA2b`. The root package declares the entry points
 over a document — `Read`, `Document` and its methods, one validator function per
 standard, the builders — and what those entry points own: their options,
-results and errors. It re-exports exactly one group of names: the twelve object
-types in `object_api.go` (`pdf0.Dictionary` is `object.Dictionary`), because
-every caller writes them and a second import for them would buy nothing.
+results and errors. It gives a second name to exactly one group: the object
+model's types, aliased in `object_api.go` (`pdf0.Dictionary` is
+`object.Dictionary`), because every caller writes them and a second import for
+them would buy nothing.
 Everything else is named from the package that owns it — `pdfa.SkeletonOptions`,
 `syntax.NewParser`, `object.Equal`, `sign.CheckCertRevocation` — and the root
 package declares no second name for it. The errors that come from internal
 packages (`ErrWrongPassword`, `ErrInvalidMetadataText`, …) are declared in the
 root because it is their only public home; that is ownership, not a second
-name.
+name. The lint `TestRootReexportsOnlyTheObjectModel` holds that policy.
 
 **A subsystem is a regular package if it carries public API, `internal/` if it
 does not.** `internal/crypt` is the clear case of the second: its whole exported
@@ -58,12 +59,16 @@ regular package.
 | `pdfua`, `pdfx`, `pdfvt`, `pdfr`, `dpart` | One validator each, with its finding type. |
 | `sign` | Signature verification: CMS, PAdES, revocation, time-stamp tokens. |
 | `facturx` | The Factur-X and Order-X containers, and the invoice embedder. |
-| `images` | Image extraction. |
+| `images` | Image extraction, and embedding an image as an XObject. |
+| `content` | The content-stream builder: drawing operators, checked as they are written. |
+| `htmlpdf` | The backend that writes forme's laid-out HTML and CSS into a document. |
 | `internal/core` | What every subsystem needs: the view, resolution, filters, content scanning, limits. |
 | `internal/crypt` | The standard security handler. No public API of its own. |
+| `internal/xmp` | The one XMP model every metadata writer edits, with merge semantics. |
 | `fonts` | Setting text with a font: shaped glyphs into content-stream operators, and the font into the document. The shaping itself, and the sfnt/CFF/Type 1 program reader under it, are [github.com/mgilbir/forme](https://github.com/mgilbir/forme). |
 | `internal/finding` | The panic boundary, the reserved rule identifiers, deterministic ordering. |
 | `internal/bridge` | The entry points the public packages keep unexported because they take `core.View`; see below. |
+| `internal/testfiles`, `internal/hostile`, `internal/lint` | Test support: where committed and fetched test data is and whether it is complete; running a hostile-input test in a capped child process; the repository-wide static checks, the documentation checks among them. |
 | `internal/signtest` | Fixtures shared by tests in packages that cannot share a `_test.go`. The font-program equivalent is [forme](https://github.com/mgilbir/forme)'s `fonttest`, exported rather than internal because two modules read font programs and one copy of the fixtures is the point. |
 
 ### `core.View`: the document seen from below
@@ -241,16 +246,17 @@ cannot tell you why it is broken.
 ## Write
 
 `Document.Write` (`document.go`) regenerates a clean file. It refuses documents
-it cannot faithfully serialize, re-encrypts a document decrypted on Read (and
-writes a still-locked one back verbatim), and regenerates the cross-reference
-section in the same form the source used — a cross-reference stream, or a
-traditional table.
+it cannot faithfully serialize, re-encrypts a document decrypted on Read, writes
+a Locked one's ciphertext back unchanged under its original `/Encrypt` and `/ID`
+(so the result opens with the right password, and `Write` returns nil), and
+regenerates the cross-reference section in the same form the source used — a
+cross-reference stream, or a traditional table.
 
 ```mermaid
 flowchart TD
-    A[Document.Write] --> B{locked encryption,<br/>in-use object 0,<br/>or broken/skipped ObjStms?}
+    A[Document.Write] --> B{in-use object 0,<br/>broken or skipped ObjStms,<br/>objects that did not decrypt,<br/>or Locked with an unresolvable /Encrypt?}
     B -->|yes| X[return error]
-    B -->|no| C[compute indirect /Length overrides<br/>re-encrypt if a handler is retained]
+    B -->|no| C[compute indirect /Length overrides<br/>re-encrypt if a handler is retained<br/>a Locked document's ciphertext is kept as it is]
     C --> D[write header + binary comment]
     D --> E[write objects sorted by number<br/>rewrite stale /Length targets]
     E --> F{source used<br/>an xref stream?}
@@ -276,7 +282,7 @@ below the file's, and its second `/ID` string is refreshed.
 ## Validate
 
 Validation reads the object model and reports findings; it never mutates the
-document. Ten standards are supported and the PDF/A engine has its own dispatch,
+document. Each standard has its own validator, and the PDF/A engine has its own dispatch,
 executed-content model and rule-file map — all of that lives in
 [validators.md](validators.md).
 
@@ -289,14 +295,17 @@ always had.**
 
 A fixed number cannot be right for every caller, though. A batch converter on a
 workstation and a public upload endpoint want genuinely different answers to
-"how much may one untrusted document cost me". Eleven limits are therefore
-settable per document, as variadic options on `Read`, `ReadWithPassword`, their
-`…Context` variants and `ParseXRefStream`:
+"how much may one untrusted document cost me". The limits worth tuning are
+therefore settable per document, as variadic options on `Read`,
+`ReadWithPassword`, their `…Context` variants and `ParseXRefStream`. Each
+option's documentation gives the largest real value measured, and a cap below
+it refuses real documents; these are stricter than the defaults and still above
+it:
 
 ```go
 doc, err := pdf0.Read(r, size,
-	pdf0.WithMaxDecodedStreamBytes(8<<20),   // stricter bomb ceiling
-	pdf0.WithMaxDecodedContentBytes(64<<20), // stricter whole-run budget
+	pdf0.WithMaxDecodedStreamBytes(48<<20),   // bomb ceiling
+	pdf0.WithMaxDecodedContentBytes(256<<20), // whole-run budget
 )
 ```
 
@@ -310,18 +319,24 @@ The struct travels by value and is never mutated after resolution, so validating
 one `Document` from several goroutines stays safe — the property package-level
 `var`s would have lost.
 
-| Option | Default | Bounds |
-|--------|---------|--------|
-| `WithMaxDecodedStreamBytes` | 100 MB | decompressed size of any one stream — the bomb ceiling |
-| `WithMaxDecodedContentBytes` | 512 MB | total content decoded by one validation run |
-| `WithMaxObjectStreamBytes` | 512 MB | estimated memory of the objects unpacked from `/ObjStm` containers in one document |
-| `WithMaxContentStreamBytes` | 64 MB | one content stream or image sample buffer |
-| `WithMaxICCProfileBytes` | 8 MiB | a decoded ICC profile |
-| `WithMaxXMPPacketBytes` | 4 MiB | an XMP packet the property checks build a tree for |
-| `WithMaxTableGridFills` | 1<<24 | grid slots filled for one PDF/UA table |
-| `WithMaxCmapWork` | 1<<18 | work spent expanding one TrueType cmap subtable of format 4 or 12 |
-| `WithMaxImagePixels` | 1<<26 | pixels in one image extraction decodes, for every codec (four samples per pixel beyond that) |
-| `WithMaxWork` | 2^28 + 512 a byte of the file | the work of one run — a validation or an extraction — in units of some tens of nanoseconds; see [limits.md](limits.md#the-work-meter-one-budget-for-a-whole-run) |
+The options, generated from their documentation in `limits.go`:
+
+<!-- BEGIN GENERATED: options. From the With* functions in limits.go by TestGeneratedDocSections; regenerate with `go test ./internal/lint -run TestGeneratedDocSections -update`. -->
+
+| Option | Caps | Default |
+|---|---|---|
+| `WithMaxDecodedStreamBytes` | the decompressed size of any single stream | 100 MB |
+| `WithMaxDecodedContentBytes` | the total decoded content one validation run will materialize | 512 MB |
+| `WithMaxObjectStreamBytes` | the memory Read may spend on the objects it unpacks from object streams in one document: the parser's estimate of every object it builds (syntax.MaterialCost, twice the measured live cost), plus the decoded bytes of the container being unpacked | 512 MB |
+| `WithMaxContentStreamBytes` | the decoded size of a single content stream or image sample buffer that will be scanned | 64 MB |
+| `WithMaxICCProfileBytes` | the decoded size of an ICC profile | 8 MiB |
+| `WithMaxXMPPacketBytes` | the size of an XMP packet that the property checks will build a node tree for | 4 MiB |
+| `WithMaxTableGridFills` | the number of grid slots the PDF/UA table checks will fill for one table, bounding a cell whose /RowSpan and /ColSpan claim a multi-million-slot area | 1<<24 |
+| `WithMaxCmapWork` | the work spent expanding one TrueType cmap subtable of an expanding format — 4 or 12 | 1<<18 |
+| `WithMaxWork` | the work one run may do | 2^28 units plus 512 for every byte of the file the document was read from |
+| `WithMaxImagePixels` | the size of an image that extraction will decode | 1<<26 |
+
+<!-- END GENERATED: options -->
 
 Every value must be positive: `Read` (and `ParseXRefStream`) returns an error
 wrapping `ErrInvalidOption` for 0 or a negative value, which could only mean
@@ -387,7 +402,7 @@ available and would have been the smaller change. It was rejected:
   earlier.
 
 So `ctx` is an explicit first parameter, and the two mechanisms stay separate.
-Every original signature is unchanged.
+Adding the variants changed no existing signature.
 
 ### Which entry points have one
 
@@ -398,20 +413,20 @@ images — rather than to a bounded structural count.
 |---|---|---|
 | `Read`, `ReadWithPassword` | `PageList`, `PageCount`, `Resolve`, `object.Equal`, `DocumentEqual`, `Repair`, `ExtractPages`, `AppendPages` | Structural walks over objects already in memory: no decompression, no content scanning. Microseconds to low milliseconds. |
 | `Write` | `WriteIncremental`, `SetEncryption` | Bounded by the changed-object set. |
-| All ten validators (`ValidatePDFA`, `ValidatePDFUA`, `ValidatePDFUA2`, `ValidatePDFX`, `ValidatePDFVT`, `ValidatePDFVT2`, `ValidatePDFR`, `ValidateDParts`, `ValidateFacturX`, `ValidateOrderX`) | — | The two invoice containers were the exception until `formalis` v0.2.0, and on two counts, both now lapsed: their findings were `formalis.Violation` values, which could not satisfy `pdf0.Violation` and so were outside `IsCheckerFinding`, and the invoice half of the work was a rule engine that took no context. The findings are `facturx.Violation` / `facturx.OrderXViolation` now and the engine takes one, so both halves honour `ctx` and a cancelled run reports `limit` like every other validator. |
+| Every validator (`ValidatePDFA`, `ValidatePDFUA`, `ValidatePDFUA2`, `ValidatePDFX`, `ValidatePDFVT`, `ValidatePDFVT2`, `ValidatePDFR`, `ValidateDParts`, `ValidateFacturX`, `ValidateOrderX`) | — | The two invoice containers were the exception until `formalis` v0.2.0, and on two counts, both now lapsed: their findings were `formalis.Violation` values, which could not satisfy `pdf0.Violation` and so were outside `IsCheckerFinding`, and the invoice half of the work was a rule engine that took no context. The findings are `facturx.Violation` / `facturx.OrderXViolation` now and the engine takes one, so both halves honour `ctx` and a cancelled run reports `limit` like every other validator. |
 | `ExtractText`, `ExtractImages` | `ExtractPageText` | One page *is* the unit of work; a caller iterating pages already has a loop to check a context in. Like `ExtractText`, it returns an error for a page it had to leave out. |
 | | `Images` | An iterator is already cancellable by `break`, and because each image is decoded only as it is yielded, breaking after image N skips exactly what a context checked between images would have. |
 | | `VerifySignatures`, `ValidatePAdES`, `WriteSigned*` | Linear in the file: every signed range is hashed where it lies, with the prefix the signatures share hashed once, and the revision comparison behind the allowed-changes analysis has a work budget, past which the changes are reported unknown (never permitted). |
 
 The rule that falls out of the third row is worth stating on its own: **an entry
 point gets a `…Context` variant only if it has somewhere honest to report the
-cancellation.** For the ten validators that is a finding under the reserved
+cancellation.** For the validators that is a finding under the reserved
 rule `limit`; for `Read` and `Write` it is a returned error; for the two
 extractors it is a partial result *plus* an error. Nothing is given a variant
 that would have to swallow the fact.
 
 `ValidateFacturX` and `ValidateOrderX` are the one place that rule has to hold
-across a module boundary. `formalis.RuleLimit` and pdf0's `limitRule` are both
+across a module boundary. `formalis.RuleLimit` and pdf0's `finding.LimitRule` are both
 the string `"limit"`, deliberately, so a caller draining one mixed slice of
 container and invoice findings has one name to look for; the adoption seam
 (`adoptInvoiceFindings`) therefore takes the rule engine's identifiers verbatim,
@@ -422,20 +437,20 @@ exactly as `adoptPDFAFindings` passes the reserved ones through unprefixed. A
 The two halves each report a cancellation they saw, in their own words. Neither
 covers the container checks between them, nor a container with no embedded XML to
 hand over, so the entry point polls once on the way out and speaks only when
-neither half has (`reportCancellation`).
+neither half has (`finding.ReportCancellation`).
 
 ### Where the check happens, and what latency that buys
 
-`ctx.Err()` in the innermost loop is not free: `forEachContentItem` and
-`forEachContentToken` are together about two thirds of a large document's
-validation time. The check is therefore layered, coarsest first:
+`ctx.Err()` in the innermost loop is not free: tokenising content
+(`core.ContentLexer`) is most of a large document's validation time. The check
+is therefore layered, coarsest first:
 
 | Boundary | Unit of work between checks | Implied latency |
 |---|---|---|
-| Per check | one of ~50 PDF/A or ~45 PDF/UA checks | seconds on a large file — never sufficient alone |
+| Per check | one PDF/A or PDF/UA check | seconds on a large file — never sufficient alone |
 | Per page / per content stream / per embedded PDF | one stream's scan | tens of ms |
-| Per `cancelScanBytes` (1 MiB) inside the three token scanners | ~1 MiB tokenized | ~10 ms |
-| Per `cancelReadChunk` (1 MiB) inside flate and LZW decoding | ~1 MiB inflated | ~10 ms |
+| Per `core.CancelScanBytes` (1 MiB) inside the content lexer | ~1 MiB tokenized | ~10 ms |
+| Per `core.CancelReadChunk` (1 MiB) inside flate and LZW decoding | ~1 MiB inflated | ~10 ms |
 | Per object in `Read`'s load loops and `Write`'s emit loop | one object | sub-ms |
 
 The scanner check is gated on the scan position, not on a token counter: one
@@ -448,7 +463,7 @@ nil channel, so the `default` case is taken.
 The scanners do **not** branch on "is this cancellable" to skip the bookkeeping,
 and that is deliberate. The obvious version — set the gate past the end of the
 data when the signal can never fire, so the comparison never succeeds — added
-two statements to `tokenizeContent`'s loop and pushed its inline cost from under
+two statements to the then content tokenizer's loop and pushed its inline cost from under
 the compiler's 800-node budget to 805. The range-over-func closure then stopped
 being inlined into its consumers, and PDF/UA validation of a 71 MB file slowed
 by 5% — far more than the one nil-channel poll per megabyte it was avoiding.
@@ -471,7 +486,7 @@ finding under the rule identifier `"limit"`, which `IsCheckerFinding` reports as
 a checker finding. The reasoning of [limits.md](limits.md) transfers unchanged —
 the checker stopped before it had seen everything, so the honest answer is
 "unknown", not "conformant" — and routing cancellation through `runLimitTrips`
-gives all nine validators the finding without any of them learning a second
+gives every validator the finding without any of them learning a second
 mechanism.
 
 The findings gathered before the cancellation are kept. They are true, just

@@ -59,7 +59,7 @@ const (
 	GuardCanceled = "context-canceled"
 
 	// GuardReportOverflow is the recorder speaking about itself: the synthetic
-	// trip snapshot emits when maxRecordedLimitTrips has dropped distinct trips.
+	// trip snapshot emits when MaxRecordedTrips has dropped distinct trips.
 	// It is a guard identifier like the rest so that a caller keying on the name
 	// sees the report's own truncation in the same shape as the ones it reports.
 	GuardReportOverflow = "limit-report"
@@ -156,9 +156,9 @@ func NewCanceler(ctx context.Context) Canceler {
 // Cancellable reports whether this signal can ever fire.
 //
 // It is for the two places where a non-Cancellable run should skip real work,
-// not merely a poll: cancelReader, which would otherwise wrap and chunk every
-// decode in the package, and lzwDecode's output gate. The token scanners
-// deliberately do not use it — see cancelScanBytes.
+// not merely a poll: CancelReader, which would otherwise wrap and chunk every
+// decode in the package, and lzwDecode's output gate. The content lexer
+// deliberately does not use it — see CancelScanBytes.
 func (c Canceler) Cancellable() bool { return c.done != nil }
 
 // Stopped reports whether the operation should stop now.
@@ -222,25 +222,24 @@ func (c Canceler) Cause() error {
 	return err
 }
 
-// CancelScanBytes is how many bytes of a content stream one of the token
-// scanners covers between cancellation checks.
+// CancelScanBytes is how many bytes of a content stream the content lexer
+// covers between cancellation checks.
 //
-// The scanners are the package's hot loop — forEachContentItem and
-// forEachContentToken are together about two thirds of a large file's
-// validation time — so the check cannot go per token. It is gated on the scan
+// Tokenising content is the package's hot loop — about two thirds of a large
+// file's validation time — so the check cannot go per token. It is gated on the scan
 // position instead: one comparison of the loop index against a local int per
 // token, and the poll itself once per megabyte. A megabyte of content tokenizes
 // in roughly 10 ms, which sets the granularity of this level of the design.
 //
-// The scanners do not branch on cancellable() to skip the bookkeeping, even
+// The lexer does not branch on Cancellable to skip the bookkeeping, even
 // though that would spare a non-cancellable run one poll per megabyte. Two extra
-// statements in tokenizeContent's loop pushed its inline cost from under the
+// statements in the loop of the tokenizer it replaced pushed its inline cost from under the
 // compiler's 800-node budget to 805, so the range-over-func closure stopped
 // being inlined into its consumers and PDF/UA validation of a 71 MB file slowed
 // by 5% — far more than the poll it was avoiding, which is a non-blocking
 // receive on a nil channel taken once per megabyte. If you add anything to
 // these loops, check `go build -gcflags=-m=2` for "function too complex" on
-// tokenizeContent.func1 before trusting a wall-clock measurement.
+// the lexer's Next before trusting a wall-clock measurement.
 const CancelScanBytes = 1 << 20
 
 // CancelReadChunk bounds how much one wrapped Read may produce, and so how
@@ -398,7 +397,7 @@ func (r *Recorder) Note(guard, detail string, obj int) {
 }
 
 // Snapshot returns the recorded trips in a deterministic order, plus a synthetic
-// trip standing for any that were dropped by maxRecordedLimitTrips.
+// trip standing for any that were dropped by MaxRecordedTrips.
 func (r *Recorder) Snapshot() []Trip {
 	if r == nil {
 		return nil

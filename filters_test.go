@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-// pngEncode applies a PNG filter forward so tests can verify the reversal.
 func TestParseXRefStreamWithPredictor(t *testing.T) {
 	// Three entries, W [1 2 1]: rows of 4 bytes.
 	entries := [][]byte{

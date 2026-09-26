@@ -350,7 +350,7 @@ func (f *Face) bboxArray(d Descriptor) object.Array {
 // Asked before the font is subsetted, because for a face read here it is a fact
 // already known, and a font that cannot be embedded should say so for the
 // reason that matters rather than reporting whatever the subsetter met first.
-// A face from Adopt is not known, and embedComposite asks again afterwards.
+// A face from Adopt is not known, and Embed asks the subset again afterwards.
 func (f *Face) collection() (registry, ordering string, supplement int, err error) {
 	if !f.cidKeyed {
 		return "Adobe", "Identity", 0, nil

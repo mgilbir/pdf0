@@ -18,7 +18,7 @@ import (
 // different validators can be collected, filtered and reported together:
 //
 //	var all []pdf0.Violation
-//	for _, e := range pdf0.ValidatePDFA(doc, pdf0.PDFA2b) {
+//	for _, e := range pdf0.ValidatePDFA(doc, pdfa.PDFA2b) {
 //		all = append(all, e)
 //	}
 //	for _, e := range pdf0.ValidatePDFUA(doc) {

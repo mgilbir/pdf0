@@ -114,7 +114,7 @@ func (b *fileBuilder) prevEntry() string {
 	return fmt.Sprintf(" /Prev %d", b.prev)
 }
 
-// xrefStreamBody writes a cross-reference stream object numbered num holding
+// xrefStreamObject writes a cross-reference stream object numbered num holding
 // entries (plus its own), with the extra trailer text, and returns its offset
 // without writing startxref.
 func (b *fileBuilder) xrefStreamObject(num int, entries []xent, trailer string) int {

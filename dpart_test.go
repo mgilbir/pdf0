@@ -74,7 +74,7 @@ func buildDPartDoc() *Document {
 	return d
 }
 
-// leafDict returns the leaf DPart dictionary numbered num from a built doc.
+// objDict returns the dictionary numbered num from a built doc.
 func objDict(d *Document, num int) *object.Dictionary {
 	return d.Objects[num].Value.(*object.Dictionary)
 }

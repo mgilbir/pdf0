@@ -144,7 +144,7 @@ func filterRule(errs []Violation, rule string) []Violation {
 }
 
 // addExtGStateToDoc adds an ExtGState dict to the view's page Resources.
-// It creates a page (obj 20) with Resources/ExtGState referencing gsObj (obj 10).
+// It creates a page (obj 20) with Resources/ExtGState referencing gs, as obj 10.
 func addExtGStateToDoc(v core.View, gs *object.Dictionary) {
 	v.Objects[10] = &object.IndirectObject{Number: 10, Value: gs}
 

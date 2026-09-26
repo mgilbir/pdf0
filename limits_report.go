@@ -47,7 +47,7 @@ import (
 // as "unknown", not as a failure:
 //
 //	var real []pdf0.Violation
-//	for _, e := range pdf0.ValidatePDFA(doc, pdf0.PDFA2b) {
+//	for _, e := range pdf0.ValidatePDFA(doc, pdfa.PDFA2b) {
 //		if !pdf0.IsCheckerFinding(e) {
 //			real = append(real, e)
 //		}
@@ -64,7 +64,7 @@ func IsCheckerFinding(v Violation) bool { return finding.IsCheckerFinding(v) }
 // Each is annotated with the limits field that bounds it and the With* option
 // that configures it, because every guard that can report a trip is also one a
 // caller can move: a trip on a lowered bound is the caller's own configuration
-// answering back, and the message says so (see limitBound).
+// answering back, and the message says so (see core.LimitBound).
 const (
 	limitCmapWork      = core.GuardCmapWork      // Limits.CmapWork, WithMaxCmapWork — internal/font
 	limitContentStream = core.GuardContentStream // Limits.ContentStreamBytes, WithMaxContentStreamBytes — pdfa
@@ -91,7 +91,7 @@ func (d *Document) noteReadLimit(guard, detail string, obj int) {
 //
 // Guards with no *Document in scope at all — the sfnt/CFF parsers, the lexer —
 // cannot use this. Those record the trip on the value they return instead (see
-// fontProgram.cmapPartial), and whoever loads that value, which does have a
+// font.Program.CmapPartial), and whoever loads that value, which does have a
 // Document, forwards it here (noteFontProgramLimits).
 func noteLimit(doc *Document, guard, detail string, obj int) {
 	if doc == nil || doc.valCache == nil {

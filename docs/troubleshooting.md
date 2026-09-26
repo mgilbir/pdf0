@@ -1,7 +1,9 @@
 # Troubleshooting
 
-Organised by the symptom you actually have. Every message quoted below is a real
-string emitted by the library or the `pdf0` CLI.
+Organised by the symptom you actually have. Every message quoted in a block
+below is a real string emitted by the library or the `pdf0` CLI, and every
+quotation of a godoc is the godoc as it is: `TestDocQuotedMessagesExist`
+(`internal/lint`) fails when one is not.
 
 ## `Read` returned an error
 
@@ -71,33 +73,43 @@ password. A wrong password is *not* an error — the file parses structurally an
 comes back `Locked()`. If you do not check, you will validate ciphertext and get
 nonsense violations.
 
-The CLI checks for you, per subcommand:
+The CLI checks for you, and tells a missing password from a wrong one (the
+password comes from `-password-file`, `PDF0_PASSWORD` or a terminal prompt,
+never from the command line):
 
+<!-- messages -->
 ```
-could not read FILE: it is encrypted (supply -password)      # validate, extract, ua
-could not decrypt FILE: wrong password or unsupported encryption   # decrypt
-FILE is encrypted; decrypt it before merging                  # merge
+FILE is encrypted and no password was supplied (give it with …)
+could not decrypt FILE: the password is wrong (…)
+could not decrypt FILE: …      # an unsupported or malformed /Encrypt: no password would help
+FILE is encrypted; decrypt it before merging
 ```
 
 **Why `Write` sometimes refuses.** `Write` does *not* refuse every encrypted
 document. A document that was decrypted on `Read` is re-encrypted with the
-retained key and round-trips. A *locked* document is passed through verbatim —
-its already-encrypted content is written back under the preserved `/Encrypt` and
-`/ID`, so a file you cannot decrypt is still round-trippable rather than lost.
-That passthrough is sound only when the encryption state is knowable and the
-whole object model survived, so it refuses in exactly two cases:
+retained key and round-trips. A *locked* document's ciphertext is written back
+unchanged under the preserved `/Encrypt` and `/ID` — the layout is regenerated,
+the encrypted content is not touched, and `Write` returns nil — so a file you
+cannot decrypt is still round-trippable rather than lost. That passthrough is
+sound only when the encryption state is knowable and the whole object model
+survived, so it refuses when either is not:
 
+<!-- messages -->
 ```
 cannot write encrypted document: its /Encrypt dictionary is unresolvable, so the encryption state is unknown
-cannot write encrypted document: N object stream(s) could not be decrypted, so some objects are missing
+cannot write encrypted document: N object stream(s) failed to decode on read, so some objects are missing
+cannot write encrypted document: N object stream(s) were not unpacked on read (a resource limit, an unsupported filter or undecrypted data), so some objects are missing
 ```
 
-The first would produce a file readers wrongly try to decrypt; the second would
-silently drop the objects locked inside the undecryptable container. A
-*decrypted* document is refused when `DecryptFailures` is non-empty
-(`cannot write: object(s) [N …] could not be decrypted on read, so their content
-is missing`), and when a stream added since `Read` names a crypt filter the
-handler does not define.
+The first would produce a file readers wrongly try to decrypt; the others would
+silently drop the objects locked inside a container that was not unpacked. A
+*decrypted* document is refused when `DecryptFailures` is non-empty, and when a
+stream added since `Read` names a crypt filter the handler does not define:
+
+<!-- messages -->
+```
+cannot write: object(s) … could not be decrypted on read, so their content is missing
+```
 
 **`SetEncryption` refusals.** It needs a non-empty user password (an empty one
 opens the file for anyone, and `SetEncryption` grants every permission), and
@@ -108,6 +120,7 @@ replaced by a random one. See [encryption.md](encryption.md#passwords).
 
 Two related refusals that are not about encryption:
 
+<!-- messages -->
 ```
 cannot write: N object stream(s) failed to decode on read, so some objects are missing
 object number 0 is reserved and cannot be written
@@ -191,9 +204,10 @@ seconds to validate, and a hostile one can sit at the resource ceilings for
 longer. Two independent levers, and they answer different questions.
 
 - **"This must not cost more than X."** Lower the limits at `Read` time —
-  `pdf0.Read(r, size, pdf0.WithMaxDecodedStreamBytes(8<<20))` and the other
-  `With*` options. The resolved values are stored on the `Document`, so every
-  later validation and extraction inherits them. See
+  `pdf0.Read(r, size, pdf0.WithMaxDecodedStreamBytes(48<<20))` and the other
+  `With*` options, keeping each above the largest real value its documentation
+  gives. The resolved values are stored on the `Document`, so every later
+  validation and extraction inherits them. See
   [architecture.md](architecture.md#resource-limits).
 - **"I need an answer within X seconds, whatever it costs."** Use the `…Context`
   variants: `ValidatePDFAContext`, `ReadContext`, `ExtractTextContext` and the
@@ -212,6 +226,7 @@ what the context variants exist for.
 `pdf0 repair` prints `FILE: N fix(es) applied, M violation(s) remain` and exits 1
 when `M > 0`, with:
 
+<!-- messages -->
 ```
 M violation(s) remain after repair (run: pdf0 validate -level LEVEL FILE)
 ```
@@ -226,22 +241,26 @@ This is expected for most inputs. From `Repair`'s godoc:
 > remains (missing embedded fonts, device colour without an output intent, and
 > the like need information Repair does not have).
 
-So `Repair` will drop encryption, catalog/page/annotation `/AA` dictionaries, and
-synthesize a missing `/ID` — and will do nothing at all about an unembedded font,
-because embedding one requires a font program it does not have. Zero fixes means
-none of those document-level defects were present, not that the file is clean.
+So `Repair` removes what the validator forbids at the level you give it —
+encryption, the additional-actions (`/AA`) entries that level forbids on the
+catalog, pages, annotations and form fields — and synthesizes a missing `/ID`,
+and will do nothing at all about an unembedded font, because embedding one
+requires a font program it does not have. Zero fixes means none of those
+document-level defects were present, not that the file is clean. It refuses a
+Locked document and an unknown level with an error rather than changing
+anything.
 
 ## A signature says `Valid` but you should not trust it yet
 
 `sign.Result.Valid` means only that the bytes *inside* the signed
 `/ByteRange` are intact and were signed by the embedded certificate's key. It
 says nothing about bytes outside that range, and nothing about whether the
-certificate is trustworthy. From the godoc:
+certificate is trustworthy. From the godoc on `sign.Result.Intact`:
 
-> Intact: Valid, and every change made after signing is a permitted one
-> (ChangesAllowed): a Document Security Store or document time-stamp added for
-> long-term validation, say. A timestamp never makes a change permitted; it
-> proves only when bytes existed.
+> Intact reports that the signature verifies and every change made after it
+> is permitted (see ChangesAllowed). It is the verdict to read for a document
+> that has been through long-term-validation updates. It says nothing about
+> who signed: read TrustedChain and Revocation for that.
 
 Use `result.Intact()` (`Valid && ChangesAllowed`) as your baseline verdict, or
 `result.DocumentUnmodified()` (`Valid && CoversWholeDocument`) when nothing may
@@ -257,17 +276,22 @@ For long-term validation (PAdES B-T through B-LTA, timestamps, revocation) see
 `ExtractedImage.Decoded` reports whether `Image` holds pixels. When it is false,
 `Encoded` holds the raw stream bytes and `Note` says why — so read `Note` first:
 
+<!-- messages -->
 ```
 JPEG decode failed: <err>
-CCITTFaxDecode preceding filter chain could not be reversed; the raw encoded bytes are provided
+CCITTFaxDecode preceding filter chain could not be reversed (<reason>); the raw encoded bytes are provided
 CCITTFaxDecode failed: <err>
-JBIG2Decode preceding filter chain could not be reversed; the raw encoded bytes are provided
+JBIG2Decode preceding filter chain could not be reversed (<reason>); the raw encoded bytes are provided
 JBIG2Decode not decoded (<err>); the raw encoded bytes are provided
 JPXDecode not decoded; raw bytes provided
+image data not decoded (<reason>); raw bytes provided
 unsupported CCITT sample layout
 unsupported JBIG2 sample layout
 unsupported sample layout (colour space <cs>, <n> bpc)
+internal error while decoding the image, which was not decoded: <panic>
 ```
+
+The last is a recovered panic: a bug in pdf0, not in your file.
 
 The `unsupported … sample layout` notes mean the codec decoded fine but the
 colour space / bit-depth combination has no renderer — the samples are there,

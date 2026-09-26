@@ -57,7 +57,7 @@ func cmapTable(sub []byte) []byte {
 // --- the cmap work budget (limits.cmapWork, WithMaxCmapWork) ---
 
 // budgetBustingCmap builds a format-4 subtable whose segments cost more work
-// than defaultMaxCmapWork allows. The first five segments each span the whole
+// than core.DefaultMaxCmapWork allows. The first five segments each span the whole
 // BMP with a delta chosen so code 0x41 ('A') maps to glyph 0 and is therefore
 // not recorded; the sixth segment, the only one that maps 'A' to a real glyph,
 // is never reached because the budget runs out inside the fifth. The result is

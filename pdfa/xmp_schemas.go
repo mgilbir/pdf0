@@ -1181,7 +1181,7 @@ func checkXMPWellFormed(doc core.View, level Level) []Violation {
 		// Stream the packet rather than building a node tree: well-formedness and
 		// the presence of a properly namespaced rdf:RDF element are all that is
 		// needed here, and streaming stays linear on an adversarially large
-		// packet that would make tree-building blow up (see xmpPropertyMaxBytes).
+		// packet that would make tree-building blow up (see WithMaxXMPPacketBytes).
 		wellFormed, hasRDF := xmpWellFormed([]byte(xmp))
 		if !wellFormed {
 			errs = append(errs, Violation{Rule: wfRule, Level: level, Message: "the XMP packet is not well-formed XML"})

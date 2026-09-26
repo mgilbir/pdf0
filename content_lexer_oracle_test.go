@@ -59,7 +59,7 @@ func oldScanContentDict(data []byte, i int) int {
 func oldForEachContentItem(cancel core.Canceler, data []byte, fn func(kind oldItemKind, payload []byte)) {
 	n := len(data)
 	i := 0
-	nextCancelCheck := 0 // poll before the first token, then per cancelScanBytes
+	nextCancelCheck := 0 // poll before the first token, then per core.CancelScanBytes
 	for i < n {
 		if i >= nextCancelCheck {
 			if cancel.Stopped() {
@@ -131,7 +131,7 @@ func oldForEachContentItem(cancel core.Canceler, data []byte, fn func(kind oldIt
 				continue
 			}
 			if !numeric && i-start > core.MaxContentTokenLen {
-				continue // binary run, not a keyword; see scanStreamForDeviceOps
+				continue // binary run, not a keyword; as the old device-colour scanner had it
 			}
 			tok := data[start:i]
 			if len(tok) == 2 && tok[0] == 'B' && tok[1] == 'I' {
@@ -150,7 +150,7 @@ func oldForEachContentItem(cancel core.Canceler, data []byte, fn func(kind oldIt
 func oldForEachContentToken(cancel core.Canceler, data []byte, fn func(tok []byte, isName bool)) {
 	n := len(data)
 	i := 0
-	nextCancelCheck := 0 // poll before the first token, then per cancelScanBytes
+	nextCancelCheck := 0 // poll before the first token, then per core.CancelScanBytes
 	for i < n {
 		if i >= nextCancelCheck {
 			if cancel.Stopped() {
@@ -223,7 +223,7 @@ func oldForEachContentToken(cancel core.Canceler, data []byte, fn func(tok []byt
 				continue
 			}
 			if i-start > core.MaxContentTokenLen {
-				continue // binary run, not a token; see scanStreamForDeviceOps
+				continue // binary run, not a token; as the old device-colour scanner had it
 			}
 			tok := data[start:i]
 			if len(tok) == 2 && tok[0] == 'B' && tok[1] == 'I' {
@@ -326,7 +326,7 @@ func oldDecodeContentLiteralString(data []byte, i int) ([]byte, int) {
 func oldTokenizeContent(cancel core.Canceler, data []byte) iter.Seq[core.ContentToken] {
 	return func(yield func(core.ContentToken) bool) {
 		i := 0
-		nextCancelCheck := 0 // poll before the first token, then per cancelScanBytes
+		nextCancelCheck := 0 // poll before the first token, then per core.CancelScanBytes
 		for i < len(data) {
 			if i >= nextCancelCheck {
 				if cancel.Stopped() {

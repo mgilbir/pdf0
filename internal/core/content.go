@@ -28,10 +28,10 @@ type ContentToken struct {
 	Op   string
 	Name string
 	Str  []byte
-	Raw  []byte // ctNumber: the unparsed digits, sub-sliced from the content
+	Raw  []byte // KindNumber: the unparsed digits, sub-sliced from the content
 }
 
-// Number parses a ctNumber token's value. Parsing is deferred to the consumer
+// Number parses a KindNumber token's value. Parsing is deferred to the consumer
 // because most consumers never look at a Number: the PDF/UA content pass reads
 // only operators, names and strings, yet numbers are the most common token in a
 // content stream, so parsing every one eagerly was pure waste.
@@ -79,7 +79,7 @@ func TokenizeContent(cancel Canceler, data []byte) iter.Seq[ContentToken] {
 }
 
 // SkipContentInlineImage steps past a BI…ID…EI inline image, given i positioned
-// just after the BI operator. It delegates to skipInlineImage — the single,
+// just after the BI operator. It delegates to SkipInlineImage — the single,
 // robust skipper — which parses the parameter dictionary and honors a declared
 // /L (or /Length) so binary sample data that happens to contain the bytes "EI"
 // does not truncate the image early and spew the rest as bogus tokens (audit

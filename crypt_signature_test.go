@@ -353,7 +353,7 @@ func TestEncryptionExemptionIsNarrow(t *testing.T) {
 }
 
 // TestTrailerIDNotDecrypted pins the other 7.6.2 exemption that concerns the
-// object walk: the trailer's /ID values are not encrypted, and decryptDocument
+// object walk: the trailer's /ID values are not encrypted, and the handler's DecryptDocument
 // must leave them alone. They are safe because the walk covers only doc.Objects
 // — including when the trailer is a cross-reference stream dictionary, which is
 // skipped as a /Type /XRef stream.

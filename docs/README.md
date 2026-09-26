@@ -34,7 +34,7 @@ The per-symbol API reference is the godoc: `go doc github.com/mgilbir/pdf0`, or
 pipeline and its recovery ladder, the Write pipeline. Read before changing the
 parser or serializer.
 
-**[validators.md](validators.md)** — reference plus explanation. Ten standards,
+**[validators.md](validators.md)** — reference plus explanation. Every standard,
 which entry point returns what, the PDF/A dispatch and executed-content model,
 and where each rule lives.
 
@@ -45,8 +45,8 @@ read, because that is the question with a wrong answer that compiles.
 its memory contract, the codec dispatch, the resource budgets.
 
 **[pdfa.md](pdfa.md)** — explanation. Inside the PDF/A engine: the anatomy of a
-rule, what the 59 dispatched checks actually cover, the per-run cache, and how
-one rule body serves four levels.
+rule, what the dispatched checks actually cover, the per-run memos, and how one
+rule body serves every level.
 
 **[pdfua.md](pdfua.md)** — explanation. The structure tree, the UA rule
 families, table-grid reconstruction, and how much a clean result is worth.
@@ -68,16 +68,17 @@ guaranteed.
 **[limits.md](limits.md)** — reference plus explanation. Every resource guard
 in the package, classified loud / silently lossy / silently wrong, what each
 truncated value feeds into, and the one mechanism that reports a trip — the
-reserved `limit` rule, which a cancelled run reports through too. Eleven of
+reserved `limit` rule, which a cancelled run reports through too. Some of
 those guards are configurable; the options are in
 [architecture.md](architecture.md#resource-limits), cancellation is in
 [architecture.md](architecture.md#cancellation), and the design record behind
 both is [proposals/configurable-limits.md](proposals/configurable-limits.md).
 
 **[proposals/html-css-rendering.md](proposals/html-css-rendering.md)** — the
-design record for rendering HTML and CSS into a PDF page. Phases 0 and 1 of its
-§9 are done: the package split, and the content-generation layer this library
-had none of. Phase 2 is the parsers, and §11a says where to start.
+design record for rendering HTML and CSS into a PDF page. It is done: the engine
+was built through its phases and moved to
+[forme](https://github.com/mgilbir/forme); what pdf0 keeps is the backend,
+[htmlpdf.md](htmlpdf.md). The record says what was intended, and why.
 
 **[cli.md](cli.md)** — reference for `cmd/pdf0`, a small command-line front end
 used mainly for poking at files during development. pdf0 is a library first; this
@@ -87,8 +88,8 @@ tool does not expose.
 
 **[troubleshooting.md](troubleshooting.md)** — how-to, organised by symptom.
 
-**[testing.md](testing.md)** — reference. The test tiers, the twelve external
-datasets and how to fetch them, the fuzzers, and what CI does and does not check.
+**[testing.md](testing.md)** — reference. The test tiers, the external data sets
+and how to fetch them, the fuzzers, and what CI does and does not check.
 
 **[adr/](adr/README.md)** — explanation. Decisions that keep being
 re-litigated, with the rejected alternative recorded.

@@ -10,8 +10,7 @@ import (
 // composed of — the PDF/A-3 base (adoptPDFAFindings) and the invoice or order
 // rule engine (adoptInvoiceFindings) — into the container's own finding type.
 // The panic boundary and the sort every validator applies are finding.Guarded
-// and finding.Sort; they are not here. (An earlier comment here described a
-// runUACheck helper that no longer exists.)
+// and finding.Sort; they are not here.
 
 // adoptPDFAFindings replays the findings of a composed PDF/A validation through
 // an add callback, namespacing each rule under prefix. ValidateFacturX and
