@@ -35,14 +35,6 @@ type Face struct {
 	// rather than to the shaping face: a Clone draws a different document, and
 	// what one document's glyphs meant is no fact about another's.
 	rec *textRecord
-
-	// embedding is what the font's own licence bits permit, read from the
-	// OS/2 table when the program is at hand. See embedding.go.
-	embedding embeddingRights
-	// program is the font as it was loaded, kept only when its licence
-	// forbids subsetting: then it is what has to be embedded, and nothing
-	// else can supply it. Nil otherwise, so a face costs no more than it did.
-	program []byte
 }
 
 // Adopt wraps a shaping face so it can be drawn and embedded.
@@ -53,12 +45,11 @@ type Face struct {
 // records the glyphs the other used.
 //
 // An adopted face is embedded exactly as a loaded one is. /W, /CIDSet and
-// /ToUnicode ask shape.Face.GlyphCode, which answers from the face; the
-// character collection and the licence's embedding bits are read from the
-// subset, which is the program this constructor never saw and carries the ROS
-// and the OS/2 table through untouched. The one thing it cannot do is embed a
-// font whose licence forbids subsetting, since the whole program is not at
-// hand; Embed says so rather than subsetting it.
+// /ToUnicode ask shape.Face.GlyphCode, the character collection is
+// CharacterCollection's, and the licence's embedding bits are
+// EmbeddingPermissions': each answers from the parse forme did when it loaded
+// the program. A face whose licence forbids subsetting is embedded whole from
+// shape.Face.Program, which is the program forme kept.
 //
 // What each glyph was drawn for — which the ToUnicode CMap is written from —
 // is recorded by this wrapper, not by the shaping face. A glyph drawn through
@@ -74,14 +65,16 @@ func Adopt(f *shape.Face) *Face { return &Face{Face: f} }
 // That is the form that can set any script the font covers, because a code is
 // not limited to what one byte can say, and it is the form shaping needs: a
 // glyph index is what the layout tables are written about.
+//
+// data is kept, not copied: the face reads its tables from it for as long as
+// it is used, and a font embedded whole is embedded from it. It must not be
+// modified afterwards.
 func Load(data []byte) (*Face, error) {
 	f, err := shape.Load(data)
 	if err != nil {
 		return nil, err
 	}
-	face := &Face{Face: f}
-	face.readEmbedding(data)
-	return face, nil
+	return &Face{Face: f}, nil
 }
 
 // LoadSimple reads a font program as a simple face, whose character codes are
@@ -91,14 +84,14 @@ func Load(data []byte) (*Face, error) {
 // stream is half the size and the text extracts in any reader at all. Shaping
 // does not apply — the codes name characters, and a font's layout tables are
 // written about glyphs.
+//
+// data is kept, not copied, as Load keeps it.
 func LoadSimple(data []byte) (*Face, error) {
 	f, err := shape.LoadSimple(data)
 	if err != nil {
 		return nil, err
 	}
-	face := &Face{Face: f}
-	face.readEmbedding(data)
-	return face, nil
+	return &Face{Face: f}, nil
 }
 
 // Standard names one of the fourteen faces every PDF reader is required to
