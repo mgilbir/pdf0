@@ -550,30 +550,6 @@ func indexOf(sorted []int, x int) int {
 	return lo
 }
 
-// markDrawn makes sure the subset keeps the glyphs a simple face's codes name.
-//
-// For a composite face the shaping call that produced the glyphs already
-// recorded them. For a simple face it recorded the wrong numbers: forme's
-// one-code-per-character path marks the *code* as a used glyph index (forme
-// v0.3.0, shape.shapeByCode), so a page drawn through the glyph path in a
-// simple face embedded a subset without its letters in it. Encoding the
-// characters the codes name records the right glyphs through forme's own public
-// path. A standard face embeds no program and needs nothing.
-func (f *Face) markDrawn(glyphs []Glyph) {
-	if !f.IsSimple() {
-		return
-	}
-	var b strings.Builder
-	for _, g := range glyphs {
-		if r, ok := winAnsiRune(g.GID); ok {
-			b.WriteRune(r)
-		}
-	}
-	if b.Len() > 0 {
-		f.Face.Encode(b.String())
-	}
-}
-
 // spans writes planned glyphs as the spans ShowTextAdjusted takes.
 //
 // Two displacements per glyph, at most, and usually none: an offset displaces
@@ -583,7 +559,6 @@ func (f *Face) markDrawn(glyphs []Glyph) {
 // two are emitted as one number where they meet, because a displacement is
 // three bytes of content stream and a page has thousands of them.
 func (f *Face) spans(glyphs []Glyph, text string) []content.TextSpan {
-	f.markDrawn(glyphs)
 	var (
 		out []content.TextSpan
 		run []byte
@@ -624,7 +599,6 @@ func (f *Face) spans(glyphs []Glyph, text string) []content.TextSpan {
 // draw writes planned glyphs as text operators, with a rise for an offset
 // across the line, which spans cannot express.
 func (f *Face) draw(b *content.Builder, glyphs []Glyph, text string, size float64) {
-	f.markDrawn(glyphs)
 	var (
 		run  []byte
 		rise float64
