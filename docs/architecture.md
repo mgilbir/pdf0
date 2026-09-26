@@ -66,6 +66,7 @@ regular package.
 | `internal/crypt` | The standard security handler. No public API of its own. |
 | `internal/xmp` | The one XMP model every metadata writer edits, with merge semantics. |
 | `fonts` | Setting text with a font: shaped glyphs into content-stream operators, and the font into the document. The shaping itself, and the sfnt/CFF/Type 1 program reader under it, are [github.com/mgilbir/forme](https://github.com/mgilbir/forme). |
+| `simplefont` | What ISO 32000 says about simple fonts independent of the font program: the standard Latin encodings (Annex D.2), the standard Latin and Symbol character sets (Annex D.2, D.5; ISO 19005-1 6.3.8), and how a code selects a TrueType glyph (9.6.6.4). Text extraction, the PDF/A font rules and `fonts` read it. |
 | `internal/finding` | The panic boundary, the reserved rule identifiers, deterministic ordering. |
 | `internal/bridge` | The entry points the public packages keep unexported because they take `core.View`; see below. |
 | `internal/testfiles`, `internal/hostile`, `internal/lint` | Test support: where committed and fetched test data is and whether it is complete; running a hostile-input test in a capped child process; the repository-wide static checks, the documentation checks among them. |

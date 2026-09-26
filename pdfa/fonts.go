@@ -5,6 +5,7 @@ import (
 	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/simplefont"
 	"math"
 	"strings"
 	"unicode"
@@ -553,16 +554,11 @@ var aglNames = map[string]bool{
 func simpleFontCodeToName(doc core.View, fontDict *object.Dictionary, symbolic bool) map[byte]string {
 	table := make(map[byte]string)
 	applyBase := func(name object.Name) {
-		var src map[byte]string
-		switch name {
-		case "WinAnsiEncoding":
-			src = font.WinAnsiEncodingNames
-		case "MacRomanEncoding":
-			src = font.MacRomanEncodingNames
-		case "StandardEncoding":
-			src = font.StandardEncodingNames
+		enc, ok := simplefont.EncodingNamed(string(name))
+		if !ok {
+			return
 		}
-		for c, n := range src {
+		for c, n := range enc.Codes() {
 			table[c] = n
 		}
 	}
@@ -765,7 +761,7 @@ func checkSimpleFontConsistency(doc core.View, level Level, rule string, fontDic
 			// A code that the cmap does not resolve is only evidence of a
 			// missing glyph when the cmap is complete. When the work budget
 			// truncated it (fp.cmapPartial) the code is *unknown*, and
-			// font.TrueTypeGID's "non-nil cmap is authoritative" contract would
+			// simplefont.TrueTypeGlyph's "non-nil cmap is authoritative" contract would
 			// otherwise turn every unread mapping into glyph 0 — audit C46's
 			// false positive, reached through the budget instead of the
 			// dropped-segment bug.
@@ -1024,7 +1020,7 @@ func simpleDeclaredWidth(doc core.View, widths object.Array, firstChar int, code
 // simpleGlyphWidth returns the embedded program's advance width for a code.
 func simpleGlyphWidth(fp *font.Program, subtype object.Name, symbolic bool, code byte, name string) (float64, bool) {
 	if subtype == "TrueType" {
-		gid, ok := font.TrueTypeGID(fp, symbolic, code, name)
+		gid, ok := simplefont.TrueTypeGlyph(fp, symbolic, code, name)
 		if !ok || gid >= len(fp.WidthByGID) {
 			return 0, false
 		}
@@ -1040,7 +1036,7 @@ func simpleGlyphWidth(fp *font.Program, subtype object.Name, symbolic bool, code
 
 func simpleGlyphExists(fp *font.Program, subtype object.Name, symbolic bool, code byte, name string) bool {
 	if subtype == "TrueType" {
-		gid, ok := font.TrueTypeGID(fp, symbolic, code, name)
+		gid, ok := simplefont.TrueTypeGlyph(fp, symbolic, code, name)
 		return ok && gid > 0 && gid < fp.NumGlyphs
 	}
 	if name == "" {
@@ -1054,7 +1050,7 @@ func isNotdefGlyph(fp *font.Program, subtype object.Name, symbolic bool, code by
 		return true
 	}
 	if subtype == "TrueType" {
-		gid, ok := font.TrueTypeGID(fp, symbolic, code, name)
+		gid, ok := simplefont.TrueTypeGlyph(fp, symbolic, code, name)
 		return ok && gid == 0
 	}
 	return false

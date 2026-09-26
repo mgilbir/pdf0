@@ -9,6 +9,7 @@ import (
 	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/simplefont"
 )
 
 // Embedding a face as the PDF object graph a reader needs: a Type0 font, its
@@ -489,7 +490,7 @@ func (f *Face) simpleWidths() (first, last int, widths object.Array) {
 	advances := f.GlyphAdvances()
 	widths = make(object.Array, 0, last-first+1)
 	for code := first; code <= last; code++ {
-		name := font.WinAnsiEncodingNames[byte(code)]
+		name, _ := simplefont.WinAnsiEncoding.GlyphName(byte(code))
 		w := 0.0
 		if r, ok := font.GlyphNameToRune(name, byte(code)); ok {
 			if gid, mapped := cmap[r]; mapped && gid < len(advances) {
@@ -512,7 +513,7 @@ func (f *Face) simpleToUnicode(first, last int) []byte {
 	cmap := f.Cmap()
 	entries := make([]toUnicodeEntry, 0, last-first+1)
 	for code := first; code <= last; code++ {
-		name := font.WinAnsiEncodingNames[byte(code)]
+		name, _ := simplefont.WinAnsiEncoding.GlyphName(byte(code))
 		r, ok := font.GlyphNameToRune(name, byte(code))
 		if !ok || forbiddenInToUnicode(r) {
 			continue

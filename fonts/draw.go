@@ -9,6 +9,7 @@ import (
 	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/pdf0/content"
+	"github.com/mgilbir/pdf0/simplefont"
 )
 
 // From positioned glyphs to content-stream bytes, and from drawn glyphs back to
@@ -83,7 +84,7 @@ func winAnsiRune(code int) (rune, bool) {
 	if code < 0 || code > 0xFF {
 		return 0, false
 	}
-	name, ok := font.WinAnsiEncodingNames[byte(code)]
+	name, ok := simplefont.WinAnsiEncoding.GlyphName(byte(code))
 	if !ok {
 		return 0, false
 	}

@@ -66,7 +66,7 @@ the descendant CIDFont's — everything downstream follows from that pair.
 | Font | Program stream | Declared widths | Code → glyph in pdf0 | Subset set |
 |------|----------------|-----------------|----------------------|------------|
 | `Type1` / `MMType1` | `/FontFile` (Type 1) or `/FontFile3` `/Type1C` (CFF) | `/Widths` + `/FirstChar`, else descriptor `/MissingWidth` | code → glyph *name* via the encoding, name → charstring (`font.Program.GlyphNames`, `font.Program.WidthByName`) | `/CharSet` |
-| `TrueType` | `/FontFile2` (sfnt) or `/FontFile3` `/OpenType` | same as Type 1 | code → GID through the program's `cmap` subtables (`font.TrueTypeGID`) | — |
+| `TrueType` | `/FontFile2` (sfnt) or `/FontFile3` `/OpenType` | same as Type 1 | code → GID through the program's `cmap` subtables (`simplefont.TrueTypeGlyph`, ISO 32000-2 9.6.6.4) | — |
 | `Type0` → `CIDFontType0` | descendant's `/FontFile3` (CID-keyed CFF) or `/OpenType` | `/W` array + `/DW` (default 1000) | code (cut by the CMap) → CID → CFF charset entry (`font.Program.CIDGIDs`, `font.Program.WidthByCID`) | `/CIDSet` |
 | `Type0` → `CIDFontType2` | descendant's `/FontFile2` | `/W` + `/DW` | code (cut by the CMap) → CID → GID via `/CIDToGIDMap` → `glyf` entry | `/CIDSet` |
 | `Type3` | none — `/CharProcs` content streams | `/Widths` in glyph space, scaled by `/FontMatrix` | code → glyph name → CharProc, width from the `d0`/`d1` operand | — |
@@ -182,7 +182,7 @@ are Unicode code points; its documentation lists them and says why format 2
 (legacy CJK encodings, never at a Unicode platform/encoding pair) and format 14
 (variation sequences, a different function altogether) are not among them. An
 unparseable subtable — or one that parses cleanly and maps nothing — yields
-`nil`, never an empty map: `font.TrueTypeGID` treats a non-nil `cmap` as
+`nil`, never an empty map: `simplefont.TrueTypeGlyph` treats a non-nil `cmap` as
 authoritative, so an empty one would read as "every code is `.notdef`" instead
 of "unknown". forme's own `FuzzCmapSubtable` pins that invariant.
 
