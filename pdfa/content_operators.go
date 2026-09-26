@@ -6,7 +6,7 @@ import "github.com/mgilbir/pdf0/internal/core"
 
 import "fmt"
 
-import "github.com/mgilbir/pdf0/internal/checked"
+import "github.com/mgilbir/pdf0/syntax"
 
 // This file implements the PDF/A rules that are decided by reading content
 // streams: the operator whitelist and rendering-intent operand (ISO 19005
@@ -448,7 +448,7 @@ func checkContentStreamLimits(doc core.View, level Level, lim implLimits, errs *
 	}
 	for num, f := range contentBytesFactsOf(doc) {
 		for _, s := range f.bigNumbers {
-			checkContentNumberLimit(s, lim, num, add)
+			checkContentNumberLimit([]byte(s), lim, num, add)
 		}
 		for _, n := range f.longStrings {
 			if n > lim.stringLen {
@@ -459,39 +459,24 @@ func checkContentStreamLimits(doc core.View, level Level, lim implLimits, errs *
 }
 
 // checkContentNumberLimit validates a numeric content operand against the
-// integer or real architectural limit.
-func checkContentNumberLimit(s string, lim implLimits, objNum int, add func(string, int)) {
-	isReal := false
-	for i := 0; i < len(s); i++ {
-		if s[i] == '.' || s[i] == 'e' || s[i] == 'E' {
-			isReal = true
-			break
-		}
+// integer or real architectural limit. A token that is not a PDF number
+// (syntax.ParseNumber: "1e40" has an exponent, which PDF numbers do not) has
+// no magnitude for a limit to judge.
+func checkContentNumberLimit(s []byte, lim implLimits, objNum int, add func(string, int)) {
+	v, isInt, ok := syntax.ParseNumber(s)
+	if !ok {
+		return
 	}
-	if isReal {
-		v := parseNumberToken([]byte(s))
+	if !isInt {
 		if absf(v) > lim.realLimit {
 			add(fmt.Sprintf("a content-stream real value %s exceeds the magnitude limit %g", s, lim.realLimit), objNum)
 		}
 		return
 	}
-	// Integer: parse with overflow guard against the 2^31-1 architectural
-	// limit (ISO 32000-1 Annex C, Table C.1).
-	neg := false
-	i := 0
-	if i < len(s) && (s[i] == '+' || s[i] == '-') {
-		neg = s[i] == '-'
-		i++
-	}
-	v, digits, fits := checked.Decimal(s[i:])
-	if digits != len(s)-i {
-		return
-	}
-	overflow := !fits
-	if neg {
-		v = -v
-	}
-	if overflow || v > 2147483647 || v < -2147483648 {
+	// Integer: exact, against the 2^31-1 architectural limit (ISO 32000-1
+	// Annex C, Table C.1). v is exact to 2^53, far past the limit, so the
+	// comparison is exact where it matters.
+	if v > 2147483647 || v < -2147483648 {
 		add(fmt.Sprintf("a content-stream integer value %s is outside [-2^31, 2^31-1]", s), objNum)
 	}
 }

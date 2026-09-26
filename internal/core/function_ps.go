@@ -160,7 +160,7 @@ func psParseProc(toks []string) (items []psItem, rest []string, ok bool) {
 			}
 			open[top-1] = append(open[top-1], psItem{isProc: true, proc: body})
 		default:
-			if f, err := strconv.ParseFloat(t, 64); err == nil {
+			if f, ok := psNumber(t); ok {
 				open[top] = append(open[top], psItem{isNum: true, num: f})
 			} else {
 				open[top] = append(open[top], psItem{op: t})
@@ -168,6 +168,67 @@ func psParseProc(toks []string) (items []psItem, rest []string, ok bool) {
 		}
 	}
 	return nil, nil, false // unterminated procedure
+}
+
+// psNumber reads a token as a PostScript number (PLRM 3.3.1, which ISO 32000-2
+// 7.10.5.1 defers to for the calculator's operands): an optional sign, then
+// digits with at most one period and at least one digit, then optionally an
+// exponent — "e" or "E", an optional sign and at least one digit. "-.002",
+// "123.6e10", "1E6", "-1." and "+17" are numbers.
+//
+// It was strconv.ParseFloat, which also reads "Inf", "NaN", "0x1p3" and
+// "infinity": a program naming one of those pushed an infinity or a NaN where
+// PostScript sees an undefined name, and the function's output — a colour, a
+// tint — carried it on instead of the function being refused. Radix numbers
+// (16#FF) are PostScript, but not something the calculator subset has been
+// seen to use; they stay undefined names and refuse the function, as they did.
+// A number beyond float64's range is a limitcheck in PostScript, and refuses
+// the function too; one below its precision is the nearest value.
+func psNumber(t string) (float64, bool) {
+	i := 0
+	if i < len(t) && (t[i] == '+' || t[i] == '-') {
+		i++
+	}
+	digits, points := 0, 0
+	for ; i < len(t); i++ {
+		c := t[i]
+		if c >= '0' && c <= '9' {
+			digits++
+			continue
+		}
+		if c == '.' && points == 0 {
+			points++
+			continue
+		}
+		break
+	}
+	if digits == 0 {
+		return 0, false
+	}
+	if i < len(t) && (t[i] == 'e' || t[i] == 'E') {
+		i++
+		if i < len(t) && (t[i] == '+' || t[i] == '-') {
+			i++
+		}
+		expDigits := 0
+		for ; i < len(t) && t[i] >= '0' && t[i] <= '9'; i++ {
+			expDigits++
+		}
+		if expDigits == 0 {
+			return 0, false
+		}
+	}
+	if i != len(t) {
+		return 0, false
+	}
+	// The grammar is a subset of strconv's; strconv does the rounding. Its
+	// only possible error is ErrRange: an overflow, refused, or an underflow,
+	// which is the nearest value (zero or a subnormal).
+	f, _ := strconv.ParseFloat(t, 64)
+	if math.IsInf(f, 0) {
+		return 0, false
+	}
+	return f, true
 }
 
 // psTokenize splits a PostScript calculator program into tokens: braces are

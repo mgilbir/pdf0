@@ -9,6 +9,7 @@ import (
 	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/simplefont"
 )
 
 // Embedding a face as the PDF object graph a reader needs: a Type0 font, its
@@ -489,7 +490,7 @@ func (f *Face) simpleWidths() (first, last int, widths object.Array) {
 	advances := f.GlyphAdvances()
 	widths = make(object.Array, 0, last-first+1)
 	for code := first; code <= last; code++ {
-		name := font.WinAnsiEncodingNames[byte(code)]
+		name, _ := simplefont.WinAnsiEncoding.GlyphName(byte(code))
 		w := 0.0
 		if r, ok := font.GlyphNameToRune(name, byte(code)); ok {
 			if gid, mapped := cmap[r]; mapped && gid < len(advances) {
@@ -512,7 +513,7 @@ func (f *Face) simpleToUnicode(first, last int) []byte {
 	cmap := f.Cmap()
 	entries := make([]toUnicodeEntry, 0, last-first+1)
 	for code := first; code <= last; code++ {
-		name := font.WinAnsiEncodingNames[byte(code)]
+		name, _ := simplefont.WinAnsiEncoding.GlyphName(byte(code))
 		r, ok := font.GlyphNameToRune(name, byte(code))
 		if !ok || forbiddenInToUnicode(r) {
 			continue
@@ -556,11 +557,11 @@ func subsetTag(kept []int) string {
 // in the font is referenced or used by the PDF or not". For a font addressed by
 // glyph index those are the glyphs the subset kept with outlines, which is the
 // kept set. For a CID-keyed CFF they are every CID its charset lists — and
-// forme's subsetter (v0.3.0) keeps the whole charset, giving the glyphs it
-// dropped an empty charstring each rather than removing them. So the set is
-// the kept glyphs' CIDs together with the charset of the program actually
-// embedded, read back from it: listing only the kept ones described a smaller
-// font than the one in the file, which PDF/A-1b reports.
+// forme's subsetter (v0.3.0, and still at d45d580) keeps the whole charset,
+// giving the glyphs it dropped an empty charstring each rather than removing
+// them. So the set is the kept glyphs' CIDs together with the charset of the
+// program actually embedded, read back from it: listing only the kept ones
+// described a smaller font than the one in the file, which PDF/A-1b reports.
 func (f *Face) cidSetBits(kept []int, program []byte) []byte {
 	// One bit per CID, for the same reason /W is keyed by CID: the set says
 	// which characters of the collection the subset carries, and for a

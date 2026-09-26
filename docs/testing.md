@@ -226,6 +226,11 @@ request.
   fuzzer's bytes through the content builder and the page API, and asserts that
   what it manages to write, it can read back.
 
+- **`FuzzTrueTypeGlyph`** (`fuzz_truetype_test.go`) — reads the fuzzer's bytes
+  as an sfnt with forme's parser and asks `simplefont.TrueTypeGlyph` (ISO
+  32000-2 9.6.6.4) for a spread of codes and names, symbolic and not: an
+  answer must be a glyph the font has, and ignorance must be glyph 0.
+
 The TrueType `cmap` fuzzers went to `github.com/mgilbir/forme` with the font
 program parser they fuzz (`FuzzCmapSubtable` and `FuzzSFNTCmap`, in forme's
 `font/fuzz_test.go`); run them there. Pointing `go test -fuzz` at a name that is

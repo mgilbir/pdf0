@@ -52,7 +52,7 @@ func scanContentBytes(cancel core.Canceler, data []byte) *contentBytesFacts {
 	for lx.Next(&t) {
 		switch t.Kind {
 		case core.ContentNumber:
-			checkContentNumberLimit(string(t.Raw), strictContentLimits, 0, func(string, int) {
+			checkContentNumberLimit(t.Raw, strictContentLimits, 0, func(string, int) {
 				if s := string(t.Raw); !seenNum[s] {
 					seenNum[s] = true
 					f.bigNumbers = append(f.bigNumbers, s)

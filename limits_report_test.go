@@ -61,16 +61,24 @@ func hasMessage(msgs []string, sub string) bool {
 	return false
 }
 
+// TestCmapFormat4BudgetReportsPartial reads the fixture as pdf0 reads an
+// embedded font, through font.ParseSFNT with pdf0's default budget, rather than
+// through forme's subtable parser, which is not forme's API: what pdf0 relies
+// on is that the font's chosen cmap says it is partial, and still holds what
+// was read.
 func TestCmapFormat4BudgetReportsPartial(t *testing.T) {
 	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
-		m, partial := font.ParseCmapSubtable(budgetBustingCmap(), core.DefaultMaxCmapWork)
-		if !partial {
+		fp := font.ParseSFNT(fonttest.SFNTWithCmapSubtables([]fonttest.CmapSub{{Plat: 3, Enc: 1, Data: budgetBustingCmap()}}), core.DefaultMaxCmapWork)
+		if fp == nil {
+			t.Fatal("the fixture font does not parse")
+		}
+		if !fp.CmapPartial {
 			t.Fatal("the work budget did not trip; the fixture no longer exercises it")
 		}
-		if m == nil {
+		if fp.Cmap == nil {
 			t.Fatal("a budget trip must still return the mappings it did read")
 		}
-		if _, ok := m[0x41]; ok {
+		if _, ok := fp.Cmap[0x41]; ok {
 			t.Fatal("fixture wrong: code 0x41 was mapped, so nothing is missing")
 		}
 	})

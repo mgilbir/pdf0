@@ -9,6 +9,7 @@ import (
 	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/simplefont"
 )
 
 // This file implements text extraction: the visible text of a whole document
@@ -446,14 +447,14 @@ func (d *Document) fontMapsFrom(res *object.Dictionary) map[string]fontText {
 // document setting a quotation mark is exactly the document the byte value gets
 // wrong.
 func (d *Document) simpleEncoding(f *object.Dictionary) map[int]rune {
-	base := font.StandardEncodingNames
+	base := simplefont.StandardEncoding
 	var differences object.Array
 	switch enc := d.Resolve(f.Get("Encoding")).(type) {
 	case object.Name:
-		base = baseEncodingNames(enc, base)
+		base = baseEncoding(enc, base)
 	case *object.Dictionary:
 		if n, ok := d.Resolve(enc.Get("BaseEncoding")).(object.Name); ok {
-			base = baseEncodingNames(n, base)
+			base = baseEncoding(n, base)
 		}
 		differences, _ = d.Resolve(enc.Get("Differences")).(object.Array)
 	case nil:
@@ -463,8 +464,8 @@ func (d *Document) simpleEncoding(f *object.Dictionary) map[int]rune {
 		return nil
 	}
 
-	out := make(map[int]rune, len(base)+len(differences))
-	for code, name := range base {
+	out := make(map[int]rune, base.Len()+len(differences))
+	for code, name := range base.Codes() {
 		if r, ok := font.GlyphNameToRune(name, code); ok {
 			out[int(code)] = r
 		}
@@ -492,16 +493,11 @@ func (d *Document) simpleEncoding(f *object.Dictionary) map[int]rune {
 	return out
 }
 
-// baseEncodingNames resolves a base encoding name to its table, keeping the
-// current one for a name this package does not know.
-func baseEncodingNames(n object.Name, current map[byte]string) map[byte]string {
-	switch n {
-	case "WinAnsiEncoding":
-		return font.WinAnsiEncodingNames
-	case "MacRomanEncoding":
-		return font.MacRomanEncodingNames
-	case "StandardEncoding":
-		return font.StandardEncodingNames
+// baseEncoding resolves a base encoding name, keeping the current encoding for
+// a name this package does not know.
+func baseEncoding(n object.Name, current simplefont.Encoding) simplefont.Encoding {
+	if e, ok := simplefont.EncodingNamed(string(n)); ok {
+		return e
 	}
 	return current
 }
