@@ -24,9 +24,10 @@ getting it back](#setting-text-and-getting-it-back) below is about that half.
 
 ## Setting text and getting it back
 
-`fonts.Face` has five ways to put a string on a page — `Encode`, `Shape`,
-`ShapeWith`, `Draw` and `DrawShaped` — and `htmlpdf.Render` draws through
-`Draw`. All of them go through one path in `fonts/draw.go`:
+`fonts.Face` has six ways to put a string on a page — `Encode`, `Shape`,
+`ShapeWith`, `Draw`, `DrawShaped` and `DrawUpright` — and `htmlpdf.Render`
+draws through `Draw`, and `DrawUpright` for text set upright down the page.
+All of them go through one path in `fonts/draw.go`:
 
 - **One function writes a code** (`appendCode`): `GlyphCode`'s two bytes for a
   composite face — the glyph index, or the CID for a CID-keyed CFF — and the
@@ -46,6 +47,17 @@ getting it back](#setting-text-and-getting-it-back) below is about that half.
 
 `Encode` returns bare codes, which cannot carry an `/ActualText`: a glyph the
 cmap reaches from two characters extracts as the one the CMap names it by.
+
+`DrawUpright` draws a run shaped with `shape.Features.Vertical`: the pen moves
+down by each glyph's vertical advance and each glyph is hung from its vertical
+origin (the font's `vmtx` and `VORG`, as forme reads them), placed explicitly
+with a displacement and a rise in the face's ordinary, horizontal font. A
+vertical CIDFont (`Identity-V` with `/W2`, ISO 32000-2 9.7.4.3) would state
+each glyph's vertical advance and origin as the font's own metrics, and forme
+reports them only for a glyph as shaped, where positioning may have changed
+them; placed explicitly, nothing is claimed about the font. The run is one
+`/ActualText`, since a reader rebuilding text from positions sees a column of
+one-glyph lines.
 
 Embedding honours the font's licence (OS/2 `fsType`): Restricted License
 embedding is refused with `fonts.ErrRestrictedLicense`, bitmap-only with

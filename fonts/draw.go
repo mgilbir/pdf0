@@ -16,7 +16,7 @@ import (
 // the text they were drawn for.
 //
 // Every public way of putting text on a page — Encode, Shape, ShapeWith, Draw,
-// DrawShaped — comes through here, and that is the point of the file. They used
+// DrawShaped, DrawUpright — comes through here, and that is the point of the file. They used
 // to be four loops, each writing its own bytes: two wrote the glyph index where
 // a CID-keyed CFF font is addressed by CID, one wrote two-byte codes into a
 // one-byte font, and none of them told the ToUnicode CMap what a shaped glyph
@@ -599,6 +599,39 @@ func (f *Face) spans(glyphs []Glyph, text string) []content.TextSpan {
 // draw writes planned glyphs as text operators, with a rise for an offset
 // across the line, which spans cannot express.
 func (f *Face) draw(b *content.Builder, glyphs []Glyph, text string, size float64) {
+	f.drawPlanned(b, glyphs, f.plan(glyphs, text), size)
+}
+
+// drawWhole is draw for a run whose glyphs a reader cannot read in the order
+// they stand: the whole run is one /ActualText saying the text, and the
+// per-glyph plan decides only the ToUnicode CMap.
+//
+// It is for DrawUpright. An upright run's glyphs are one below the other,
+// each placed by a displacement along the line and a rise across it, and a
+// reader that rebuilds text from positions takes a glyph moved right by more
+// than a small gap — a mark hung over its base, a narrow letter centred in
+// the column — for the start of a word, and a glyph below another for a new
+// line. The /ActualText is the run's text in the order it was written.
+func (f *Face) drawWhole(b *content.Builder, glyphs []Glyph, text string, size float64) {
+	segs := f.plan(glyphs, text)
+	actual := visible(text)
+	if actual == "" {
+		f.drawPlanned(b, glyphs, segs, size)
+		return
+	}
+	// Not nested inside another: the one says it all, and a reader that
+	// keeps a single /ActualText at a time would lose the outer to an inner.
+	for i := range segs {
+		segs[i].marked = false
+	}
+	b.BeginActualText(actual)
+	f.drawPlanned(b, glyphs, segs, size)
+	b.EndMarked()
+}
+
+// drawPlanned writes glyphs as text operators, stretch by stretch as a plan
+// divided them.
+func (f *Face) drawPlanned(b *content.Builder, glyphs []Glyph, segs []segment, size float64) {
 	var (
 		run  []byte
 		rise float64
@@ -617,7 +650,7 @@ func (f *Face) draw(b *content.Builder, glyphs []Glyph, text string, size float6
 		// TJ subtracts its number, so moving the pen forward is negative.
 		b.ShowTextAdjusted(content.TextSpan{Adjust: -d})
 	}
-	for _, seg := range f.plan(glyphs, text) {
+	for _, seg := range segs {
 		if seg.marked {
 			flush()
 			b.BeginActualText(seg.actual)

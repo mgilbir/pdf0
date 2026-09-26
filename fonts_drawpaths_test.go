@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/fonts"
 	"github.com/mgilbir/pdf0/object"
@@ -18,8 +19,8 @@ import (
 // Every way of putting text on a page, in every kind of face, judged by what
 // comes back out of the file.
 //
-// The fonts package has five public ways to turn a string into content-stream
-// bytes — Encode, Shape, ShapeWith, Draw and DrawShaped — and htmlpdf is a
+// The fonts package has six public ways to turn a string into content-stream
+// bytes — Encode, Shape, ShapeWith, Draw, DrawShaped and DrawUpright — and htmlpdf is a
 // sixth (it has its own test, over the same faces, in htmlpdf). They grew
 // apart: two of them wrote the glyph index where a CID-keyed CFF font is
 // addressed by CID, one wrote two-byte codes into a one-byte font, and none of
@@ -63,6 +64,12 @@ var drawPaths = []drawPath{
 	}},
 	{"DrawShaped", func(t *testing.T, face *fonts.Face, b *content.Builder, s string, size float64) {
 		face.DrawShaped(b, s, size)
+	}},
+	{"DrawUpright", func(t *testing.T, face *fonts.Face, b *content.Builder, s string, size float64) {
+		// Set upright down the page: shaped with the vertical rules and
+		// metrics, each glyph hung from its vertical origin.
+		glyphs, _ := face.ShapeGlyphsInContext(s, "", "", shape.Features{Vertical: true})
+		face.DrawUpright(b, s, glyphs, size)
 	}},
 }
 

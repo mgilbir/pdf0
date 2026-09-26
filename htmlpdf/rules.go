@@ -12,11 +12,13 @@ import "github.com/mgilbir/forme/layout"
 // to Ignore — so that a caller who can live with the loss says so rather than
 // finding it later.
 const (
-	// RuleVerticalText is a run set upright down the page: text-orientation
-	// upright, or the characters a vertical writing mode stands upright. A
-	// run turned sideways is drawn, by turning the text matrix; an upright
-	// glyph hangs from its vertical origin and advances by its vertical
-	// metrics, which a turned horizontal run does not do.
+	// RuleVerticalText is a run set down the page that cannot be drawn where
+	// layout placed it. A run turned sideways is drawn, by turning the text
+	// matrix, and so is one set upright in a face whose vertical advances are
+	// an em, as a CJK face's are. Refused are an upright run in any other face
+	// (layout measures upright text at an em per character and does not read
+	// the face's vertical metrics, so it would be drawn longer or shorter than
+	// its space), and a combination of turns forme does not make.
 	RuleVerticalText layout.Rule = "backend-vertical-text"
 
 	// RuleLinkDropped is a hyperlink this backend cannot write as a link

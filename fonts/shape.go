@@ -129,3 +129,55 @@ func (f *Face) DrawShaped(b *content.Builder, s string, size float64) int {
 	f.draw(b, glyphs, s, size)
 	return missing
 }
+
+// DrawUpright writes glyphs set upright down the page — a run shaped with
+// shape.Features.Vertical — placing each one where shaping hung it.
+//
+// The pen starts at the origin of the current text matrix and moves down it:
+// each glyph's YAdvance, which is negative, is how far. A glyph is hung from
+// its vertical origin (VOriginX, VOriginY, measured from its horizontal
+// origin: half its width across, and from the top of its em box down to
+// where the font puts its baseline), and moved from there by its XOffset and
+// YOffset, as the font's positioning decided. So its horizontal origin is
+// drawn at the pen plus (XOffset-VOriginX, YOffset-VOriginY), in thousandths
+// of an em at size. For a CJK face the pen is the top centre of each
+// glyph's ideographic em box.
+//
+// The font is the face's ordinary one, written horizontally, and every
+// glyph is placed explicitly, with a displacement along the line and a rise
+// across it. PDF's other way to set vertical text, a CIDFont with /WMode 1
+// (Identity-V) and a /W2 array, states each glyph's vertical advance and
+// origin as the font's own metrics, as /W states its width. forme reports
+// those only for glyphs as shaped, where positioning may have changed them
+// (a mark's advance is cancelled; 'vkrn' or 'vpal', when a document asks for
+// them, move the pen), and not for the glyph itself; see shape.Glyph. Written
+// into /W2, a shaped value would misstate the font. Placed explicitly, each
+// glyph is exactly where shaping put it, with nothing claimed about the font
+// at all, and the page shows and extracts the same.
+//
+// text is the string the glyphs were shaped from, as for Draw, and it is what
+// a reader extracting the page gets back, in the order it was written: the
+// run is one /ActualText, because a reader rebuilding text from where the
+// glyphs stand sees a column of one-glyph lines, and a mark hung to the right
+// of the column's centre as the start of a word. The ToUnicode CMap says what
+// each glyph means, as for every other path. The
+// builder must already be inside a text object with this face's font
+// selected at this size, and its text matrix must not be turned: the glyphs
+// stand as they do in the font.
+func (f *Face) DrawUpright(b *content.Builder, text string, glyphs []Glyph, size float64) {
+	placed := make([]Glyph, len(glyphs))
+	pen := 0.0
+	for i, g := range glyphs {
+		p := g
+		// The pen does not move along the line: each glyph is placed from
+		// the run's origin by its offsets, and draw takes back the width the
+		// text operator advances by.
+		p.XAdvance = 0
+		p.XOffset = g.XOffset - g.VOriginX
+		p.YOffset = pen + g.YOffset - g.VOriginY
+		p.YAdvance, p.VOriginX, p.VOriginY = 0, 0, 0
+		placed[i] = p
+		pen += g.YAdvance
+	}
+	f.drawWhole(b, placed, text, size)
+}

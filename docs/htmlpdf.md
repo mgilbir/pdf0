@@ -150,7 +150,7 @@ document with the finding, for a caller who can live with the loss:
 
 | rule | what the display list says | why it is refused |
 |---|---|---|
-| `backend-vertical-text` (`RuleVerticalText`) | a run set upright down the page: `text-orientation: upright`, or the characters a vertical writing mode stands upright (CJK, by default) | an upright glyph hangs from its vertical origin and advances by its vertical metrics, which a turned horizontal run does not do |
+| `backend-vertical-text` (`RuleVerticalText`) | a run set upright down the page in a face whose vertical advances are not an em — the standard faces, and any face without `vmtx`, whose glyphs advance by the line's height — or a combination of turns forme does not make | layout measures an upright run at an em per character and does not read the face's vertical metrics, so the run would be drawn longer or shorter than the space it was given |
 | `backend-link-dropped` (`RuleLinkDropped`) | a link whose target a PDF link cannot carry: a reference relative to the HTML document (`other.html`, `/a/b`), a fragment (`#section`), or a URI [`pdf0.LinkURI`](../annotation.go) refuses | the HTML document's address is not given to the backend, and a PDF reader resolves a relative URI against the PDF's own; the display list does not say where a fragment's target is; so the page would have the link's text and nothing to follow |
 | `backend-unknown-op` (`RuleUnknownOp`) | an operation a newer forme added | part of the page would be undrawn |
 
@@ -177,6 +177,16 @@ What is drawn:
   the same glyphs and displacements, with the text matrix turned clockwise
   (`[0 1 1 0]` in layout's coordinates) or, for `sideways-lr`, anticlockwise
   (`[0 -1 -1 0]`), at the pen position layout gave the run.
+- **Upright text.** A character a vertical writing mode stands upright — CJK
+  by default, anything under `text-orientation: upright` — is shaped with the
+  vertical rules and metrics (`shape.Features.Vertical`: `vert`, and the
+  face's `vmtx` and `VORG`) and drawn by `fonts.Face.DrawUpright`, each glyph
+  hung from its vertical origin at the pen layout gave it. It is drawn only
+  where the face's vertical advances add up to the em per character layout
+  measured the run at, which a CJK face's do; otherwise `RuleVerticalText`
+  refuses it. The glyphs are placed explicitly in the ordinary font rather
+  than through a vertical CIDFont; see
+  [fonts.md](fonts.md#setting-text-and-getting-it-back).
 - **Links.** Each `<a href>` forme lays out is a `Link` in the display list,
   with one area per fragment of the `<a>`: a line of an inline link, the box of
   a block one, an image or inline-block inside one. Each area is a link

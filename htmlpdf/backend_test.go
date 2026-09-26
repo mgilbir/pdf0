@@ -274,8 +274,10 @@ func TestFullyTransparentMarksPaintNothing(t *testing.T) {
 }
 
 // TestUprightTextIsRefused is C114: a run set upright down the page is not
-// drawn as though it were turned or set across. Sideways runs are drawn; see
-// vertical_test.go.
+// drawn where it would not fit. Layout measures it at an em per character;
+// the standard faces have no vertical metrics, and their glyphs advance by
+// the line's height, which is more. Upright runs in a face whose vertical
+// advances are an em, and sideways runs, are drawn; see vertical_test.go.
 func TestUprightTextIsRefused(t *testing.T) {
 	for _, css := range []string{
 		`html { writing-mode: vertical-rl; text-orientation: upright }`,
@@ -451,8 +453,10 @@ func TestTheTilingPatternIsCompressed(t *testing.T) {
 
 // TestEachVerticalFlagIsJudgedOnItsOwn: the check reads the flags as they
 // are, not as layout happens to combine them today. A turn either way is
-// drawn; an upright run, and a combination that is not a turn (Anticlockwise
-// or Upright without Sideways), is refused.
+// drawn, and so is an upright run down a clockwise line (whether its face's
+// metrics fit is TestUprightTextIsRefused's); a combination that is not one
+// (Anticlockwise or Upright without Sideways, Upright with Anticlockwise) is
+// refused.
 func TestEachVerticalFlagIsJudgedOnItsOwn(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -464,10 +468,11 @@ func TestEachVerticalFlagIsJudgedOnItsOwn(t *testing.T) {
 		{"Sideways+Anticlockwise", layout.DrawText{Sideways: true, Anticlockwise: true}, false},
 		{"Anticlockwise", layout.DrawText{Anticlockwise: true}, true},
 		{"Upright", layout.DrawText{Upright: true}, true},
-		{"Sideways+Upright", layout.DrawText{Sideways: true, Upright: true}, true},
+		{"Sideways+Upright", layout.DrawText{Sideways: true, Upright: true}, false},
+		{"Anticlockwise+Upright", layout.DrawText{Anticlockwise: true, Upright: true}, true},
 		{"all three", layout.DrawText{Sideways: true, Anticlockwise: true, Upright: true}, true},
 	} {
-		findings, refused := checkDrawable(layout.Composed{Ops: []layout.Op{tc.op}}, nil)
+		findings, refused, _ := checkDrawable(layout.Composed{Ops: []layout.Op{tc.op}}, nil)
 		if refused != tc.refused || hasRule(findings, RuleVerticalText, layout.Error) != tc.refused {
 			t.Errorf("%s: refused=%v with %v; want refused=%v", tc.name, refused, findings, tc.refused)
 		}

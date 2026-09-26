@@ -25,6 +25,7 @@ package htmlpdf
 import (
 	"fmt"
 	"image"
+	"math"
 	"net/url"
 	"sort"
 	"strings"
@@ -214,7 +215,7 @@ func Render(in layout.Input, opts layout.Options) (Result, error) {
 	// before anything is written: a page that would say something else is
 	// refused the way the engine refuses one, unless the caller's policy says
 	// the loss is acceptable.
-	backend, refused := checkDrawable(composed, in.Policy)
+	backend, refused, upright := checkDrawable(composed, in.Policy)
 	out.Findings = append(out.Findings, backend...)
 	if composed.Refused || refused {
 		return out, &RefusedError{
@@ -223,7 +224,7 @@ func Render(in layout.Input, opts layout.Options) (Result, error) {
 		}
 	}
 
-	doc, err := writePage(composed.Ops, composed.Page, composed.Scale)
+	doc, err := writePage(composed.Ops, composed.Page, composed.Scale, upright)
 	if err != nil {
 		return out, err
 	}
@@ -238,17 +239,30 @@ func Render(in layout.Input, opts layout.Options) (Result, error) {
 //
 // One finding per rule, however many operations raised it: a vertical page is
 // one fact about the document, and a line per run would bury it.
-func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, bool) {
+//
+// It also shapes each upright run, which is how it knows whether the run can
+// be drawn where layout placed it, and returns the glyphs for writePage, so
+// that a run is shaped once.
+func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, bool, uprightRuns) {
 	counts := map[layout.Rule]int{}
+	upright := uprightRuns{}
 	// The first link that cannot be written, and why: the links a document
 	// cannot carry are usually all one kind — every relative reference in it
 	// — and the first says which.
 	var firstLink string
-	for _, op := range c.Ops {
+	for i, op := range c.Ops {
 		switch v := op.(type) {
 		case layout.DrawText:
 			if !drawableTurn(v) {
 				counts[RuleVerticalText]++
+				continue
+			}
+			if v.Upright && v.Face != nil && v.Text != "" {
+				glyphs, fits := uprightGlyphs(v)
+				upright[i] = glyphs
+				if !fits {
+					counts[RuleVerticalText]++
+				}
 			}
 		case layout.Link:
 			if _, err := linkTarget(v.Href); err != nil {
@@ -264,9 +278,10 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 	}
 
 	messages := map[layout.Rule]string{
-		RuleVerticalText: "%d run(s) of text are set upright down the page (text-orientation: " +
-			"upright, or a vertical writing mode's upright characters), which this PDF backend " +
-			"cannot draw; they would be drawn in the wrong place",
+		RuleVerticalText: "%d run(s) of text set down the page cannot be drawn where layout " +
+			"placed them: set upright in a face whose vertical advances are not the em per " +
+			"character layout measured the run at (layout does not read a face's vertical " +
+			"metrics), or turned in a way layout does not turn text",
 		RuleLinkDropped: "%d hyperlink(s) cannot be written as PDF links, so the page would " +
 			"show their text with nothing to follow; the first: " + firstLink,
 		RuleUnknownOp: "the display list has %d operation(s) of a kind this backend does not " +
@@ -297,7 +312,7 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 			Source:  layout.Source{HTMLOffset: -1, CSSOffset: -1},
 		})
 	}
-	return out, refused
+	return out, refused, upright
 }
 
 // textMatrix is the linear part of a run's text matrix: where the text
@@ -320,10 +335,14 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 // is how layout placed the run's ink and decorations. Everything the drawing
 // writes in text space — the TJ displacements, a mark's rise — turns with it.
 //
-// An upright run is not a turned horizontal run, and is not drawn here; see
-// checkDrawable.
+// An upright run is not a turned horizontal run: its glyphs stand as they do
+// in the font, and uprightGlyphs says where each goes.
 func textMatrix(v layout.DrawText) (a, b, c, d float64) {
 	switch {
+	case v.Upright:
+		// The glyphs stand as they do in the font, whichever way the line
+		// runs: DrawUpright moves the pen down the page itself.
+		return 1, 0, 0, -1
 	case v.Sideways && v.Anticlockwise:
 		return 0, -1, -1, 0
 	case v.Sideways:
@@ -332,15 +351,66 @@ func textMatrix(v layout.DrawText) (a, b, c, d float64) {
 	return 1, 0, 0, -1
 }
 
-// drawableTurn reports whether a run's turn is one textMatrix draws: across
-// the page, or turned a quarter either way with its glyphs turned too. An
-// upright run, and a combination forme does not make (Anticlockwise or
-// Upright without Sideways, or both at once), is not.
+// drawableTurn reports whether a run's turn is one this backend draws: across
+// the page, turned a quarter either way with its glyphs turned too, or set
+// upright down a line turned clockwise. A combination forme does not make —
+// Anticlockwise or Upright without Sideways, or Upright with Anticlockwise,
+// which CSS Writing Modes 5.1 rules out, since sideways-lr turns every
+// character — is not.
 func drawableTurn(v layout.DrawText) bool {
-	if v.Upright || (v.Anticlockwise && !v.Sideways) {
+	switch {
+	case v.Anticlockwise && !v.Sideways:
+		return false
+	case v.Upright && (!v.Sideways || v.Anticlockwise):
 		return false
 	}
 	return true
+}
+
+// uprightRuns are the glyphs of each upright run, by its index in the display
+// list: shaped once, by checkDrawable, and drawn by writePage.
+type uprightRuns map[int][]shape.Glyph
+
+// uprightGlyphs shapes a run set upright: with the vertical rules and metrics
+// (shape.Features.Vertical, which layout leaves to the backend to ask for),
+// the run's context either side, and its letter-spacing. fits is whether the
+// run so drawn is the length layout gave it; see uprightFits.
+//
+// Each glyph comes back with its vertical advance and the point it is hung
+// from, which are the font's vmtx and VORG (or what HarfBuzz falls back to
+// where it states none) as positioning left them; fonts.Face.DrawUpright
+// places each glyph by them.
+func uprightGlyphs(v layout.DrawText) (glyphs []shape.Glyph, fits bool) {
+	v.Features.Vertical = true
+	glyphs, _ = layout.ShapedGlyphs(v)
+	fits = uprightFits(v, glyphs)
+	return withLetterSpacing(glyphs, layout.ShapedText(v), v), fits
+}
+
+// uprightFits reports whether an upright run, drawn by its face's vertical
+// metrics, is the length layout measured it at and placed the next run after.
+//
+// Layout measures an upright run at an em per character (CSS Writing Modes
+// 4.4's synthesis, which forme applies to every face, stating vertical
+// metrics or not) and does not yet read the face's own. A face whose vertical
+// advance is an em for every glyph of the run — every CJK face's ideographs,
+// kana and fullwidth forms, and whatever else its vmtx gives an em — is drawn
+// exactly where layout put it. One whose advances differ — a face with no
+// vmtx, whose glyphs advance by its line height, or a proportional one — would
+// draw the run longer or shorter than the space it was given, over its
+// neighbour or short of it; that is refused rather than drawn. The glyphs are
+// the ones shaped, before letter-spacing, which layout and the drawing add
+// alike.
+func uprightFits(v layout.DrawText, glyphs []shape.Glyph) bool {
+	size := v.Size.Px()
+	drawn := 0.0
+	for _, g := range glyphs {
+		drawn -= g.YAdvance * size / 1000
+	}
+	measured := size * float64(paragraph.UprightUnits(v.Text))
+	// A layout length is a whole number of 1/64 px, and the metrics are
+	// thousandths of an em: agreement within one layout unit is exact.
+	return math.Abs(drawn-measured) <= 1.0/64
 }
 
 // linkTarget is the URI a display-list link is written with, or why it
@@ -395,7 +465,7 @@ func (m pageTransform) rect(r layout.Rect) [4]float64 {
 // Every field of every operation is either drawn here or refused by
 // checkDrawable before this runs; drawnFields in this file lists which, and a
 // test holds that list against the operations layout declares.
-func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Document, error) {
+func writePage(ops []layout.Op, page layout.PageSize, scale float64, upright uprightRuns) (*pdf0.Document, error) {
 	doc := pdf0.NewDocument()
 	b := &content.Builder{}
 
@@ -448,7 +518,7 @@ func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Docu
 		return name, nil
 	}
 
-	for _, op := range ops {
+	for i, op := range ops {
 		switch v := op.(type) {
 		case layout.FillRect:
 			// Overhang is about the page-overflow guard in layout and says
@@ -499,9 +569,15 @@ func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Docu
 			// placed (a ligature measured as two letters, a kern turned back on,
 			// an Arabic word in isolated forms).
 			text := layout.ShapedText(v)
-			glyphs, _ := layout.ShapedGlyphs(v)
-			glyphs = withLetterSpacing(glyphs, text, v)
-			face.Draw(b, text, glyphs, v.Size.Px())
+			if glyphs, ok := upright[i]; ok {
+				// Upright: each glyph hung from its vertical origin, one
+				// below the other. See uprightGlyphs.
+				face.DrawUpright(b, text, glyphs, v.Size.Px())
+			} else {
+				glyphs, _ := layout.ShapedGlyphs(v)
+				glyphs = withLetterSpacing(glyphs, text, v)
+				face.Draw(b, text, glyphs, v.Size.Px())
+			}
 			b.EndText()
 			b.Restore()
 
@@ -634,7 +710,7 @@ var drawnFields = map[string]map[string]string{
 		"RTL":           "through layout.ShapedText and layout.ShapedGlyphs",
 		"Sideways":      "the text matrix turned a quarter clockwise: textMatrix",
 		"Anticlockwise": "the text matrix turned a quarter anticlockwise: textMatrix",
-		"Upright":       "refused: RuleVerticalText",
+		"Upright":       "shaped with the vertical metrics and each glyph hung from its vertical origin: uprightGlyphs, fonts.Face.DrawUpright; refused where they do not fit layout's em per character: RuleVerticalText",
 		"Face":          "the font, adopted and embedded",
 		"Size":          "the font size",
 		"Color":         "the fill colour; alpha through an ExtGState, and invisible text at zero",
@@ -643,7 +719,7 @@ var drawnFields = map[string]map[string]string{
 		"MergePre":      "through layout.ShapedGlyphs",
 		"MergePost":     "through layout.ShapedGlyphs",
 		"ContextKerns":  "through layout.ShapedGlyphs",
-		"Features":      "through layout.ShapedGlyphs",
+		"Features":      "through layout.ShapedGlyphs, with Vertical set for an upright run",
 		"CharSpacing":   "added after each typographic character unit: withLetterSpacing",
 		"Clip":          "clipTo",
 	},
@@ -717,7 +793,9 @@ func (a *alphaStates) use(b *content.Builder, alpha float64) {
 // ligatures narrower on the page than layout said it was.
 //
 // The spacing is in the run's units and a glyph's advance in thousandths of
-// its em, so it is scaled by the size the run is set at.
+// its em, so it is scaled by the size the run is set at. It goes along the
+// run's advance: across for a run across the page or turned sideways, down
+// for an upright one.
 func withLetterSpacing(glyphs []shape.Glyph, text string, v layout.DrawText) []shape.Glyph {
 	if v.CharSpacing == 0 || len(glyphs) == 0 || !(v.Size.Px() > 0) {
 		return glyphs
@@ -755,7 +833,12 @@ func withLetterSpacing(glyphs []shape.Glyph, text string, v layout.DrawText) []s
 				units++
 			}
 		}
-		out[i].XAdvance += perUnit * float64(units)
+		if v.Upright {
+			// Down the page, which a vertical advance states as negative.
+			out[i].YAdvance -= perUnit * float64(units)
+		} else {
+			out[i].XAdvance += perUnit * float64(units)
+		}
 	}
 	return out
 }
