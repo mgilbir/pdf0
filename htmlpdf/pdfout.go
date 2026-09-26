@@ -247,7 +247,7 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 	for _, op := range c.Ops {
 		switch v := op.(type) {
 		case layout.DrawText:
-			if v.Sideways || v.Anticlockwise || v.Upright {
+			if !drawableTurn(v) {
 				counts[RuleVerticalText]++
 			}
 		case layout.Link:
@@ -264,9 +264,9 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 	}
 
 	messages := map[layout.Rule]string{
-		RuleVerticalText: "%d run(s) of text are set down the page (a vertical writing-mode " +
-			"or text-orientation: upright), which this PDF backend cannot draw; they would " +
-			"be drawn across the page",
+		RuleVerticalText: "%d run(s) of text are set upright down the page (text-orientation: " +
+			"upright, or a vertical writing mode's upright characters), which this PDF backend " +
+			"cannot draw; they would be drawn in the wrong place",
 		RuleLinkDropped: "%d hyperlink(s) cannot be written as PDF links, so the page would " +
 			"show their text with nothing to follow; the first: " + firstLink,
 		RuleUnknownOp: "the display list has %d operation(s) of a kind this backend does not " +
@@ -298,6 +298,49 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 		})
 	}
 	return out, refused
+}
+
+// textMatrix is the linear part of a run's text matrix: where the text
+// space's x axis (the advance) and y axis (up the glyph) point in the
+// layout's coordinates, in which y grows down the page.
+//
+// A run across the page advances along +x with its glyphs' up along -y; the
+// matrix [1 0 0 -1] undoes the page transform's inversion locally, which
+// leaves the glyphs upright while the position still comes from the flipped
+// system.
+//
+// A sideways run is the same run turned a quarter, which is all "sideways"
+// means (DrawText.Sideways, CSS Writing Modes 5.1): each glyph is its
+// horizontal self, the advance and the marks' offsets are the horizontal
+// ones, and the only change is the direction the text space points. Turned
+// clockwise, as vertical-rl, vertical-lr and sideways-rl set it, the advance
+// goes down the page (+y) and a glyph's up points right (+x): [0 1 1 0].
+// Turned anticlockwise, as sideways-lr sets it, the advance goes up the page
+// (-y) and up points left (-x): [0 -1 -1 0]. Both are forme's placeRun, which
+// is how layout placed the run's ink and decorations. Everything the drawing
+// writes in text space — the TJ displacements, a mark's rise — turns with it.
+//
+// An upright run is not a turned horizontal run, and is not drawn here; see
+// checkDrawable.
+func textMatrix(v layout.DrawText) (a, b, c, d float64) {
+	switch {
+	case v.Sideways && v.Anticlockwise:
+		return 0, -1, -1, 0
+	case v.Sideways:
+		return 0, 1, 1, 0
+	}
+	return 1, 0, 0, -1
+}
+
+// drawableTurn reports whether a run's turn is one textMatrix draws: across
+// the page, or turned a quarter either way with its glyphs turned too. An
+// upright run, and a combination forme does not make (Anticlockwise or
+// Upright without Sideways, or both at once), is not.
+func drawableTurn(v layout.DrawText) bool {
+	if v.Upright || (v.Anticlockwise && !v.Sideways) {
+		return false
+	}
+	return true
 }
 
 // linkTarget is the URI a display-list link is written with, or why it
@@ -444,11 +487,11 @@ func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Docu
 				// "color: transparent" leaves it selectable, and so does this.
 				b.SetTextRenderMode(content.InvisibleText)
 			}
-			// The y axis is inverted by the transform, so text drawn through it
-			// would be mirrored. The text matrix undoes that inversion locally,
-			// which leaves the glyphs upright while the position still comes
-			// from the flipped system.
-			b.SetTextMatrix(1, 0, 0, -1, v.At.X.Px(), v.At.Y.Px())
+			// The text matrix puts the run's own axes — along the line, and up
+			// the glyph — onto the page, in the flipped system the transform
+			// above set up. See textMatrix.
+			a, bb, c, d := textMatrix(v)
+			b.SetTextMatrix(a, bb, c, d, v.At.X.Px(), v.At.Y.Px())
 			// The glyphs layout measured, shaped with the run's direction, its
 			// context either side and the features the document turned off —
 			// layout.ShapedGlyphs is the pairing of all of them, and a backend
@@ -589,8 +632,8 @@ var drawnFields = map[string]map[string]string{
 		"At":            "the origin of the text matrix",
 		"Text":          "what the glyphs were shaped from and what the page extracts as",
 		"RTL":           "through layout.ShapedText and layout.ShapedGlyphs",
-		"Sideways":      "refused: RuleVerticalText",
-		"Anticlockwise": "refused: RuleVerticalText",
+		"Sideways":      "the text matrix turned a quarter clockwise: textMatrix",
+		"Anticlockwise": "the text matrix turned a quarter anticlockwise: textMatrix",
 		"Upright":       "refused: RuleVerticalText",
 		"Face":          "the font, adopted and embedded",
 		"Size":          "the font size",

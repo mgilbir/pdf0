@@ -150,7 +150,7 @@ document with the finding, for a caller who can live with the loss:
 
 | rule | what the display list says | why it is refused |
 |---|---|---|
-| `backend-vertical-text` (`RuleVerticalText`) | a run set down the page: `writing-mode` `vertical-rl`, `vertical-lr`, `sideways-rl`, `sideways-lr`, or `text-orientation: upright` | the glyphs would be drawn across the page, in the wrong place and the wrong way up |
+| `backend-vertical-text` (`RuleVerticalText`) | a run set upright down the page: `text-orientation: upright`, or the characters a vertical writing mode stands upright (CJK, by default) | an upright glyph hangs from its vertical origin and advances by its vertical metrics, which a turned horizontal run does not do |
 | `backend-link-dropped` (`RuleLinkDropped`) | a link whose target a PDF link cannot carry: a reference relative to the HTML document (`other.html`, `/a/b`), a fragment (`#section`), or a URI [`pdf0.LinkURI`](../annotation.go) refuses | the HTML document's address is not given to the backend, and a PDF reader resolves a relative URI against the PDF's own; the display list does not say where a fragment's target is; so the page would have the link's text and nothing to follow |
 | `backend-unknown-op` (`RuleUnknownOp`) | an operation a newer forme added | part of the page would be undrawn |
 
@@ -171,6 +171,12 @@ What is drawn:
   each typographic character unit, not after each glyph. Every run extracts as
   the text it was set from — a ligature as its letters, a right-to-left word in
   reading order; see [fonts.md](fonts.md#setting-text-and-getting-it-back).
+- **Sideways text.** A run a vertical writing mode lays along the line —
+  Latin in `vertical-rl` or `vertical-lr`, everything in `sideways-rl` and
+  `sideways-lr` — is a horizontal run turned a quarter, and is drawn as one:
+  the same glyphs and displacements, with the text matrix turned clockwise
+  (`[0 1 1 0]` in layout's coordinates) or, for `sideways-lr`, anticlockwise
+  (`[0 -1 -1 0]`), at the pen position layout gave the run.
 - **Links.** Each `<a href>` forme lays out is a `Link` in the display list,
   with one area per fragment of the `<a>`: a line of an inline link, the box of
   a block one, an image or inline-block inside one. Each area is a link

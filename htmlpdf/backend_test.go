@@ -273,27 +273,31 @@ func TestFullyTransparentMarksPaintNothing(t *testing.T) {
 	}
 }
 
-// TestVerticalTextIsRefused is C114: a run set down the page is not drawn
-// across it.
-func TestVerticalTextIsRefused(t *testing.T) {
-	for _, mode := range []string{"vertical-rl", "vertical-lr", "sideways-rl", "sideways-lr"} {
+// TestUprightTextIsRefused is C114: a run set upright down the page is not
+// drawn as though it were turned or set across. Sideways runs are drawn; see
+// vertical_test.go.
+func TestUprightTextIsRefused(t *testing.T) {
+	for _, css := range []string{
+		`html { writing-mode: vertical-rl; text-orientation: upright }`,
+		`html { writing-mode: vertical-lr; text-orientation: upright }`,
+	} {
 		_, err := Render(Input{
 			HTML: `<p>vertical text</p>`,
-			CSS:  []Stylesheet{{Source: `html { writing-mode: ` + mode + ` }`}},
+			CSS:  []Stylesheet{{Source: css}},
 		}, Options{})
 		var refused *RefusedError
 		if !errors.As(err, &refused) {
-			t.Errorf("%s: rendered with err %v; want a refusal", mode, err)
+			t.Errorf("%s: rendered with err %v; want a refusal", css, err)
 			continue
 		}
 		if !hasRule(refused.Findings, RuleVerticalText, layout.Error) {
-			t.Errorf("%s: refused without a %s finding: %v", mode, RuleVerticalText, refused.Findings)
+			t.Errorf("%s: refused without a %s finding: %v", css, RuleVerticalText, refused.Findings)
 		}
 	}
 	// A caller may accept it, knowing what they get.
 	out, err := Render(Input{
 		HTML:   `<p>vertical text</p>`,
-		CSS:    []Stylesheet{{Source: `html { writing-mode: vertical-rl }`}},
+		CSS:    []Stylesheet{{Source: `html { writing-mode: vertical-rl; text-orientation: upright }`}},
 		Policy: layout.Policy{RuleVerticalText: layout.Warn},
 	}, Options{})
 	if err != nil {
@@ -445,20 +449,27 @@ func TestTheTilingPatternIsCompressed(t *testing.T) {
 	}
 }
 
-// TestEachVerticalFlagIsRefusedOnItsOwn: layout sets Upright and Anticlockwise
-// only together with Sideways today, and the check does not lean on that.
-func TestEachVerticalFlagIsRefusedOnItsOwn(t *testing.T) {
-	for name, op := range map[string]layout.DrawText{
-		"Sideways":      {Sideways: true},
-		"Anticlockwise": {Anticlockwise: true},
-		"Upright":       {Upright: true},
+// TestEachVerticalFlagIsJudgedOnItsOwn: the check reads the flags as they
+// are, not as layout happens to combine them today. A turn either way is
+// drawn; an upright run, and a combination that is not a turn (Anticlockwise
+// or Upright without Sideways), is refused.
+func TestEachVerticalFlagIsJudgedOnItsOwn(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		op      layout.DrawText
+		refused bool
+	}{
+		{"across", layout.DrawText{}, false},
+		{"Sideways", layout.DrawText{Sideways: true}, false},
+		{"Sideways+Anticlockwise", layout.DrawText{Sideways: true, Anticlockwise: true}, false},
+		{"Anticlockwise", layout.DrawText{Anticlockwise: true}, true},
+		{"Upright", layout.DrawText{Upright: true}, true},
+		{"Sideways+Upright", layout.DrawText{Sideways: true, Upright: true}, true},
+		{"all three", layout.DrawText{Sideways: true, Anticlockwise: true, Upright: true}, true},
 	} {
-		findings, refused := checkDrawable(layout.Composed{Ops: []layout.Op{op}}, nil)
-		if !refused || !hasRule(findings, RuleVerticalText, layout.Error) {
-			t.Errorf("%s alone was not refused: %v", name, findings)
+		findings, refused := checkDrawable(layout.Composed{Ops: []layout.Op{tc.op}}, nil)
+		if refused != tc.refused || hasRule(findings, RuleVerticalText, layout.Error) != tc.refused {
+			t.Errorf("%s: refused=%v with %v; want refused=%v", tc.name, refused, findings, tc.refused)
 		}
-	}
-	if findings, refused := checkDrawable(layout.Composed{Ops: []layout.Op{layout.DrawText{}}}, nil); refused {
-		t.Errorf("a horizontal run was refused: %v", findings)
 	}
 }

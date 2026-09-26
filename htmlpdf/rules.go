@@ -12,10 +12,11 @@ import "github.com/mgilbir/forme/layout"
 // to Ignore — so that a caller who can live with the loss says so rather than
 // finding it later.
 const (
-	// RuleVerticalText is a run set down the page: writing-mode vertical-rl,
-	// vertical-lr, sideways-rl or sideways-lr, or text-orientation upright.
-	// Its glyphs would be drawn across the page, in the wrong place and the
-	// wrong way up.
+	// RuleVerticalText is a run set upright down the page: text-orientation
+	// upright, or the characters a vertical writing mode stands upright. A
+	// run turned sideways is drawn, by turning the text matrix; an upright
+	// glyph hangs from its vertical origin and advances by its vertical
+	// metrics, which a turned horizontal run does not do.
 	RuleVerticalText layout.Rule = "backend-vertical-text"
 
 	// RuleLinkDropped is a hyperlink this backend cannot write as a link
