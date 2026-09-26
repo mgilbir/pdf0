@@ -86,6 +86,17 @@ func TestValidateDPartsValid(t *testing.T) {
 	}
 }
 
+// TestValidateDPartsIndirectNodeNameIsAName: a NodeNameList entry written as
+// a reference to a valid name is a valid name, not "not a name".
+func TestValidateDPartsIndirectNodeNameIsAName(t *testing.T) {
+	d := buildDPartDoc()
+	d.Objects[40] = &object.IndirectObject{Number: 40, Value: object.Name("Document")}
+	objDict(d, 7).Set("NodeNameList", object.Array{object.IndirectRef{Number: 40}, object.Name("Section")})
+	if v := ValidateDParts(d); len(v) != 0 {
+		t.Fatalf("an indirect NodeNameList name was rejected: %v", v)
+	}
+}
+
 func TestValidateDPartsNoRootIsValid(t *testing.T) {
 	d := buildDPartDoc()
 	objDict(d, 1).Delete("DPartRoot") // remove the hierarchy entirely
@@ -118,6 +129,12 @@ func TestValidateDPartsViolations(t *testing.T) {
 		{"NodeNameList wrong length", func(d *Document) { objDict(d, 7).Set("NodeNameList", object.Array{object.Name("Only")}) }, "14.12.4.1", "levels"},
 		{"NodeNameList bad name", func(d *Document) {
 			objDict(d, 7).Set("NodeNameList", object.Array{object.Name("1bad"), object.Name("Section")})
+		}, "14.12.4.1", "not a valid XML name"},
+		{"NodeNameList bad name written indirectly", func(d *Document) {
+			// A name is as legal behind a reference as inline; the syntax
+			// rule applies to it either way (audit 2026-09-22 C36).
+			d.Objects[40] = &object.IndirectObject{Number: 40, Value: object.Name("1bad")}
+			objDict(d, 7).Set("NodeNameList", object.Array{object.IndirectRef{Number: 40}, object.Name("Section")})
 		}, "14.12.4.1", "not a valid XML name"},
 		{"DPM disallowed value", func(d *Document) {
 			dpm := &object.Dictionary{}

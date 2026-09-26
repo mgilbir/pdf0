@@ -67,11 +67,16 @@ func TestLevelAStructureCheck(t *testing.T) {
 }
 
 func TestLevelAConformanceCheck(t *testing.T) {
-	if v := checkLevelAConformance(levelADoc(true, true, "en", "A"), PDFA1a); len(v) != 0 {
+	if v := filterCheck(checkIdentification(levelADoc(true, true, "en", "A"), PDFA1a), CheckPDFAIDConformance); len(v) != 0 {
 		t.Errorf("conformance A flagged: %v", v)
 	}
-	if v := checkLevelAConformance(levelADoc(true, true, "en", "B"), PDFA1a); !hasMsg(v, "must be A") {
+	if v := filterCheck(checkIdentification(levelADoc(true, true, "en", "B"), PDFA1a), CheckPDFAIDConformance); !hasMsg(v, `accepts "A"`) {
 		t.Errorf("expected a conformance finding for B at Level A; got %v", v)
+	}
+	// Level A includes Level B: a 1a file satisfies a 1b target's
+	// identification.
+	if v := filterCheck(checkIdentification(levelADoc(true, true, "en", "A"), PDFA1b), CheckPDFAIDConformance); len(v) != 0 {
+		t.Errorf("an A declaration was refused at 1b: %v", v)
 	}
 }
 

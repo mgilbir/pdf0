@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/mgilbir/pdf0"
 	"github.com/mgilbir/pdf0/pdfa"
@@ -127,15 +128,15 @@ func cmdInfo(args []string) error {
 
 func cmdValidate(args []string) error {
 	fs := flag.NewFlagSet("validate", flag.ExitOnError)
-	level := fs.String("level", "2b", "PDF/A level: 1b, 2b, 3b, or 4")
+	level := fs.String("level", "2b", "PDF/A level: "+levelNames+", or declared (the level the file declares)")
 	pw := addSecretFlags(fs, readPassword)
 	fs.Parse(args)
 	if fs.NArg() != 1 {
-		return usagef("usage: pdf0 validate [-level 1b|2b|3b|4] [-password-file F] <file>")
+		return usagef("usage: pdf0 validate [-level LEVEL|declared] [-password-file F] <file>")
 	}
-	lvl, ok := parseLevel(*level)
+	lvl, ok := parseLevel(*level, true)
 	if !ok {
-		return usagef("unknown level %q (want 1b, 2b, 3b, or 4)", *level)
+		return usagef("unknown level %q (want %s, or declared)", *level, levelNames)
 	}
 	src, err := open(fs.Arg(0), pw, &stdinClaim{})
 	if err != nil {
@@ -147,7 +148,10 @@ func cmdValidate(args []string) error {
 	}
 	errs := pdf0.ValidatePDFABytes(doc, lvl, src.in.data)
 	if len(errs) == 0 {
-		fmt.Fprintf(stdout, "%s: no violations found for PDF/A-%s\n", src.in.name, *level)
+		if declared, ok := doc.Conformance(); ok && lvl == pdfa.LevelDeclared {
+			lvl = declared // the level the run resolved to, for the report
+		}
+		fmt.Fprintf(stdout, "%s: no violations found for %s\n", src.in.name, lvl)
 		return nil
 	}
 	for _, e := range errs {
@@ -281,15 +285,15 @@ func cmdExtract(args []string) error {
 func cmdRepair(args []string) error {
 	fs := flag.NewFlagSet("repair", flag.ExitOnError)
 	force := fs.Bool("force", false, "replace <out> if it exists")
-	level := fs.String("level", "2b", "target PDF/A level: 1b, 2b, 3b, or 4")
+	level := fs.String("level", "2b", "target PDF/A level: "+levelNames)
 	pw := addSecretFlags(fs, readPassword)
 	fs.Parse(args)
 	if fs.NArg() != 2 {
-		return usagef("usage: pdf0 repair [-force] [-level 1b|2b|3b|4] [-password-file F] <in> <out>")
+		return usagef("usage: pdf0 repair [-force] [-level LEVEL] [-password-file F] <in> <out>")
 	}
-	lvl, ok := parseLevel(*level)
+	lvl, ok := parseLevel(*level, false)
 	if !ok {
-		return usagef("unknown level %q (want 1b, 2b, 3b, or 4)", *level)
+		return usagef("unknown level %q (want %s)", *level, levelNames)
 	}
 	out := fs.Arg(1)
 	src, err := open(fs.Arg(0), pw, &stdinClaim{})
@@ -442,18 +446,31 @@ func cmdUA(args []string) error {
 // a test can make the read-back fail.
 var readBack = parseDoc
 
-func parseLevel(s string) (pdfa.Level, bool) {
-	switch s {
-	case "1b":
-		return pdfa.PDFA1b, true
-	case "2b":
-		return pdfa.PDFA2b, true
-	case "3b":
-		return pdfa.PDFA3b, true
-	case "4":
-		return pdfa.PDFA4, true
+// levelNames lists the -level values that name a profile, as parseLevel
+// reads them.
+var levelNames = func() string {
+	var names []string
+	for _, l := range pdfa.Levels() {
+		names = append(names, levelName(l))
 	}
-	return 0, false
+	return strings.Join(names, ", ")
+}()
+
+// levelName is a level as -level spells it: its name without "PDF/A-".
+func levelName(l pdfa.Level) string { return strings.TrimPrefix(l.String(), "PDF/A-") }
+
+// parseLevel maps a -level value to a level: any PDF/A profile (levelNames),
+// and, where the command can take its target from the file, "declared".
+func parseLevel(s string, allowDeclared bool) (pdfa.Level, bool) {
+	if allowDeclared && s == "declared" {
+		return pdfa.LevelDeclared, true
+	}
+	for _, l := range pdfa.Levels() {
+		if levelName(l) == s {
+			return l, true
+		}
+	}
+	return pdfa.LevelDeclared, false
 }
 
 // writeDoc serialises doc in full, then writes it with writeOutput: a

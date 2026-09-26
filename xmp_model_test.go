@@ -460,19 +460,23 @@ func TestEmbeddedXMPOverLimitIsUnknown(t *testing.T) {
 	}
 }
 
-// TestUnreadVariantRelaxes: when the metadata is over the XMP packet limit the
-// PDF/A-4 variant a document declares is unknown. A relaxation the variant
-// grants is then applied, not withheld — withholding it would assert a
-// violation the document's own declaration may excuse — and the limit finding
-// says the run was incomplete.
-func TestUnreadVariantRelaxes(t *testing.T) {
-	build := func() *Document {
-		d := mustPDFADoc(t, pdfa.PDFA4)
+// TestUnreadMetadataDoesNotChooseTheRules: when the metadata is over the XMP
+// packet limit, what the document declares is unknown — and it no longer
+// matters to any rule but the identification one, because every other rule is
+// gated on the target. Plain PDF/A-4 requires the document-level /AF whatever
+// the document says; PDF/A-4f relaxes it whatever the document says. Before,
+// the relaxation was read out of the declaration and an unread declaration
+// granted it at plain PDF/A-4 too. The run is still reported incomplete, and a
+// LevelDeclared run, which needs the declaration, is not run at all.
+func TestUnreadMetadataDoesNotChooseTheRules(t *testing.T) {
+	build := func(level pdfa.Level) *Document {
+		d := mustPDFADoc(t, level)
 		// An embedded file with no document-level /AF: plain PDF/A-4 requires
 		// the association, 4e and 4f relax it.
 		attach(t, d, "notes.txt", []byte("notes"))
 		cat := d.ResolveDict(d.Trailer.Get("Root"))
 		cat.Delete("AF")
+		d.limits.XMPPacketBytes = 64
 		return d
 	}
 	afFinding := func(vs []pdfa.Violation) bool {
@@ -483,22 +487,26 @@ func TestUnreadVariantRelaxes(t *testing.T) {
 		}
 		return false
 	}
-	if !afFinding(ValidatePDFA(build(), pdfa.PDFA4)) {
-		t.Fatal("the fixture does not trip the /AF rule it is meant to exercise")
-	}
-	d := build()
-	d.limits.XMPPacketBytes = 64
-	vs := ValidatePDFA(d, pdfa.PDFA4)
-	if afFinding(vs) {
-		t.Error("with the variant unread, the /AF relaxation was withheld")
-	}
-	limit := false
-	for _, v := range vs {
-		if v.Rule == "limit" && strings.Contains(v.Message, core.GuardXMPPacket) {
-			limit = true
+	limitFinding := func(vs []pdfa.Violation) bool {
+		for _, v := range vs {
+			if v.Rule == "limit" && strings.Contains(v.Message, core.GuardXMPPacket) {
+				return true
+			}
 		}
+		return false
 	}
-	if !limit {
-		t.Errorf("no limit finding for the unread metadata: %v", vs)
+	plain := ValidatePDFA(build(pdfa.PDFA4), pdfa.PDFA4)
+	if !afFinding(plain) {
+		t.Errorf("plain PDF/A-4 with unread metadata did not require /AF: %v", plain)
+	}
+	if !limitFinding(plain) {
+		t.Errorf("no limit finding for the unread metadata: %v", plain)
+	}
+	if f := ValidatePDFA(build(pdfa.PDFA4F), pdfa.PDFA4F); afFinding(f) {
+		t.Errorf("PDF/A-4f with unread metadata withheld the /AF relaxation: %v", f)
+	}
+	declared := ValidatePDFA(build(pdfa.PDFA4F), pdfa.LevelDeclared)
+	if len(declared) != 1 || !IsCheckerFinding(declared[0]) || !strings.Contains(declared[0].Message, "XMP packet limit") {
+		t.Errorf("LevelDeclared with unread metadata: want one checker finding, got %v", declared)
 	}
 }

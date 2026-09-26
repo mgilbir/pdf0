@@ -317,7 +317,7 @@ const maxCMapChain = 8
 // resolveCMap reads the CMap enc names or carries. depth and seen guard a chain
 // of embedded CMaps that use each other.
 func resolveCMap(doc View, enc object.Object, depth int, seen map[*object.Stream]bool) (*CMap, Reason, cmapRefusal) {
-	switch e := enc.(type) {
+	switch e := doc.Resolve(enc).(type) {
 	case object.Name:
 		if e == "Identity-H" || e == "Identity-V" {
 			return IdentityCMap(), ReasonOK, cmapRefusal{}

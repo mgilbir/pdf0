@@ -37,7 +37,10 @@ type tableRow []tableCell
 // rule got wrong.
 func checkUATableTHScope(d core.View, cat *object.Dictionary) []Violation {
 	var v []Violation
-	reported := map[int]bool{}
+	// One report per cell, identified by its dictionary: keyed by object
+	// number, every direct cell shared the one "no object" key and all but the
+	// first went unreported (audit 2026-09-22 C138).
+	reported := map[*object.Dictionary]bool{}
 	walkStructElems(d, cat, func(el *object.Dictionary, t object.Name) {
 		if t != "TH" {
 			return
@@ -45,10 +48,9 @@ func checkUATableTHScope(d core.View, cat *object.Dictionary) []Violation {
 		if cellHasScope(d, el) || el.Get("ID") != nil {
 			return
 		}
-		num := d.DictObjNum(el)
-		if !reported[num] {
-			reported[num] = true
-			v = append(v, Violation{"7.5", "table header cell (TH) has neither a Scope attribute nor an /ID", num})
+		if !reported[el] {
+			reported[el] = true
+			v = append(v, Violation{"7.5", "table header cell (TH) has neither a Scope attribute nor an /ID", d.ObjNumOf(el)})
 		}
 	})
 	return v
@@ -80,7 +82,7 @@ func checkUATableGrid(d core.View, cat *object.Dictionary) []Violation {
 			maxFills := d.Limits.TableGridFills
 			defects, complete := gridDefects(rows, maxFills)
 			if !complete {
-				d.Note(core.GuardGridFills, "a table's RowSpan/ColSpan values imply more than "+core.LimitBound(maxFills, core.DefaultMaxTableGridFills)+" grid slots; that table was not laid out, so none of its grid rules ran", d.DictObjNum(n.Elem))
+				d.Note(core.GuardGridFills, "a table's RowSpan/ColSpan values imply more than "+core.LimitBound(maxFills, core.DefaultMaxTableGridFills)+" grid slots; that table was not laid out, so none of its grid rules ran", d.ObjNumOf(n.Elem))
 			}
 			v = append(v, defects...)
 		}

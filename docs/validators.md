@@ -44,7 +44,7 @@ for _, e := range pdf0.ValidatePDFAContext(ctx, doc, pdfa.PDFA2b) {
 
 | Standard | Entry point | Returns | Findings satisfy `Violation` | `…Context` variant |
 |----------|-------------|---------|------------------------------|--------------------|
-| PDF/A (ISO 19005) 1a/1b/2a/2b/3a/3b/4 | `ValidatePDFA(doc, level)`<br/>`ValidatePDFABytes(doc, level, raw)` | `[]pdfa.Violation` | yes | yes (both) |
+| PDF/A (ISO 19005) 1a/1b/2a/2b/2u/3a/3b/3u/4/4e/4f | `ValidatePDFA(doc, level)`<br/>`ValidatePDFABytes(doc, level, raw)` | `[]pdfa.Violation` | yes | yes (both) |
 | PDF/UA-1 (ISO 14289-1) | `ValidatePDFUA(doc)` | `[]pdfua.Violation` | yes | yes |
 | PDF/UA-2 (ISO 14289-2) | `ValidatePDFUA2(doc)` | `[]pdfua.Violation` | yes | yes |
 | PDF/X-1a/3/4/4p/6 (ISO 15930) | `ValidatePDFX(doc, level)` | `[]pdfx.Violation` | yes | yes |
@@ -131,7 +131,10 @@ and not outside it.
 Three fields on the result are worth reading together:
 
 - `Violations` is the verdict: pdf0's container findings, the PDF/A-3 base's,
-  and the invoice engine's **fatal** findings.
+  and the invoice engine's **fatal** findings. The PDF/A-3 base is validated at
+  PDF/A-3b, which a container declaring 3a or 3u also satisfies; whether such a
+  container meets the rest of its own claim is a PDF/A question
+  (`ValidatePDFABytes` at `pdfa.LevelDeclared`).
 - `InvoiceWarnings` is the invoice engine's **advisory** findings — CEN flags
   1,168 of the two EN 16931 syntax bindings' assertions `warning`, and a
   conforming Factur-X EXTENDED invoice trips dozens by design, since carrying
@@ -172,10 +175,10 @@ concurrently on the same document.
 
 ```mermaid
 flowchart TD
-    A[ValidatePDFABytes doc, level, rawData] --> LA{level is 1a/2a/3a?}
-    LA -->|yes| LB["validatePDFALevelA:<br/>run the Level B pipeline at level.baseB(),<br/>drop the conformance-letter finding,<br/>found by its Check (CheckPDFAIDConformance),<br/>add tagged-structure + language + conformance checks"]
-    LA -->|no| B[shallow-copy doc,<br/>install per-run cache]
-    B --> C[for each of 59 checks]
+    A[ValidatePDFABytes doc, level, rawData] --> B[shallow-copy doc,<br/>install per-run cache]
+    B --> T{"ResolveTarget: a profile?<br/>LevelDeclared → LevelFor(the document's pdfaid)"}
+    T -->|no| R["one 'limit' finding:<br/>not validated"]
+    T -->|yes| C[for each check, with the target unflattened]
     C --> D[runCheck: recover panic -> 'internal' violation]
     D --> C
     C --> E{rawData != nil?}
@@ -183,26 +186,43 @@ flowchart TD
     E -->|no| G
     F --> G[sort violations by Rule, Object, Message]
     G --> I[return violation list]
-    LB --> I
+    R --> I
 ```
 
 `ValidatePDFA(doc, level)` is `ValidatePDFABytes(doc, level, nil)`: it skips the
 byte-level rules because they need the file bytes. Use `ValidatePDFABytes`
 whenever you have them.
 
-**Level A** (1a/2a/3a) is Level B plus the accessibility requirements. It is
-validated by running the Level B pipeline and adding the Level A families
-(`pdfa_levela.go`), so every Level B rule applies at Level A too.
+**The level is a target profile.** A `pdfa.Level` names the part, the
+conformance level and (at part 4) the variant: `PDFA1a`, `PDFA1b`, `PDFA2a`,
+`PDFA2b`, `PDFA2u`, `PDFA3a`, `PDFA3b`, `PDFA3u`, `PDFA4`, `PDFA4E`, `PDFA4F`
+(`pdfa.Levels()`). Every rule gates on the target, never on what the document
+declares, with one exception: the identification rule, which compares the
+declaration with the target. A target accepts the declarations the conformance
+hierarchy allows — a 2b or 3b target accepts `B`, `U` or `A`, a 2u/3u target `U`
+or `A`, an a target only `A`, 1b `B` or `A`; plain PDF/A-4 accepts no
+conformance entry, 4e only `E`, 4f only `F`. So a 2u or 2a file validates clean
+at 2b, and a file declaring `F` validated at plain PDF/A-4 is reported for its
+declaration and held to the plain part's rules (no 4f relaxations).
 
-Be precise about how much that adds: there are **three** Level A checks —
-`checkLevelAConformance` (the `A` conformance declaration),
-`checkLevelAStructure` (`/MarkInfo` and `/StructTreeRoot` present) and
-`checkLevelALanguage` (catalog `/Lang` syntax). Unicode character mapping is
-*not* an extra Level A rule; the ToUnicode requirements live in the Level B
-font rules. Level A also has no corpus oracle: `TestCorpus` runs the
-`PDF_A-1b/2b/3b/4` suites, and `TestCorpusConformanceSuites` validates the
-`PDF_A-1a`/`PDF_A-2a` directories at Level *B*, so `validatePDFALevelA` is
-unratcheted. Treat a clean Level A result more cautiously than a Level B one.
+The zero value, **`pdfa.LevelDeclared`**, validates against the level the
+document declares (`pdfa.LevelFor(part, conformance)`, the one mapping from a
+declaration to a level, which `Document.Conformance`, `Save` and the
+embedded-PDF/A rule share). A document whose declaration cannot be read or names
+no level — and a `Level` that names no profile at all, such as `pdfa.Level(99)` —
+gets exactly one finding under the `limit` rule (`IsCheckerFinding` reports it)
+and is not validated. The builders (`NewPDFADocument`, `NewPDFADocumentWith`,
+`GenerateXMPMetadata`) refuse both with an error.
+
+**Level A** (1a/2a/3a) and **Level U** (2u/3u) are Level B plus more. Level U
+adds the Unicode character-map requirement: every font used for rendering has a
+ToUnicode CMap or meets one of the standard's three exemptions, and at parts 2/3
+no ToUnicode maps to U+0000, U+FEFF or U+FFFE. Level A adds that and Tagged PDF
+(`/MarkInfo` and a structure tree), content tagged or marked as an artifact,
+role-mapped structure types without cycles, `/Lang` syntax wherever it is
+written, and (parts 2/3) ActualText for Private Use Area code points. The
+`PDF_A-1a`, `PDF_A-2a` and `PDF_A-2u` corpus suites are ratcheted at their own
+levels (`TestCorpusLevelA`, FP=0, missed=0); part 3 has no a or u suite.
 
 **Executed-content model.** Many PDF/A rules apply only to content that is
 actually *used*, not merely present. (Two font rules are deliberate exceptions
@@ -223,7 +243,8 @@ They are grouped across files by concern:
 | File | Rules |
 |------|-------|
 | `pdfa.go` | Dispatch + most rules (font embedding, colour, metadata, annotations, output intents, transparency) |
-| `pdfa_levela.go` | Level A: conformance declaration, tagged structure, language |
+| `level.go` | The target profile: levels, `LevelFor`, `ResolveTarget`, the conformance hierarchy |
+| `pdfa_levela.go` / `pdfa_levela_fonts.go` | Level A: tagged structure, artifacts, structure types, language, ActualText; Level A and U: Unicode character maps |
 | `final_rules.go` | Catalog prohibitions, trigger events, halftones, inherited XObjects |
 | `content_operators.go` | Content-stream operator whitelist, named resources |
 | `filestructure.go` | Byte-level structure rules over the raw file (the source record's offsets, `Document.Source`) |

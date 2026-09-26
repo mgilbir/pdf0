@@ -19,14 +19,18 @@ func TestPDFAPartConformanceLevelA(t *testing.T) {
 		{PDFA2a, 2, "A", "1.7"},
 		{PDFA3a, 3, "A", "1.7"},
 		{PDFA1b, 1, "B", "1.4"},
+		{PDFA2u, 2, "U", "1.7"},
+		{PDFA3u, 3, "U", "1.7"},
 		{PDFA4, 4, "", "2.0"},
+		{PDFA4E, 4, "E", "2.0"},
+		{PDFA4F, 4, "F", "2.0"},
 	}
 	for _, c := range cases {
-		if got := pdfaPart(c.level); got != c.part {
-			t.Errorf("pdfaPart(%v) = %d, want %d", c.level, got, c.part)
+		if got := c.level.Part(); got != c.part {
+			t.Errorf("%v.Part() = %d, want %d", c.level, got, c.part)
 		}
-		if got := pdfaConformance(c.level); got != c.conf {
-			t.Errorf("pdfaConformance(%v) = %q, want %q", c.level, got, c.conf)
+		if got := c.level.Conformance(); got != c.conf {
+			t.Errorf("%v.Conformance() = %q, want %q", c.level, got, c.conf)
 		}
 		if got := pdfaVersion(c.level); got != c.ver {
 			t.Errorf("pdfaVersion(%v) = %q, want %q", c.level, got, c.ver)

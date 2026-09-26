@@ -31,7 +31,6 @@ func checkFileStructureBytes(doc core.View, level Level, raw []byte) []Violation
 	errs = append(errs, checkHexStringFormat(doc, level, raw)...)
 	errs = append(errs, checkStreamKeywordFormat(doc, level, raw)...)
 	errs = append(errs, checkInlineImageFilters(doc, level)...)
-	errs = append(errs, checkInlineImageIntent(doc, level)...)
 	return errs
 }
 
@@ -271,10 +270,10 @@ func checkOneObjectSyntax(raw []byte, off, regionEnd int64, num int, add func(st
 }
 
 func indirectRule(level Level) string {
-	if level == PDFA1b {
+	if level.Part() == 1 {
 		return "6.1.8"
 	}
-	if level == PDFA4 {
+	if level.Part() == 4 {
 		return "6.1.8"
 	}
 	return "6.1.9"
@@ -319,11 +318,11 @@ func min64(a, b int64) int64 {
 // structure type names and RoleMap names at PDF/A-4 (PDF 2.0, where names
 // are defined as UTF-8, ISO 32000-2 7.3.5).
 func checkNameUTF8(doc core.View, level Level) []Violation {
-	if level == PDFA1b {
+	if level.Part() == 1 {
 		return nil // PDF/A-1 predates the UTF-8 name requirement
 	}
 	rule := "6.1.8"
-	if level == PDFA4 {
+	if level.Part() == 4 {
 		rule = "6.1.7"
 	}
 	// One example per distinct message, attributed to the lowest object number
@@ -335,7 +334,7 @@ func checkNameUTF8(doc core.View, level Level) []Violation {
 
 	for num, iobj := range doc.Objects {
 		walkColorantUTF8(doc, iobj.Value, num, add, 0)
-		if level == PDFA4 {
+		if level.Part() == 4 {
 			if d, ok := iobj.Value.(*object.Dictionary); ok {
 				checkA4NameUTF8(doc, d, num, add)
 			}
@@ -352,6 +351,8 @@ func walkColorantUTF8(doc core.View, obj object.Object, num int, add func(string
 		return
 	}
 	switch v := obj.(type) {
+	case object.IndirectRef:
+		// Visited as its own object.
 	case object.Array:
 		checkColorantArrayUTF8(doc, v, num, add)
 		for _, e := range v {
@@ -374,16 +375,16 @@ func checkColorantArrayUTF8(doc core.View, arr object.Array, num int, add func(s
 	if len(arr) < 2 {
 		return
 	}
-	csType, _ := arr[0].(object.Name)
+	csType, _ := doc.ResolveName(arr[0])
 	switch csType {
 	case "Separation":
-		if name, ok := arr[1].(object.Name); ok && !validUTF8Name(name) {
+		if name, ok := doc.ResolveName(arr[1]); ok && !validUTF8Name(name) {
 			add("the colorant name in a Separation colour space is not a valid UTF-8 string", num)
 		}
 	case "DeviceN":
 		if names, ok := doc.Resolve(arr[1]).(object.Array); ok {
 			for _, el := range names {
-				if name, ok := el.(object.Name); ok && !validUTF8Name(name) {
+				if name, ok := doc.ResolveName(el); ok && !validUTF8Name(name) {
 					add("the colorant name in a DeviceN colour space is not a valid UTF-8 string", num)
 				}
 			}
@@ -411,7 +412,7 @@ func checkA4NameUTF8(doc core.View, dict *object.Dictionary, num int, add func(s
 			if !validUTF8Name(key) {
 				add("the structure type name in RoleMap is not a valid UTF-8 string", num)
 			}
-			if val, ok := rval.(object.Name); ok && !validUTF8Name(val) {
+			if val, ok := doc.ResolveName(rval); ok && !validUTF8Name(val) {
 				add("the structure type name in RoleMap is not a valid UTF-8 string", num)
 			}
 		}
@@ -595,7 +596,7 @@ func checkHexStringFormat(doc core.View, level Level, raw []byte) []Violation {
 		return nil
 	}
 	rule := "6.1.6"
-	if level == PDFA4 {
+	if level.Part() == 4 {
 		rule = "6.1.5"
 	}
 	var errs []Violation
@@ -831,9 +832,9 @@ func checkStreamKeywordFormat(doc core.View, level Level, raw []byte) []Violatio
 		return nil
 	}
 	rule := "6.1.7.1"
-	if level == PDFA1b {
+	if level.Part() == 1 {
 		rule = "6.1.6"
-	} else if level == PDFA4 {
+	} else if level.Part() == 4 {
 		rule = "6.1.6"
 	}
 	var errs []Violation
@@ -920,44 +921,6 @@ var inlineFilterNames = map[string]bool{
 
 var inlineLZWNames = map[string]bool{"LZW": true, "LZWDecode": true}
 
-// checkInlineImageIntent verifies that an inline image /Intent entry, when
-// present, names a standard rendering intent (ISO 19005-2 6.2.6, -4 6.2.9;
-// ISO 32000-1 8.6.5.8).
-func checkInlineImageIntent(doc core.View, level Level) []Violation {
-	rule := "6.2.6"
-	if level == PDFA4 {
-		rule = "6.2.9"
-	} else if level == PDFA1b {
-		rule = "6.2.4"
-	}
-	// One example per distinct message, attributed to the lowest object number
-	// that produced it — collectContentStreamData returns a map.
-	var found exampleFindings
-	for num, data := range collectContentStreamData(doc) {
-		for _, intent := range inlineImageIntents(data) {
-			if standardRenderingIntents[intent] {
-				continue
-			}
-			found.add(Violation{Rule: rule, Level: level,
-				Message: "inline image /Intent uses a non-standard rendering intent", Object: num})
-		}
-	}
-	return found.errs
-}
-
-// inlineImageIntents extracts the /Intent value of every inline image.
-func inlineImageIntents(data []byte) []string {
-	var out []string
-	forEachInlineImage(data, func(params []core.InlineImageParam) {
-		for _, p := range params {
-			if p.Key == "Intent" && !p.Array && len(p.Value) == 1 && p.Value[0].Kind == core.ContentName {
-				out = append(out, p.Value[0].Name())
-			}
-		}
-	})
-	return out
-}
-
 // forEachInlineImage calls fn with the parameter entries of every inline image
 // in a content stream.
 func forEachInlineImage(data []byte, fn func([]core.InlineImageParam)) {
@@ -974,9 +937,9 @@ func forEachInlineImage(data []byte, fn func([]core.InlineImageParam)) {
 // entry uses only permitted filters and never LZW.
 func checkInlineImageFilters(doc core.View, level Level) []Violation {
 	rule := "6.1.10"
-	if level == PDFA4 {
+	if level.Part() == 4 {
 		rule = "6.1.9"
-	} else if level == PDFA1b {
+	} else if level.Part() == 1 {
 		rule = "6.1.7"
 	}
 	// One example per distinct message, attributed to the lowest object number
@@ -1031,10 +994,10 @@ func inlineImageFilters(data []byte) [][]string {
 // the true byte count and a divergence from the declared value is a mismatch.
 func checkStreamLength(doc core.View, level Level) []Violation {
 	rule := "6.1.7" // 6.1.7 in ISO 19005-1
-	switch level {
-	case PDFA4:
+	switch level.Part() {
+	case 4:
 		rule = "6.1.6.1"
-	case PDFA2b, PDFA3b:
+	case 2, 3:
 		rule = "6.1.7.1"
 	}
 	var errs []Violation
@@ -1061,7 +1024,7 @@ func checkStreamLength(doc core.View, level Level) []Violation {
 // and the objects it should provide are unavailable.
 func checkObjectStreamDecodable(doc core.View, level Level) []Violation {
 	rule := "6.1.7"
-	if level == PDFA4 {
+	if level.Part() == 4 {
 		rule = "6.1.6"
 	}
 	var errs []Violation
@@ -1078,11 +1041,11 @@ func checkObjectStreamDecodable(doc core.View, level Level) []Violation {
 // the traditional trailers a linearized PDF/A-1 file uses. Gated on
 // /Linearized: a non-linearized incremental-update file legitimately carries
 // several trailers, and comparing them there produced a false positive.
-func checkLinearizedTrailerID(raw []byte, level Level) []Violation {
+func checkLinearizedTrailerID(doc core.View, raw []byte, level Level) []Violation {
 	if !bytes.Contains(raw, []byte("/Linearized")) {
 		return nil
 	}
-	ids := collectTrailerIDFirstElements(raw)
+	ids := collectTrailerIDFirstElements(doc, raw)
 	if len(ids) >= 2 && !bytes.Equal(ids[0], ids[len(ids)-1]) {
 		return []Violation{{
 			Rule:    "6.1.3",
@@ -1094,8 +1057,10 @@ func checkLinearizedTrailerID(raw []byte, level Level) []Violation {
 }
 
 // collectTrailerIDFirstElements returns the first element of the /ID array of
-// every traditional "trailer" dictionary in raw, in file order.
-func collectTrailerIDFirstElements(raw []byte) [][]byte {
+// every traditional "trailer" dictionary in raw, in file order. A trailer is
+// parsed from the bytes, but what it references are objects of the same file,
+// so an indirect /ID (or an indirect element) resolves through the document.
+func collectTrailerIDFirstElements(doc core.View, raw []byte) [][]byte {
 	var ids [][]byte
 	for i := 0; ; {
 		idx := bytes.Index(raw[i:], []byte("trailer"))
@@ -1114,8 +1079,8 @@ func collectTrailerIDFirstElements(raw []byte) [][]byte {
 		if !ok {
 			continue
 		}
-		if arr, ok := d.Get("ID").(object.Array); ok && len(arr) >= 1 {
-			if s, ok := arr[0].(object.String); ok { // string: a trailer's file identifier, parsed from the raw bytes and never encrypted (ISO 32000-2 7.6.2)
+		if arr, ok := doc.Resolve(d.Get("ID")).(object.Array); ok && len(arr) >= 1 {
+			if s, ok := doc.Resolve(arr[0]).(object.String); ok { // string: a trailer's file identifier, parsed from the raw bytes and never encrypted (ISO 32000-2 7.6.2)
 				ids = append(ids, append([]byte(nil), s.Value...))
 			}
 		}
@@ -1140,10 +1105,10 @@ func collectTrailerIDFirstElements(raw []byte) [][]byte {
 //     one that wrongly includes the whole EOL — is a violation.
 func checkStreamLengthBytes(doc core.View, level Level, raw []byte) []Violation {
 	rule := "6.1.7" // 6.1.7 in ISO 19005-1
-	switch level {
-	case PDFA4:
+	switch level.Part() {
+	case 4:
 		rule = "6.1.6.1"
-	case PDFA2b, PDFA3b:
+	case 2, 3:
 		rule = "6.1.7.1"
 	}
 	// Locate every delimited "stream" and "endobj" keyword once, up front, so

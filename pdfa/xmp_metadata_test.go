@@ -59,8 +59,12 @@ func TestXMPSingleQuotedAttributes(t *testing.T) {
 	}
 }
 
-// TestA4ConformanceFE ensures pdfaid:conformance F/E is accepted at part 4 but
-// other values are still rejected (audit C23).
+// TestA4ConformanceFE: each part-4 target accepts exactly its own declaration
+// — F at 4f, E at 4e, none at plain PDF/A-4 (veraPDF 6.7.3 t03) — and every
+// other value is rejected. A compliant 4f or 4e file embedded in a PDF/A-4
+// document is validated at the level it declares (LevelFor), which is what
+// keeps it from being rejected for carrying its letter (the concern of audit
+// C23, which accepted F and E at plain PDF/A-4 instead).
 func TestA4ConformanceFE(t *testing.T) {
 	mk := func(conf string) core.View {
 		xmp := `<?xpacket?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">` +
@@ -79,26 +83,27 @@ func TestA4ConformanceFE(t *testing.T) {
 			2: {Number: 2, Value: meta},
 		}, Trailer: dictWith("Root", object.IndirectRef{Number: 1})})
 	}
-	confErrs := func(doc core.View) int {
+	confErrs := func(doc core.View, level Level) int {
 		n := 0
-		for _, e := range checkMetadataVersion(doc, PDFA4) {
+		for _, e := range checkIdentification(doc, level) {
 			if e.Rule == "6.7.3" && strings.Contains(e.Message, "conformance") {
 				n++
 			}
 		}
 		return n
 	}
-	if confErrs(mk("F")) != 0 {
-		t.Errorf("A-4f conformance F was rejected")
-	}
-	if confErrs(mk("E")) != 0 {
-		t.Errorf("A-4e conformance E was rejected")
-	}
-	if confErrs(mk("")) != 0 {
-		t.Errorf("plain A-4 (no conformance) was flagged")
-	}
-	if confErrs(mk("B")) == 0 {
-		t.Errorf("invalid A-4 conformance B was not flagged")
+	for _, tc := range []struct {
+		conf  string
+		level Level
+		ok    bool
+	}{
+		{"F", PDFA4F, true}, {"E", PDFA4E, true}, {"", PDFA4, true},
+		{"F", PDFA4, false}, {"E", PDFA4, false}, {"B", PDFA4, false},
+		{"E", PDFA4F, false}, {"", PDFA4E, false},
+	} {
+		if got := confErrs(mk(tc.conf), tc.level) == 0; got != tc.ok {
+			t.Errorf("conformance %q at %s: accepted = %v, want %v", tc.conf, tc.level, got, tc.ok)
+		}
 	}
 }
 

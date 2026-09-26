@@ -39,11 +39,13 @@ import (
 // A document from NewDocument claims nothing and reports false. One from
 // NewPDFADocument claims the level it was made at. One that was read claims
 // whatever its metadata says, which is how a file's own assertion about itself
-// becomes checkable.
+// becomes checkable: the part and conformance are mapped by pdfa.LevelFor, so a
+// file declaring 2u claims PDFA2u. A declaration that names no level — an
+// unknown part, a part-4 "B", no letter at parts 1-3 — reports false.
 func (d *Document) Conformance() (pdfa.Level, bool) {
 	id := d.existingPDFAIdentification()
 	if id.part == "" {
-		return 0, false
+		return pdfa.LevelDeclared, false
 	}
 	return pdfa.LevelFor(id.part, id.conformance)
 }
@@ -90,12 +92,12 @@ func (d *Document) save(cancel core.Canceler, w io.Writer) error {
 	}
 	if !claimed {
 		if id := d.existingPDFAIdentification(); id.part != "" {
-			// The document says it is a part of ISO 19005 that names no level
-			// this package knows. Writing it would put a claim in the file that
-			// nothing here can stand behind.
+			// The document says it is PDF/A, but the part and conformance it
+			// declares name no level this package knows. Writing it would put a
+			// claim in the file that nothing here can stand behind.
 			return fmt.Errorf(
-				"pdf0: the document claims PDF/A part %q, which pdf0 does not know how to check; "+
-					"use Write to write it anyway", id.part)
+				"pdf0: the document claims PDF/A part %q with conformance %q, which names no level pdf0 can check; "+
+					"use Write to write it anyway", id.part, id.conformance)
 		}
 		return d.write(cancel, w)
 	}

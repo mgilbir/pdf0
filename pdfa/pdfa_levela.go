@@ -3,61 +3,22 @@ package pdfa
 import (
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
-	"github.com/mgilbir/pdf0/internal/finding"
 	"github.com/mgilbir/pdf0/object"
 )
 
 // This file implements PDF/A Level A (accessible) conformance. Level A is Level
 // B plus the accessibility requirements: a tagged logical structure, a natural-
-// language specification, Unicode character mapping, and a Level A conformance
-// declaration. Validation runs the Level B checks and adds these families; the
+// language specification, Unicode character mapping (shared with Level U, see
+// pdfa_levela_fonts.go) and ActualText for Private Use Area code points. Each
+// family is a check in the one pipeline, switched on by the target (Level.IsA);
+// the identification rule, not this file, judges the declared conformance. The
 // tagged-structure and language checks mirror the PDF/UA logic (ISO 14289),
 // which pdf0 already validates.
-
-// ValidateLevelAView validates a Level A conformance level (1a/2a/3a).
-func ValidateLevelAView(doc core.View, level Level, rawData []byte) []Violation {
-	// All Level B requirements apply, so run the Level B pipeline and adopt its
-	// findings at this level. The Level B pipeline requires pdfaid:conformance
-	// "B"; at Level A it must be "A", so that one Level B finding is dropped and
-	// re-checked below.
-	base := ValidateView(doc, level.BaseB(), rawData)
-	errs := make([]Violation, 0, len(base))
-	for _, e := range base {
-		if e.Check == CheckPDFAIDConformance {
-			continue
-		}
-		e.Level = level
-		errs = append(errs, e)
-	}
-
-	// Run the Level A checks through runCheck like every Level B check, so a
-	// panic on hostile input becomes a reported "internal" finding rather than
-	// crashing the caller — the asymmetry runCheck exists to prevent (audit C27).
-	// A cancelled run abandons the ones it has not started; the finding that
-	// says so is already in base, carried over by the loop above.
-	for _, check := range []func(core.View, Level) []Violation{
-		checkLevelAConformance, checkLevelAStructure, checkLevelAArtifacts,
-		checkLevelAStructTypes, checkLevelALanguage, checkLevelAToUnicode,
-		checkLevelAActualText,
-	} {
-		if doc.Cancel.Stopped() {
-			break
-		}
-		errs = append(errs, runCheck(doc, level, check)...)
-	}
-
-	// validatePDFABytes sorted the Level B findings; re-sort now that the Level A
-	// families have appended to them, so Level A returns findings in the same
-	// "by rule, then object, then message" order every other validator promises
-	// (validatePDFUA2 does the same for its extra rule).
-	finding.Sort(errs)
-	return errs
-}
 
 // levelAClause returns the ISO 19005 clause identifier for a Level A concept,
 // which is numbered differently in part 1 (1a) than in parts 2/3 (2a/3a).
 func levelAClause(concept string, level Level) string {
-	part1 := level == PDFA1a
+	part1 := level.Part() == 1
 	switch concept {
 	case "structure": // Tagged PDF / logical structure
 		if part1 {
@@ -95,39 +56,13 @@ func levelAClause(concept string, level Level) string {
 	return "6.8"
 }
 
-// checkLevelAConformance verifies the XMP declares Level A conformance
-// (pdfaid:conformance = "A").
-func checkLevelAConformance(doc core.View, level Level) []Violation {
-	id := readPDFAIdentification(doc)
-	if id.status != core.XMPParsed {
-		// Missing metadata is reported by the Level B checks, a malformed
-		// packet by the well-formedness rule, and one pdf0 declined to model
-		// by the limit finding already on the run.
-		return nil
-	}
-	if !id.hasConformance {
-		return []Violation{{
-			Rule:    levelAClause("conformance", level),
-			Level:   level,
-			Message: "metadata must declare pdfaid:conformance A for Level A",
-			Check:   CheckPDFAIDConformance,
-		}}
-	}
-	if id.conformance != "A" {
-		return []Violation{{
-			Rule:    levelAClause("conformance", level),
-			Level:   level,
-			Message: fmt.Sprintf("pdfaid:conformance must be A, got %q", id.conformance),
-			Check:   CheckPDFAIDConformance,
-		}}
-	}
-	return nil
-}
-
 // checkLevelAStructure verifies the file is a Tagged PDF with a logical
 // structure tree (ISO 19005-1 6.8.2 / -2/-3 6.7.2). It mirrors the PDF/UA
 // tagged-PDF requirement.
 func checkLevelAStructure(doc core.View, level Level) []Violation {
+	if !level.IsA() {
+		return nil
+	}
 	cat := doc.Catalog()
 	if cat == nil {
 		return nil // reported by the Level B checks
@@ -161,6 +96,9 @@ func checkLevelAStructure(doc core.View, level Level) []Violation {
 // conforming — which is exactly the file the level exists to rule out, since a
 // reader following the structure tree finds nothing on it.
 func checkLevelAArtifacts(doc core.View, level Level) []Violation {
+	if !level.IsA() {
+		return nil
+	}
 	var errs []Violation
 	for _, page := range levelAContent(doc).untagged {
 		errs = append(errs, Violation{
@@ -184,7 +122,7 @@ func checkLevelAArtifacts(doc core.View, level Level) []Violation {
 // for. ISO 19005-1 states no equivalent requirement, so this runs at parts 2
 // and 3 only.
 func checkLevelAActualText(doc core.View, level Level) []Violation {
-	if level == PDFA1a {
+	if !level.IsA() || level.Part() == 1 {
 		return nil
 	}
 	var errs []Violation
@@ -212,6 +150,9 @@ func checkLevelAActualText(doc core.View, level Level) []Violation {
 // offender — sit in the corpus as *conforming*. Judging the map as a whole would
 // reject them.
 func checkLevelAStructTypes(doc core.View, level Level) []Violation {
+	if !level.IsA() {
+		return nil
+	}
 	cat := doc.Catalog()
 	if cat == nil {
 		return nil
@@ -267,6 +208,9 @@ func checkLevelAStructTypes(doc core.View, level Level) []Violation {
 // may legitimately be carried per structure element rather than on the
 // catalogue, and demanding a catalogue /Lang would reject conforming files.
 func checkLevelALanguage(doc core.View, level Level) []Violation {
+	if !level.IsA() {
+		return nil
+	}
 	cat := doc.Catalog()
 	if cat == nil {
 		return nil
@@ -317,5 +261,5 @@ func checkLevelALanguage(doc core.View, level Level) []Violation {
 // (alphanumeric), and the corpus asserts the difference from both sides: "en-12"
 // is a failing file at 1a, "ru-petr1708" a passing one at 2a.
 func languageSubtagsMayHaveDigits(level Level) bool {
-	return level != PDFA1a
+	return level.Part() != 1
 }

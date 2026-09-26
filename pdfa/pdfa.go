@@ -8,6 +8,8 @@ import (
 	"github.com/mgilbir/pdf0/internal/xmp"
 	"github.com/mgilbir/pdf0/object"
 	"math"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -26,34 +28,6 @@ import (
 // the Document, so the checks share page-tree walks and decoded content
 // streams without touching the caller's Document or racing another run.
 
-// Level represents a PDF/A conformance level.
-type Level int
-
-const (
-	PDFA1b Level = iota
-	PDFA2b
-	PDFA3b
-	PDFA4
-	// Level A (accessible) conformance: Level B plus tagged logical structure,
-	// natural-language specification and Unicode character mapping. PDF/A-4 has
-	// no Level A — accessibility there is expressed via PDF/UA-2.
-	PDFA1a
-	PDFA2a
-	PDFA3a
-
-	// The PDF/A-4 variants, ISO 19005-4 Annexes A and B. Each relaxes something
-	// the base part forbids — arbitrary embedded files for 4f, 3D and RichMedia
-	// annotations for 4e — and takes on requirements in exchange.
-	//
-	// They are levels rather than something read out of the file because one
-	// question cannot be answered any other way: a part-4 file carrying no
-	// pdfaid:conformance is a valid *plain* PDF/A-4 file, so "this should have
-	// said E" is only meaningful to a caller who asked for PDF/A-4e. Appended
-	// rather than inserted so the existing constants keep their values.
-	PDFA4E
-	PDFA4F
-)
-
 // pdfaCache is this engine's memo for one run: the annotations found directly
 // on pages rather than through the page tree. It is reached through core.Slot
 // rather than held on the shared run state, because nothing else reads it.
@@ -66,68 +40,6 @@ type pdfaMemoCache struct {
 type pdfaSlot struct{}
 
 func pdfaMemo(d core.View) *pdfaMemoCache { return core.Slot[pdfaMemoCache](d.Run, pdfaSlot{}) }
-
-func (l Level) String() string {
-	switch l {
-	case PDFA1b:
-		return "PDF/A-1b"
-	case PDFA2b:
-		return "PDF/A-2b"
-	case PDFA3b:
-		return "PDF/A-3b"
-	case PDFA4:
-		return "PDF/A-4"
-	case PDFA1a:
-		return "PDF/A-1a"
-	case PDFA2a:
-		return "PDF/A-2a"
-	case PDFA3a:
-		return "PDF/A-3a"
-	case PDFA4E:
-		return "PDF/A-4e"
-	case PDFA4F:
-		return "PDF/A-4f"
-	default:
-		return fmt.Sprintf("PDFALevel(%d)", int(l))
-	}
-}
-
-// IsA reports whether l is a Level A (accessible) conformance level.
-func (l Level) IsA() bool { return l == PDFA1a || l == PDFA2a || l == PDFA3a }
-
-// Is4Variant reports whether l is one of the PDF/A-4 variants (4e, 4f).
-func (l Level) Is4Variant() bool { return l == PDFA4E || l == PDFA4F }
-
-// variantConformance is the pdfaid:conformance value a variant requires: "E"
-// for PDF/A-4e, "F" for PDF/A-4f, and "" for every level that is not one.
-func (l Level) variantConformance() string {
-	switch l {
-	case PDFA4E:
-		return "E"
-	case PDFA4F:
-		return "F"
-	}
-	return ""
-}
-
-// BaseB returns the Level B conformance level whose requirements a Level A level
-// includes (1a→1b, 2a→2b, 3a→3b); for a non-A level it returns the level itself.
-func (l Level) BaseB() Level {
-	switch l {
-	case PDFA1a:
-		return PDFA1b
-	case PDFA2a:
-		return PDFA2b
-	case PDFA3a:
-		return PDFA3b
-	case PDFA4E, PDFA4F:
-		// Not a Level B, but the same relationship: every base PDF/A-4
-		// requirement applies to a variant, so a level check written against
-		// the base part answers correctly for one.
-		return PDFA4
-	}
-	return l
-}
 
 // Violation describes a single PDF/A conformance violation.
 type Violation struct {
@@ -186,18 +98,19 @@ func runByteCheck(level Level, check func() []Violation) (out []Violation) {
 	return check()
 }
 
-// ValidateView runs the PDF/A pipeline over a view.
+// ValidateView runs the PDF/A pipeline over a view, against the target
+// profile level names (see ResolveTarget for LevelDeclared and invalid
+// levels).
+//
+// There is one pipeline for every level. Each check is handed the target
+// unflattened and asks it what it needs — the part, the conformance level,
+// the variant — so a Level A, Level U or PDF/A-4 variant run is the same run
+// as a Level B one with the families that level adds switched on, and no
+// finding is produced at one level only to be dropped at another.
 func ValidateView(doc core.View, level Level, rawData []byte) []Violation {
-	// Level A conformance is Level B plus the accessibility requirements; it is
-	// validated by running the Level B checks and adding the Level A rule
-	// families (see validatePDFALevelA).
-	if level.IsA() {
-		return ValidateLevelAView(doc, level, rawData)
-	}
-	// The PDF/A-4 variants are the base part plus what the variant takes on,
-	// validated the same way (see ValidateVariant4View).
-	if level.Is4Variant() {
-		return ValidateVariant4View(doc, level, rawData)
+	level, refused := ResolveTarget(doc, level)
+	if refused != nil {
+		return refused
 	}
 
 	var errs []Violation
@@ -231,8 +144,8 @@ func ValidateView(doc core.View, level Level, rawData []byte) []Violation {
 		checkNoForbiddenActions,
 		checkNamedActions,
 		checkAnnotationAA,
-		// Metadata (6.7)
-		checkMetadataVersion,
+		// Metadata (6.7): the declaration against the target
+		checkIdentification,
 		// Transparency (PDFA-1b only)
 		checkNoTransparency,
 		// Images (6.2.7)
@@ -307,6 +220,15 @@ func ValidateView(doc core.View, level Level, rawData []byte) []Violation {
 		checkCIDSetProgramComplete,
 		// CMap embedding (6.3.3.3, PDF/A-1 only)
 		checkCMapEmbedded,
+		// Unicode character maps (Level A and Level U: 6.3.8 / 6.2.11.7.2)
+		checkUnicodeMapping,
+		// Level A: logical structure, artifacts, structure types, language,
+		// ActualText for Private Use Area code points
+		checkLevelAStructure,
+		checkLevelAArtifacts,
+		checkLevelAStructTypes,
+		checkLevelALanguage,
+		checkLevelAActualText,
 	}
 
 	// The check list is the coarsest cancellation boundary: a cancelled run
@@ -325,13 +247,13 @@ func ValidateView(doc core.View, level Level, rawData []byte) []Violation {
 	if rawData != nil && !doc.Cancel.Stopped() {
 		errs = append(errs, runByteCheck(level, func() []Violation { return checkNoDataAfterEOF(rawData, level) })...)
 		errs = append(errs, runByteCheck(level, func() []Violation { return checkFileStructureBytes(doc, level, rawData) })...)
-		errs = append(errs, runByteCheck(level, func() []Violation { return checkLinearizedTrailerID(rawData, level) })...)
+		errs = append(errs, runByteCheck(level, func() []Violation { return checkLinearizedTrailerID(doc, rawData, level) })...)
 		errs = append(errs, runByteCheck(level, func() []Violation { return checkStreamLengthBytes(doc, level, rawData) })...)
 		errs = append(errs, runByteCheck(level, func() []Violation { return checkSignatureByteRange(doc, level, rawData) })...)
 	}
 
+	finding.Sort(errs)
 	return errs
-
 }
 
 // --- File structure checks (6.1) ---
@@ -358,7 +280,7 @@ func checkFileID(doc core.View, level Level) []Violation {
 			Message: "trailer must contain /ID array",
 		}}
 	}
-	arr, ok := idObj.(object.Array)
+	arr, ok := doc.Resolve(idObj).(object.Array)
 	if !ok {
 		return []Violation{{
 			Rule:    "6.1.3",
@@ -374,7 +296,7 @@ func checkFileID(doc core.View, level Level) []Violation {
 		}}
 	}
 	for i, elem := range arr {
-		if _, ok := elem.(object.String); !ok { // string: a type check on the file identifier, which is never encrypted (ISO 32000-2 7.6.2)
+		if _, ok := doc.Resolve(elem).(object.String); !ok { // string: a type check on the file identifier, which is never encrypted (ISO 32000-2 7.6.2)
 			return []Violation{{
 				Rule:    "6.1.3",
 				Level:   level,
@@ -387,11 +309,11 @@ func checkFileID(doc core.View, level Level) []Violation {
 
 // Rule 6.1.2-1: File header version must match level.
 func checkHeader(doc core.View, level Level) []Violation {
-	switch level {
-	case PDFA1b:
+	switch level.Part() {
+	case 1:
 		// The 19005-1 header rule is about format, not version: the veraPDF
 		// corpus passes a %PDF-2.0 header at PDF/A-1b. No version check.
-	case PDFA2b, PDFA3b:
+	case 2, 3:
 		// PDF/A-2/3 accept any PDF 1.x header (1.0-1.7): the standard is
 		// built on PDF 1.7 but earlier headers are legal; the previous
 		// 1.4-1.7 floor false-positived on conforming 1.0-1.3 files.
@@ -404,7 +326,7 @@ func checkHeader(doc core.View, level Level) []Violation {
 				Message: fmt.Sprintf("header version must be 1.0-1.7, got %s", doc.Version),
 			}}
 		}
-	case PDFA4:
+	case 4:
 		if !strings.HasPrefix(doc.Version, "2.") {
 			return []Violation{{
 				Rule:    "6.1.2",
@@ -418,7 +340,7 @@ func checkHeader(doc core.View, level Level) []Violation {
 
 // Rules 6.1.3-4, 6.1.3-5: Info key requires PieceInfo; Info may only contain ModDate.
 func checkTrailerInfo(doc core.View, level Level) []Violation {
-	if level != PDFA4 {
+	if level.Part() != 4 {
 		return nil // only applies to PDF/A-4
 	}
 
@@ -531,7 +453,7 @@ func checkMetadataStream(doc core.View, level Level) []Violation {
 
 	var errs []Violation
 
-	if t := stream.Dict.Get("Type"); t == nil || t != object.Name("Metadata") {
+	if t, _ := doc.ResolveName(stream.Dict.Get("Type")); t != "Metadata" {
 		errs = append(errs, Violation{
 			Rule:    "6.7.2",
 			Level:   level,
@@ -539,7 +461,7 @@ func checkMetadataStream(doc core.View, level Level) []Violation {
 		})
 	}
 
-	if st := stream.Dict.Get("Subtype"); st == nil || st != object.Name("XML") {
+	if st, _ := doc.ResolveName(stream.Dict.Get("Subtype")); st != "XML" {
 		errs = append(errs, Violation{
 			Rule:    "6.7.2",
 			Level:   level,
@@ -551,7 +473,7 @@ func checkMetadataStream(doc core.View, level Level) []Violation {
 	// stream; PDF/A-2 and PDF/A-3 removed that restriction (a permitted filter
 	// such as FlateDecode is allowed). veraPDF carries the PDMetadata Filter rule
 	// only in its PDF/A-1 profile.
-	if level == PDFA1b && stream.Dict.Get("Filter") != nil {
+	if level.Part() == 1 && stream.Dict.Get("Filter") != nil {
 		errs = append(errs, Violation{
 			Rule:    "6.7.2",
 			Level:   level,
@@ -578,10 +500,10 @@ func colourClause(concept string, level Level) string {
 	if !ok {
 		return "6.2.4"
 	}
-	switch level {
-	case PDFA1b:
+	switch level.Part() {
+	case 1:
 		return cl[0]
-	case PDFA4:
+	case 4:
 		return cl[2]
 	default:
 		return cl[1]
@@ -606,10 +528,10 @@ func annotActionClause(concept string, level Level) string {
 	if !ok {
 		return "6.6.1"
 	}
-	switch level {
-	case PDFA1b:
+	switch level.Part() {
+	case 1:
 		return c[0]
-	case PDFA4:
+	case 4:
 		return c[2]
 	default:
 		return c[1]
@@ -625,7 +547,7 @@ func checkOutputIntents(doc core.View, level Level) []Violation {
 	// PDF/A-4: validate page-level OutputIntents have /S /GTS_PDFA1
 	// (must run even if no catalog-level OutputIntents)
 	var errsPageLevel []Violation
-	if level == PDFA4 {
+	if level.Part() == 4 {
 		pages := doc.Pages(catalog.Get("Pages"))
 		for _, page := range pages {
 			pageOIRef := page.Dict.Get("OutputIntents")
@@ -705,7 +627,7 @@ func checkOutputIntents(doc core.View, level Level) []Violation {
 			continue
 		}
 
-		if _, ok := s.(object.Name); !ok {
+		if _, ok := doc.ResolveName(s); !ok {
 			errs = append(errs, Violation{
 				Rule:    colourClause("outputIntent", level),
 				Level:   level,
@@ -724,9 +646,12 @@ func checkOutputIntents(doc core.View, level Level) []Violation {
 		}
 
 		profRef := dict.Get("DestOutputProfile")
-		if profRef == nil {
+		if sName, _ := doc.ResolveName(s); profRef == nil && sName != "GTS_PDFA1" {
 			// /DestOutputProfile is required unless /OutputConditionIdentifier
-			// identifies a standard registered condition
+			// identifies a standard registered condition. A GTS_PDFA1 intent
+			// needs the profile whatever its identifier says, which the rule
+			// below reports; reporting it here as well gave one missing profile
+			// two findings (audit 2026-09-22 C140).
 			oci := dict.Get("OutputConditionIdentifier")
 			if oci == nil {
 				errs = append(errs, Violation{
@@ -793,49 +718,76 @@ func checkOutputIntents(doc core.View, level Level) []Violation {
 	return errs
 }
 
-func checkOutputIntentProfile(doc core.View, level Level) []Violation {
+// outputIntentRef is one output intent a profile rule judges: its dictionary,
+// how a message names it, and the object a finding anchors to.
+type outputIntentRef struct {
+	dict  *object.Dictionary
+	label string
+	obj   int
+}
+
+// documentOutputIntents lists the catalog's output intents and, at PDF/A-4,
+// every page's — ISO 19005-4 6.2.3 lets a page carry its own, and its
+// destination profile is held to the same requirements as the document's.
+func documentOutputIntents(doc core.View, level Level) []outputIntentRef {
+	var out []outputIntentRef
 	catalog := doc.Catalog()
 	if catalog == nil {
 		return nil
 	}
-
-	oiRef := catalog.Get("OutputIntents")
-	if oiRef == nil {
-		return nil
+	if arr, ok := doc.Resolve(catalog.Get("OutputIntents")).(object.Array); ok {
+		for i, elem := range arr {
+			if d := doc.ResolveDict(elem); d != nil {
+				out = append(out, outputIntentRef{d, fmt.Sprintf("/OutputIntents[%d]", i), 0})
+			}
+		}
 	}
-
-	oiObj := doc.Resolve(oiRef)
-	arr, ok := oiObj.(object.Array)
-	if !ok || len(arr) == 0 {
-		return nil
+	if level.Part() == 4 {
+		for _, page := range doc.Pages(catalog.Get("Pages")) {
+			arr, ok := doc.Resolve(page.Dict.Get("OutputIntents")).(object.Array)
+			if !ok {
+				continue
+			}
+			for j, elem := range arr {
+				if d := doc.ResolveDict(elem); d != nil {
+					out = append(out, outputIntentRef{d, fmt.Sprintf("page OutputIntents[%d]", j), page.ObjNum})
+				}
+			}
+		}
 	}
+	return out
+}
 
+// checkOutputIntentProfile judges the destination profile of every output
+// intent — the catalog's and, at PDF/A-4, the pages' — once per profile: an
+// intent sharing another's profile adds nothing to check, and every finding
+// names the first intent that carries it. Each finding is under the
+// output-intent clause (6.2.2 at part 1, 6.2.3 later).
+//
+// It does not look at ICCBased colour spaces: checkICCBasedProfiles judges a
+// profile used as one, under its own clause, and a profile that is only an
+// output intent's is not one (audit 2026-09-22 C140).
+func checkOutputIntentProfile(doc core.View, level Level) []Violation {
+	rule := colourClause("outputIntent", level)
 	var errs []Violation
-	for i, elem := range arr {
-		dict := doc.ResolveDict(elem)
-		if dict == nil {
+	report := func(oi outputIntentRef, format string, args ...any) {
+		errs = append(errs, Violation{Rule: rule, Level: level, Object: oi.obj,
+			Message: oi.label + " " + fmt.Sprintf(format, args...)})
+	}
+	judged := map[*object.Stream]bool{}
+	for _, oi := range documentOutputIntents(doc, level) {
+		profStream, ok := doc.Resolve(oi.dict.Get("DestOutputProfile")).(*object.Stream)
+		if !ok || judged[profStream] {
 			continue
 		}
-		profRef := dict.Get("DestOutputProfile")
-		if profRef == nil {
-			continue
-		}
-		profObj := doc.Resolve(profRef)
-		profStream, ok := profObj.(*object.Stream)
-		if !ok {
-			continue
-		}
+		judged[profStream] = true
 		// Validate ICC profile N matches the profile data
 		nObj := profStream.Dict.Get("N")
 		if nObj == nil {
-			errs = append(errs, Violation{
-				Rule:    colourClause("outputIntent", level),
-				Level:   level,
-				Message: fmt.Sprintf("/OutputIntents[%d] /DestOutputProfile must have /N", i),
-			})
+			report(oi, "/DestOutputProfile must have /N")
 			continue
 		}
-		nVal, ok := nObj.(object.Integer)
+		nVal, ok := doc.ResolveInt(nObj)
 		if !ok {
 			continue
 		}
@@ -847,95 +799,56 @@ func checkOutputIntentProfile(doc core.View, level Level) []Violation {
 			// implement, ciphertext — must not produce a false positive; the
 			// producer recorded the trip.
 			if r == core.ReasonMalformed {
-				errs = append(errs, Violation{
-					Rule:    colourClause("outputIntent", level),
-					Level:   level,
-					Message: fmt.Sprintf("/OutputIntents[%d] /DestOutputProfile ICC data cannot be decoded (malformed stream data)", i),
-				})
+				report(oi, "/DestOutputProfile ICC data cannot be decoded (malformed stream data)")
 			}
 			continue
 		}
 		if len(data) < 128 {
-			errs = append(errs, Violation{
-				Rule:    colourClause("outputIntent", level),
-				Level:   level,
-				Message: fmt.Sprintf("/OutputIntents[%d] /DestOutputProfile ICC data too short (%d bytes, minimum 128)", i, len(data)),
-			})
+			report(oi, "/DestOutputProfile ICC data too short (%d bytes, minimum 128)", len(data))
 			continue
 		}
 		// ICC profile header: bytes 16-19 contain color space signature
-		if len(data) >= 20 {
-			cs := string(data[16:20])
-			var expectedN int
-			switch cs {
-			case "GRAY":
-				expectedN = 1
-			case "RGB ":
-				expectedN = 3
-			case "CMYK":
-				expectedN = 4
-			default:
-				// Invalid or unsupported color space in output intent profile
-				errs = append(errs, Violation{
-					Rule:    colourClause("outputIntent", level),
-					Level:   level,
-					Message: fmt.Sprintf("/OutputIntents[%d] ICC profile has unsupported color space %q", i, cs),
-				})
-			}
-			if expectedN > 0 && int(nVal) != expectedN {
-				errs = append(errs, Violation{
-					Rule:    colourClause("outputIntent", level),
-					Level:   level,
-					Message: fmt.Sprintf("/OutputIntents[%d] /N=%d does not match ICC profile color space %s (expected %d)", i, nVal, cs, expectedN),
-				})
-			}
+		cs := string(data[16:20])
+		expectedN := 0
+		switch cs {
+		case "GRAY":
+			expectedN = 1
+		case "RGB ":
+			expectedN = 3
+		case "CMYK":
+			expectedN = 4
+		default:
+			report(oi, "ICC profile has unsupported color space %q", cs)
 		}
-		// ICC profile header: bytes 12-15 contain device class
-		if len(data) >= 16 {
-			cls := string(data[12:16])
-			// Output intent profiles must be of class "mntr" (monitor),
-			// "prtr" (printer), or "spac" (color space conversion)
-			switch cls {
-			case "mntr", "prtr", "spac":
-				// OK
-			default:
-				errs = append(errs, Violation{
-					Rule:    colourClause("outputIntent", level),
-					Level:   level,
-					Message: fmt.Sprintf("/OutputIntents[%d] ICC profile has invalid device class %q (must be mntr, prtr, or spac)", i, cls),
-				})
-			}
+		if expectedN > 0 && int(nVal) != expectedN {
+			report(oi, "/N=%d does not match ICC profile color space %s (expected %d)", nVal, cs, expectedN)
 		}
-		// Check ICC profile version (bytes 8-11)
-		if len(data) >= 12 {
-			major := data[8]
-			minor := data[9] >> 4
-			if level == PDFA1b {
-				// PDF/A-1b: ICC profile version must be <= 2.x
-				if major > 2 {
-					errs = append(errs, Violation{
-						Rule:    colourClause("outputIntent", level),
-						Level:   level,
-						Message: fmt.Sprintf("/OutputIntents[%d] ICC profile version %d.%d not allowed for PDF/A-1b (max 2.x)", i, major, minor),
-					})
-				}
-			} else if level == PDFA2b || level == PDFA3b {
-				// PDF/A-2b/3b: ICC profile version must be <= 4.x
-				if major > 4 {
-					errs = append(errs, Violation{
-						Rule:    colourClause("outputIntent", level),
-						Level:   level,
-						Message: fmt.Sprintf("/OutputIntents[%d] ICC profile version %d.%d not allowed for PDF/A-2b/3b (max 4.x)", i, major, minor),
-					})
-				}
-			}
+		// ICC profile header: bytes 12-15 contain device class. Output intent
+		// profiles must be of class "mntr" (monitor), "prtr" (printer), or
+		// "spac" (color space conversion).
+		switch cls := string(data[12:16]); cls {
+		case "mntr", "prtr", "spac":
+		default:
+			report(oi, "ICC profile has invalid device class %q (must be mntr, prtr, or spac)", cls)
+		}
+		// ICC profile version (bytes 8-11): at most 2.x at part 1, which is
+		// based on PDF 1.4, and 4.x at parts 2, 3 and 4 (veraPDF 6.2.2 t01,
+		// 6.2.3 t01: version < 3.0, version < 5.0). Part 4 was not checked
+		// here; a v5 output-intent profile at 4 was reported only because the
+		// ICCBased rule took it for a colour space.
+		major, minor := data[8], data[9]>>4
+		switch {
+		case level.Part() == 1 && major > 2:
+			report(oi, "ICC profile version %d.%d not allowed for %s (max 2.x)", major, minor, level)
+		case level.Part() > 1 && major > 4:
+			report(oi, "ICC profile version %d.%d not allowed for %s (max 4.x)", major, minor, level)
 		}
 	}
 	return errs
 }
 
 func checkNoCatalogAA(doc core.View, level Level) []Violation {
-	if level == PDFA4 {
+	if level.Part() == 4 {
 		return nil // PDF/A-4 does not restrict /AA in catalog
 	}
 	catalog := doc.Catalog()
@@ -966,7 +879,7 @@ func checkNoCatalogAA(doc core.View, level Level) []Violation {
 }
 
 func checkNoOCProperties(doc core.View, level Level) []Violation {
-	if level != PDFA1b {
+	if level.Part() != 1 {
 		return nil
 	}
 	catalog := doc.Catalog()
@@ -985,7 +898,7 @@ func checkNoOCProperties(doc core.View, level Level) []Violation {
 
 // Rule 6.1.12: Perms dictionary may only contain UR3 and DocMDP keys.
 func checkPermsDict(doc core.View, level Level) []Violation {
-	if level == PDFA1b {
+	if level.Part() == 1 {
 		return nil // PDF/A-1b doesn't have Perms rules
 	}
 	catalog := doc.Catalog()
@@ -1048,10 +961,10 @@ func checkPermsDict(doc core.View, level Level) []Violation {
 // the standard filters (Table 6) are permitted, so LZWDecode and any
 // non-standard name are rejected. ISO 19005-1 6.1.10; -2/-3 6.1.7.2; -4 6.1.6.2.
 func filterClause(level Level) string {
-	switch level {
-	case PDFA1b:
+	switch level.Part() {
+	case 1:
 		return "6.1.10"
-	case PDFA4:
+	case 4:
 		return "6.1.6.2"
 	default:
 		return "6.1.7.2"
@@ -1066,7 +979,7 @@ func checkNoLZW(doc core.View, level Level) []Violation {
 		if !ok {
 			continue
 		}
-		if hasFilter(stream, "LZWDecode") {
+		if hasFilter(doc, stream, "LZWDecode") {
 			errs = append(errs, Violation{
 				Rule:    filterClause(level),
 				Level:   level,
@@ -1078,7 +991,7 @@ func checkNoLZW(doc core.View, level Level) []Violation {
 		// PDF/A-1, which is based on PDF 1.4. It is a standard filter at 2b/3b/4,
 		// so isStandardFilter accepts it there; forbid it explicitly at PDF/A-1
 		// (audit C17).
-		if level == PDFA1b && hasFilter(stream, "JPXDecode") {
+		if level.Part() == 1 && hasFilter(doc, stream, "JPXDecode") {
 			errs = append(errs, Violation{
 				Rule:    filterClause(level),
 				Level:   level,
@@ -1087,7 +1000,7 @@ func checkNoLZW(doc core.View, level Level) []Violation {
 			})
 		}
 		// Check for non-standard filter names
-		if badFilter := getNonStandardFilter(stream); badFilter != "" {
+		if badFilter := getNonStandardFilter(doc, stream); badFilter != "" {
 			errs = append(errs, Violation{
 				Rule:    filterClause(level),
 				Level:   level,
@@ -1105,7 +1018,7 @@ func checkNoLZW(doc core.View, level Level) []Violation {
 // must span to the end of the file. Works from the raw bytes; only the single
 // gap (the signature value) may be uncovered.
 func checkSignatureByteRange(doc core.View, level Level, raw []byte) []Violation {
-	if level != PDFA2b && level != PDFA3b {
+	if level.Part() != 2 && level.Part() != 3 {
 		return nil
 	}
 	var errs []Violation
@@ -1180,39 +1093,25 @@ func isStandardFilter(name object.Name) bool {
 	return false
 }
 
-func getNonStandardFilter(stream *object.Stream) string {
-	f := stream.Dict.Get("Filter")
-	if f == nil {
-		return ""
-	}
-	if name, ok := f.(object.Name); ok {
+// getNonStandardFilter returns the first filter on the stream that is not a
+// standard one, or "". The chain is read through StreamFilters, which resolves
+// the /Filter value and each name in it: `/Filter 7 0 R` naming /LZWDecode is
+// as much an LZW stream as the direct spelling (audit C36).
+func getNonStandardFilter(doc core.View, stream *object.Stream) string {
+	for _, name := range doc.StreamFilters(stream) {
 		if !isStandardFilter(name) {
 			return string(name)
-		}
-	}
-	if arr, ok := f.(object.Array); ok {
-		for _, elem := range arr {
-			if name, ok := elem.(object.Name); ok && !isStandardFilter(name) {
-				return string(name)
-			}
 		}
 	}
 	return ""
 }
 
-func hasFilter(stream *object.Stream, filterName string) bool {
-	f := stream.Dict.Get("Filter")
-	if f == nil {
-		return false
-	}
-	if name, ok := f.(object.Name); ok {
-		return string(name) == filterName
-	}
-	if arr, ok := f.(object.Array); ok {
-		for _, elem := range arr {
-			if name, ok := elem.(object.Name); ok && string(name) == filterName {
-				return true
-			}
+// hasFilter reports whether filterName is anywhere in the stream's filter
+// chain, resolved as getNonStandardFilter's is.
+func hasFilter(doc core.View, stream *object.Stream, filterName string) bool {
+	for _, name := range doc.StreamFilters(stream) {
+		if string(name) == filterName {
+			return true
 		}
 	}
 	return false
@@ -1274,7 +1173,7 @@ func checkFontsEmbedded(doc core.View, level Level) []Violation {
 	// collectFonts walks, so they would escape the embedding rule. Include the
 	// executed-content fonts too (audit C21), deduped by dictionary pointer.
 	checked := make(map[*object.Dictionary]bool, len(fonts))
-	for objNum, fontDict := range fonts {
+	for fontDict, objNum := range fonts {
 		checked[fontDict] = true
 		if exemptInvisible[fontDict] {
 			continue
@@ -1301,10 +1200,7 @@ func checkFontsEmbedded(doc core.View, level Level) []Violation {
 // convention here matches the "unknown object" sentinel used in
 // Violation.Object; dictObjNum itself reports -1 on miss.
 func objNumForDict(doc core.View, dict *object.Dictionary) int {
-	if n := doc.DictObjNum(dict); n >= 0 {
-		return n
-	}
-	return 0
+	return doc.ObjNumOf(dict)
 }
 
 // fontObjNum returns the object number of a font dictionary, or 0 if it is a
@@ -1373,13 +1269,21 @@ func checkOneFontEmbedded(doc core.View, fontDict *object.Dictionary, objNum int
 	}}
 }
 
-func collectFonts(doc core.View, pageTreeRef object.Object) map[int]*object.Dictionary {
-	fonts := make(map[int]*object.Dictionary)
+// collectFonts returns every font dictionary named in the page tree's
+// /Resources, each once, with the object number that holds it — 0 for a font
+// written directly inside a /Font dictionary.
+//
+// A font is identified by its dictionary, not by a number. Keyed by number, a
+// direct font had none, so each sighting got a fresh negative one: the same
+// font was reported once per page that reached it, as "object -1", "object
+// -2"... (audit 2026-09-22 C138).
+func collectFonts(doc core.View, pageTreeRef object.Object) map[*object.Dictionary]int {
+	fonts := make(map[*object.Dictionary]int)
 	collectFontsRecursive(doc, pageTreeRef, fonts, make(map[int]bool))
 	return fonts
 }
 
-func collectFontsRecursive(doc core.View, ref object.Object, fonts map[int]*object.Dictionary, seen map[int]bool) {
+func collectFontsRecursive(doc core.View, ref object.Object, fonts map[*object.Dictionary]int, seen map[int]bool) {
 	if r, ok := ref.(object.IndirectRef); ok {
 		if seen[r.Number] {
 			return // cycle in the page tree
@@ -1406,7 +1310,7 @@ func collectFontsRecursive(doc core.View, ref object.Object, fonts map[int]*obje
 	}
 }
 
-func collectFontsFromResources(doc core.View, pageOrPages *object.Dictionary, fonts map[int]*object.Dictionary) {
+func collectFontsFromResources(doc core.View, pageOrPages *object.Dictionary, fonts map[*object.Dictionary]int) {
 	resRef := pageOrPages.Get("Resources")
 	if resRef == nil {
 		return
@@ -1426,28 +1330,22 @@ func collectFontsFromResources(doc core.View, pageOrPages *object.Dictionary, fo
 	}
 
 	for fontRef := range fontDict.Values() {
-		objNum := 0
-		if iref, ok := fontRef.(object.IndirectRef); ok {
-			objNum = iref.Number
-		}
-
 		fd := doc.ResolveDict(fontRef)
 		if fd == nil {
 			continue
 		}
-		if objNum == 0 {
-			objNum = -len(fonts) - 1
+		if _, seen := fonts[fd]; !seen {
+			fonts[fd] = resolveObjNum(doc, fontRef)
 		}
-		fonts[objNum] = fd
 	}
 }
 
 // --- Annotation checks (6.3) ---
 
-// Allowed annotation subtypes per PDF/A level.
-// Rule 6.3.1-1.
-var allowedAnnotSubtypes = map[Level]map[object.Name]bool{
-	PDFA4: {
+// Allowed annotation subtypes per part of ISO 19005 (the conformance level
+// does not change them). Rule 6.3.1-1.
+var allowedAnnotSubtypes = map[int]map[object.Name]bool{
+	4: {
 		"Text": true, "Link": true, "FreeText": true, "Line": true,
 		"Square": true, "Circle": true, "Polygon": true, "PolyLine": true,
 		"Highlight": true, "Underline": true, "Squiggly": true, "StrikeOut": true,
@@ -1470,11 +1368,11 @@ func init() {
 		"Widget": true, "PrinterMark": true, "TrapNet": true, "Watermark": true,
 		"Redact": true, "FileAttachment": true,
 	}
-	allowedAnnotSubtypes[PDFA2b] = pdfa2bAnnots
-	allowedAnnotSubtypes[PDFA3b] = pdfa2bAnnots
+	allowedAnnotSubtypes[2] = pdfa2bAnnots
+	allowedAnnotSubtypes[3] = pdfa2bAnnots
 
 	// PDF/A-1b allowed subtypes (per ISO 19005-1 clause 6.5.1)
-	allowedAnnotSubtypes[PDFA1b] = map[object.Name]bool{
+	allowedAnnotSubtypes[1] = map[object.Name]bool{
 		"Text": true, "Link": true, "FreeText": true, "Line": true,
 		"Square": true, "Circle": true, "Highlight": true, "Underline": true,
 		"Squiggly": true, "StrikeOut": true, "Stamp": true, "Ink": true,
@@ -1509,7 +1407,10 @@ func collectDirectAnnotations(doc core.View) []annotOccurrence {
 			continue
 		}
 		for _, el := range annots {
-			if dict, ok := el.(*object.Dictionary); ok {
+			switch dict := el.(type) {
+			case object.IndirectRef:
+				// A top-level object, which the object scans already visit.
+			case *object.Dictionary:
 				out = append(out, annotOccurrence{dict: dict, num: page.ObjNum})
 			}
 		}
@@ -1531,14 +1432,14 @@ func resolveName(doc core.View, obj object.Object) (object.Name, bool) {
 }
 
 func checkAnnotationSubtypes(doc core.View, level Level) []Violation {
-	allowed, ok := allowedAnnotSubtypes[level]
+	allowed, ok := allowedAnnotSubtypes[level.Part()]
 	if !ok {
 		return nil
 	}
 	// PDF/A-4e permits 3D and RichMedia annotations (they carry the embedded
 	// 3D/multimedia content that "e" stands for); plain PDF/A-4 forbids them.
 	extra := map[object.Name]bool{}
-	if level == PDFA4 && relaxedAsVariant(pdfaConformanceFlag(doc), "E") {
+	if level.variant() == "E" {
 		extra["3D"] = true
 		extra["RichMedia"] = true
 	}
@@ -1569,17 +1470,6 @@ func checkAnnotationSubtypes(doc core.View, level Level) []Violation {
 	return errs
 }
 
-// annotOpacity returns an annotation /CA value as a float, if it is numeric.
-func annotOpacity(v object.Object) (float64, bool) {
-	switch n := v.(type) {
-	case object.Integer:
-		return float64(n), true
-	case object.Real:
-		return float64(n), true
-	}
-	return 0, false
-}
-
 // Rule 6.3.2-1/2: Non-Popup annotations require F key; flags must have Print set,
 // Hidden/Invisible/ToggleNoView/NoView clear.
 func checkAnnotationFlags(doc core.View, level Level) []Violation {
@@ -1588,8 +1478,8 @@ func checkAnnotationFlags(doc core.View, level Level) []Violation {
 		// 6.5.3: at PDF/A-1, an annotation's /CA (constant opacity) must be 1.0
 		// — annotation transparency is not permitted. This applies to every
 		// annotation subtype, so it precedes the Popup exemption below.
-		if level == PDFA1b {
-			if ca, ok := annotOpacity(doc.Resolve(dict.Get("CA"))); ok && math.Abs(ca-1.0) > 1e-6 {
+		if level.Part() == 1 {
+			if ca, ok := doc.ResolveNumber(dict.Get("CA")); ok && math.Abs(ca-1.0) > 1e-6 {
 				errs = append(errs, Violation{
 					Rule:    "6.5.3",
 					Level:   level,
@@ -1714,7 +1604,7 @@ func checkAnnotationAppearance(doc core.View, level Level) []Violation {
 		}
 
 		// Exempt zero-area rectangles
-		if isZeroAreaRect(dict.Get("Rect")) {
+		if isZeroAreaRect(doc, dict.Get("Rect")) {
 			return
 		}
 
@@ -1783,7 +1673,7 @@ func checkAnnotationAppearance(doc core.View, level Level) []Violation {
 		// (/IC) — which are given in DeviceRGB — only when the PDF/A output
 		// intent's destination profile is RGB (ISO 19005-1 6.5.3). An output
 		// intent whose profile could not be read is not judged.
-		if level == PDFA1b && (dict.Get("C") != nil || dict.Get("IC") != nil) {
+		if level.Part() == 1 && (dict.Get("C") != nil || dict.Get("IC") != nil) {
 			space, known := pdfa1OutputIntentSpace()
 			if known && space != "RGB " {
 				why := "there is no PDF/A output intent"
@@ -1823,21 +1713,21 @@ func annotFieldType(doc core.View, dict *object.Dictionary) object.Name {
 	return ""
 }
 
-func isZeroAreaRect(obj object.Object) bool {
-	arr, ok := obj.(object.Array)
+// isZeroAreaRect reports whether a /Rect has zero width or height. The
+// rectangle and each coordinate are resolved: an indirect /Rect used to read as
+// "not a rectangle", which reported a zero-area annotation as missing its /AP.
+func isZeroAreaRect(doc core.View, obj object.Object) bool {
+	arr, ok := doc.Resolve(obj).(object.Array)
 	if !ok || len(arr) != 4 {
 		return false
 	}
 	vals := make([]float64, 4)
 	for i, elem := range arr {
-		switch v := elem.(type) {
-		case object.Integer:
-			vals[i] = float64(v)
-		case object.Real:
-			vals[i] = float64(v)
-		default:
+		v, ok := doc.ResolveNumber(elem)
+		if !ok {
 			return false
 		}
+		vals[i] = v
 	}
 	// Zero area if width or height is zero
 	return (vals[2]-vals[0]) == 0 || (vals[3]-vals[1]) == 0
@@ -1897,7 +1787,7 @@ func checkNoXFA(doc core.View, level Level) []Violation {
 	}
 
 	var errs []Violation
-	if level != PDFA1b {
+	if level.Part() != 1 {
 		if nr, ok := doc.ResolveBool(catalog.Get("NeedsRendering")); ok && bool(nr) {
 			errs = append(errs, Violation{
 				Rule:    "6.4.2",
@@ -1933,11 +1823,7 @@ func checkNeedAppearances(doc core.View, level Level) []Violation {
 	if af == nil {
 		return nil
 	}
-	na := af.Get("NeedAppearances")
-	if na == nil {
-		return nil
-	}
-	if b, ok := na.(object.Boolean); ok && bool(b) {
+	if doc.IsTrue(af.Get("NeedAppearances")) {
 		return []Violation{{
 			Rule:    "6.4.1",
 			Level:   level,
@@ -1951,7 +1837,7 @@ func checkNeedAppearances(doc core.View, level Level) []Violation {
 
 // Forbidden action types by level per ISO 19005.
 // Rule 6.6.1-1.
-func isForbiddenAction(s object.Name, level Level, conformance string) bool {
+func isForbiddenAction(s object.Name, level Level) bool {
 	// Universally forbidden across all PDF/A levels:
 	universallyForbidden := map[object.Name]bool{
 		"Launch":     true,
@@ -1967,8 +1853,8 @@ func isForbiddenAction(s object.Name, level Level, conformance string) bool {
 		return true
 	}
 
-	switch level {
-	case PDFA1b, PDFA2b, PDFA3b:
+	switch level.Part() {
+	case 1, 2, 3:
 		// Additionally forbidden in parts 1-3:
 		forbidden123 := map[object.Name]bool{
 			"JavaScript":  true,
@@ -1979,11 +1865,11 @@ func isForbiddenAction(s object.Name, level Level, conformance string) bool {
 			"NOP":         true,
 		}
 		return forbidden123[s]
-	case PDFA4:
+	case 4:
 		// PDF/A-4e permits the 3D/multimedia navigation actions SetOCGState and
 		// GoTo3DView; plain PDF/A-4 forbids them. SetState/NOP (deprecated) stay
 		// forbidden at every part-4 conformance.
-		if relaxedAsVariant(conformance, "E") {
+		if level.variant() == "E" {
 			return s == "SetState" || s == "NOP"
 		}
 		forbidden4 := map[object.Name]bool{
@@ -2000,19 +1886,12 @@ func isForbiddenAction(s object.Name, level Level, conformance string) bool {
 func checkNoForbiddenActions(doc core.View, level Level) []Violation {
 	var errs []Violation
 
-	// PDF/A-4e relaxes a couple of 3D/multimedia actions; the conformance flag
-	// selects that behaviour. Computed once (it decodes the XMP packet).
-	conformance := ""
-	if level == PDFA4 {
-		conformance = pdfaConformanceFlag(doc)
-	}
-
 	// Check catalog /OpenAction
 	catalog := doc.Catalog()
 	if catalog != nil {
 		oaRef := catalog.Get("OpenAction")
 		if oaRef != nil {
-			errs = append(errs, checkActionObject(doc, oaRef, 0, level, conformance)...)
+			errs = append(errs, checkActionObject(doc, oaRef, 0, level)...)
 		}
 	}
 
@@ -2025,14 +1904,14 @@ func checkNoForbiddenActions(doc core.View, level Level) []Violation {
 
 		// Check /A (action) in any dictionary
 		if aRef := dict.Get("A"); aRef != nil {
-			errs = append(errs, checkActionObject(doc, aRef, num, level, conformance)...)
+			errs = append(errs, checkActionObject(doc, aRef, num, level)...)
 		}
 
 		// Check if the object itself is an action dict (has /S and /Type=Action or no /Type)
 		if s, ok := doc.ResolveName(dict.Get("S")); ok {
 			typeObj := doc.Resolve(dict.Get("Type"))
 			isAction := typeObj == nil || typeObj == object.Name("Action")
-			if isAction && isForbiddenAction(s, level, conformance) {
+			if isAction && isForbiddenAction(s, level) {
 				errs = append(errs, Violation{
 					Rule:    annotActionClause("forbidden", level),
 					Level:   level,
@@ -2047,24 +1926,27 @@ func checkNoForbiddenActions(doc core.View, level Level) []Violation {
 	// to the object scan above. Check their direct /A actions explicitly (an
 	// indirect /A resolves to a top-level object the scan already covers).
 	for _, a := range collectDirectAnnotations(doc) {
-		if actionDict, ok := a.dict.Get("A").(*object.Dictionary); ok {
-			errs = append(errs, checkActionObject(doc, actionDict, a.num, level, conformance)...)
+		switch actionDict := a.dict.Get("A").(type) {
+		case object.IndirectRef:
+			// A top-level object: the scan above covered it.
+		case *object.Dictionary:
+			errs = append(errs, checkActionObject(doc, actionDict, a.num, level)...)
 		}
 	}
 
 	return errs
 }
 
-func checkActionObject(doc core.View, ref object.Object, objNum int, level Level, conformance string) []Violation {
+func checkActionObject(doc core.View, ref object.Object, objNum int, level Level) []Violation {
 	var errs []Violation
-	checkActionChain(doc, ref, objNum, level, conformance, &errs, make(map[*object.Dictionary]bool))
+	checkActionChain(doc, ref, objNum, level, &errs, make(map[*object.Dictionary]bool))
 	return errs
 }
 
 // checkActionChain validates one action dictionary and follows its /Next
 // entry (a single action or an array of actions), which previous versions
 // ignored entirely — a legal action whose /Next launches JavaScript passed.
-func checkActionChain(doc core.View, ref object.Object, objNum int, level Level, conformance string, errs *[]Violation, seen map[*object.Dictionary]bool) {
+func checkActionChain(doc core.View, ref object.Object, objNum int, level Level, errs *[]Violation, seen map[*object.Dictionary]bool) {
 	// ref might be an action dict or an array (for OpenAction destination)
 	actionDict := doc.ResolveDict(ref)
 	if actionDict == nil || seen[actionDict] {
@@ -2072,7 +1954,7 @@ func checkActionChain(doc core.View, ref object.Object, objNum int, level Level,
 	}
 	seen[actionDict] = true
 
-	if s, ok := doc.ResolveName(actionDict.Get("S")); ok && isForbiddenAction(s, level, conformance) {
+	if s, ok := doc.ResolveName(actionDict.Get("S")); ok && isForbiddenAction(s, level) {
 		*errs = append(*errs, Violation{
 			Rule:    annotActionClause("forbidden", level),
 			Level:   level,
@@ -2083,10 +1965,10 @@ func checkActionChain(doc core.View, ref object.Object, objNum int, level Level,
 
 	switch next := doc.Resolve(actionDict.Get("Next")).(type) {
 	case *object.Dictionary:
-		checkActionChain(doc, next, objNum, level, conformance, errs, seen)
+		checkActionChain(doc, next, objNum, level, errs, seen)
 	case object.Array:
 		for _, el := range next {
-			checkActionChain(doc, el, objNum, level, conformance, errs, seen)
+			checkActionChain(doc, el, objNum, level, errs, seen)
 		}
 	}
 }
@@ -2127,7 +2009,10 @@ func checkNamedActions(doc core.View, level Level) []Violation {
 	// Direct annotations may carry direct action dictionaries that never
 	// appear as top-level objects (an indirect /A is already covered above).
 	for _, a := range collectDirectAnnotations(doc) {
-		if actionDict, ok := a.dict.Get("A").(*object.Dictionary); ok {
+		switch actionDict := a.dict.Get("A").(type) {
+		case object.IndirectRef:
+			// A top-level object: the scan above covered it.
+		case *object.Dictionary:
 			check(actionDict, a.num)
 		}
 	}
@@ -2139,7 +2024,7 @@ func checkNamedActions(doc core.View, level Level) []Violation {
 // For PDF/A-4: AA allowed on widgets/form fields (trigger events).
 // Non-widget AA (doc/page/annot) keys restricted to: E, X, D, U, Fo, Bl.
 func checkAnnotationAA(doc core.View, level Level) []Violation {
-	if level == PDFA4 {
+	if level.Part() == 4 {
 		return nil // PDF/A-4 gates trigger events per-event; see checkA4TriggerEvents
 	}
 
@@ -2189,7 +2074,6 @@ func isWidgetOrField(doc core.View, dict *object.Dictionary) bool {
 
 // --- Metadata checks (6.7) ---
 
-// Rule 6.7.3: Version identification via XMP pdfaid:part, pdfaid:rev, pdfaid:conformance.
 // metadataClause returns the ISO clause for a metadata-rule concept at the
 // given level. Metadata requirements are numbered differently per part (ISO
 // 19005-1 6.7.x; -2/-3 6.6.x; -4 6.7.x); clauses follow the veraPDF profiles.
@@ -2204,17 +2088,28 @@ func metadataClause(concept string, level Level) string {
 	if !ok {
 		return "6.7"
 	}
-	switch level {
-	case PDFA1b:
+	switch level.Part() {
+	case 1:
 		return c[0]
-	case PDFA4:
+	case 4:
 		return c[2]
 	default:
 		return c[1]
 	}
 }
 
-func checkMetadataVersion(doc core.View, level Level) []Violation {
+// checkIdentification is the one rule that compares what a document declares
+// about itself — its pdfaid identification, read through the XMP model — with
+// the target it is validated against (ISO 19005-1 6.7.11, -2/-3 6.6.4, -4
+// 6.7.3).
+//
+// It is the only place the declaration is judged. The part must be the
+// target's; the conformance letter must be one the target accepts, and which
+// ones that is — the hierarchy that lets a 2b target accept a 2u or 2a file —
+// is written down once, in Level.acceptsConformance; part 4 must also carry
+// its revision. Nothing else in the package reads the declaration to decide
+// what to check: the target alone does that.
+func checkIdentification(doc core.View, level Level) []Violation {
 	catalog := doc.Catalog()
 	if catalog == nil {
 		return nil
@@ -2252,41 +2147,43 @@ func checkMetadataVersion(doc core.View, level Level) []Violation {
 		report("", fmt.Sprintf("the PDF/A identification schema must use the namespace prefix pdfaid, found %q", p))
 	}
 
-	expectedPart := ""
-	switch level {
-	case PDFA1b:
-		expectedPart = "1"
-	case PDFA2b:
-		expectedPart = "2"
-	case PDFA3b:
-		expectedPart = "3"
-	case PDFA4:
-		expectedPart = "4"
-	}
-	switch {
-	case id.part == "":
+	switch want := strconv.Itoa(level.Part()); {
+	case !id.hasPart || id.part == "":
 		report("", "metadata must contain pdfaid:part")
-	case id.part != expectedPart:
-		report("", fmt.Sprintf("pdfaid:part must be %s, got %s", expectedPart, id.part))
+	case id.part != want:
+		report("", fmt.Sprintf("pdfaid:part must be %s, got %s", want, id.part))
 	}
 
-	switch level {
-	case PDFA1b, PDFA2b, PDFA3b:
-		if id.conformance != "B" {
-			report(CheckPDFAIDConformance, fmt.Sprintf("pdfaid:conformance must be B, got %q", id.conformance))
+	if !level.acceptsConformance(id.conformance, id.hasConformance) {
+		var msg string
+		switch {
+		case level.Part() == 4 && level.Conformance() == "":
+			// Base rule 6.7.3-3: a file conforming to neither variant shall
+			// not provide a conformance entry.
+			msg = fmt.Sprintf("pdfaid:conformance is %q; plain %s declares none", id.conformance, level)
+			if id.conformance == "E" || id.conformance == "F" {
+				msg += fmt.Sprintf(" (the document identifies itself as PDF/A-4%s, a level of its own)", strings.ToLower(id.conformance))
+			}
+		case !id.hasConformance && level.Part() == 4:
+			// The case the variants are levels for: a conforming plain
+			// PDF/A-4 file is not the variant file the caller asked for.
+			msg = fmt.Sprintf("the document declares no pdfaid:conformance, so it identifies itself as plain PDF/A-4 rather than %s, which must declare %s", level, level.acceptedConformance())
+		case !id.hasConformance:
+			msg = fmt.Sprintf("metadata must declare pdfaid:conformance; %s accepts %s", level, level.acceptedConformance())
+		default:
+			// Including the right letter in the wrong case, which is the
+			// whole of the difference for a case-sensitive property.
+			msg = fmt.Sprintf("pdfaid:conformance is %q; %s accepts %s", id.conformance, level, level.acceptedConformance())
 		}
-	case PDFA4:
-		// PDF/A-4: conformance is absent for plain A-4, but "F" (A-4f) and "E"
-		// (A-4e) are valid — a compliant 4f/4e file (e.g. an embedded one) must
-		// not be rejected for carrying it (audit C23).
-		if id.hasConformance && id.conformance != "F" && id.conformance != "E" {
-			report(CheckPDFAIDConformance, fmt.Sprintf("PDF/A-4 pdfaid:conformance must be absent, F, or E, got %q", id.conformance))
-		}
+		report(CheckPDFAIDConformance, msg)
+	}
+
+	if rev := level.revision(); rev != "" {
 		switch {
 		case id.rev == "":
-			report("", "PDF/A-4 metadata must contain pdfaid:rev")
-		case id.rev != "2020":
-			report("", fmt.Sprintf("pdfaid:rev must be 2020, got %q", id.rev))
+			report("", fmt.Sprintf("%s metadata must contain pdfaid:rev", level))
+		case id.rev != rev:
+			report("", fmt.Sprintf("pdfaid:rev must be %s, got %q", rev, id.rev))
 		}
 	}
 	return errs
@@ -2295,7 +2192,7 @@ func checkMetadataVersion(doc core.View, level Level) []Violation {
 // --- Transparency checks (PDFA-1b only) ---
 
 func checkNoTransparency(doc core.View, level Level) []Violation {
-	if level != PDFA1b {
+	if level.Part() != 1 {
 		return nil
 	}
 
@@ -2344,7 +2241,7 @@ func checkNoTransparency(doc core.View, level Level) []Violation {
 
 		smask := gs.Get("SMask")
 		if smask != nil {
-			if n, ok := smask.(object.Name); ok && n == "None" {
+			if n, ok := doc.ResolveName(smask); ok && n == "None" {
 				// acceptable
 			} else {
 				errs = append(errs, Violation{
@@ -2358,7 +2255,7 @@ func checkNoTransparency(doc core.View, level Level) []Violation {
 
 		bm := gs.Get("BM")
 		if bm != nil {
-			if n, ok := bm.(object.Name); ok {
+			if n, ok := doc.ResolveName(bm); ok {
 				if n != "Normal" && n != "Compatible" {
 					errs = append(errs, Violation{
 						Rule:    "6.4",
@@ -2371,15 +2268,7 @@ func checkNoTransparency(doc core.View, level Level) []Violation {
 		}
 
 		for _, key := range []object.Name{"CA", "ca"} {
-			v := gs.Get(key)
-			if v != nil {
-				val := 1.0
-				switch tv := v.(type) {
-				case object.Real:
-					val = float64(tv)
-				case object.Integer:
-					val = float64(tv)
-				}
+			if val, ok := doc.ResolveNumber(gs.Get(key)); ok {
 				if math.Abs(val-1.0) > 1e-6 {
 					errs = append(errs, Violation{
 						Rule:    "6.4",
@@ -2483,10 +2372,10 @@ func imageClause(concept string, level Level) string {
 	if !ok {
 		return "6.2.8"
 	}
-	switch level {
-	case PDFA1b:
+	switch level.Part() {
+	case 1:
 		return c[0]
-	case PDFA4:
+	case 4:
 		return c[2]
 	default:
 		return c[1]
@@ -2500,7 +2389,7 @@ func imageClause(concept string, level Level) string {
 // filter at that level, so a JPEG 2000 image there is reported by the filter
 // check under 6.1.10 and the rules below never run.
 func jpxClause(level Level) string {
-	if level == PDFA4 {
+	if level.Part() == 4 {
 		return "6.2.7.3"
 	}
 	return "6.2.8.3"
@@ -2567,10 +2456,10 @@ func xobjectClause(concept string, level Level) string {
 	if !ok {
 		return "6.2.9"
 	}
-	switch level {
-	case PDFA1b:
+	switch level.Part() {
+	case 1:
 		return c[0]
-	case PDFA4:
+	case 4:
 		return c[2]
 	default:
 		return c[1]
@@ -2616,7 +2505,7 @@ func checkNoOPI(doc core.View, level Level) []Violation {
 
 // Rule 6.1.12: PDF/A-4 catalog /Version must match pattern 2.N.
 func checkCatalogVersion(doc core.View, level Level) []Violation {
-	if level != PDFA4 {
+	if level.Part() != 4 {
 		return nil
 	}
 
@@ -2630,7 +2519,7 @@ func checkCatalogVersion(doc core.View, level Level) []Violation {
 		return nil
 	}
 
-	vName, ok := versionObj.(object.Name)
+	vName, ok := doc.ResolveName(versionObj)
 	if !ok {
 		return []Violation{{
 			Rule:    "6.1.12",
@@ -2658,7 +2547,7 @@ func checkFontSubsets(doc core.View, level Level) []Violation {
 	// CharSet/CIDSet PRESENCE is only required by 19005-1: the veraPDF
 	// corpus passes a PDF/A-2 subset CIDFont without /CIDSet (Part 2 only
 	// constrains the sets when present).
-	if level != PDFA1b {
+	if level.Part() != 1 {
 		return nil
 	}
 
@@ -2674,7 +2563,7 @@ func checkFontSubsets(doc core.View, level Level) []Violation {
 	fonts := collectFonts(doc, pagesRef)
 	var errs []Violation
 
-	for objNum, fontDict := range fonts {
+	for fontDict, objNum := range fonts {
 		subtype, _ := doc.ResolveName(fontDict.Get("Subtype"))
 		baseFont, _ := doc.ResolveName(fontDict.Get("BaseFont"))
 
@@ -2755,7 +2644,7 @@ func checkExtGState(doc core.View, level Level) []Violation {
 	// with a comment claiming checkNoTransparency covered it, which never
 	// looked at /TR, /TR2, or halftones.
 	rule := "6.2.5"
-	if level == PDFA1b {
+	if level.Part() == 1 {
 		rule = "6.2.8"
 	}
 
@@ -2777,7 +2666,7 @@ func checkExtGState(doc core.View, level Level) []Violation {
 
 		// /TR2 must be /Default if present
 		if tr2 := dict.Get("TR2"); tr2 != nil {
-			if n, ok := tr2.(object.Name); !ok || n != "Default" {
+			if n, ok := doc.ResolveName(tr2); !ok || n != "Default" {
 				errs = append(errs, Violation{
 					Rule:    rule,
 					Level:   level,
@@ -2789,7 +2678,7 @@ func checkExtGState(doc core.View, level Level) []Violation {
 
 		// /HTO and /HTP must not be present (PDF 2.0 halftone keys;
 		// restricted at 2b+).
-		if level != PDFA1b && dict.Get("HTO") != nil {
+		if level.Part() != 1 && dict.Get("HTO") != nil {
 			errs = append(errs, Violation{
 				Rule:    rule,
 				Level:   level,
@@ -2797,7 +2686,7 @@ func checkExtGState(doc core.View, level Level) []Violation {
 				Object:  num,
 			})
 		}
-		if level != PDFA1b && dict.Get("HTP") != nil {
+		if level.Part() != 1 && dict.Get("HTP") != nil {
 			errs = append(errs, Violation{
 				Rule:    rule,
 				Level:   level,
@@ -2822,9 +2711,9 @@ func checkExtGState(doc core.View, level Level) []Violation {
 
 		// Check BM is a valid blend mode. At 1b any transparency use is
 		// forbidden wholesale by checkNoTransparency.
-		if level != PDFA1b {
+		if level.Part() != 1 {
 			if bm := dict.Get("BM"); bm != nil {
-				if n, ok := bm.(object.Name); ok {
+				if n, ok := doc.ResolveName(bm); ok {
 					if !isValidBlendMode(n) {
 						errs = append(errs, Violation{
 							Rule:    rule,
@@ -2859,7 +2748,7 @@ func checkHalftoneErrors(doc core.View, htRef object.Object, objNum int, level L
 	}
 
 	if htType := htDict.Get("HalftoneType"); htType != nil {
-		if intVal, ok := htType.(object.Integer); ok {
+		if intVal, ok := doc.ResolveInt(htType); ok {
 			if intVal != 1 && intVal != 5 {
 				*errs = append(*errs, Violation{
 					Rule:    rule,
@@ -2897,7 +2786,7 @@ func checkInfoXMPConsistency(doc core.View, level Level) []Violation {
 	// Info<->XMP consistency is a 19005-1 (6.7.3) requirement only: the
 	// veraPDF corpus passes PDF/A-2 files whose Info entries deliberately
 	// differ from their XMP counterparts (Part 2 deprecates Info instead).
-	if level != PDFA1b {
+	if level.Part() != 1 {
 		return nil
 	}
 
@@ -3146,7 +3035,7 @@ func normalizeXMPDate(s string) string {
 
 // Rule 6.2.4: Pages using transparency must have proper blending color space.
 func checkTransparencyBlending(doc core.View, level Level) []Violation {
-	if level == PDFA1b {
+	if level.Part() == 1 {
 		return nil // PDF/A-1b prohibits transparency entirely
 	}
 
@@ -3217,7 +3106,7 @@ func checkTransparencyBlending(doc core.View, level Level) []Violation {
 // can be relaxed for a page. For PDF/A-4, OutputIntents provide implicit
 // blending CS. For PDF/A-2b/3b, DefaultCS coverage can substitute.
 func transparencyGroupNotRequired(doc core.View, catalog *object.Dictionary, page *object.Dictionary, level Level) bool {
-	if level == PDFA4 {
+	if level.Part() == 4 {
 		// PDF/A-4: page-level or catalog-level OutputIntents provide blending CS
 		catalogRGB, catalogCMYK, catalogGray := getOutputIntentCoverage(doc, catalog)
 		pageRGB, pageCMYK, pageGray := getOutputIntentCoverage(doc, page)
@@ -3227,7 +3116,7 @@ func transparencyGroupNotRequired(doc core.View, catalog *object.Dictionary, pag
 	}
 
 	// For PDF/A-2b/3b: OutputIntents or DefaultCS coverage can provide blending CS
-	if level == PDFA2b || level == PDFA3b {
+	if level.Part() == 2 || level.Part() == 3 {
 		// Catalog-level OutputIntents provide blending CS for all pages
 		catalogRGB, catalogCMYK, catalogGray := getOutputIntentCoverage(doc, catalog)
 		if catalogRGB || catalogCMYK || catalogGray {
@@ -3282,7 +3171,7 @@ func find1bTransparencyXObjects(doc core.View, container *object.Dictionary, lev
 			switch subtype, _ := doc.ResolveName(stream.Dict.Get("Subtype")); subtype {
 			case "Image":
 				if sm := stream.Dict.Get("SMask"); sm != nil {
-					if n, ok := sm.(object.Name); !ok || n != "None" {
+					if n, ok := doc.ResolveName(sm); !ok || n != "None" {
 						*errs = append(*errs, Violation{
 							Rule:    "6.4",
 							Level:   level,
@@ -3337,7 +3226,7 @@ func checkEmbeddedFiles(doc core.View, level Level) []Violation {
 	// PDF/A-1 (ISO 19005-1, 6.1.11) forbids embedded files outright: no
 	// file specification may carry /EF, wherever it lives — not only in the
 	// catalog's Names tree.
-	if level == PDFA1b {
+	if level.Part() == 1 {
 		var errs []Violation
 		for num, iobj := range doc.Objects {
 			if dict, ok := iobj.Value.(*object.Dictionary); ok && dict.Get("EF") != nil {
@@ -3380,7 +3269,7 @@ func checkEmbeddedFileSpecs(doc core.View, level Level, catalog *object.Dictiona
 	// Embedded-file rules live in clause 6.8 for 19005-2/-3 and 6.9 for
 	// 19005-4.
 	rule := "6.8"
-	if level == PDFA4 {
+	if level.Part() == 4 {
 		rule = "6.9"
 	}
 
@@ -3390,13 +3279,10 @@ func checkEmbeddedFileSpecs(doc core.View, level Level, catalog *object.Dictiona
 	// association mechanism. PDF/A-4f and -4e exist to carry embedded files
 	// (arbitrary files; 3D/RichMedia content) and associate them per-filespec
 	// via /AFRelationship rather than a document-level /AF array, so the
-	// document-/AF requirement is relaxed for both.
-	conformance := ""
-	if level == PDFA4 {
-		conformance = pdfaConformanceFlag(doc)
-	}
-	relaxAF := relaxedAsVariant(conformance, "F", "E")
-	if level != PDFA2b && !relaxAF && documentHasEmbeddedFiles(doc, catalog) && !documentHasAF(doc) {
+	// document-/AF requirement is relaxed for both — when the target is one;
+	// the document's own declaration is the identification rule's to judge.
+	relaxAF := level.variant() != ""
+	if level.Part() != 2 && !relaxAF && documentHasEmbeddedFiles(doc, catalog) && !documentHasAF(doc) {
 		errs = append(errs, Violation{
 			Rule:    rule,
 			Level:   level,
@@ -3435,7 +3321,7 @@ func checkEmbeddedFileSpecs(doc core.View, level Level, catalog *object.Dictiona
 		}
 		// /AFRelationship is the PDF/A-3+ mechanism relating an embedded
 		// file to the document; PDF/A-2 has no such key.
-		if level != PDFA2b && dict.Get("AFRelationship") == nil {
+		if level.Part() != 2 && dict.Get("AFRelationship") == nil {
 			errs = append(errs, Violation{
 				Rule:    rule,
 				Level:   level,
@@ -3445,7 +3331,7 @@ func checkEmbeddedFileSpecs(doc core.View, level Level, catalog *object.Dictiona
 		}
 
 		// Embedded file streams must declare their MIME type in PDF/A-3/4.
-		if level == PDFA3b || level == PDFA4 {
+		if level.Part() == 3 || level.Part() == 4 {
 			if efDict := doc.ResolveDict(dict.Get("EF")); efDict != nil {
 				for val := range efDict.Values() {
 					stream, ok := doc.Resolve(val).(*object.Stream)
@@ -3460,7 +3346,7 @@ func checkEmbeddedFileSpecs(doc core.View, level Level, catalog *object.Dictiona
 							Message: "embedded file stream must have /Subtype (MIME type)",
 							Object:  num,
 						})
-					} else if name, ok := st.(object.Name); ok {
+					} else if name, ok := doc.ResolveName(st); ok {
 						if !strings.Contains(string(name), "/") {
 							errs = append(errs, Violation{
 								Rule:    rule,
@@ -3521,11 +3407,11 @@ func checkOptionalContent(doc core.View, level Level) []Violation {
 	// Optional-content configuration rules are 19005-2/-3 clause 6.9 and
 	// 19005-4 clause 6.10. PDF/A-1 forbids optional content wholesale
 	// (checkNoOCProperties).
-	if level == PDFA1b {
+	if level.Part() == 1 {
 		return nil
 	}
 	ocRule := "6.9"
-	if level == PDFA4 {
+	if level.Part() == 4 {
 		ocRule = "6.10"
 	}
 
@@ -3619,7 +3505,7 @@ func checkOptionalContent(doc core.View, level Level) []Violation {
 		orderArr, ok := doc.Resolve(orderRef).(object.Array)
 		if ok {
 			referencedOCGs := make(map[int]bool)
-			collectOCGRefs(orderArr, referencedOCGs)
+			collectOCGRefs(doc, orderArr, referencedOCGs, map[int]bool{})
 			for _, ocgRef := range ocgsArr {
 				if iref, ok := ocgRef.(object.IndirectRef); ok {
 					if !referencedOCGs[iref.Number] {
@@ -3637,13 +3523,22 @@ func checkOptionalContent(doc core.View, level Level) []Violation {
 	return errs
 }
 
-func collectOCGRefs(arr object.Array, refs map[int]bool) {
+// collectOCGRefs records every OCG an /Order array names, descending into its
+// nested arrays. An optional content group is always a reference (it is a
+// dictionary identified by its object), but a nested array may be one too,
+// so a reference is recorded and, when it names an array, descended into;
+// seen stops an array that contains itself.
+func collectOCGRefs(doc core.View, arr object.Array, refs map[int]bool, seen map[int]bool) {
 	for _, item := range arr {
-		if iref, ok := item.(object.IndirectRef); ok {
-			refs[iref.Number] = true
-		}
-		if subArr, ok := item.(object.Array); ok {
-			collectOCGRefs(subArr, refs)
+		switch v := item.(type) {
+		case object.IndirectRef:
+			refs[v.Number] = true
+			if sub, ok := doc.Resolve(v).(object.Array); ok && !seen[v.Number] {
+				seen[v.Number] = true
+				collectOCGRefs(doc, sub, refs, seen)
+			}
+		case object.Array:
+			collectOCGRefs(doc, v, refs, seen)
 		}
 	}
 }
@@ -3665,7 +3560,7 @@ type implLimits struct {
 }
 
 func checkImplementationLimits(doc core.View, level Level) []Violation {
-	if level == PDFA4 {
+	if level.Part() == 4 {
 		// PDF 2.0 (ISO 32000-2) abolished the Annex C limits; ISO 19005-4
 		// has no implementation-limits clause.
 		return nil
@@ -3680,7 +3575,7 @@ func checkImplementationLimits(doc core.View, level Level) []Violation {
 		nesting:   28,
 		realLimit: 32767, // PDF 1.4 Annex C
 	}
-	if level == PDFA2b || level == PDFA3b {
+	if level.Part() == 2 || level.Part() == 3 {
 		lim.rule = "6.1.13" // ISO 19005-2/-3
 		lim.stringLen = 32767
 		lim.realLimit = 3.403e38 // PDF 1.7 Annex C (float32 range)
@@ -3700,7 +3595,7 @@ func checkImplementationLimits(doc core.View, level Level) []Violation {
 	checkContentStreamLimits(doc, level, lim, &errs)
 
 	// Page size limits for 2b+ only
-	if level != PDFA1b {
+	if level.Part() != 1 {
 		checkPageSizeLimits(doc, level, &errs)
 	}
 
@@ -3713,6 +3608,9 @@ func checkObjectLimits(obj object.Object, objNum int, level Level, lim implLimit
 	}
 
 	switch v := obj.(type) {
+	case object.IndirectRef:
+		// The limits are on each object as written: a referenced object is
+		// measured as its own object, at its own nesting depth.
 	case object.Name:
 		if len(string(v)) > lim.nameLen {
 			*errs = append(*errs, Violation{
@@ -3830,14 +3728,11 @@ func checkPageSizeLimits(doc core.View, level Level, errs *[]Violation) {
 			vals := make([]float64, 4)
 			valid := true
 			for i, elem := range arr {
-				switch ev := elem.(type) {
-				case object.Integer:
-					vals[i] = float64(ev)
-				case object.Real:
-					vals[i] = float64(ev)
-				default:
+				v, ok := doc.ResolveNumber(elem)
+				if !ok {
 					valid = false
 				}
+				vals[i] = v
 			}
 			if !valid {
 				continue
@@ -3942,7 +3837,7 @@ func checkDeviceColorSpaces(doc core.View, level Level) []Violation {
 	for _, page := range pages {
 		// For PDF/A-4, also check page-level OutputIntents
 		pageRGB, pageCMYK, pageGray := hasRGBIntent, hasCMYKIntent, hasGrayIntent
-		if level == PDFA4 {
+		if level.Part() == 4 {
 			prgb, pcmyk, pgray := getOutputIntentCoverage(doc, page.Dict)
 			pageRGB = pageRGB || prgb
 			pageCMYK = pageCMYK || pcmyk
@@ -4095,54 +3990,34 @@ func forEachContentOperator(cancel core.Canceler, data []byte, fn func(op []byte
 // --- ICCBased color space checks (6.2.4.2) ---
 
 // Rule 6.2.4.2: ICCBased color spaces must reference valid ICC profiles.
+// checkICCBasedProfiles judges every ICC profile used as an ICCBased colour
+// space (ISO 19005-1 6.2.3.2, -2/-3/-4 6.2.4.2): /N is 1, 3 or 4 and matches
+// the profile's colour space, and the profile version is at most 2.x at part 1
+// (PDF 1.4) and 4.x later. Every finding is under the ICCBased clause.
+//
+// A profile is found through an [/ICCBased profile] array, wherever one is
+// written — resources, image dictionaries, Default colour spaces, group /CS,
+// nested inside Indexed, Separation and DeviceN — and judged once. It used to be
+// "every stream with an integer /N", which took an output intent's destination
+// profile for a colour space: a PDF/A-2b skeleton at 1b got its v4 profile
+// reported twice, once as the output intent it is (6.2.2) and once, at a
+// different clause, as an ICCBased colour space the file does not have (audit
+// 2026-09-22 C140).
 func checkICCBasedProfiles(doc core.View, level Level) []Violation {
+	rule := colourClause("iccBased", level)
 	var errs []Violation
-
-	for num, iobj := range doc.Objects {
-		stream, ok := iobj.Value.(*object.Stream)
+	for _, p := range iccBasedProfiles(doc) {
+		n, ok := doc.ResolveInt(p.stream.Dict.Get("N"))
 		if !ok {
 			continue
 		}
-
-		// Check if this stream is used as an ICC profile (has /N key typical of ICC)
-		nObj := stream.Dict.Get("N")
-		if nObj == nil {
-			continue
-		}
-
-		// Structural stream types also carry an integer /N with a different
-		// meaning (an object stream's /N is its object count); they are never
-		// ICC profiles.
-		if t, ok := doc.ResolveName(stream.Dict.Get("Type")); ok && (t == "ObjStm" || t == "XRef") {
-			continue
-		}
-
-		// Verify it's actually an ICC profile by checking for Alternate or being
-		// referenced from a ColorSpace array. We check for the /N key which is
-		// specific to ICC profile streams.
-		nVal := 0
-		switch v := nObj.(type) {
-		case object.Integer:
-			nVal = int(v)
-		default:
-			continue
-		}
-
-		// N must be 1, 3, or 4
+		nVal := int(n)
 		if nVal != 1 && nVal != 3 && nVal != 4 {
-			errs = append(errs, Violation{
-				Rule:    colourClause("iccBased", level),
-				Level:   level,
-				Message: fmt.Sprintf("ICCBased profile /N must be 1, 3, or 4, got %d", nVal),
-				Object:  num,
-			})
+			errs = append(errs, Violation{Rule: rule, Level: level, Object: p.num,
+				Message: fmt.Sprintf("ICCBased profile /N must be 1, 3, or 4, got %d", nVal)})
 			continue
 		}
-
-		// Decompress profile data to check ICC header
-		profileData, _ := doc.ICCProfileData(stream) // reason: the header checks below run only on data that is present; the producer recorded any declined trip
-
-		// Check ICC profile header if data is available
+		profileData, _ := doc.ICCProfileData(p.stream) // reason: the header checks below run only on data that is present; the producer recorded any declined trip
 		if len(profileData) >= 20 {
 			cs := string(profileData[16:20])
 			expectedN := 0
@@ -4155,36 +4030,82 @@ func checkICCBasedProfiles(doc core.View, level Level) []Violation {
 				expectedN = 1
 			}
 			if expectedN > 0 && expectedN != nVal {
-				errs = append(errs, Violation{
-					Rule:    colourClause("iccBased", level),
-					Level:   level,
-					Message: fmt.Sprintf("ICCBased profile /N=%d does not match ICC color space %q", nVal, cs),
-					Object:  num,
-				})
+				errs = append(errs, Violation{Rule: rule, Level: level, Object: p.num,
+					Message: fmt.Sprintf("ICCBased profile /N=%d does not match ICC color space %q", nVal, cs)})
 			}
 		}
-
-		// Check ICC profile version
 		if len(profileData) >= 9 {
 			majorVersion := profileData[8]
-			maxVersion := byte(4) // Default max for 2b/3b/4
-			rule := "6.2.4"
-			if level == PDFA1b {
+			maxVersion := byte(4)
+			if level.Part() == 1 {
 				maxVersion = 2
-				rule = "6.2.3"
 			}
 			if majorVersion > maxVersion {
-				errs = append(errs, Violation{
-					Rule:    rule,
-					Level:   level,
-					Message: fmt.Sprintf("ICCBased profile version %d.x not allowed (max %d.x)", majorVersion, maxVersion),
-					Object:  num,
-				})
+				errs = append(errs, Violation{Rule: rule, Level: level, Object: p.num,
+					Message: fmt.Sprintf("ICCBased profile version %d.x not allowed (max %d.x)", majorVersion, maxVersion)})
 			}
 		}
 	}
-
 	return errs
+}
+
+// iccBasedProfile is a profile stream an ICCBased colour space names, and the
+// object that holds it.
+type iccBasedProfile struct {
+	stream *object.Stream
+	num    int
+}
+
+// iccBasedProfiles finds every profile stream named by an [/ICCBased profile]
+// array anywhere in the document, each once, in object-number order. Each
+// object's value is walked to a bounded depth without following references —
+// a referenced object is walked as its own object — so every array written
+// anywhere is seen exactly as written.
+func iccBasedProfiles(doc core.View) []iccBasedProfile {
+	seen := map[*object.Stream]bool{}
+	var out []iccBasedProfile
+	var walk func(o object.Object, depth int)
+	walk = func(o object.Object, depth int) {
+		if depth > 32 {
+			return
+		}
+		switch v := o.(type) {
+		case object.IndirectRef:
+			// Walked as its own object.
+		case object.Array:
+			if len(v) >= 2 {
+				if name, _ := doc.ResolveName(v[0]); name == "ICCBased" {
+					if s, ok := doc.Resolve(v[1]).(*object.Stream); ok && !seen[s] {
+						seen[s] = true
+						out = append(out, iccBasedProfile{s, resolveObjNum(doc, v[1])})
+					}
+				}
+			}
+			for _, e := range v {
+				walk(e, depth+1)
+			}
+		case *object.Dictionary:
+			for val := range v.Values() {
+				walk(val, depth+1)
+			}
+		case *object.Stream:
+			for val := range v.Dict.Values() {
+				walk(val, depth+1)
+			}
+		}
+	}
+	nums := make([]int, 0, len(doc.Objects))
+	for num := range doc.Objects {
+		nums = append(nums, num)
+	}
+	sort.Ints(nums)
+	for _, num := range nums {
+		if doc.Cancel.Stopped() {
+			break
+		}
+		walk(doc.Objects[num].Value, 0)
+	}
+	return out
 }
 
 // --- Separation/DeviceN checks (6.2.4.4) ---
@@ -4210,7 +4131,10 @@ func checkSeparationDeviceN(doc core.View, level Level) []Violation {
 			// is not a top-level object, so this scan would never visit its
 			// /ColorSpace entries; descend explicitly. Indirect Resources
 			// are separate objects and are visited by the loop itself.
-			if resDict, ok := dict.Get("Resources").(*object.Dictionary); ok {
+			switch resDict := dict.Get("Resources").(type) {
+			case object.IndirectRef:
+				// Visited by the loop as its own object.
+			case *object.Dictionary:
 				checkDictForSepDeviceN(doc, resDict, num, level, &errs)
 				collectTintTransforms(doc, resDict, tintTransforms, num, level, &errs)
 			}
@@ -4223,7 +4147,10 @@ func checkSeparationDeviceN(doc core.View, level Level) []Violation {
 			}
 			// Also check direct Resources in Form XObjects (indirect ones
 			// are visited as top-level objects).
-			if resDict, ok := stream.Dict.Get("Resources").(*object.Dictionary); ok {
+			switch resDict := stream.Dict.Get("Resources").(type) {
+			case object.IndirectRef:
+				// Visited by the loop as its own object.
+			case *object.Dictionary:
 				checkDictForSepDeviceN(doc, resDict, num, level, &errs)
 				collectTintTransforms(doc, resDict, tintTransforms, num, level, &errs)
 			}
@@ -4280,7 +4207,7 @@ func collectSeparationConsistencySeen(doc core.View, val object.Object, tintTran
 	if !ok || len(arr) == 0 {
 		return
 	}
-	csType, _ := arr[0].(object.Name)
+	csType, _ := doc.ResolveName(arr[0])
 
 	// Separations inside a DeviceN attributes' Colorants dictionary join
 	// the same consistency pool (the corpus flags NChannel colorants with
@@ -4299,7 +4226,7 @@ func collectSeparationConsistencySeen(doc core.View, val object.Object, tintTran
 	if csType != "Separation" || len(arr) < 4 {
 		return
 	}
-	colorantName, ok := arr[1].(object.Name)
+	colorantName, ok := doc.ResolveName(arr[1])
 	if !ok {
 		return
 	}
@@ -4364,7 +4291,7 @@ func checkColorSpaceValueSeen(doc core.View, csObj object.Object, objNum int, le
 		return
 	}
 
-	csType, ok := arr[0].(object.Name)
+	csType, ok := doc.ResolveName(arr[0])
 	if !ok {
 		return
 	}
@@ -4381,7 +4308,7 @@ func checkColorSpaceValueSeen(doc core.View, csObj object.Object, objNum int, le
 		// [/Separation name alternateSpace tintTransform]
 		if len(arr) < 4 {
 			rule := "6.2.4"
-			if level == PDFA1b {
+			if level.Part() == 1 {
 				rule = "6.2.3"
 			}
 			*errs = append(*errs, Violation{
@@ -4393,9 +4320,9 @@ func checkColorSpaceValueSeen(doc core.View, csObj object.Object, objNum int, le
 			return
 		}
 		// Check colorant name is not None for PDF/A-2b+ (it's reserved)
-		if name, ok := arr[1].(object.Name); ok && name == "None" {
+		if name, ok := doc.ResolveName(arr[1]); ok && name == "None" {
 			// "None" is a special name in PDF 2.0 only
-			if level != PDFA4 {
+			if level.Part() != 4 {
 				*errs = append(*errs, Violation{
 					Rule:    colourClause("spot", level),
 					Level:   level,
@@ -4411,7 +4338,7 @@ func checkColorSpaceValueSeen(doc core.View, csObj object.Object, objNum int, le
 		// [/DeviceN names alternateSpace tintTransform ...]
 		if len(arr) < 4 {
 			rule := "6.2.4"
-			if level == PDFA1b {
+			if level.Part() == 1 {
 				rule = "6.2.3"
 			}
 			*errs = append(*errs, Violation{
@@ -4430,11 +4357,11 @@ func checkColorSpaceValueSeen(doc core.View, csObj object.Object, objNum int, le
 		// (PDF 1.7, NChannel) raise it to 32; PDF/A-4 (PDF 2.0) has no such limit.
 		maxColorants := 0
 		rule := "6.2.4"
-		switch level {
-		case PDFA1b:
+		switch level.Part() {
+		case 1:
 			maxColorants = 8
 			rule = "6.2.3"
-		case PDFA2b, PDFA3b:
+		case 2, 3:
 			maxColorants = 32
 		}
 		if maxColorants > 0 {
@@ -4454,10 +4381,10 @@ func checkColorSpaceValueSeen(doc core.View, csObj object.Object, objNum int, le
 		// Spot colorants require a Colorants dictionary with their
 		// definitions (ISO 19005-2/-3/-4, 6.2.4.4); process colour names
 		// need none.
-		if level != PDFA1b && namesOk {
+		if level.Part() != 1 && namesOk {
 			hasSpot := false
 			for _, nameObj := range namesArr {
-				if name, ok := nameObj.(object.Name); ok && !isProcessColorant(name) {
+				if name, ok := doc.ResolveName(nameObj); ok && !isProcessColorant(name) {
 					hasSpot = true
 					break
 				}
@@ -4491,10 +4418,10 @@ func checkColorSpaceValueSeen(doc core.View, csObj object.Object, objNum int, le
 						// Check that each DeviceN colorant name has an entry in Colorants dict
 						if namesOk {
 							for _, nameObj := range namesArr {
-								if name, ok := nameObj.(object.Name); ok {
+								if name, ok := doc.ResolveName(nameObj); ok {
 									if colorantsDict.Get(name) == nil {
 										rule := "6.2.4"
-										if level == PDFA1b {
+										if level.Part() == 1 {
 											rule = "6.2.3"
 										}
 										*errs = append(*errs, Violation{
@@ -4524,7 +4451,7 @@ func checkColorSpaceValueSeen(doc core.View, csObj object.Object, objNum int, le
 // must be non-negative; a Lab Range must be four numbers with min <= max.
 func checkCIEDictParams(doc core.View, family string, dict *object.Dictionary, objNum int, level Level, errs *[]Violation) {
 	rule := "6.2.4"
-	if level == PDFA1b {
+	if level.Part() == 1 {
 		rule = "6.2.3"
 	}
 	bad := func(format string, args ...interface{}) {
@@ -4631,7 +4558,7 @@ func checkAlternateCSSeen(doc core.View, altCS object.Object, objNum int, level 
 			// direct device color-space use — legal when a matching
 			// OutputIntent covers it (ISO 19005-1, 6.2.3.2), forbidden
 			// otherwise.
-			if level == PDFA1b {
+			if level.Part() == 1 {
 				covered := false
 				if catalog := doc.Catalog(); catalog != nil {
 					hasRGB, hasCMYK, hasGray := getOutputIntentCoverage(doc, catalog)
@@ -4657,7 +4584,7 @@ func checkAlternateCSSeen(doc core.View, altCS object.Object, objNum int, level 
 			// which is checked by checkDeviceColorSpaces via core.CheckCSForDevice.
 		case "Pattern":
 			rule := "6.2.4"
-			if level == PDFA1b {
+			if level.Part() == 1 {
 				rule = "6.2.3"
 			}
 			*errs = append(*errs, Violation{
@@ -4671,7 +4598,7 @@ func checkAlternateCSSeen(doc core.View, altCS object.Object, objNum int, level 
 
 	// If it's an array, recurse to check for nested Separation/DeviceN
 	if arr, ok := resolved.(object.Array); ok && len(arr) >= 2 {
-		if csType, ok := arr[0].(object.Name); ok {
+		if csType, ok := doc.ResolveName(arr[0]); ok {
 			if csType == "Separation" || csType == "DeviceN" {
 				// Nested Separation/DeviceN - check their alternates too
 				if len(arr) >= 3 {
@@ -4751,7 +4678,7 @@ func iccCMYKProfile(doc core.View, csVal object.Object) *object.Stream {
 	if !ok || len(arr) < 2 {
 		return nil
 	}
-	if n, _ := arr[0].(object.Name); n != "ICCBased" {
+	if n, _ := doc.ResolveName(arr[0]); n != "ICCBased" {
 		return nil
 	}
 	stream, ok := doc.Resolve(arr[1]).(*object.Stream)
@@ -4770,7 +4697,7 @@ func iccProfileStream(doc core.View, csVal object.Object) *object.Stream {
 	if !ok || len(arr) < 2 {
 		return nil
 	}
-	if n, _ := arr[0].(object.Name); n != "ICCBased" {
+	if n, _ := doc.ResolveName(arr[0]); n != "ICCBased" {
 		return nil
 	}
 	stream, _ := doc.Resolve(arr[1]).(*object.Stream)
@@ -4836,7 +4763,7 @@ func sameICCProfile(doc core.View, a, b *object.Stream) bool {
 //     output intent or the current transparency blending colour space — the
 //     device colour operators exist for exactly that case.
 func checkICCBasedUsageRules(doc core.View, level Level) []Violation {
-	if level == PDFA1b {
+	if level.Part() == 1 {
 		return nil
 	}
 	catalog := doc.Catalog()
@@ -4994,7 +4921,7 @@ func parseJP2Header(data []byte) jp2Info {
 // method 1-3, permitted enumerated colour spaces, and a single authoritative
 // colour specification when several are present.
 func checkJPXImages(doc core.View, level Level) []Violation {
-	if level == PDFA1b {
+	if level.Part() == 1 {
 		return nil // JPXDecode is forbidden outright at PDF/A-1 (6.1.10)
 	}
 	rule := jpxClause(level)
@@ -5002,7 +4929,7 @@ func checkJPXImages(doc core.View, level Level) []Violation {
 	var errs []Violation
 	for num, iobj := range doc.Objects {
 		stream, ok := iobj.Value.(*object.Stream)
-		if !ok || !hasFilter(stream, "JPXDecode") {
+		if !ok || !hasFilter(doc, stream, "JPXDecode") {
 			continue
 		}
 		info := parseJP2Header(stream.Data)

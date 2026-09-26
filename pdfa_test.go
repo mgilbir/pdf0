@@ -1148,12 +1148,12 @@ const (
 	// regression is a test failure rather than a number to re-baseline.
 	corpusMaxIsartorMissed = 0
 
-	// Level A baselines (TestCorpusLevelA). The PDF_A-1a / PDF_A-2a suites
-	// declare pdfaid:conformance A, so they are only measured meaningfully
-	// when validated at PDF/A-1a / PDF/A-2a — see the comment on
-	// TestCorpusLevelA for why validating them at Level B measures nothing.
+	// Level A and Level U baselines (TestCorpusLevelA). The PDF_A-1a,
+	// PDF_A-2a and PDF_A-2u suites are measured at their own levels — see the
+	// comment on TestCorpusLevelA for why validating them at Level B measures
+	// nothing.
 	//
-	// Pass files wrongly rejected at Level A. Like corpusMaxFalsePositives,
+	// Pass files wrongly rejected at their level. Like corpusMaxFalsePositives,
 	// this is the hard invariant: never raise it.
 	corpusMaxLevelAFalsePositives = 0
 	// Fail files not flagged at Level A. Both suites are fully detected: every
@@ -1166,6 +1166,10 @@ const (
 	// but a regression guard: a rule that stops firing shows up here.
 	corpusMaxLevelA1aMissed = 0
 	corpusMaxLevelA2aMissed = 0
+	// Fail files not flagged at PDF/A-2u: the Unicode-mapping rule (a font
+	// used for rendering with no ToUnicode and no exemption, and a ToUnicode
+	// that maps to U+0000, U+FEFF or U+FFFE) and the identification rule.
+	corpusMaxLevelU2uMissed = 0
 )
 
 // TestCorpusParsesEntirely asserts that every PDF in the whole veraPDF corpus
@@ -1250,22 +1254,17 @@ func TestCorpusIsartor(t *testing.T) {
 	}
 }
 
-// TestCorpusConformanceSuites ratchets the FAIL files of the remaining
-// conformance suites that TestCorpus does not cover, guarding detection from
-// regressing across the whole corpus.
+// TestCorpusConformanceSuites ratchets the remaining suites that TestCorpus
+// does not cover, guarding detection from regressing across the whole corpus.
+// The Level A and Level U suites are measured at their own levels by
+// TestCorpusLevelA.
 //
-// It deliberately counts only fail files. The pass files of these suites cannot
-// be ratcheted at FP=0: they are minimal per-clause fixtures (a "1a-pass" file
-// passes the one accessibility clause it targets but is not a complete 1b
-// document), so validating their pass files yields expected false positives,
-// and baking those in would lower the FP=0 bar. The 4e and 4f suites are the
-// exception and *are* held to FP=0: both their relaxations and the
-// requirements they take on are modelled.
-//
-// A further caveat: many of these fail files are caught incidentally (they trip
-// an implemented PDF/A rule unrelated to the clause they were built for, and
-// PDF/UA is a different standard entirely). This is a regression net, not a
-// claim of 1a/2a/2u/UA conformance coverage — that needs new rule families.
+// The 4e and 4f suites are validated at their own levels and held to FP=0 as
+// well as missed=0: both their relaxations and the requirements they take on
+// are modelled. The PDF/UA suites are not PDF/A suites at all; only their fail
+// files are counted, as a regression net — they are caught by implemented PDF/A
+// rules unrelated to the clause they were built for, which is not a claim of
+// PDF/UA coverage.
 func TestCorpusConformanceSuites(t *testing.T) {
 	// Every suite is required: corpusTestFiles skips when the corpus is absent
 	// and fails when it is present without the suite.
@@ -1274,28 +1273,14 @@ func TestCorpusConformanceSuites(t *testing.T) {
 		dir       string
 		level     pdfa.Level
 		maxMissed int
-		// checkPassFP asserts FP=0 on the suite's pass files. Only enabled where
-		// the validator models the suite's conformance well enough (the 4f/4e
-		// relaxations); the a/u/UA pass files are minimal per-clause fixtures
-		// that false-positive by design, so they remain untracked.
+		// checkPassFP asserts FP=0 on the suite's pass files: every suite
+		// validated at its own level. The UA pass files are PDF/UA fixtures,
+		// not PDF/A documents, so they are not.
 		checkPassFP bool
 	}{
-		// The 1a/2a rows validate Level A files at Level B. Every file in
-		// those suites declares pdfaid:conformance A, which the Level B
-		// pipeline rejects outright, so their fail files are all "caught"
-		// on that one finding and missed=0 here is an artifact rather than
-		// detection. They are kept as a cheap regression net (a change that
-		// broke the conformance rule would show up), but the meaningful
-		// measurement of these suites is TestCorpusLevelA.
-		{"PDF_A-1a", pdfa.PDFA1b, 0, false},
-		{"PDF_A-2a", pdfa.PDFA2b, 0, false},
-		{"PDF_A-2u", pdfa.PDFA2b, 0, false},
-		// 4f is fully detected. 4e keeps one: 6-7-3-t01-fail-b declares
-		// pdfaid:part 4 with no conformance, which is a valid *plain* PDF/A-4
-		// file — base rule 6.7.3-3 says a file conforming to neither variant
-		// shall not provide one — so it fails only against the 4E profile, and
-		// that is a question only a caller who asked for PDF/A-4e can pose.
-		// See the issue on modelling PDFA4E/PDFA4F as levels.
+		// Both fully detected, including 4e's 6-7-3-t01-fail-b: it declares
+		// pdfaid:part 4 with no conformance, a valid *plain* PDF/A-4 file (base
+		// rule 6.7.3-3), which fails only against the 4e target.
 		{"PDF_A-4f", pdfa.PDFA4F, 0, true},
 		{"PDF_A-4e", pdfa.PDFA4E, 0, true},
 		{"PDF_UA-1", pdfa.PDFA2b, 0, false},
@@ -1351,16 +1336,18 @@ func TestCorpusConformanceSuites(t *testing.T) {
 	}
 }
 
-// TestCorpusLevelA ratchets the PDF/A Level A conformance suites at their own
-// conformance level, which is the only level at which they measure anything.
+// TestCorpusLevelA ratchets the PDF/A Level A and Level U conformance suites
+// at their own conformance level, which is the only level at which they
+// measure anything.
 //
-// TestCorpusConformanceSuites walks PDF_A-1a and PDF_A-2a at PDFA1b/PDFA2b.
-// Every file in those suites declares pdfaid:conformance A, and the Level B
-// pipeline requires B — so at Level B every fail file is flagged for that one
-// unrelated reason (missed=0 is guaranteed, not earned) and every pass file is
-// a false positive (which is why that test has checkPassFP disabled for them).
-// Validating at PDFA1a/PDFA2a drops that finding and puts validatePDFALevelA
-// and its checks under measurement for the first time.
+// Every file in those suites declares pdfaid:conformance A or U. A Level B
+// target accepts both (Level A and Level U include Level B), so at Level B a
+// fail file built to break an accessibility or Unicode rule is a conforming
+// 1b/2b file, and the suites measure nothing there. They used to be walked at
+// Level B anyway, where the identification rule demanded exactly "B": every
+// fail file was then caught for that one unrelated reason (missed=0 was
+// guaranteed, not earned) and every pass file was a false positive, so their
+// pass files could not be checked at all.
 //
 // Like TestCorpus this is a ratchet: it fails only when a count gets worse.
 // falsePositives is the hard invariant at 0 — a Level A pass file is a
@@ -1375,6 +1362,7 @@ func TestCorpusLevelA(t *testing.T) {
 	}{
 		{"PDF_A-1a", pdfa.PDFA1a, corpusMaxLevelA1aMissed},
 		{"PDF_A-2a", pdfa.PDFA2a, corpusMaxLevelA2aMissed},
+		{"PDF_A-2u", pdfa.PDFA2u, corpusMaxLevelU2uMissed},
 	}
 
 	for _, s := range suites {

@@ -7,11 +7,12 @@ import (
 	"github.com/mgilbir/pdf0/object"
 )
 
-// The requirements a PDF/A-4 file takes on by declaring itself an E or an F.
+// The requirements a PDF/A-4 file takes on as an E or an F.
 //
 // Each variant relaxes something the base part forbids and adds something in
 // exchange. pdf0 honoured the relaxations and not the exchange, so a file could
-// claim the variant, collect the permission, and owe nothing for it.
+// claim the variant, collect the permission, and owe nothing for it. Both are
+// gated on the target: these checks are called at the variant levels.
 
 // efDoc builds a catalog carrying the given pdfaid:conformance, plus whatever
 // extra objects a case needs.
@@ -49,13 +50,13 @@ func TestAnFMustCarryTheFilesItsNameClaims(t *testing.T) {
 	// No name dictionary at all, and a name dictionary without the key: two
 	// shapes of the same violation, reported distinctly so the message tells a
 	// reader which one they have.
-	if v := checkA4FEmbeddedFilesPresent(efDoc("F", nil, nil), PDFA4); !hasMessage(v, "no name dictionary") {
+	if v := checkA4FEmbeddedFilesPresent(efDoc("F", nil, nil), PDFA4F); !hasMessage(v, "no name dictionary") {
 		t.Errorf("a PDF/A-4f file with no name dictionary was not reported: %v", v)
 	}
 	withNames := func(cat *object.Dictionary) {
 		cat.Set("Names", &object.Dictionary{})
 	}
-	if v := checkA4FEmbeddedFilesPresent(efDoc("F", withNames, nil), PDFA4); !hasMessage(v, "/EmbeddedFiles") {
+	if v := checkA4FEmbeddedFilesPresent(efDoc("F", withNames, nil), PDFA4F); !hasMessage(v, "/EmbeddedFiles") {
 		t.Errorf("a PDF/A-4f file whose name dictionary has no /EmbeddedFiles was not reported: %v", v)
 	}
 
@@ -65,16 +66,16 @@ func TestAnFMustCarryTheFilesItsNameClaims(t *testing.T) {
 		n.Set("EmbeddedFiles", &object.Dictionary{})
 		cat.Set("Names", n)
 	}
-	if v := checkA4FEmbeddedFilesPresent(efDoc("F", withEF, nil), PDFA4); len(v) != 0 {
+	if v := checkA4FEmbeddedFilesPresent(efDoc("F", withEF, nil), PDFA4F); len(v) != 0 {
 		t.Errorf("a conforming PDF/A-4f file was reported: %v", v)
 	}
 
 	// And the rule belongs to F alone. A plain PDF/A-4 file, or an E, is not
 	// required to attach anything — reporting them would refuse a conforming
-	// document for a variant it never claimed.
-	for _, c := range []string{"", "E"} {
-		if v := checkA4FEmbeddedFilesPresent(efDoc(c, nil, nil), PDFA4); len(v) != 0 {
-			t.Errorf("conformance %q was held to the PDF/A-4f attachment rule: %v", c, v)
+	// document for a variant it was not validated as.
+	for _, lvl := range []Level{PDFA4, PDFA4E} {
+		if v := checkA4FEmbeddedFilesPresent(efDoc("F", nil, nil), lvl); len(v) != 0 {
+			t.Errorf("%s was held to the PDF/A-4f attachment rule: %v", lvl, v)
 		}
 	}
 	// Nor does it apply at the earlier parts, which have no such variant.
@@ -97,28 +98,28 @@ func TestAnEsArtworkMustBeInAFormatTheStandardNames(t *testing.T) {
 	}
 
 	for _, ok := range []string{"U3D", "PRC"} {
-		if v := checkA4E3DStreamSubtype(efDoc("E", nil, stream(object.Name(ok))), PDFA4); len(v) != 0 {
+		if v := checkA4E3DStreamSubtype(efDoc("E", nil, stream(object.Name(ok))), PDFA4E); len(v) != 0 {
 			t.Errorf("/%s is a permitted 3D format and was reported: %v", ok, v)
 		}
 	}
 	// The corpus file's own case: the right letters in the wrong case. A name
 	// is case-sensitive, so /u3d is not /U3D.
-	if v := checkA4E3DStreamSubtype(efDoc("E", nil, stream(object.Name("u3d"))), PDFA4); !hasMessage(v, "/u3d") {
+	if v := checkA4E3DStreamSubtype(efDoc("E", nil, stream(object.Name("u3d"))), PDFA4E); !hasMessage(v, "/u3d") {
 		t.Errorf("a lowercase /u3d was accepted as /U3D: %v", v)
 	}
-	if v := checkA4E3DStreamSubtype(efDoc("E", nil, stream(object.Name("STL"))), PDFA4); !hasMessage(v, "/STL") {
+	if v := checkA4E3DStreamSubtype(efDoc("E", nil, stream(object.Name("STL"))), PDFA4E); !hasMessage(v, "/STL") {
 		t.Errorf("an unlisted 3D format was not reported: %v", v)
 	}
-	if v := checkA4E3DStreamSubtype(efDoc("E", nil, stream(nil)), PDFA4); !hasMessage(v, "no /Subtype") {
+	if v := checkA4E3DStreamSubtype(efDoc("E", nil, stream(nil)), PDFA4E); !hasMessage(v, "no /Subtype") {
 		t.Errorf("a 3D stream with no /Subtype was not reported: %v", v)
 	}
 
 	// Only at E. Anywhere else a 3D annotation is itself forbidden, and the
 	// annotation rule says so; adding a complaint about the artwork format
 	// would be answering a question nobody reached.
-	for _, c := range []string{"", "F"} {
-		if v := checkA4E3DStreamSubtype(efDoc(c, nil, stream(object.Name("STL"))), PDFA4); len(v) != 0 {
-			t.Errorf("conformance %q was held to the PDF/A-4e artwork rule: %v", c, v)
+	for _, lvl := range []Level{PDFA4, PDFA4F} {
+		if v := checkA4E3DStreamSubtype(efDoc("E", nil, stream(object.Name("STL"))), lvl); len(v) != 0 {
+			t.Errorf("%s was held to the PDF/A-4e artwork rule: %v", lvl, v)
 		}
 	}
 }

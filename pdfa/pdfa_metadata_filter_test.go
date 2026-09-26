@@ -66,15 +66,15 @@ func TestMetadataFilterOnlyForbiddenInPDFA1(t *testing.T) {
 // missing. Before the fix these read the raw compressed bytes.
 func TestCompressedMetadataIsDecoded(t *testing.T) {
 	doc := docWithMetadata(t, pdfaXMP, true)
-	for _, e := range checkMetadataVersion(doc, PDFA3b) {
+	for _, e := range checkIdentification(doc, PDFA3b) {
 		if strings.Contains(e.Message, "must contain pdfaid:part") {
 			t.Fatalf("compressed metadata was not decoded: %s", e.Message)
 		}
 	}
 	// Sanity: the same XMP uncompressed yields identical results (raw == decoded).
 	plain := docWithMetadata(t, pdfaXMP, false)
-	c := checkMetadataVersion(doc, PDFA3b)
-	p := checkMetadataVersion(plain, PDFA3b)
+	c := checkIdentification(doc, PDFA3b)
+	p := checkIdentification(plain, PDFA3b)
 	if len(c) != len(p) {
 		t.Errorf("compressed vs uncompressed metadata gave different results: %d vs %d", len(c), len(p))
 	}

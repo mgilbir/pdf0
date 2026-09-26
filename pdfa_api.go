@@ -127,6 +127,14 @@ func ValidatePDFABytesContext(ctx context.Context, doc *Document, level pdfa.Lev
 	return validatePDFABytes(core.NewCanceler(ctx), doc, level, rawData)
 }
 func validatePDFABytes(cancel core.Canceler, doc *Document, level pdfa.Level, rawData []byte) []pdfa.Violation {
+	return validatePDFABudget(cancel, doc, level, rawData, nil)
+}
+
+// validatePDFABudget is validatePDFABytes for a run that may be nested inside
+// another: the embedded-PDF/A check validates each embedded document through
+// here with the top-level run's budget, so the whole tree of embedded files
+// shares one (see embeddedBudget). A nil budget starts a fresh one.
+func validatePDFABudget(cancel core.Canceler, doc *Document, level pdfa.Level, rawData []byte, budget *embeddedBudget) []pdfa.Violation {
 	if doc == nil {
 		// A nil document is a caller mistake, and the useful answer is a finding
 		// rather than a panic: this is the API a caller reaches for after a
@@ -150,17 +158,29 @@ func validatePDFABytes(cancel core.Canceler, doc *Document, level pdfa.Level, ra
 	runDoc.valCache = newValidationCache(cancel)
 	v := runDoc.view()
 
+	// The target profile. LevelDeclared becomes the level the document
+	// declares, and a level that names no profile — or a declaration that
+	// names none — is one checker finding and nothing else: nothing below
+	// runs against a profile it cannot state.
+	target, refused := pdfa.ResolveTarget(v, level)
+	if refused != nil {
+		return refused
+	}
+
 	// The recursive embedded-file check needs the parser, which the checks
 	// themselves do not depend on; hand it in for this run.
-	pdfa.SetEmbeddedChecker(v, embeddedPDFACompliant)
+	if budget == nil {
+		budget = newEmbeddedBudget(runDoc.lim())
+	}
+	pdfa.SetEmbeddedChecker(v, embeddedPDFAChecker(budget))
 
-	errs := pdfa.ValidateView(v, level, rawData)
+	errs := pdfa.ValidateView(v, target, rawData)
 
 	// Any resource guard that tripped during the run (or while the file was
 	// read) is reported under the "limit" rule: the checks that depended on the
 	// truncated result declined to assert, so the result is "unknown", not
 	// "conformant". Read-time trips live on the Document, so this is here.
-	errs = append(errs, limitPDFAViolations(&runDoc, level)...)
+	errs = append(errs, limitPDFAViolations(&runDoc, target)...)
 	finding.Sort(errs)
 	return errs
 }

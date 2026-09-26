@@ -592,7 +592,7 @@ func (e *contentEngine) content(s *object.Stream) []byte {
 // shadingFamilies is the device families a shading (dictionary or stream)
 // paints in.
 func (e *contentEngine) shadingFamilies(sh object.Object) devSet {
-	switch v := sh.(type) {
+	switch v := e.doc.Resolve(sh).(type) {
 	case *object.Dictionary:
 		return e.csFamilies(v.Get("ColorSpace"))
 	case *object.Stream:

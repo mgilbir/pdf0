@@ -28,10 +28,7 @@ func TestConformanceComesFromTheDocumentsOwnClaim(t *testing.T) {
 	if _, ok := NewDocument().Conformance(); ok {
 		t.Error("a plain document claims a conformance level")
 	}
-	for _, level := range []pdfa.Level{
-		pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4,
-		pdfa.PDFA1a, pdfa.PDFA2a, pdfa.PDFA3a,
-	} {
+	for _, level := range pdfa.Levels() {
 		got, ok := mustPDFADoc(t, level).Conformance()
 		if !ok {
 			t.Errorf("a %s document claims nothing", level)
@@ -205,10 +202,7 @@ func TestSaveRefusesAClaimItCannotCheck(t *testing.T) {
 // they ever disagree, a document is checked against a level other than the one
 // it claims — which is worse than not checking, because it looks checked.
 func TestLevelForIsTheInverseOfWhatIsWritten(t *testing.T) {
-	for _, level := range []pdfa.Level{
-		pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4,
-		pdfa.PDFA1a, pdfa.PDFA2a, pdfa.PDFA3a,
-	} {
+	for _, level := range pdfa.Levels() {
 		doc := mustPDFADoc(t, level)
 		got, ok := doc.Conformance()
 		if !ok || got != level {
@@ -221,10 +215,14 @@ func TestLevelForIsTheInverseOfWhatIsWritten(t *testing.T) {
 	if _, ok := pdfa.LevelFor("", ""); ok {
 		t.Error("an absent part was mapped to a level")
 	}
-	// Conformance U is checked as the B level it extends, which is what this
-	// package implements of it.
-	if got, ok := pdfa.LevelFor("2", "U"); !ok || got != pdfa.PDFA2b {
-		t.Errorf("PDF/A-2u mapped to (%v, %v), want PDF/A-2b", got, ok)
+	// Conformance U is a level of its own, not the B level it extends: mapping
+	// it to B guaranteed a false positive on every 2u/3u file, whose "U" a B
+	// rule refused (audit 2026-09-22 C33).
+	if got, ok := pdfa.LevelFor("2", "U"); !ok || got != pdfa.PDFA2u {
+		t.Errorf("PDF/A-2u mapped to (%v, %v), want PDF/A-2u", got, ok)
+	}
+	if got, ok := pdfa.LevelFor("3", "U"); !ok || got != pdfa.PDFA3u {
+		t.Errorf("PDF/A-3u mapped to (%v, %v), want PDF/A-3u", got, ok)
 	}
 }
 

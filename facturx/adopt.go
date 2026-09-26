@@ -30,16 +30,16 @@ import (
 // documented spelling for that distinction. The prefix exists to keep two rule
 // *namespaces* from colliding, and these two identifiers belong to neither.
 //
-// The A-vs-B conformance-letter finding is dropped: pdf0 validates at level B,
-// and PDF/A-3 also permits level A, which only adds tagging.
+// Every other finding is adopted, the conformance-letter finding included. It
+// used to be dropped, because a 3b target rejected an "A" or "U" declaration;
+// a 3b target now accepts the letters above it (ISO 19005-3's conformance
+// hierarchy), so the finding appears only for a declaration that is wrong at
+// every part-3 level, which is a real container defect.
 func adoptPDFAFindings(add func(rule, msg string, obj int), prefix string, errs []pdfa.Violation) {
 	for _, e := range errs {
 		switch {
 		case e.Rule == finding.InternalRule || e.Rule == finding.LimitRule:
 			add(e.Rule, e.Message, e.Object)
-		case e.Check == pdfa.CheckPDFAIDConformance:
-			// Not a container finding. Keyed on the finding's identity, not on
-			// the words of its message, which may be reworded (audit C148).
 		default:
 			add(prefix+e.Rule, e.Message, e.Object)
 		}
