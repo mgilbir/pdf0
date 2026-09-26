@@ -673,31 +673,60 @@ func (f *Face) draw(b *content.Builder, glyphs []Glyph, text string, size float6
 	}
 }
 
-// glyphsOf is what Encode draws for a string: one glyph per character, in the
-// order written, with no shaping. It is forme's Encode rule restated as glyphs
-// so that the codes go through appendCode like every other path's; the test
-// TestEncodeAgreesWithFormesEncode holds the two to the same bytes.
+// glyphsOf is what Encode draws for a string: in the order written, with no
+// shaping, one glyph per character — or one per part, for a character the face
+// draws as its canonical decomposition. The codes then go through appendCode
+// like every other path's; TestEncodeAgreesWithFormesEncode holds the result
+// to forme's Encode byte for byte.
 //
-// Characters nothing is drawn for are skipped. A character the face lacks is
-// .notdef in a composite face, the space in a standard one, and nothing at all
-// in a simple one — which has no code that could mean it.
+// A character the face has is its own glyph. For one it lacks, forme's Encode
+// decides, asked about that character alone: it draws the character's
+// canonical decomposition where the face has every part of it, and otherwise
+// the substitute — .notdef in a composite face, the space in a simple or
+// standard one. That rule (forme's drawnAs and missingByCode) is not forme's
+// API, and restating it here is what let the two drift: forme began drawing
+// decompositions, and setting a simple face's missing character as a space
+// rather than leaving it out, while this still did neither. Asking forme per
+// character keeps the cluster each part came from, which forme's whole-string
+// answer does not carry and the ToUnicode CMap needs. Characters nothing is
+// drawn for are skipped, as forme skips them.
 func (f *Face) glyphsOf(s string) []Glyph {
 	glyphs := make([]Glyph, 0, len(s))
+	var byCode map[int]int // code -> glyph, for a CID-keyed face; built on first need
 	for i, r := range s {
 		if shape.DrawsNothing(r) {
 			continue
 		}
-		gid, ok := f.GlyphID(r)
-		switch {
-		case ok:
-		case f.IsSimple():
+		if gid, ok := f.GlyphID(r); ok {
+			glyphs = append(glyphs, Glyph{GID: gid, Cluster: i})
 			continue
-		case f.IsStandard():
-			gid = ' '
-		default:
-			gid = 0
 		}
-		glyphs = append(glyphs, Glyph{GID: gid, Cluster: i})
+		codes, _ := f.Face.Encode(string(r))
+		if !f.composite() {
+			for _, c := range codes {
+				glyphs = append(glyphs, Glyph{GID: int(c), Cluster: i})
+			}
+			continue
+		}
+		for k := 0; k+1 < len(codes); k += 2 {
+			code := int(codes[k])<<8 | int(codes[k+1])
+			gid := code
+			// A face addressed by glyph index writes the index. A CID-keyed
+			// one writes the CID, and the glyph with that CID is found by
+			// inverting GlyphCode: a CFF charset gives each glyph its own
+			// CID, so an index whose CID is the code is the only one.
+			if f.GlyphCode(code) != code {
+				if byCode == nil {
+					n := f.NumGlyphs()
+					byCode = make(map[int]int, n)
+					for g := 0; g < n; g++ {
+						byCode[f.GlyphCode(g)] = g
+					}
+				}
+				gid = byCode[code] // absent: glyph 0, .notdef, as forme wrote
+			}
+			glyphs = append(glyphs, Glyph{GID: gid, Cluster: i})
+		}
 	}
 	return glyphs
 }

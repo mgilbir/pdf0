@@ -77,8 +77,10 @@ func (f *Face) ShapeWith(s string, features ...string) (spans []content.TextSpan
 // It is the embedded face's Encode, with the text recorded: a composite face's
 // ToUnicode CMap is written from what each glyph was drawn for, and a caller
 // using this has told the face exactly that. A character the face lacks is
-// .notdef in a composite face, the space in a standard one and left out of a
-// simple one, and the count of them is the second result.
+// drawn as its canonical decomposition where the face has every part of it (é
+// as e and U+0301), as shaping and Measure treat it. Otherwise it is .notdef
+// in a composite face and the space in a simple or standard one, which keeps
+// its place in the text, and the count of those is the second result.
 //
 // Bare codes cannot carry an /ActualText, which is the one thing this cannot
 // say that Draw can: a glyph the font's cmap reaches from two characters — 日

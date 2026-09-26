@@ -8,7 +8,7 @@ require github.com/mgilbir/gopenjpeg v0.1.1
 
 require github.com/mgilbir/golittlecms v0.0.0-20260727161601-f6af7cfe1556
 
-require github.com/mgilbir/forme v0.3.0
+require github.com/mgilbir/forme v0.3.1-0.20260926161936-d45d5803e230
 
 require golang.org/x/text v0.40.0
 

@@ -177,8 +177,9 @@ terms of the Windows subtables. An unreadable higher-ranked subtable never
 displaces a readable lower-ranked one — nor does one that is well formed but
 maps nothing.
 
-**Subtable formats.** `font.ParseCmapSubtable` reads every format whose codes
-are Unicode code points; its documentation lists them and says why format 2
+**Subtable formats.** forme's subtable reader (behind `font.ParseSFNT`) reads
+every format whose codes are Unicode code points; its documentation lists them
+and says why format 2
 (legacy CJK encodings, never at a Unicode platform/encoding pair) and format 14
 (variation sequences, a different function altogether) are not among them. An
 unparseable subtable — or one that parses cleanly and maps nothing — yields
@@ -211,8 +212,8 @@ Type 1 program fills `font.Program.GlyphNames` and `font.Program.WidthByName`.
 Widths come from the charstrings — the optional leading width operand of a
 Type 2 charstring, read through the glyph's own Private DICT and its
 subroutines, or `hsbw`/`sbw` in Type 1. The Type 1 reader stops at the
-standalone `end` token that closes the CharStrings dictionary
-(`font.Type1CharStringsEnd`, Type 1 Font Format 10.3), never at a glyph *name*
+standalone `end` token that closes the CharStrings dictionary (Type 1 Font
+Format 10.3), never at a glyph *name*
 containing "end": `endash` and `endescender` are ordinary glyphs, and breaking
 on the name once truncated the glyph list, so every glyph after it read as
 missing from a font that defines it (`TestType1CharStringsEndTerminator`).
@@ -522,8 +523,8 @@ same budget as any other.
   the dictionary level only, because the mapping is data this module does not
   carry; the skip is reported. Identity and *embedded* CMaps are decoded (see
   [CMaps](#cmaps)).
-- **cmap formats 2 and 14 are not parsed** — see `font.ParseCmapSubtable` for
-  why. Format 14 in particular means variation sequences are invisible.
+- **cmap formats 2 and 14 are not parsed** — see forme's subtable reader
+  (`parseCmapSubtable` in its `font/fontprog.go`) for why. Format 14 in particular means variation sequences are invisible.
   Format 12's groups are read as written: they are required to be sorted and
   non-overlapping, and neither is enforced — an overlap resolves to the last
   group.
