@@ -151,7 +151,7 @@ document with the finding, for a caller who can live with the loss:
 | rule | what the display list says | why it is refused |
 |---|---|---|
 | `backend-vertical-text` (`RuleVerticalText`) | a run set down the page: `writing-mode` `vertical-rl`, `vertical-lr`, `sideways-rl`, `sideways-lr`, or `text-orientation: upright` | the glyphs would be drawn across the page, in the wrong place and the wrong way up |
-| `backend-link-dropped` (`RuleLinkDropped`) | an `<a href>` | the display list carries no links, so the page would have the link's text and nothing to follow |
+| `backend-link-dropped` (`RuleLinkDropped`) | a link whose target a PDF link cannot carry: a reference relative to the HTML document (`other.html`, `/a/b`), a fragment (`#section`), or a URI [`pdf0.LinkURI`](../annotation.go) refuses | the HTML document's address is not given to the backend, and a PDF reader resolves a relative URI against the PDF's own; the display list does not say where a fragment's target is; so the page would have the link's text and nothing to follow |
 | `backend-unknown-op` (`RuleUnknownOp`) | an operation a newer forme added | part of the page would be undrawn |
 
 Every field of every display-list operation is either drawn or refused, and
@@ -171,6 +171,19 @@ What is drawn:
   each typographic character unit, not after each glyph. Every run extracts as
   the text it was set from — a ligature as its letters, a right-to-left word in
   reading order; see [fonts.md](fonts.md#setting-text-and-getting-it-back).
+- **Links.** Each `<a href>` forme lays out is a `Link` in the display list,
+  with one area per fragment of the `<a>`: a line of an inline link, the box of
+  a block one, an image or inline-block inside one. Each area is a link
+  annotation with a URI action, placed through the same transform as the
+  drawing, and written by pdf0's own builder (`Page.Links`), so the URI is
+  checked against its scheme allowlist, normalised and percent-encoded to
+  7-bit ASCII as ISO 32000-2 12.6.4.8 requires. A link broken across lines is
+  one annotation per line rather than one with `/QuadPoints`, because a reader
+  that does not honour `/QuadPoints` activates the whole `/Rect`, which covers
+  the middle of every line between. An href forme will not make a link of
+  (`javascript:`, `data:`, `file:` and every scheme but http, https and
+  mailto) is reported by forme as `link-refused`, at warning severity, and the
+  words are drawn without a link.
 - **Translucency.** A colour's alpha — including the `opacity` layout folds
   into it — is an ExtGState with `/ca` and `/CA`, and a page that uses one is a
   transparency group. A fill at alpha zero is left out; text at alpha zero is

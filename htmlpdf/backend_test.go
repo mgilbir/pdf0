@@ -305,9 +305,11 @@ func TestVerticalTextIsRefused(t *testing.T) {
 }
 
 // TestLinksAreNotDroppedSilently is C168: a link this backend does not write
-// refuses the document unless the caller accepts losing it.
+// refuses the document unless the caller accepts losing it. A link it can
+// write is written; see link_test.go. This one is relative to the HTML
+// document, whose address the backend is not told.
 func TestLinksAreNotDroppedSilently(t *testing.T) {
-	in := Input{HTML: `<p>see <a href="https://example.com/">this</a></p>`}
+	in := Input{HTML: `<p>see <a href="other.html">this</a></p>`}
 	_, err := Render(in, Options{})
 	var refused *RefusedError
 	if !errors.As(err, &refused) || !hasRule(refused.Findings, RuleLinkDropped, layout.Error) {

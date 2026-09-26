@@ -25,7 +25,9 @@ package htmlpdf
 import (
 	"fmt"
 	"image"
+	"net/url"
 	"sort"
+	"strings"
 
 	"github.com/mgilbir/forme/layout"
 	"github.com/mgilbir/forme/paragraph"
@@ -238,6 +240,10 @@ func Render(in layout.Input, opts layout.Options) (Result, error) {
 // one fact about the document, and a line per run would bury it.
 func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, bool) {
 	counts := map[layout.Rule]int{}
+	// The first link that cannot be written, and why: the links a document
+	// cannot carry are usually all one kind — every relative reference in it
+	// — and the first says which.
+	var firstLink string
 	for _, op := range c.Ops {
 		switch v := op.(type) {
 		case layout.DrawText:
@@ -245,9 +251,12 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 				counts[RuleVerticalText]++
 			}
 		case layout.Link:
-			// A link is in the display list, and this backend does not yet
-			// write link annotations.
-			counts[RuleLinkDropped]++
+			if _, err := linkTarget(v.Href); err != nil {
+				if counts[RuleLinkDropped] == 0 {
+					firstLink = err.Error()
+				}
+				counts[RuleLinkDropped]++
+			}
 		case layout.FillRect, layout.DrawImage, layout.TileImage:
 		default:
 			counts[RuleUnknownOp]++
@@ -258,8 +267,8 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 		RuleVerticalText: "%d run(s) of text are set down the page (a vertical writing-mode " +
 			"or text-orientation: upright), which this PDF backend cannot draw; they would " +
 			"be drawn across the page",
-		RuleLinkDropped: "the document has %d hyperlink(s), and this backend does not write " +
-			"link annotations, so the PDF would show their text with nothing to follow",
+		RuleLinkDropped: "%d hyperlink(s) cannot be written as PDF links, so the page would " +
+			"show their text with nothing to follow; the first: " + firstLink,
 		RuleUnknownOp: "the display list has %d operation(s) of a kind this backend does not " +
 			"know, which a newer layout engine added; the page would be missing them",
 	}
@@ -289,6 +298,45 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 		})
 	}
 	return out, refused
+}
+
+// linkTarget is the URI a display-list link is written with, or why it
+// cannot be one.
+//
+// forme makes a Link only of an http, https or mailto URL or of a reference
+// with no scheme, and reports every other href itself (layout.RuleLinkRefused).
+// The first kind goes through pdf0.LinkURI, the rule every link annotation
+// goes through: an allowlist of schemes, the URL standard's normalisation,
+// and 7-bit percent-encoding. The second cannot be written correctly. A
+// relative reference is relative to the HTML document, whose address this
+// backend is never given, and a PDF reader resolves a relative /URI against
+// the PDF's own location (ISO 32000-2 12.6.4.8), which is another place. A
+// fragment names an element of the HTML document, and the display list does
+// not say where on the page that element is.
+func linkTarget(href string) (string, error) {
+	if u, err := url.Parse(href); err == nil && u.Scheme == "" {
+		if strings.HasPrefix(href, "#") {
+			return "", fmt.Errorf("%q is a fragment of the HTML document, and the display "+
+				"list does not say where on the page its target is", href)
+		}
+		return "", fmt.Errorf("%q is relative to the HTML document, whose address this "+
+			"backend is not given; a PDF reader would resolve it against the PDF's own", href)
+	}
+	return pdf0.LinkURI(href)
+}
+
+// pageTransform is the one transform of writePage, as a function: layout
+// units, y down, to page space in points, y up. A link annotation's /Rect is
+// in the page's default coordinates and is not drawn through the content
+// stream's "cm", so it is put through the same numbers here.
+type pageTransform struct{ k, tx, ty float64 }
+
+// rect is a layout rectangle in page space, as [xMin yMin xMax yMax].
+func (m pageTransform) rect(r layout.Rect) [4]float64 {
+	return [4]float64{
+		m.tx + m.k*r.X.Px(), m.ty - m.k*r.Bottom().Px(),
+		m.tx + m.k*r.Right().Px(), m.ty - m.k*r.Y.Px(),
+	}
 }
 
 // writePage turns a display list into a one-page document.
@@ -321,6 +369,8 @@ func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Docu
 	ty := page.Height.Pt() - page.Margin.Top.Pt()
 	b.Save()
 	b.Concat(k, 0, 0, -k, tx, ty)
+	toPage := pageTransform{k: k, tx: tx, ty: ty}
+	var links []pdf0.Link
 
 	// Keyed by the shaping face, which is what the display list carries, and
 	// held as the embedding wrapper, which is what writing the document needs.
@@ -475,6 +525,25 @@ func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Docu
 			}
 			b.Restore()
 
+		case layout.Link:
+			if _, err := linkTarget(v.Href); err != nil {
+				continue // checkDrawable reported it, and the policy let the page through without it
+			}
+			// One annotation per area, in the order forme painted them, so
+			// that where areas overlap the later — the inner of two nested
+			// links — is on top, as forme's Link says a backend should make
+			// it. Not one annotation with /QuadPoints: a reader that does
+			// not read them (PDF 1.6, and optional) activates the /Rect,
+			// which for a link broken across lines is a box over the middle
+			// of every line between. The href goes to the builder as the
+			// document wrote it; the builder normalises and encodes it.
+			for _, r := range v.Rects {
+				if r.Empty() {
+					continue // forme drops these; nothing could activate one
+				}
+				links = append(links, pdf0.Link{Rect: toPage.rect(r), URI: v.Href})
+			}
+
 		default:
 			// checkDrawable refused this document or the caller's policy let
 			// it through knowing the operation is not drawn.
@@ -486,6 +555,7 @@ func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Docu
 		Width:      page.Width.Pt(),
 		Height:     page.Height.Pt(),
 		Content:    b,
+		Links:      links,
 		Faces:      faces,
 		XObjects:   xobjects,
 		Patterns:   patterns,
@@ -541,8 +611,9 @@ var drawnFields = map[string]map[string]string{
 		"Clip":  "clipTo",
 	},
 	"Link": {
-		"Rects": "refused: RuleLinkDropped",
-		"Href":  "refused: RuleLinkDropped",
+		"Rects": "one link annotation per area, through the page transform",
+		"Href": "the annotation's URI action, through pdf0.LinkURI; a relative reference, " +
+			"a fragment or a URI the builder refuses is refused: RuleLinkDropped",
 	},
 	"TileImage": {
 		"Clip":  "the area painted",
