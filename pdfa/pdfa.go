@@ -8,7 +8,7 @@ import (
 	"github.com/mgilbir/pdf0/internal/xmp"
 	"github.com/mgilbir/pdf0/object"
 	"math"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -28,18 +28,29 @@ import (
 // the Document, so the checks share page-tree walks and decoded content
 // streams without touching the caller's Document or racing another run.
 
-// pdfaCache is this engine's memo for one run: the annotations found directly
-// on pages rather than through the page tree. It is reached through core.Slot
-// rather than held on the shared run state, because nothing else reads it.
+// pdfaMemoCache is this engine's memo for one run: the annotations the
+// document reaches, which half a dozen rules walk. It is reached through
+// core.Slot rather than held on the shared run state, because nothing else
+// reads it.
 type pdfaMemoCache struct {
-	directAnnots    []annotOccurrence
-	hasDirectAnnots bool
+	annots    []annotOccurrence
+	hasAnnots bool
 }
 
 // pdfaSlot keys pdfaMemoCache; an unexported empty struct cannot collide.
 type pdfaSlot struct{}
 
 func pdfaMemo(d core.View) *pdfaMemoCache { return core.Slot[pdfaMemoCache](d.Run, pdfaSlot{}) }
+
+// sortedReachableObjectNums returns the numbers of the objects the document
+// reaches in ascending order, for a rule whose report depends on which object
+// it meets first: ascending number is a total order, so the report is the same
+// on every run.
+func sortedReachableObjectNums(doc core.View) []int {
+	nums := slices.Clone(doc.ReachableObjectNums())
+	slices.Sort(nums)
+	return nums
+}
 
 // Violation describes a single PDF/A conformance violation.
 type Violation struct {
@@ -974,6 +985,8 @@ func filterClause(level Level) string {
 // Rule: only the standard stream filters may be used; LZWDecode is prohibited.
 func checkNoLZW(doc core.View, level Level) []Violation {
 	var errs []Violation
+	// allobjects: a stream's filter is file syntax, required of every stream
+	// the file holds whether or not the document uses it.
 	for num, iobj := range doc.Objects {
 		stream, ok := iobj.Value.(*object.Stream)
 		if !ok {
@@ -1022,9 +1035,9 @@ func checkSignatureByteRange(doc core.View, level Level, raw []byte) []Violation
 		return nil
 	}
 	var errs []Violation
-	for num, iobj := range doc.Objects {
-		dict, ok := iobj.Value.(*object.Dictionary)
-		if !ok {
+	for _, r := range doc.ReachableDicts() {
+		dict, num := r.Dict, r.ObjNum
+		if r.Stream != nil {
 			continue
 		}
 		// A signature dictionary carries both /ByteRange and /Contents; that
@@ -1120,6 +1133,8 @@ func hasFilter(doc core.View, stream *object.Stream, filterName string) bool {
 // Rule 6.1.6.1-2: Stream dict cannot contain F, FFilter, or FDecodeParms.
 func checkNoExternalStreams(doc core.View, level Level) []Violation {
 	var errs []Violation
+	// allobjects: the stream dictionary's keys are file syntax, required of
+	// every stream the file holds whether or not the document uses it.
 	for num, iobj := range doc.Objects {
 		stream, ok := iobj.Value.(*object.Stream)
 		if !ok {
@@ -1381,43 +1396,33 @@ func init() {
 }
 
 // annotOccurrence is one annotation dictionary paired with the object number
-// used for error attribution: the annotation's own number, or the owning
-// page's number when the annotation is a direct dictionary inside /Annots.
+// used for error attribution: the annotation's own number, or, for an
+// annotation written directly inside another object (a page's /Annots, say),
+// that object's number.
 type annotOccurrence struct {
 	dict *object.Dictionary
 	num  int
 }
 
-// collectDirectAnnotations returns annotations written as direct dictionaries
-// inside page /Annots arrays. These are not top-level objects, so the flat
-// doc.Objects scans the annotation checks start from can never see them
-// (audit A9); every annotation check runs over this list as well.
-func collectDirectAnnotations(doc core.View) []annotOccurrence {
-	if c := pdfaMemo(doc); true && c.hasDirectAnnots {
-		return c.directAnnots
-	}
-	catalog := doc.Catalog()
-	if catalog == nil {
-		return nil
+// reachableAnnotations returns every annotation the document reaches, direct
+// ones included, each once. It replaces a scan of the object table plus a
+// second pass for the direct annotations of page /Annots arrays (audit A9):
+// the table scan also judged annotations nothing refers to, and the second
+// pass missed a direct annotation anywhere but a page's own /Annots
+// (audit 2026-09-22 C83).
+func reachableAnnotations(doc core.View) []annotOccurrence {
+	if c := pdfaMemo(doc); true && c.hasAnnots {
+		return c.annots
 	}
 	var out []annotOccurrence
-	for _, page := range doc.Pages(catalog.Get("Pages")) {
-		annots, ok := doc.Resolve(page.Dict.Get("Annots")).(object.Array)
-		if !ok {
-			continue
-		}
-		for _, el := range annots {
-			switch dict := el.(type) {
-			case object.IndirectRef:
-				// A top-level object, which the object scans already visit.
-			case *object.Dictionary:
-				out = append(out, annotOccurrence{dict: dict, num: page.ObjNum})
-			}
+	for _, r := range doc.ReachableDicts() {
+		if r.Stream == nil && doc.IsAnnotation(r.Dict) {
+			out = append(out, annotOccurrence{dict: r.Dict, num: r.ObjNum})
 		}
 	}
 	if c := pdfaMemo(doc); true {
-		c.directAnnots = out
-		c.hasDirectAnnots = true
+		c.annots = out
+		c.hasAnnots = true
 	}
 	return out
 }
@@ -1459,12 +1464,7 @@ func checkAnnotationSubtypes(doc core.View, level Level) []Violation {
 			})
 		}
 	}
-	for num, iobj := range doc.Objects {
-		if dict, ok := iobj.Value.(*object.Dictionary); ok && doc.IsAnnotation(dict) {
-			check(dict, num)
-		}
-	}
-	for _, a := range collectDirectAnnotations(doc) {
+	for _, a := range reachableAnnotations(doc) {
 		check(a.dict, a.num)
 	}
 	return errs
@@ -1559,12 +1559,7 @@ func checkAnnotationFlags(doc core.View, level Level) []Violation {
 			})
 		}
 	}
-	for num, iobj := range doc.Objects {
-		if dict, ok := iobj.Value.(*object.Dictionary); ok && doc.IsAnnotation(dict) {
-			check(dict, num)
-		}
-	}
-	for _, a := range collectDirectAnnotations(doc) {
+	for _, a := range reachableAnnotations(doc) {
 		check(a.dict, a.num)
 	}
 	return errs
@@ -1603,8 +1598,8 @@ func checkAnnotationAppearance(doc core.View, level Level) []Violation {
 			return
 		}
 
-		// Exempt zero-area rectangles
-		if isZeroAreaRect(doc, dict.Get("Rect")) {
+		// Exempt an annotation whose rectangle has no size at all
+		if isZeroSizeRect(doc, dict.Get("Rect")) {
 			return
 		}
 
@@ -1689,12 +1684,7 @@ func checkAnnotationAppearance(doc core.View, level Level) []Violation {
 			}
 		}
 	}
-	for num, iobj := range doc.Objects {
-		if dict, ok := iobj.Value.(*object.Dictionary); ok && doc.IsAnnotation(dict) {
-			check(dict, num)
-		}
-	}
-	for _, a := range collectDirectAnnotations(doc) {
+	for _, a := range reachableAnnotations(doc) {
 		check(a.dict, a.num)
 	}
 	return errs
@@ -1713,10 +1703,16 @@ func annotFieldType(doc core.View, dict *object.Dictionary) object.Name {
 	return ""
 }
 
-// isZeroAreaRect reports whether a /Rect has zero width or height. The
-// rectangle and each coordinate are resolved: an indirect /Rect used to read as
-// "not a rectangle", which reported a zero-area annotation as missing its /AP.
-func isZeroAreaRect(doc core.View, obj object.Object) bool {
+// isZeroSizeRect reports whether a /Rect has neither width nor height — the
+// annotations 6.3.3 (PDF/A-1 6.5.3) exempts from needing an appearance. Both,
+// not either: the veraPDF rule is (width == 0 && height == 0), and a
+// FileAttachment annotation 50 points tall and 0 wide without /AP is a failing
+// file in the corpus (PDF_A-2b 6-3-3-t01-fail-p), which "either" exempted.
+// That went unnoticed while an over-broad /UF rule happened to reject the file
+// for a reason veraPDF does not share. The rectangle and each coordinate are
+// resolved: an indirect /Rect used to read as "not a rectangle", which
+// reported a zero-area annotation as missing its /AP.
+func isZeroSizeRect(doc core.View, obj object.Object) bool {
 	arr, ok := doc.Resolve(obj).(object.Array)
 	if !ok || len(arr) != 4 {
 		return false
@@ -1729,8 +1725,7 @@ func isZeroAreaRect(doc core.View, obj object.Object) bool {
 		}
 		vals[i] = v
 	}
-	// Zero area if width or height is zero
-	return (vals[2]-vals[0]) == 0 || (vals[3]-vals[1]) == 0
+	return (vals[2]-vals[0]) == 0 && (vals[3]-vals[1]) == 0
 }
 
 // --- Interactive forms (6.4) ---
@@ -1752,13 +1747,10 @@ func checkWidgetNoAction(doc core.View, level Level) []Violation {
 			})
 		}
 	}
-	for num, iobj := range doc.Objects {
-		if dict, ok := iobj.Value.(*object.Dictionary); ok {
-			check(dict, num)
+	for _, r := range doc.ReachableDicts() {
+		if r.Stream == nil {
+			check(r.Dict, r.ObjNum)
 		}
-	}
-	for _, a := range collectDirectAnnotations(doc) {
-		check(a.dict, a.num)
 	}
 	return errs
 }
@@ -1895,16 +1887,33 @@ func checkNoForbiddenActions(doc core.View, level Level) []Violation {
 		}
 	}
 
-	// Check all objects for /A and action dictionaries
-	for num, iobj := range doc.Objects {
-		dict, ok := iobj.Value.(*object.Dictionary)
-		if !ok {
+	// Check every dictionary the document reaches for /A and for being an
+	// action itself. Direct dictionaries are included — an inline /A, or an
+	// action written directly in an /AA, is the shape most producers write —
+	// and an orphan action nothing reaches is not part of the document
+	// (audit 2026-09-22 C83).
+	//
+	// Each action is judged once. One reached through a holder's /A (or the
+	// /Next chain behind it) is judged there, under the holder's number, and
+	// not again as a dictionary in its own right — whether it is written
+	// inline or as an object of its own, which is the same document and must
+	// get the same findings (TestFindingsAreInvariantUnderIndirection). So
+	// every /A is followed first, and the standalone pass skips what it
+	// reached.
+	dicts := doc.ReachableDicts()
+	viaA := map[*object.Dictionary]bool{}
+	for _, r := range dicts {
+		if r.Stream != nil {
 			continue
 		}
-
-		// Check /A (action) in any dictionary
-		if aRef := dict.Get("A"); aRef != nil {
-			errs = append(errs, checkActionObject(doc, aRef, num, level)...)
+		if aRef := r.Dict.Get("A"); aRef != nil {
+			checkActionChain(doc, aRef, r.ObjNum, level, &errs, viaA)
+		}
+	}
+	for _, r := range dicts {
+		dict, num := r.Dict, r.ObjNum
+		if r.Stream != nil || viaA[dict] {
+			continue
 		}
 
 		// Check if the object itself is an action dict (has /S and /Type=Action or no /Type)
@@ -1921,19 +1930,6 @@ func checkNoForbiddenActions(doc core.View, level Level) []Violation {
 			}
 		}
 	}
-
-	// Annotations written as direct dictionaries inside /Annots are invisible
-	// to the object scan above. Check their direct /A actions explicitly (an
-	// indirect /A resolves to a top-level object the scan already covers).
-	for _, a := range collectDirectAnnotations(doc) {
-		switch actionDict := a.dict.Get("A").(type) {
-		case object.IndirectRef:
-			// A top-level object: the scan above covered it.
-		case *object.Dictionary:
-			errs = append(errs, checkActionObject(doc, actionDict, a.num, level)...)
-		}
-	}
-
 	return errs
 }
 
@@ -2001,19 +1997,10 @@ func checkNamedActions(doc core.View, level Level) []Violation {
 			})
 		}
 	}
-	for num, iobj := range doc.Objects {
-		if dict, ok := iobj.Value.(*object.Dictionary); ok {
-			check(dict, num)
-		}
-	}
-	// Direct annotations may carry direct action dictionaries that never
-	// appear as top-level objects (an indirect /A is already covered above).
-	for _, a := range collectDirectAnnotations(doc) {
-		switch actionDict := a.dict.Get("A").(type) {
-		case object.IndirectRef:
-			// A top-level object: the scan above covered it.
-		case *object.Dictionary:
-			check(actionDict, a.num)
+	// Every action the document reaches, direct ones included.
+	for _, r := range doc.ReachableDicts() {
+		if r.Stream == nil {
+			check(r.Dict, r.ObjNum)
 		}
 	}
 	return errs
@@ -2051,13 +2038,10 @@ func checkAnnotationAA(doc core.View, level Level) []Violation {
 			})
 		}
 	}
-	for num, iobj := range doc.Objects {
-		if dict, ok := iobj.Value.(*object.Dictionary); ok && (doc.IsAnnotation(dict) || isWidgetOrField(doc, dict)) {
-			check(dict, num)
+	for _, r := range doc.ReachableDicts() {
+		if r.Stream == nil && (doc.IsAnnotation(r.Dict) || isWidgetOrField(doc, r.Dict)) {
+			check(r.Dict, r.ObjNum)
 		}
-	}
-	for _, a := range collectDirectAnnotations(doc) {
-		check(a.dict, a.num)
 	}
 	return errs
 }
@@ -2322,7 +2306,8 @@ func collectAllExtGState(doc core.View) []extGStateEntry {
 		}
 	}
 
-	// Scan all objects for Resources dicts (pages, Form XObjects, Type3 fonts).
+	// Scan the objects the document reaches for Resources dicts (pages, Form
+	// XObjects, Type3 fonts).
 	//
 	// In ascending object-number order, not doc.Objects map order. A graphics
 	// state written as a DIRECT dictionary takes its object number from the
@@ -2333,7 +2318,7 @@ func collectAllExtGState(doc core.View) []extGStateEntry {
 	// shared graphics state reported a different object number on every run over
 	// the same file. Lowest container object number is a total order, so it is
 	// reproducible; that is load-bearing, since reports are diffed run to run.
-	for _, num := range doc.SortedObjectNums() {
+	for _, num := range sortedReachableObjectNums(doc) {
 		switch v := doc.Objects[num].Value.(type) {
 		case *object.Dictionary:
 			resRef := v.Get("Resources")
@@ -2397,9 +2382,9 @@ func jpxClause(level Level) string {
 
 func checkNoAlternateImages(doc core.View, level Level) []Violation {
 	var errs []Violation
-	for num, iobj := range doc.Objects {
-		stream, ok := iobj.Value.(*object.Stream)
-		if !ok {
+	for _, r := range doc.ReachableDicts() {
+		stream, num := r.Stream, r.ObjNum
+		if stream == nil {
 			continue
 		}
 		if st, ok := doc.ResolveName(stream.Dict.Get("Subtype")); ok && st == "Image" {
@@ -2419,9 +2404,9 @@ func checkNoAlternateImages(doc core.View, level Level) []Violation {
 // Rule 6.2.7.1-3: Interpolate must be false.
 func checkInterpolate(doc core.View, level Level) []Violation {
 	var errs []Violation
-	for num, iobj := range doc.Objects {
-		stream, ok := iobj.Value.(*object.Stream)
-		if !ok {
+	for _, r := range doc.ReachableDicts() {
+		stream, num := r.Stream, r.ObjNum
+		if stream == nil {
 			continue
 		}
 		if st, ok := doc.ResolveName(stream.Dict.Get("Subtype")); ok && st == "Image" {
@@ -2468,9 +2453,9 @@ func xobjectClause(concept string, level Level) string {
 
 func checkNoOPI(doc core.View, level Level) []Violation {
 	var errs []Violation
-	for num, iobj := range doc.Objects {
-		stream, ok := iobj.Value.(*object.Stream)
-		if !ok {
+	for _, r := range doc.ReachableDicts() {
+		stream, num := r.Stream, r.ObjNum
+		if stream == nil {
 			continue
 		}
 		st, ok := doc.ResolveName(stream.Dict.Get("Subtype"))
@@ -3228,8 +3213,8 @@ func checkEmbeddedFiles(doc core.View, level Level) []Violation {
 	// catalog's Names tree.
 	if level.Part() == 1 {
 		var errs []Violation
-		for num, iobj := range doc.Objects {
-			if dict, ok := iobj.Value.(*object.Dictionary); ok && dict.Get("EF") != nil {
+		for _, r := range doc.ReachableDicts() {
+			if dict, num := r.Dict, r.ObjNum; r.Stream == nil && dict.Get("EF") != nil {
 				errs = append(errs, Violation{
 					Rule:    "6.1.11",
 					Level:   level,
@@ -3290,9 +3275,9 @@ func checkEmbeddedFileSpecs(doc core.View, level Level, catalog *object.Dictiona
 		})
 	}
 
-	for num, iobj := range doc.Objects {
-		dict, ok := iobj.Value.(*object.Dictionary)
-		if !ok {
+	for _, r := range doc.ReachableDicts() {
+		dict, num := r.Dict, r.ObjNum
+		if r.Stream != nil {
 			continue
 		}
 		// A file specification is not required to carry /Type /Filespec;
@@ -3303,7 +3288,15 @@ func checkEmbeddedFileSpecs(doc core.View, level Level, catalog *object.Dictiona
 			continue
 		}
 
-		if dict.Get("F") == nil {
+		// /F and /UF are required of the specification of an *embedded* file
+		// (ISO 19005-2/-3 6.8, -4 6.9; veraPDF: containsEF == false ||
+		// (F != null && UF != null)). A specification that only names an
+		// external file — a Launch action's /F, say, written inline — is
+		// not held to it. That distinction was invisible while only the
+		// specifications written as objects of their own were examined,
+		// since those are the embedded ones in practice.
+		embedded := dict.Get("EF") != nil
+		if embedded && dict.Get("F") == nil {
 			errs = append(errs, Violation{
 				Rule:    rule,
 				Level:   level,
@@ -3311,7 +3304,7 @@ func checkEmbeddedFileSpecs(doc core.View, level Level, catalog *object.Dictiona
 				Object:  num,
 			})
 		}
-		if dict.Get("UF") == nil {
+		if embedded && dict.Get("UF") == nil {
 			errs = append(errs, Violation{
 				Rule:    rule,
 				Level:   level,
@@ -3320,8 +3313,11 @@ func checkEmbeddedFileSpecs(doc core.View, level Level, catalog *object.Dictiona
 			})
 		}
 		// /AFRelationship is the PDF/A-3+ mechanism relating an embedded
-		// file to the document; PDF/A-2 has no such key.
-		if level.Part() != 2 && dict.Get("AFRelationship") == nil {
+		// file to the document; PDF/A-2 has no such key. PDF/A-3 asks it of
+		// every file specification (6.8 t03: AFRelationship != null), PDF/A-4
+		// of an embedded file's only (6.9 t04: containsEF == false ||
+		// AFRelationship != null).
+		if level.Part() != 2 && (level.Part() != 4 || embedded) && dict.Get("AFRelationship") == nil {
 			errs = append(errs, Violation{
 				Rule:    rule,
 				Level:   level,
@@ -3372,8 +3368,8 @@ func documentHasEmbeddedFiles(doc core.View, catalog *object.Dictionary) bool {
 			return true
 		}
 	}
-	for _, iobj := range doc.Objects {
-		if dict, ok := iobj.Value.(*object.Dictionary); ok && dict.Get("EF") != nil {
+	for _, r := range doc.ReachableDicts() {
+		if r.Stream == nil && r.Dict.Get("EF") != nil {
 			return true
 		}
 	}
@@ -3385,16 +3381,9 @@ func documentHasAF(doc core.View) bool {
 	if catalog != nil && catalog.Get("AF") != nil {
 		return true
 	}
-	for _, iobj := range doc.Objects {
-		if dict, ok := iobj.Value.(*object.Dictionary); ok {
-			if dict.Get("AF") != nil {
-				return true
-			}
-		}
-		if stream, ok := iobj.Value.(*object.Stream); ok {
-			if stream.Dict.Get("AF") != nil {
-				return true
-			}
+	for _, r := range doc.ReachableDicts() {
+		if r.Dict.Get("AF") != nil {
+			return true
 		}
 	}
 	return false
@@ -3582,6 +3571,8 @@ func checkImplementationLimits(doc core.View, level Level) []Violation {
 	}
 
 	var errs []Violation
+	// allobjects: the implementation limits bound the file's syntax, which
+	// every indirect object in the file must respect, used or not.
 	for num, iobj := range doc.Objects {
 		checkObjectLimits(iobj.Value, num, level, lim, 0, &errs)
 	}
@@ -4057,7 +4048,8 @@ type iccBasedProfile struct {
 }
 
 // iccBasedProfiles finds every profile stream named by an [/ICCBased profile]
-// array anywhere in the document, each once, in object-number order. Each
+// array anywhere in the document it reaches, each once, in object-number
+// order. Each
 // object's value is walked to a bounded depth without following references —
 // a referenced object is walked as its own object — so every array written
 // anywhere is seen exactly as written.
@@ -4094,12 +4086,9 @@ func iccBasedProfiles(doc core.View) []iccBasedProfile {
 			}
 		}
 	}
-	nums := make([]int, 0, len(doc.Objects))
-	for num := range doc.Objects {
-		nums = append(nums, num)
-	}
-	sort.Ints(nums)
-	for _, num := range nums {
+	// The objects the document reaches, in ascending number; an orphan
+	// colour space colours nothing (audit 2026-09-22 C83).
+	for _, num := range sortedReachableObjectNums(doc) {
 		if doc.Cancel.Stopped() {
 			break
 		}
@@ -4118,8 +4107,10 @@ func checkSeparationDeviceN(doc core.View, level Level) []Violation {
 	// Track tint transform references by colorant name for consistency check
 	tintTransforms := make(map[object.Name]sepColorantSeen) // colorant name → first seen definition
 
-	// Scan all objects for color space arrays used in Resources
-	for num, iobj := range doc.Objects {
+	// Scan the objects the document reaches for color space arrays used in
+	// Resources; an orphan colour space colours nothing (audit 2026-09-22 C83).
+	for _, num := range doc.ReachableObjectNums() {
+		iobj := doc.Objects[num]
 		dict, isDict := iobj.Value.(*object.Dictionary)
 		stream, isStream := iobj.Value.(*object.Stream)
 
@@ -4927,9 +4918,9 @@ func checkJPXImages(doc core.View, level Level) []Violation {
 	rule := jpxClause(level)
 
 	var errs []Violation
-	for num, iobj := range doc.Objects {
-		stream, ok := iobj.Value.(*object.Stream)
-		if !ok || !hasFilter(doc, stream, "JPXDecode") {
+	for _, r := range doc.ReachableDicts() {
+		stream, num := r.Stream, r.ObjNum
+		if stream == nil || !hasFilter(doc, stream, "JPXDecode") {
 			continue
 		}
 		info := parseJP2Header(stream.Data)

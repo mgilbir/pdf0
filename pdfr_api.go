@@ -2,8 +2,6 @@ package pdf0
 
 import (
 	"context"
-	"fmt"
-	"strings"
 
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
@@ -25,73 +23,25 @@ func ValidatePDFRContext(ctx context.Context, d *Document) []pdfr.Violation {
 	return validatePDFR(core.NewCanceler(ctx), d)
 }
 func validatePDFR(cancel core.Canceler, d *Document) []pdfr.Violation {
+	if d == nil {
+		return []pdfr.Violation{{Rule: finding.LimitRule, Message: nilDocumentMessage}}
+	}
 	// Run against a shallow copy carrying the per-run cache (see beginRun): it
 	// memoizes the shared traversals, applies the aggregate content budget,
 	// carries the cancellation signal, and gives the resource guards somewhere to
 	// report a trip (limits.go).
+	//
+	// This is the boundary: the checks below read a view.
 	rd := beginRunCancel(d, cancel)
-	v := rd
-	var out []pdfr.Violation
+	out := pdfr.ValidateView(rd.view())
+
+	// Guard trips are reported under their own rule, not as conformance
+	// failures (see limits.go). Read-time trips live on the Document, so this
+	// is here.
 	add := func(rule, msg string, obj int) {
 		out = append(out, pdfr.Violation{Rule: rule, Message: msg, Object: obj})
 	}
-
-	// Every check runs under a recover boundary, so a panic on hostile input
-	// becomes an "internal" finding instead of crashing the caller, and one bad
-	// check (or one bad page) does not discard the others' findings (audit C27).
-	// It is also the coarse cancellation boundary (cancel.go).
-	run := func(check func()) {
-		if v.view().Cancel.Stopped() {
-			return
-		}
-		finding.Guarded(add, check)
-	}
-
-	run(func() {
-		if v.Encrypted || v.Trailer.Get("Encrypt") != nil {
-			add("encryption", "a PDF/R file shall not be encrypted", 0)
-		}
-		if maj, _, ok := core.ParsePDFVersion(v.Version); ok && maj != 2 {
-			add("version", fmt.Sprintf("PDF/R is defined for PDF 2.0; file declares %s", v.Version), 0)
-		}
-	})
-
-	cat := v.view().Catalog()
-	if cat == nil {
-		add("structure", "document has no catalog", 0)
-		reportLimits(rd, add)
-		finding.Sort(out)
-		return out
-	}
-	run(func() {
-		xmp, r := v.view().DocumentXMP()
-		if r.Declined() {
-			return // not read; the producer recorded the trip
-		}
-		if xmp == "" && r != core.ReasonMalformed {
-			add("metadata", "a PDF/R file requires an XMP metadata stream", 0)
-		} else if !strings.Contains(strings.ToLower(xmp), "pdf/r") && !strings.Contains(strings.ToLower(xmp), "pdfr") {
-			add("identification", "the XMP metadata does not identify the file as PDF/R", 0)
-		}
-	})
-
-	var pages []core.PageInfo
-	run(func() {
-		pages = v.view().Pages(cat.Get("Pages"))
-		if len(pages) == 0 {
-			add("structure", "a PDF/R file shall have at least one page", 0)
-		}
-	})
-	for _, page := range pages {
-		run(func() { pdfr.CheckPage(v.view(), page.Dict, page.ObjNum, add) })
-	}
-
-	// Guard trips are reported under their own rule, not as conformance
-	// failures (see limits.go).
 	reportLimits(rd, add)
-
-	// The checks iterate map-ordered doc.Objects, so their concatenated output
-	// order is nondeterministic; sort for stable, diffable reports.
 	finding.Sort(out)
 	return out
 }

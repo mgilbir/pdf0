@@ -35,3 +35,19 @@ func mkViewVersion(objs map[int]*object.IndirectObject, trailer *object.Dictiona
 	v.Version = version
 	return v
 }
+
+// referenced makes objects part of the document and returns the view. A rule
+// judges what the document reaches (core.View.ReachableDicts), so an object
+// dropped into the table with nothing pointing at it is an orphan, which is
+// deliberately not judged (audit 2026-09-22 C83). The references hang from a
+// trailer entry no rule reads, which keeps a fixture about the rule it tests;
+// the tests of reachability itself build real structure. Call it before the
+// first check: the reachable set is computed once per run.
+func referenced(v core.View, nums ...int) core.View {
+	arr, _ := v.Trailer.Get("PDF0TestFixture").(object.Array)
+	for _, n := range nums {
+		arr = append(arr, object.IndirectRef{Number: n})
+	}
+	v.Trailer.Set("PDF0TestFixture", arr)
+	return v
+}

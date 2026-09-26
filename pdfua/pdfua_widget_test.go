@@ -17,6 +17,7 @@ func TestUAWidgetDescription(t *testing.T) {
 		w.Set("FT", object.Name("Tx"))
 		w.Set("StructParent", object.Integer(0))
 		doc.Objects[5] = &object.IndirectObject{Number: 5, Value: w}
+		referenced(doc, 5)
 		return doc, w
 	}
 	// No TU, no Alt -> flagged.

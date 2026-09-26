@@ -48,6 +48,7 @@ func TestUATrapNet(t *testing.T) {
 	a.Set("Type", object.Name("Annot"))
 	a.Set("Subtype", object.Name("TrapNet"))
 	doc.Objects[5] = &object.IndirectObject{Number: 5, Value: a}
+	referenced(doc, 5)
 	if !hasUAClause(checkUAAnnotations(doc), "7.18.2") {
 		t.Error("TrapNet annotation not flagged")
 	}
@@ -66,6 +67,7 @@ func TestUAAnnotationTagged(t *testing.T) {
 	a.Set("Type", object.Name("Annot"))
 	a.Set("Subtype", object.Name("Text"))
 	doc.Objects[5] = &object.IndirectObject{Number: 5, Value: a}
+	referenced(doc, 5)
 	if !hasUAClause(checkUAAnnotations(doc), "7.18.1") {
 		t.Error("untagged annotation not flagged")
 	}
@@ -90,6 +92,7 @@ func TestUALinkAltText(t *testing.T) {
 	a.Set("Subtype", object.Name("Link"))
 	a.Set("StructParent", object.Integer(0)) // tagged, so only the alt-text rule applies
 	doc.Objects[5] = &object.IndirectObject{Number: 5, Value: a}
+	referenced(doc, 5)
 	if !hasUAClause(checkUAAnnotations(doc), "7.18.5") {
 		t.Error("Link without /Contents not flagged")
 	}

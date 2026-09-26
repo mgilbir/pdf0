@@ -50,6 +50,7 @@ func TestUAEmbeddedFiles(t *testing.T) {
 			fs.Set("UF", object.String{Value: []byte("a.txt")})
 		}
 		doc.Objects[5] = &object.IndirectObject{Number: 5, Value: fs}
+		referenced(doc, 5)
 		return doc
 	}
 	if len(checkUAEmbeddedFiles(mk(false, false))) == 0 {

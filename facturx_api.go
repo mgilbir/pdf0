@@ -7,6 +7,7 @@ import (
 
 	"github.com/mgilbir/pdf0/facturx"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/finding"
 	"github.com/mgilbir/pdf0/pdfa"
 )
 
@@ -44,6 +45,9 @@ func ValidateFacturX(doc *Document, rawData []byte) facturx.Result {
 // that stops early says so with a "limit" finding rather than reporting a
 // conformant document.
 func ValidateFacturXContext(ctx context.Context, doc *Document, rawData []byte) facturx.Result {
+	if doc == nil {
+		return facturx.Result{Violations: []facturx.Violation{{Rule: finding.LimitRule, Message: nilDocumentMessage}}}
+	}
 	return facturx.ValidateContext(ctx, facturxRun(ctx, doc, rawData), rawData)
 }
 
@@ -55,6 +59,9 @@ func ValidateOrderX(doc *Document, rawData []byte) facturx.OrderXResult {
 
 // ValidateOrderXContext is ValidateOrderX under a context.
 func ValidateOrderXContext(ctx context.Context, doc *Document, rawData []byte) facturx.OrderXResult {
+	if doc == nil {
+		return facturx.OrderXResult{Violations: []facturx.OrderXViolation{{Rule: finding.LimitRule, Message: nilDocumentMessage}}}
+	}
 	return facturx.ValidateOrderContext(ctx, facturxRun(ctx, doc, rawData), rawData)
 }
 

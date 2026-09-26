@@ -163,12 +163,7 @@ func collectAppearanceStreams(doc core.View) []appearanceStream {
 			add(ap.Get("N"), num)
 		}
 	}
-	for num, iobj := range doc.Objects {
-		if dict, ok := iobj.Value.(*object.Dictionary); ok && doc.IsAnnotation(dict) {
-			visit(dict, num)
-		}
-	}
-	for _, a := range collectDirectAnnotations(doc) {
+	for _, a := range reachableAnnotations(doc) {
 		visit(a.dict, a.num)
 	}
 	return out

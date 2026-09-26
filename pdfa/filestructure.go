@@ -332,7 +332,10 @@ func checkNameUTF8(doc core.View, level Level) []Violation {
 		found.add(Violation{Rule: rule, Level: level, Message: msg, Object: obj})
 	}
 
-	for num, iobj := range doc.Objects {
+	// The objects the document reaches (an orphan names nothing the document
+	// shows); walkColorantUTF8 descends each one's direct values itself.
+	for _, num := range doc.ReachableObjectNums() {
+		iobj := doc.Objects[num]
 		walkColorantUTF8(doc, iobj.Value, num, add, 0)
 		if level.Part() == 4 {
 			if d, ok := iobj.Value.(*object.Dictionary); ok {
@@ -686,11 +689,12 @@ func collectContentStreamData(doc core.View) map[int][]byte {
 			}
 		}
 	}
-	for num, iobj := range doc.Objects {
+	for _, r := range doc.ReachableDicts() {
 		if doc.Cancel.Stopped() {
 			return out
 		}
-		s, ok := iobj.Value.(*object.Stream)
+		num := r.ObjNum
+		s, ok := r.Stream, r.Stream != nil
 		if !ok {
 			continue
 		}
@@ -706,9 +710,9 @@ func collectContentStreamData(doc core.View) map[int][]byte {
 	// Type3 glyph procedures are content streams too, but carry no
 	// Subtype/PatternType marker, so the loop above misses them. Pull them from
 	// each Type3 font's /CharProcs (audit C27).
-	for _, iobj := range doc.Objects {
-		fd, ok := iobj.Value.(*object.Dictionary)
-		if !ok {
+	for _, r := range doc.ReachableDicts() {
+		fd := r.Dict
+		if r.Stream != nil {
 			continue
 		}
 		if st, _ := doc.ResolveName(fd.Get("Subtype")); st != "Type3" {
@@ -964,27 +968,9 @@ func checkInlineImageFilters(doc core.View, level Level) []Violation {
 	return found.errs
 }
 
-// inlineImageFilters extracts the /F (or /Filter) filter name(s) of every
-// inline image in a content stream that declares any.
+// inlineImageFilters is core.InlineImageFilters, which PDF/R reads too.
 func inlineImageFilters(data []byte) [][]string {
-	var out [][]string
-	forEachInlineImage(data, func(params []core.InlineImageParam) {
-		var filters []string
-		for _, p := range params {
-			if p.Key != "F" && p.Key != "Filter" {
-				continue
-			}
-			for _, v := range p.Value {
-				if v.Kind == core.ContentName {
-					filters = append(filters, v.Name())
-				}
-			}
-		}
-		if filters != nil {
-			out = append(out, filters)
-		}
-	})
-	return out
+	return core.InlineImageFilters(core.Canceler{}, data)
 }
 
 // checkStreamLength enforces that a stream's /Length entry equals the actual
@@ -1001,6 +987,8 @@ func checkStreamLength(doc core.View, level Level) []Violation {
 		rule = "6.1.7.1"
 	}
 	var errs []Violation
+	// allobjects: /Length is stream syntax, required of every stream the file
+	// holds whether or not the document uses it.
 	for num, iobj := range doc.Objects {
 		s, ok := iobj.Value.(*object.Stream)
 		if !ok {

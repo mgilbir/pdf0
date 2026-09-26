@@ -209,15 +209,15 @@ func TestInlineImageFilters(t *testing.T) {
 }
 
 func TestNameUTF8(t *testing.T) {
-	doc := mkV(core.View{Objects: map[int]*object.IndirectObject{
+	doc := referenced(mkV(core.View{Objects: map[int]*object.IndirectObject{
 		1: {Number: 1, Value: object.Array{object.Name("Separation"), object.Name("Spot\xff\xfe"), object.Name("DeviceCMYK"), object.IndirectRef{Number: 9}}},
-	}})
+	}}), 1)
 	if !hasRuleMsg(checkNameUTF8(doc, PDFA2b), "6.1.8") {
 		t.Error("invalid-UTF8 Separation colorant not flagged")
 	}
-	doc2 := mkV(core.View{Objects: map[int]*object.IndirectObject{
+	doc2 := referenced(mkV(core.View{Objects: map[int]*object.IndirectObject{
 		1: {Number: 1, Value: object.Array{object.Name("Separation"), object.Name("Spot"), object.Name("DeviceCMYK"), object.IndirectRef{Number: 9}}},
-	}})
+	}}), 1)
 	if hasRuleMsg(checkNameUTF8(doc2, PDFA2b), "6.1.8") {
 		t.Error("valid colorant flagged")
 	}

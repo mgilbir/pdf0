@@ -168,6 +168,10 @@ func checkLevelAStructTypes(doc core.View, level Level) []Violation {
 	// One verdict per distinct type: each answer costs a walk of that type's
 	// role-map chain, and a document repeats a handful of types over all its
 	// elements.
+	//
+	// The resolution is the tree's own (core.ResolveStructType, the one every
+	// structure check reads); this rule reads the written type, RawS, because
+	// its question is whether that type is mapped at all.
 	decided := map[object.Name]bool{}
 	for _, n := range core.StructTree(doc, cat) {
 		st := n.RawS
@@ -178,7 +182,7 @@ func checkLevelAStructTypes(doc core.View, level Level) []Violation {
 		// A budget trip leaves the mapping unknown, and unknown is not evidence
 		// of a violation — the rule the whole package follows for a walk that
 		// did not finish.
-		if _, mapped, complete := core.ResolveRoleMapChain(doc, st, roleMap); !mapped && complete {
+		if !n.Mapped && n.Complete {
 			errs = append(errs, Violation{
 				Rule:    rule,
 				Level:   level,

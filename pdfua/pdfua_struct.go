@@ -53,10 +53,6 @@ func standardStructType(d core.View, elem *object.Dictionary, roleMap *object.Di
 	return core.StandardStructType(d, elem, roleMap)
 }
 
-func resolveRoleMapChain(d core.View, s object.Name, roleMap *object.Dictionary) (object.Name, bool, bool) {
-	return core.ResolveRoleMapChain(d, s, roleMap)
-}
-
 func structKids(d core.View, elem *object.Dictionary) []object.Object {
 	return core.StructKids(d, elem)
 }
@@ -70,58 +66,42 @@ func walkStructElems(d core.View, cat *object.Dictionary, fn func(elem *object.D
 }
 
 // checkUAStructNesting enforces the structure-element parent/child constraints
-// (tables, lists, table of contents) from the PDF/UA profile.
+// (tables, lists, table of contents) from the PDF/UA profile, on resolved
+// types. It reads the flattened tree rather than descending /K itself, so the
+// types it compares are the ones every other check compares.
+//
+// Only structure elements reached through structure elements take part: the
+// descent stops at a dictionary with no /S (an MCR or OBJR), as it always has.
 func checkUAStructNesting(d core.View, cat *object.Dictionary) []Violation {
-	root := d.ResolveDict(cat.Get("StructTreeRoot"))
-	if root == nil {
-		return nil
-	}
-	roleMap := d.ResolveDict(root.Get("RoleMap"))
-
+	nodes := structTree(d, cat)
 	var v []Violation
-	seen := map[int]bool{}
-	var walk func(node object.Object, parentType object.Name)
-	walk = func(node object.Object, parentType object.Name) {
-		if ref, ok := node.(object.IndirectRef); ok {
-			if seen[ref.Number] {
-				return
-			}
-			seen[ref.Number] = true
+	// inTree[i]: node i and all its ancestors are structure elements.
+	inTree := make([]bool, len(nodes))
+	for i, n := range nodes {
+		if !n.HasS || (n.Parent >= 0 && !inTree[n.Parent]) {
+			continue
 		}
-		elem := d.ResolveDict(node)
-		if elem == nil {
-			if arr, ok := d.Resolve(node).(object.Array); ok {
-				for _, kid := range arr {
-					walk(kid, parentType)
-				}
-			}
-			return
+		inTree[i] = true
+		t := n.StdType
+		var parentType object.Name
+		if n.Parent >= 0 {
+			parentType = nodes[n.Parent].StdType
 		}
-		// Only structure elements (those with an /S type) participate.
-		if _, hasS := d.ResolveName(elem.Get("S")); !hasS {
-			return
-		}
-		t := standardStructType(d, elem, roleMap)
 
 		// Parent constraint.
 		if parents, ok := uaAllowedParents[t]; ok && !containsName(parents, parentType) {
-			v = append(v, Violation{"7.2", "<" + string(t) + "> element must be contained in a " + orList(parents) + " element, not <" + string(parentType) + ">", 0})
+			v = append(v, Violation{Clause: "7.2", Message: "<" + string(t) + "> element must be contained in a " + orList(parents) + " element, not <" + string(parentType) + ">", Object: 0})
 		}
 
 		// Child constraint: check each structure-element child's type.
 		if allowed, ok := uaAllowedChildren[t]; ok {
-			for _, ct := range childStructTypes(d, elem, roleMap) {
+			for _, ct := range n.ChildTypes {
 				if !allowed[ct] {
-					v = append(v, Violation{"7.2", "<" + string(t) + "> element must not contain a <" + string(ct) + "> element", 0})
+					v = append(v, Violation{Clause: "7.2", Message: "<" + string(t) + "> element must not contain a <" + string(ct) + "> element", Object: 0})
 				}
 			}
 		}
-
-		for _, kid := range structKids(d, elem) {
-			walk(kid, t)
-		}
 	}
-	walk(root.Get("K"), "")
 	return v
 }
 
@@ -139,15 +119,15 @@ func checkUATableListStructure(d core.View, cat *object.Dictionary) []Violation 
 			v = append(v, tableStructErrors(kids)...)
 		case "L":
 			if c := countName(kids, "Caption"); c > 1 {
-				v = append(v, Violation{"7.2", "list (L) has more than one Caption", 0})
+				v = append(v, Violation{Clause: "7.2", Message: "list (L) has more than one Caption", Object: 0})
 			} else if c == 1 && firstIndexName(kids, "Caption") != 0 {
-				v = append(v, Violation{"7.2", "list (L) Caption must be the first child", 0})
+				v = append(v, Violation{Clause: "7.2", Message: "list (L) Caption must be the first child", Object: 0})
 			}
 		case "TOC":
 			if c := countName(kids, "Caption"); c > 1 {
-				v = append(v, Violation{"7.2", "table of contents (TOC) has more than one Caption", 0})
+				v = append(v, Violation{Clause: "7.2", Message: "table of contents (TOC) has more than one Caption", Object: 0})
 			} else if c == 1 && firstIndexName(kids, "Caption") != 0 {
-				v = append(v, Violation{"7.2", "table of contents (TOC) Caption must be the first child", 0})
+				v = append(v, Violation{Clause: "7.2", Message: "table of contents (TOC) Caption must be the first child", Object: 0})
 			}
 		}
 	}
@@ -163,21 +143,21 @@ func tableStructErrors(kids []object.Name) []Violation {
 	tfoots := countName(kids, "TFoot")
 	tbodies := countName(kids, "TBody")
 	if captions > 1 {
-		v = append(v, Violation{"7.2", "table has more than one Caption", 0})
+		v = append(v, Violation{Clause: "7.2", Message: "table has more than one Caption", Object: 0})
 	}
 	if theads > 1 {
-		v = append(v, Violation{"7.2", "table has more than one THead", 0})
+		v = append(v, Violation{Clause: "7.2", Message: "table has more than one THead", Object: 0})
 	}
 	if tfoots > 1 {
-		v = append(v, Violation{"7.2", "table has more than one TFoot", 0})
+		v = append(v, Violation{Clause: "7.2", Message: "table has more than one TFoot", Object: 0})
 	}
 	if (theads > 0 || tfoots > 0) && tbodies == 0 {
-		v = append(v, Violation{"7.2", "table has a THead or TFoot but no TBody", 0})
+		v = append(v, Violation{Clause: "7.2", Message: "table has a THead or TFoot but no TBody", Object: 0})
 	}
 	if captions == 1 {
 		i := firstIndexName(kids, "Caption")
 		if i != 0 && i != len(kids)-1 {
-			v = append(v, Violation{"7.2", "table Caption must be the first or last child", 0})
+			v = append(v, Violation{Clause: "7.2", Message: "table Caption must be the first or last child", Object: 0})
 		}
 	}
 	return v
@@ -200,23 +180,6 @@ func firstIndexName(names []object.Name, want object.Name) int {
 		}
 	}
 	return -1
-}
-
-// childStructTypes returns the resolved standard types of an element's
-// structure-element children (ignoring marked-content and object references).
-func childStructTypes(d core.View, elem *object.Dictionary, roleMap *object.Dictionary) []object.Name {
-	var out []object.Name
-	for _, kid := range structKids(d, elem) {
-		child := d.ResolveDict(kid)
-		if child == nil {
-			continue
-		}
-		if _, hasS := d.ResolveName(child.Get("S")); !hasS {
-			continue
-		}
-		out = append(out, standardStructType(d, child, roleMap))
-	}
-	return out
 }
 
 func containsName(names []object.Name, n object.Name) bool {
@@ -249,14 +212,14 @@ func checkUAHeaderVersion(d core.View) []Violation {
 	if len(d.Version) >= 2 && d.Version[0] == '1' && d.Version[1] == '.' {
 		return nil
 	}
-	return []Violation{{"6.1", "PDF/UA-1 requires a PDF 1.x header, got " + d.Version, 0}}
+	return []Violation{{Clause: "6.1", Message: "PDF/UA-1 requires a PDF 1.x header, got " + d.Version, Object: 0}}
 }
 
 // checkUASuspects: a MarkInfo /Suspects value of true means the tagging may be
 // unreliable and is not permitted.
 func checkUASuspects(d core.View, cat *object.Dictionary) []Violation {
 	if mark := d.ResolveDict(cat.Get("MarkInfo")); mark != nil && d.IsTrue(mark.Get("Suspects")) {
-		return []Violation{{"7.1", "/MarkInfo /Suspects must not be true", 0}}
+		return []Violation{{Clause: "7.1", Message: "/MarkInfo /Suspects must not be true", Object: 0}}
 	}
 	return nil
 }
@@ -274,7 +237,7 @@ func checkUAStrongWeak(d core.View, cat *object.Dictionary) []Violation {
 		}
 	})
 	if hasH && hasHn {
-		return []Violation{{"7.4.4", "document mixes <H> and <H1>–<H6> headings; it must be either strongly or weakly structured", 0}}
+		return []Violation{{Clause: "7.4.4", Message: "document mixes <H> and <H1>–<H6> headings; it must be either strongly or weakly structured", Object: 0}}
 	}
 	return nil
 }
@@ -289,16 +252,66 @@ func checkUANotes(d core.View, cat *object.Dictionary) []Violation {
 		}
 		id, r := d.StringValue(elem.Get("ID"))
 		if !d.NonEmptyStringOrLocked(elem.Get("ID")) {
-			v = append(v, Violation{"7.9", "<Note> structure element has no /ID", 0})
+			v = append(v, Violation{Clause: "7.9", Message: "<Note> structure element has no /ID", Object: 0})
 			return
 		}
 		if r != core.ReasonOK {
 			return // ciphertext: present, but uniqueness cannot be judged
 		}
 		if ids[string(id.Value)] {
-			v = append(v, Violation{"7.9", "<Note> structure elements share a non-unique /ID", 0})
+			v = append(v, Violation{Clause: "7.9", Message: "<Note> structure elements share a non-unique /ID", Object: 0})
 		}
 		ids[string(id.Value)] = true
 	})
+	return v
+}
+
+// checkUA2NamespaceRoleMaps enforces ISO 14289-2 8.2.4 (veraPDF test 3):
+// within an explicitly provided namespace, a structure type shall not be role
+// mapped to another type in the same namespace — directly, or along a chain
+// that leaves the namespace and comes back to it. An element with no /NS is in
+// the default namespace, whose /RoleMap maps within it by design, and is not
+// held to this. Reported once per written type and namespace.
+//
+// It reads RawS: the rule is about the type as written.
+func checkUA2NamespaceRoleMaps(d core.View, cat *object.Dictionary) []Violation {
+	var v []Violation
+	type key struct {
+		t  object.Name
+		ns *object.Dictionary
+	}
+	seen := map[key]bool{}
+	for _, n := range structTree(d, cat) {
+		if !n.SameNSMap {
+			continue
+		}
+		k := key{n.RawS, d.ResolveDict(n.Elem.Get("NS"))}
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		v = append(v, Violation{Clause: "8.2.4", Message: "structure type /" + string(n.RawS) + " is role mapped to a structure type in its own namespace"})
+	}
+	return v
+}
+
+// checkUA2MathParent enforces ISO 14289-2 8.2.5.29 (veraPDF: hasParentFormulaOrMathML):
+// the MathML math element shall occur only as a child of a Formula structure
+// element — or inside other MathML. Both sides are resolved types: a custom
+// /Math role-mapped to MathML's math is a math element.
+func checkUA2MathParent(d core.View, cat *object.Dictionary) []Violation {
+	nodes := structTree(d, cat)
+	var v []Violation
+	for _, n := range nodes {
+		if !n.HasS || n.NS != core.NSMathML || n.StdType != "math" {
+			continue
+		}
+		if n.Parent >= 0 {
+			if p := nodes[n.Parent]; p.StdType == "Formula" || p.NS == core.NSMathML {
+				continue
+			}
+		}
+		v = append(v, Violation{Clause: "8.2.5.29", Message: "a MathML math element is not a child of a Formula structure element"})
+	}
 	return v
 }

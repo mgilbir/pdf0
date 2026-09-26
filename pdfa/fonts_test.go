@@ -387,7 +387,7 @@ func TestCMapEmbeddedAt1b(t *testing.T) {
 	font := &object.Dictionary{}
 	font.Set("Subtype", object.Name("Type0"))
 	font.Set("Encoding", object.Name("UniJIS-UCS2-H"))
-	doc := mkV(core.View{Objects: map[int]*object.IndirectObject{1: {Number: 1, Value: font}}})
+	doc := referenced(mkV(core.View{Objects: map[int]*object.IndirectObject{1: {Number: 1, Value: font}}}), 1)
 	if got := len(checkCMapEmbedded(doc, PDFA1b)); got == 0 {
 		t.Error("named predefined CMap not flagged at 1b")
 	}

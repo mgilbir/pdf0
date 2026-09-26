@@ -14,6 +14,7 @@ func pageWithContent(doc *Document, content string, resources *object.Dictionary
 	stream := &object.Stream{Dict: object.Dictionary{}, Data: []byte(content)}
 	stream.Dict.Set("Length", object.Integer(len(content)))
 	doc.Objects[21] = &object.IndirectObject{Number: 21, Value: stream}
+	reference(doc, 21)
 	page.Set("Contents", object.IndirectRef{Number: 21})
 	if resources != nil {
 		page.Set("Resources", resources)
@@ -32,6 +33,7 @@ func TestDeviceColorInFormBody(t *testing.T) {
 		form.Dict.Set("BBox", object.Array{object.Integer(0), object.Integer(0), object.Integer(10), object.Integer(10)})
 		form.Dict.Set("Length", object.Integer(len(form.Data)))
 		doc.Objects[22] = &object.IndirectObject{Number: 22, Value: form}
+		reference(doc, 22)
 		xobj := &object.Dictionary{}
 		xobj.Set("X0", object.IndirectRef{Number: 22})
 		res := &object.Dictionary{}
@@ -81,6 +83,7 @@ func TestDefaultColorSpaceScope(t *testing.T) {
 		}
 		pat.Dict.Set("Resources", patRes)
 		doc.Objects[22] = &object.IndirectObject{Number: 22, Value: pat}
+		reference(doc, 22)
 
 		patterns := &object.Dictionary{}
 		patterns.Set("P0", object.IndirectRef{Number: 22})
@@ -110,6 +113,7 @@ func TestICCCMYKOverprint(t *testing.T) {
 		icc.Dict.Set("N", object.Integer(4))
 		icc.Dict.Set("Length", object.Integer(len(icc.Data)))
 		doc.Objects[22] = &object.IndirectObject{Number: 22, Value: icc}
+		reference(doc, 22)
 		gs := &object.Dictionary{}
 		gs.Set("Type", object.Name("ExtGState"))
 		gs.Set("OPM", object.Integer(1))
@@ -174,6 +178,7 @@ func TestJPXValidation(t *testing.T) {
 		img.Dict.Set("Filter", object.Name("JPXDecode"))
 		img.Dict.Set("Length", object.Integer(len(data)))
 		doc.Objects[22] = &object.IndirectObject{Number: 22, Value: img}
+		reference(doc, 22)
 		return doc
 	}
 

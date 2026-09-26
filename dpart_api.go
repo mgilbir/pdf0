@@ -19,8 +19,14 @@ import (
 // required /Parent up-link and its target (14.12.2), the exclusive /DParts vs
 // /Start+/End roles (Table 409), the leaf page ranges partitioning every page
 // exactly once in page-tree order (14.12.2/14.12.3), page /DPart back-references
-// (14.12.3), /NodeNameList depth (Table 408), and DPM key/value constraints
-// (14.12.4.2).
+// (14.12.3), /NodeNameList depth (Table 408), and the types of DPM values
+// (14.12.4.2). DPM keys are deliberately not checked: PDF/VT encodes field
+// names into keys that are not XML name tokens (see dpart.validateDPM).
+//
+// The walk visits each node and each page once, but it is not bounded by a
+// work budget of its own: a hierarchy whose leaves each name a large page range
+// costs leaves × pages (audit 2026-09-22 C42, the per-run work meter's to fix),
+// and a context cancelled during the walk does not stop it.
 func ValidateDParts(doc *Document) []dpart.Violation {
 	return validateDParts(core.Canceler{}, doc)
 }
@@ -31,6 +37,9 @@ func ValidateDPartsContext(ctx context.Context, doc *Document) []dpart.Violation
 	return validateDParts(core.NewCanceler(ctx), doc)
 }
 func validateDParts(cancel core.Canceler, doc *Document) []dpart.Violation {
+	if doc == nil {
+		return []dpart.Violation{{Rule: finding.LimitRule, Message: nilDocumentMessage}}
+	}
 	rd := beginRunCancel(doc, cancel)
 	v := rd
 	var out []dpart.Violation
@@ -44,8 +53,9 @@ func validateDParts(cancel core.Canceler, doc *Document) []dpart.Violation {
 	// caller, and the findings reported before it are kept (audit C27). Being one
 	// traversal, it is also the whole of this validator's cancellation
 	// granularity: an already-cancelled run skips it, and a run cancelled during
-	// it completes the walk. The walk is bounded by the page and DPart counts and
-	// reads no content, so that is bounded work, not an open-ended wait.
+	// it completes the walk. The walk reads no content, but its cost is not
+	// bounded by the page and DPart counts alone: each leaf's range is walked,
+	// so it is leaves × pages (C42), which the per-run work meter is to bound.
 	if !v.view().Cancel.Stopped() {
 		finding.Guarded(add, func() { dpart.ValidateHierarchy(v.view(), add) })
 	}

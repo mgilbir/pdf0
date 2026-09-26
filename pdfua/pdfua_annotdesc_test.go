@@ -23,6 +23,7 @@ func TestUAAnnotDescription(t *testing.T) {
 			a.Set("Alt", object.String{Value: []byte(alt)})
 		}
 		doc.Objects[5] = &object.IndirectObject{Number: 5, Value: a}
+		referenced(doc, 5)
 		return doc
 	}
 	hasDesc := func(vs []Violation) bool {

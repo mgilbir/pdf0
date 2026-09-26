@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/pdfa"
 	"github.com/mgilbir/pdf0/pdfx"
@@ -135,12 +136,28 @@ func TestTheVariantIsTheTargets(t *testing.T) {
 	}
 
 	// A 3D stream in a format 4e does not name, in a file that declares
-	// nothing, at PDF/A-4e.
+	// nothing, at PDF/A-4e. The artwork is a 3D annotation's, on a page: a
+	// rule judges what the document reaches, and an orphan stream is not
+	// part of it (audit 2026-09-22 C83).
 	d := mustPDFADoc(t, pdfa.PDFA4)
-	d.Add(object.NewStream(object.NewDictionary(
+	artwork := d.Add(object.NewStream(object.NewDictionary(
 		object.Entry{Key: "Type", Value: object.Name("3D")},
 		object.Entry{Key: "Subtype", Value: object.Name("STL")},
 	), []byte("solid")))
+	var drawing content.Builder
+	drawing.Rect(0, 0, 1, 1).Fill()
+	pageRef, err := d.AddPage(Page{Width: 100, Height: 100, Content: &drawing})
+	if err != nil {
+		t.Fatal(err)
+	}
+	annot := d.Add(object.NewDictionary(
+		object.Entry{Key: "Type", Value: object.Name("Annot")},
+		object.Entry{Key: "Subtype", Value: object.Name("3D")},
+		object.Entry{Key: "Rect", Value: object.Array{object.Integer(0), object.Integer(0), object.Integer(0), object.Integer(0)}},
+		object.Entry{Key: "F", Value: object.Integer(4)},
+		object.Entry{Key: "3DD", Value: artwork},
+	))
+	d.ResolveDict(pageRef).Set("Annots", object.Array{annot})
 	r, raw = profileBytes(t, d)
 	if vs := ValidatePDFABytes(r, pdfa.PDFA4E, raw); !hasViolationMessage(vs, "/STL; it must be /U3D or /PRC") {
 		t.Errorf("PDF/A-4e did not apply its artwork rule to a file declaring nothing: %v", vs)

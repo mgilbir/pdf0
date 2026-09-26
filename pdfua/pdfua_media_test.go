@@ -19,6 +19,7 @@ func TestUAPrinterMark(t *testing.T) {
 			a.Set("StructParent", object.Integer(0))
 		}
 		doc.Objects[5] = &object.IndirectObject{Number: 5, Value: a}
+		referenced(doc, 5)
 		return doc
 	}
 	if !hasUAClause(checkUAAnnotations(mk(true)), "7.18.8") {
@@ -56,6 +57,7 @@ func TestUAMediaClips(t *testing.T) {
 		annot.Set("Subtype", object.Name("Screen"))
 		annot.Set("A", action)
 		doc.Objects[5] = &object.IndirectObject{Number: 5, Value: annot}
+		referenced(doc, 5)
 		return doc
 	}
 	has := func(vs []Violation) bool {
@@ -92,6 +94,7 @@ func TestUAMediaClipEmptyAlt(t *testing.T) {
 		annot.Set("Subtype", object.Name("Screen"))
 		annot.Set("A", rend)
 		doc.Objects[5] = &object.IndirectObject{Number: 5, Value: annot}
+		referenced(doc, 5)
 		return doc
 	}
 	empty := object.Array{object.String{Value: []byte("")}, object.String{Value: []byte("")}}

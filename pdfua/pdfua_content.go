@@ -47,7 +47,7 @@ func checkUARealContent(d core.View, cat *object.Dictionary) []Violation {
 	for _, pg := range d.Pages(cat.Get("Pages")) {
 		data, key, _ := d.ContentBytesAndKey(pg.Dict.Get("Contents")) // reason: presence-only; the producer recorded any declined trip
 		for _, msg := range contentFacts(d, data, key).realMsgs {
-			v = append(v, Violation{"7.1", msg, pg.ObjNum})
+			v = append(v, Violation{Clause: "7.1", Message: msg, Object: pg.ObjNum})
 		}
 	}
 	return v
@@ -179,17 +179,21 @@ func buildContentFacts(cancel core.Canceler, content []byte) *streamContentFacts
 // it is invoked by more than one Do operator, a single structure element would
 // map to several renderings, breaking the one-to-one structure/content mapping.
 func checkUAFormXObjectMCID(d core.View) []Violation {
+	// The forms the document reaches: an orphan form is painted by nothing and
+	// is not the document's (audit 2026-09-22 C83). A stream is always an
+	// object of its own, so ObjNum is the form's.
+	var forms []core.ReachableDict
 	mcidForm := map[int]bool{}
-	for num, iobj := range d.Objects {
-		s, ok := iobj.Value.(*object.Stream)
-		if !ok {
+	for _, r := range d.ReachableDicts() {
+		if r.Stream == nil {
 			continue
 		}
-		if st, _ := d.ResolveName(s.Dict.Get("Subtype")); st != "Form" {
+		if st, _ := d.ResolveName(r.Dict.Get("Subtype")); st != "Form" {
 			continue
 		}
-		if data, _ := d.Content(s); containsNameToken(d.Cancel, data, "MCID") { // reason: presence-only; the producer recorded any declined trip
-			mcidForm[num] = true
+		forms = append(forms, r)
+		if data, _ := d.Content(r.Stream); containsNameToken(d.Cancel, data, "MCID") { // reason: presence-only; the producer recorded any declined trip
+			mcidForm[r.ObjNum] = true
 		}
 	}
 	if len(mcidForm) == 0 {
@@ -227,22 +231,15 @@ func checkUAFormXObjectMCID(d core.View) []Violation {
 		countDo(data, key, d.ResolveDict(pg.Dict.Get("Resources")))
 	}
 	// Form XObject content sources (a form may invoke another form).
-	for _, iobj := range d.Objects {
-		s, ok := iobj.Value.(*object.Stream)
-		if !ok {
-			continue
-		}
-		if st, _ := d.ResolveName(s.Dict.Get("Subtype")); st != "Form" {
-			continue
-		}
-		data, _ := d.Content(s) // reason: presence-only (counts invocations); the producer recorded any declined trip
-		countDo(data, s, d.ResolveDict(s.Dict.Get("Resources")))
+	for _, f := range forms {
+		data, _ := d.Content(f.Stream) // reason: presence-only (counts invocations); the producer recorded any declined trip
+		countDo(data, f.Stream, d.ResolveDict(f.Dict.Get("Resources")))
 	}
 
 	var v []Violation
 	for _, num := range sortedInts(mcidForm) {
 		if doCount[num] > 1 {
-			v = append(v, Violation{"7.20", "a form XObject containing marked content (/MCID) is painted by more than one Do operator", num})
+			v = append(v, Violation{Clause: "7.20", Message: "a form XObject containing marked content (/MCID) is painted by more than one Do operator", Object: num})
 		}
 	}
 	return v
@@ -280,55 +277,35 @@ func sortedInts(m map[int]bool) []int {
 // enclosing structure element: a Widget must sit under <Form>, a Link under
 // <Link>, and any other annotation under <Annot> (Matterhorn 28-002/010/011).
 // Annotations not reachable through an OBJR are left to the tagging check.
+//
+// The enclosing element's type is its resolved type: /MyLink role-mapped to
+// /Link is a Link element, and comparing the written /S reported "nested in a
+// <MyLink> element, expected <Link>" on a conforming file (audit 2026-09-22
+// C81). The OBJR is read from the flattened tree, which records the element
+// that holds it as its parent.
 func checkUAAnnotStructType(d core.View, cat *object.Dictionary) []Violation {
-	root := d.ResolveDict(cat.Get("StructTreeRoot"))
-	if root == nil {
-		return nil
-	}
+	nodes := structTree(d, cat)
 	annotParent := map[int]object.Name{}
-	seen := map[int]bool{}
-	var walk func(node object.Object, parentType object.Name)
-	walk = func(node object.Object, parentType object.Name) {
-		if ref, ok := node.(object.IndirectRef); ok {
-			if seen[ref.Number] {
-				return
-			}
-			seen[ref.Number] = true
+	for _, n := range nodes {
+		// An OBJR references an object (often an annotation).
+		if t, _ := d.ResolveName(n.Elem.Get("Type")); t != "OBJR" {
+			continue
 		}
-		elem := d.ResolveDict(node)
-		if elem == nil {
-			if arr, ok := d.Resolve(node).(object.Array); ok {
-				for _, kid := range arr {
-					walk(kid, parentType)
-				}
-			}
-			return
+		ref, ok := n.Elem.Get("Obj").(object.IndirectRef)
+		if !ok {
+			continue
 		}
-		// An OBJR structure element references an object (often an annotation).
-		if t, _ := d.ResolveName(elem.Get("Type")); t == "OBJR" {
-			if ref, ok := elem.Get("Obj").(object.IndirectRef); ok {
-				annotParent[ref.Number] = parentType
-			}
-			return
+		var parentType object.Name
+		if n.Parent >= 0 {
+			parentType = nodes[n.Parent].StdType
 		}
-		s, _ := d.ResolveName(elem.Get("S"))
-		if k := elem.Get("K"); k != nil {
-			switch kids := d.Resolve(k).(type) {
-			case object.Array:
-				for _, kid := range kids {
-					walk(kid, s)
-				}
-			default:
-				walk(k, s)
-			}
-		}
+		annotParent[ref.Number] = parentType
 	}
-	walk(root.Get("K"), "")
 
 	var v []Violation
-	for num, iobj := range d.Objects {
-		a, ok := iobj.Value.(*object.Dictionary)
-		if !ok || !d.IsAnnotation(a) {
+	for _, r := range d.ReachableDicts() {
+		a, num := r.Dict, r.ObjNum
+		if r.Stream != nil || !r.Top || !d.IsAnnotation(a) {
 			continue
 		}
 		st, _ := d.ResolveName(a.Get("Subtype"))
@@ -350,7 +327,7 @@ func checkUAAnnotStructType(d core.View, cat *object.Dictionary) []Violation {
 			want = "Link"
 		}
 		if parent != want {
-			v = append(v, Violation{"7.18.1", "annotation of subtype /" + string(st) + " is nested in a <" + string(parent) + "> element, expected <" + string(want) + ">", num})
+			v = append(v, Violation{Clause: "7.18.1", Message: "annotation of subtype /" + string(st) + " is nested in a <" + string(parent) + "> element, expected <" + string(want) + ">", Object: num})
 		}
 	}
 	return v

@@ -24,6 +24,9 @@ func ValidatePDFXContext(ctx context.Context, v *Document, level pdfx.Level) []p
 	return validatePDFX(core.NewCanceler(ctx), v, level)
 }
 func validatePDFX(cancel core.Canceler, doc *Document, level pdfx.Level) []pdfx.Violation {
+	if doc == nil {
+		return []pdfx.Violation{{Rule: finding.LimitRule, Message: nilDocumentMessage}}
+	}
 	// Run against a shallow copy carrying the per-run cache, as the PDF/A and
 	// PDF/UA validators do: it memoizes the traversals this validator shares
 	// with them, applies the same aggregate content budget, carries the

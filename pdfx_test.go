@@ -179,12 +179,18 @@ func TestValidatePDFXViolations(t *testing.T) {
 			g.Value.(*object.Dictionary).Set("TR", &object.Dictionary{})
 			d.Objects[12] = g
 		}, "forbidden", "transfer function"},
-		{"movie annotation", func(d *Document) { d.Objects[12] = objWith("Subtype", object.Name("Movie")) }, "forbidden", "Movie"},
+		{"movie annotation", func(d *Document) {
+			// An annotation: /Subtype /Movie on any other dictionary is
+			// not a multimedia annotation.
+			d.Objects[12] = objWith("Subtype", object.Name("Movie"))
+			d.Objects[12].Value.(*object.Dictionary).Set("Type", object.Name("Annot"))
+		}, "forbidden", "Movie"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			d := buildPDFX4Doc()
 			tc.mutate(d)
+			reference(d, 12) // the construct each case injects, as part of the document
 			v := ValidatePDFX(d, pdfx.PDFX4)
 			found := false
 			for _, e := range v {

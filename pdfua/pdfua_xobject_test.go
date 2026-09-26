@@ -17,6 +17,7 @@ func TestUAReferenceXObjects(t *testing.T) {
 			s.Dict.Set("Ref", &object.Dictionary{})
 		}
 		doc.Objects[7] = &object.IndirectObject{Number: 7, Value: s}
+		referenced(doc, 7)
 		return doc
 	}
 	if len(checkUAReferenceXObjects(mk(true))) == 0 {

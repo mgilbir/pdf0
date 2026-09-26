@@ -6,18 +6,12 @@ import (
 	"github.com/mgilbir/pdf0/pdfa"
 )
 
-// This file gives every validator the two properties the PDF/A validator has
-// had since it was written (audit C27): a panic boundary around each check, so
-// a bug or an adversarial structure in one rule cannot crash the caller, and a
-// deterministic output order, so reports are stable and diffable.
-//
-// The PDF/A twins are runCheck / runByteCheck in pdfa.go; the helpers here are
-// the same idea adapted to the other validators' finding types and to the
-// `add(rule, msg, obj)` reporting style they share.
-
-// runUACheck is finding.Guarded for the PDF/UA checks, which return their
-// findings rather than reporting them through a callback. A panicking check
-// loses its own findings but not those of its siblings.
+// This file adopts the findings of the two validations a container report is
+// composed of — the PDF/A-3 base (adoptPDFAFindings) and the invoice or order
+// rule engine (adoptInvoiceFindings) — into the container's own finding type.
+// The panic boundary and the sort every validator applies are finding.Guarded
+// and finding.Sort; they are not here. (An earlier comment here described a
+// runUACheck helper that no longer exists.)
 
 // adoptPDFAFindings replays the findings of a composed PDF/A validation through
 // an add callback, namespacing each rule under prefix. ValidateFacturX and

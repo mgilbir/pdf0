@@ -83,6 +83,7 @@ func TestValidatePDFA_AnnotationSubtypes(t *testing.T) {
 			annot.Set("F", object.Integer(4))
 			annot.Set("AP", object.NewDictionary(object.Entry{Key: "N", Value: &object.Stream{}}))
 			doc.Objects[10] = &object.IndirectObject{Number: 10, Value: annot}
+			addTestPage(doc).Set("Annots", object.Array{object.IndirectRef{Number: 10}})
 
 			errs := ValidateView(doc, tt.level, nil)
 			if !hasRule(errs, annotActionClause("subtype", tt.level)) {
@@ -102,6 +103,7 @@ func TestValidatePDFA_AnnotationSubtypes(t *testing.T) {
 			annot.Set("F", object.Integer(4))
 			annot.Set("AP", object.NewDictionary(object.Entry{Key: "N", Value: &object.Stream{}}))
 			doc.Objects[10] = &object.IndirectObject{Number: 10, Value: annot}
+			addTestPage(doc).Set("Annots", object.Array{object.IndirectRef{Number: 10}})
 
 			errs := filterRule(ValidateView(doc, PDFA4, nil), "6.3.1")
 			if len(errs) > 0 {
@@ -603,6 +605,13 @@ func TestValidatePDFA_EFAnywhereForbiddenAt1b(t *testing.T) {
 	fs.Set("F", object.String{Value: []byte("x.txt")})
 	fs.Set("EF", &object.Dictionary{})
 	doc.Objects[50] = &object.IndirectObject{Number: 50, Value: fs}
+	// Reached as a FileAttachment annotation's /FS, not through the
+	// EmbeddedFiles name tree, which is the other half of the rule.
+	doc.Objects[51] = &object.IndirectObject{Number: 51, Value: object.NewDictionary(
+		object.Entry{Key: "Type", Value: object.Name("Annot")},
+		object.Entry{Key: "Subtype", Value: object.Name("FileAttachment")},
+		object.Entry{Key: "FS", Value: object.IndirectRef{Number: 50}})}
+	addTestPage(doc).Set("Annots", object.Array{object.IndirectRef{Number: 51}})
 	if !hasRule(checkEmbeddedFiles(doc, PDFA1b), "6.1.11") {
 		t.Error("expected 6.1.11 error for /EF filespec at 1b")
 	}

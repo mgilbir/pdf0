@@ -98,19 +98,19 @@ func TestAnEsArtworkMustBeInAFormatTheStandardNames(t *testing.T) {
 	}
 
 	for _, ok := range []string{"U3D", "PRC"} {
-		if v := checkA4E3DStreamSubtype(efDoc("E", nil, stream(object.Name(ok))), PDFA4E); len(v) != 0 {
+		if v := checkA4E3DStreamSubtype(referenced(efDoc("E", nil, stream(object.Name(ok))), 15), PDFA4E); len(v) != 0 {
 			t.Errorf("/%s is a permitted 3D format and was reported: %v", ok, v)
 		}
 	}
 	// The corpus file's own case: the right letters in the wrong case. A name
 	// is case-sensitive, so /u3d is not /U3D.
-	if v := checkA4E3DStreamSubtype(efDoc("E", nil, stream(object.Name("u3d"))), PDFA4E); !hasMessage(v, "/u3d") {
+	if v := checkA4E3DStreamSubtype(referenced(efDoc("E", nil, stream(object.Name("u3d"))), 15), PDFA4E); !hasMessage(v, "/u3d") {
 		t.Errorf("a lowercase /u3d was accepted as /U3D: %v", v)
 	}
-	if v := checkA4E3DStreamSubtype(efDoc("E", nil, stream(object.Name("STL"))), PDFA4E); !hasMessage(v, "/STL") {
+	if v := checkA4E3DStreamSubtype(referenced(efDoc("E", nil, stream(object.Name("STL"))), 15), PDFA4E); !hasMessage(v, "/STL") {
 		t.Errorf("an unlisted 3D format was not reported: %v", v)
 	}
-	if v := checkA4E3DStreamSubtype(efDoc("E", nil, stream(nil)), PDFA4E); !hasMessage(v, "no /Subtype") {
+	if v := checkA4E3DStreamSubtype(referenced(efDoc("E", nil, stream(nil)), 15), PDFA4E); !hasMessage(v, "no /Subtype") {
 		t.Errorf("a 3D stream with no /Subtype was not reported: %v", v)
 	}
 
@@ -118,7 +118,7 @@ func TestAnEsArtworkMustBeInAFormatTheStandardNames(t *testing.T) {
 	// annotation rule says so; adding a complaint about the artwork format
 	// would be answering a question nobody reached.
 	for _, lvl := range []Level{PDFA4, PDFA4F} {
-		if v := checkA4E3DStreamSubtype(efDoc("E", nil, stream(object.Name("STL"))), lvl); len(v) != 0 {
+		if v := checkA4E3DStreamSubtype(referenced(efDoc("E", nil, stream(object.Name("STL"))), 15), lvl); len(v) != 0 {
 			t.Errorf("%s was held to the PDF/A-4e artwork rule: %v", lvl, v)
 		}
 	}
