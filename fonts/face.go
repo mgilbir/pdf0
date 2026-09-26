@@ -45,6 +45,20 @@ type Face struct {
 	// False for a face from Adopt, which is handed a shaping face and never the
 	// program. Stated on Adopt.
 	cidKeyed bool
+
+	// rec is what each glyph was drawn for, which is what the ToUnicode CMap
+	// says it means. See textRecord in draw.go. It belongs to this wrapper
+	// rather than to the shaping face: a Clone draws a different document, and
+	// what one document's glyphs meant is no fact about another's.
+	rec *textRecord
+
+	// embedding is what the font's own licence bits permit, read from the
+	// OS/2 table when the program is at hand. See embedding.go.
+	embedding embeddingRights
+	// program is the font as it was loaded, kept only when its licence
+	// forbids subsetting: then it is what has to be embedded, and nothing
+	// else can supply it. Nil otherwise, so a face costs no more than it did.
+	program []byte
 }
 
 // Adopt wraps a shaping face so it can be drawn and embedded.
@@ -53,10 +67,21 @@ type Face struct {
 // for: one out of a cache, or one a caller built with forme directly. The face
 // is not copied — the wrapper and the original are the same font, and each
 // records the glyphs the other used.
+//
 // An adopted face is embedded exactly as a loaded one is. /W, /CIDSet and
 // /ToUnicode ask shape.Face.GlyphCode, which answers from the face; the
-// character collection is read from the subset, which is the program this
-// constructor never saw and carries the ROS through untouched.
+// character collection and the licence's embedding bits are read from the
+// subset, which is the program this constructor never saw and carries the ROS
+// and the OS/2 table through untouched. The one thing it cannot do is embed a
+// font whose licence forbids subsetting, since the whole program is not at
+// hand; Embed says so rather than subsetting it.
+//
+// What each glyph was drawn for — which the ToUnicode CMap is written from —
+// is recorded by this wrapper, not by the shaping face. A glyph drawn through
+// another wrapper of the same face, or through the shaping face directly, is
+// named in the CMap by the character the font's cmap maps to it, which is
+// right for a plain character and says nothing for a ligature or a conjunct.
+// So draw through one wrapper, and embed that one.
 func Adopt(f *shape.Face) *Face { return &Face{Face: f} }
 
 // Load reads a font program — TrueType, OpenType, or an sfnt carrying CFF
@@ -72,6 +97,7 @@ func Load(data []byte) (*Face, error) {
 	}
 	face := &Face{Face: f}
 	face.readCIDKeying(data)
+	face.readEmbedding(data)
 	return face, nil
 }
 
@@ -109,7 +135,9 @@ func LoadSimple(data []byte) (*Face, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Face{Face: f}, nil
+	face := &Face{Face: f}
+	face.readEmbedding(data)
+	return face, nil
 }
 
 // Standard names one of the fourteen faces every PDF reader is required to
@@ -129,8 +157,9 @@ func Standard(name string) (*Face, error) {
 func StandardNames() []string { return shape.StandardNames() }
 
 // NotoSans is the bundled face: a composite face over Noto Sans, which covers
-// Latin, Greek, Cyrillic, Arabic, Hebrew, Devanagari and more, so that a
-// document can be written without finding a font first.
+// Latin, Greek, Cyrillic and Devanagari, so that a document can be written
+// without finding a font first. It has no Arabic and no Hebrew — those are
+// separate Noto faces — and Scripts says what it does have.
 //
 // Each call gets its own face. Two documents must not share one, because a face
 // records the glyphs it was asked to show and that record is what decides the
@@ -171,6 +200,7 @@ func NotoSansLicense() string { return notosans.License() }
 func (f *Face) Clone() *Face {
 	c := *f
 	c.Face = f.Face.Clone()
+	c.rec = nil
 	return &c
 }
 

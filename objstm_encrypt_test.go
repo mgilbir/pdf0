@@ -29,7 +29,7 @@ func TestEncryptIndirectCFNotPacked(t *testing.T) {
 	d.Trailer = object.Dictionary{}
 	d.Trailer.Set("Root", object.IndirectRef{Number: 1})
 
-	if err := d.SetEncryption("", ""); err != nil {
+	if err := d.SetEncryption("cf-user", ""); err != nil {
 		t.Fatal(err)
 	}
 	// Move the (direct) /CF crypt-filter dictionary into its own indirect object
@@ -54,7 +54,7 @@ func TestEncryptIndirectCFNotPacked(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 	out := buf.Bytes()
-	d2, err := Read(bytes.NewReader(out), int64(len(out)))
+	d2, err := ReadWithPassword(bytes.NewReader(out), int64(len(out)), "cf-user")
 	if err != nil {
 		t.Fatalf("re-read: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestEncryptIndirectCFNotPacked(t *testing.T) {
 	}
 	// The /CF object itself must not have been packed into an object stream: it
 	// must have a recorded byte offset (uncompressed) in the rewritten file.
-	if _, ok := d2.Offsets[cfNum]; !ok {
+	if _, ok := d2.Source().Offset(cfNum); !ok {
 		t.Errorf("the /CF object %d was packed into an object stream", cfNum)
 	}
 }

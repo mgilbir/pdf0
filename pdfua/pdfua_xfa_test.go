@@ -18,7 +18,7 @@ func TestUAXFACompressed(t *testing.T) {
 
 	pkt := &object.Stream{Dict: object.Dictionary{}, Data: zbuf.Bytes()}
 	pkt.Dict.Set("Filter", object.Name("FlateDecode"))
-	doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+	doc := mkView(map[int]*object.IndirectObject{}, nil)
 	form := &object.Dictionary{}
 	form.Set("XFA", object.Array{object.String{Value: []byte("config")}, pkt})
 	cat := &object.Dictionary{}

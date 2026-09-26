@@ -1,201 +1,157 @@
 //go:build devtools
 
-// Command rulecoverage reports how the pdf0 PDF/A validator's rule coverage
-// compares to the veraPDF validation profiles — the machine-readable inventory
-// of every PDF/A rule the reference validator checks.
+// Command rulecoverage reports, rule by rule, which veraPDF PDF/A rules the
+// pdf0 validator detects: for every rule in the veraPDF validation profiles, it
+// validates the corpus files that must fail that rule and checks that pdf0
+// reports a violation under the rule's clause. See internal/rulecov for the
+// classification and for why the previous measure (clause strings found in the
+// source) had saturated at 181/181 and could no longer find a gap.
 //
-// It is a developer aid for finding coverage gaps, not a shipped feature. Fetch
-// the profiles with `make profiles` (they are CC BY 4.0, veraPDF Consortium, and
-// live under spec/ which is gitignored), then run `make rule-coverage`.
+// It is a developer aid for finding coverage gaps, not a shipped feature. It
+// needs the profiles (`make profiles`; CC BY 4.0, veraPDF Consortium) and the
+// veraPDF corpus (`make corpus`); run it with `make rule-coverage`.
 //
-// Coverage is matched by ISO clause. The comparison is approximate: pdf0 emits
-// some rule IDs with ISO 19005-2 numbering even at PDF/A-1 (see the audit notes),
-// so a clause listed as "not covered" may be implemented under a different
-// number — the printed description tells you which to check by hand.
+// usage: rulecoverage [-v]
+//
+// -v also lists every rule the corpus does not test. Exit status: 0 on a
+// completed report, 1 when the profiles or the corpus are missing or unusable.
 package main
 
 import (
-	"encoding/xml"
+	"bytes"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
-	"sort"
 	"strings"
+
+	"github.com/mgilbir/pdf0"
+	"github.com/mgilbir/pdf0/internal/rulecov"
+	"github.com/mgilbir/pdf0/pdfa"
 )
 
-// veraProfile is the subset of the veraPDF validation-profile schema we read.
-type veraProfile struct {
-	Rules []veraRule `xml:"rules>rule"`
-}
-
-type veraRule struct {
-	Object string `xml:"object,attr"`
-	ID     struct {
-		Specification string `xml:"specification,attr"`
-		Clause        string `xml:"clause,attr"`
-		TestNumber    string `xml:"testNumber,attr"`
-	} `xml:"id"`
-	Description string `xml:"description"`
-	Test        string `xml:"test"`
-}
-
-// level pairs a display name with its combined-profile filename.
+// level pairs a PDF/A level with its combined profile and its corpus directory.
 type level struct {
-	name string
-	file string
+	name    string
+	level   pdfa.Level
+	profile string
+	corpus  string
 }
 
 var levels = []level{
-	{"PDF/A-1b", "PDFA-1B.xml"},
-	{"PDF/A-2b", "PDFA-2B.xml"},
-	{"PDF/A-3b", "PDFA-3B.xml"},
-	{"PDF/A-4", "PDFA-4.xml"},
+	{"PDF/A-1b", pdfa.PDFA1b, "PDFA-1B.xml", "PDF_A-1b"},
+	{"PDF/A-2b", pdfa.PDFA2b, "PDFA-2B.xml", "PDF_A-2b"},
+	{"PDF/A-3b", pdfa.PDFA3b, "PDFA-3B.xml", "PDF_A-3b"},
+	{"PDF/A-4", pdfa.PDFA4, "PDFA-4.xml", "PDF_A-4"},
 }
 
 func main() {
-	profilesDir := os.Getenv("VERAPDF_PROFILES")
-	if profilesDir == "" {
-		profilesDir = "spec/verapdf-profiles"
+	verbose := flag.Bool("v", false, "also list the rules the corpus does not test")
+	flag.Parse()
+	if flag.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, "usage: rulecoverage [-v]")
+		os.Exit(2)
 	}
-	srcDir := "."
-	if len(os.Args) > 1 {
-		srcDir = os.Args[1]
+	profilesDir := envOr("VERAPDF_PROFILES", "spec/verapdf-profiles")
+	corpusDir := envOr("VERAPDF_CORPUS", "testdata/verapdf-corpus")
+	for _, need := range []struct{ path, fetch string }{
+		{filepath.Join(profilesDir, "PDF_A"), "make profiles"},
+		{corpusDir, "make corpus"},
+	} {
+		if fi, err := os.Stat(need.path); err != nil || !fi.IsDir() {
+			fmt.Fprintf(os.Stderr, "%s not found; run `%s` first.\n", need.path, need.fetch)
+			os.Exit(1)
+		}
 	}
 
-	if _, err := os.Stat(filepath.Join(profilesDir, "PDF_A")); err != nil {
-		fmt.Fprintf(os.Stderr, "veraPDF profiles not found at %s\nRun `make profiles` first.\n", profilesDir)
-		os.Exit(1)
-	}
-
-	implemented, err := scanImplementedRules(srcDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "scanning source: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("pdf0 emits %d distinct rule clauses across the source.\n\n", len(implemented))
-
-	var totalVera, totalCovered int
+	var total, tested, detected int
 	for _, lv := range levels {
-		rules, err := loadProfile(filepath.Join(profilesDir, "PDF_A", lv.file))
+		rules, err := rulecov.LoadProfile(filepath.Join(profilesDir, "PDF_A", lv.profile))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%s: %v\n", lv.name, err)
-			continue
+			os.Exit(1)
 		}
-		// Group by clause; keep the first description per clause.
-		clauseDesc := map[string]string{}
-		clauseTests := map[string]int{}
-		for _, r := range rules {
-			if _, ok := clauseDesc[r.ID.Clause]; !ok {
-				clauseDesc[r.ID.Clause] = firstSentence(r.Description)
-			}
-			clauseTests[r.ID.Clause]++
-		}
-		clauses := sortedClauses(clauseDesc)
-
-		var covered, missing []string
-		for _, c := range clauses {
-			if implemented[c] {
-				covered = append(covered, c)
-			} else {
-				missing = append(missing, c)
-			}
-		}
-		totalVera += len(clauses)
-		totalCovered += len(covered)
-
-		fmt.Printf("=== %s: %d rules across %d clauses — %d/%d clauses covered ===\n",
-			lv.name, len(rules), len(clauses), len(covered), len(clauses))
-		if len(missing) > 0 {
-			fmt.Printf("  clauses with no matching pdf0 rule ID (%d):\n", len(missing))
-			for _, c := range missing {
-				fmt.Printf("    %-10s (%d test%s)  %s\n", c, clauseTests[c], plural(clauseTests[c]), clauseDesc[c])
-			}
-		}
-		fmt.Println()
-	}
-	fmt.Printf("Overall: %d/%d veraPDF clauses matched by a pdf0 rule ID (clause-string match; see caveat).\n",
-		totalCovered, totalVera)
-}
-
-func loadProfile(path string) ([]veraRule, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var p veraProfile
-	if err := xml.Unmarshal(data, &p); err != nil {
-		return nil, err
-	}
-	return p.Rules, nil
-}
-
-// ruleLiteral matches any quoted ISO clause number (e.g. "6.7.8", "6.1.7").
-// This catches rule IDs however they reach a pdfa.Violation — inline
-// `Rule: "6.1.4"`, via `rule := "6.1.7"`, or in a multi-assignment like
-// `attrRule, wfRule = "6.7.5", "6.7.9"` — which a `Rule:`-anchored pattern misses.
-var ruleLiteral = regexp.MustCompile(`"(6(?:\.\d+)+)"`)
-
-// scanImplementedRules returns the set of ISO clause strings that appear as
-// quoted literals in the non-test Go source (the rule IDs the validator emits).
-func scanImplementedRules(root string) (map[string]bool, error) {
-	set := map[string]bool{}
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return err
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		if strings.Contains(path, "/cmd/") {
-			return nil
-		}
-		data, err := os.ReadFile(path)
+		files, err := rulecov.CorpusFiles(filepath.Join(corpusDir, lv.corpus))
 		if err != nil {
-			return err
+			fmt.Fprintf(os.Stderr, "%s: %v\n", lv.name, err)
+			os.Exit(1)
 		}
-		for _, m := range ruleLiteral.FindAllStringSubmatch(string(data), -1) {
-			set[m[1]] = true
+		if len(files) == 0 {
+			fmt.Fprintf(os.Stderr, "%s: no corpus test files under %s\n", lv.name, lv.corpus)
+			os.Exit(1)
 		}
-		return nil
-	})
-	return set, err
+		rep, err := rulecov.Measure(rules, files, validator(lv.level))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", lv.name, err)
+			os.Exit(1)
+		}
+		printLevel(lv.name, rep, *verbose)
+		total += len(rep.Rules)
+		tested += len(rep.Rules) - rep.Count(rulecov.Untested)
+		detected += rep.Count(rulecov.Detected)
+	}
+	fmt.Printf("Overall: %d rules; the corpus tests %d, and pdf0 detects %d of those under the rule's own clause.\n",
+		total, tested, detected)
+	fmt.Println("A rule the corpus does not test is not measured here, in either direction.")
 }
 
-func sortedClauses(m map[string]string) []string {
-	out := make([]string, 0, len(m))
-	for c := range m {
-		out = append(out, c)
+// validator validates at one level and returns the clauses reported.
+func validator(lvl pdfa.Level) rulecov.Validator {
+	return func(data []byte) ([]string, error) {
+		doc, err := pdf0.Read(bytes.NewReader(data), int64(len(data)))
+		if err != nil {
+			return nil, err
+		}
+		var clauses []string
+		for _, v := range pdf0.ValidatePDFABytes(doc, lvl, data) {
+			clauses = append(clauses, v.Rule)
+		}
+		return clauses, nil
 	}
-	sort.Slice(out, func(i, j int) bool { return clauseLess(out[i], out[j]) })
-	return out
 }
 
-// clauseLess orders dotted clause numbers numerically ("6.2.10" after "6.2.9").
-func clauseLess(a, b string) bool {
-	as, bs := strings.Split(a, "."), strings.Split(b, ".")
-	for i := 0; i < len(as) && i < len(bs); i++ {
-		x, y := atoiSafe(as[i]), atoiSafe(bs[i])
-		if x != y {
-			return x < y
+func printLevel(name string, rep rulecov.Report, verbose bool) {
+	n := len(rep.Rules)
+	untested := rep.Count(rulecov.Untested)
+	fmt.Printf("=== %s: %d rules; %d tested by the corpus: %d detected, %d caught only under another clause, %d missed, %d unreadable; %d untested ===\n",
+		name, n, n-untested, rep.Count(rulecov.Detected), rep.Count(rulecov.Elsewhere),
+		rep.Count(rulecov.Missed), rep.Count(rulecov.Unreadable), untested)
+	for _, s := range []rulecov.Status{rulecov.Missed, rulecov.Unreadable, rulecov.Elsewhere} {
+		for _, r := range rep.Rules {
+			if r.Status() != s {
+				continue
+			}
+			fmt.Printf("  %-10s %-16s %s\n", s, r.ID(), firstSentence(r.Description))
+			for _, ex := range r.Examples {
+				fmt.Printf("  %-10s %-16s   %s\n", "", "", ex)
+			}
 		}
 	}
-	return len(as) < len(bs)
+	if verbose {
+		for _, r := range rep.Rules {
+			if r.Status() == rulecov.Untested {
+				fmt.Printf("  %-10s %-16s %s\n", "untested", r.ID(), firstSentence(r.Description))
+			}
+		}
+	}
+	if len(rep.Orphans) > 0 {
+		var names []string
+		for _, o := range rep.Orphans {
+			names = append(names, filepath.Base(o.Path))
+		}
+		fmt.Printf("  fail files naming a rule the profile does not define: %s\n", strings.Join(names, ", "))
+	}
+	fmt.Println()
 }
 
-func atoiSafe(s string) int {
-	n := 0
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return n
-		}
-		n = n*10 + int(r-'0')
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
 	}
-	return n
+	return def
 }
 
 func firstSentence(s string) string {
-	s = strings.Join(strings.Fields(s), " ")
 	if i := strings.IndexByte(s, '.'); i > 0 && i < 100 {
 		return s[:i+1]
 	}
@@ -203,11 +159,4 @@ func firstSentence(s string) string {
 		return s[:100] + "…"
 	}
 	return s
-}
-
-func plural(n int) string {
-	if n == 1 {
-		return ""
-	}
-	return "s"
 }

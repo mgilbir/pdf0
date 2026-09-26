@@ -127,7 +127,9 @@ func TestUncoloredPatternRefusesToSetItsOwnColour(t *testing.T) {
 
 // TestEveryColourOperatorCountsAsSettingColour pins that the check is on the
 // operators and not on one convenience method. A cell that reaches a colour
-// through a colour space, a pattern or a stroke is just as undefined.
+// through a colour space, a pattern or a stroke has it ignored just the same,
+// and so does one that sets the rendering intent or paints a shading
+// (ISO 32000-2 8.6.8).
 func TestEveryColourOperatorCountsAsSettingColour(t *testing.T) {
 	cases := map[string]func(*content.Builder){
 		"SetGray":             func(b *content.Builder) { b.SetGray(0.5) },
@@ -140,18 +142,22 @@ func TestEveryColourOperatorCountsAsSettingColour(t *testing.T) {
 		"SetStrokeColorSpace": func(b *content.Builder) { b.SetStrokeColorSpace("DeviceRGB") },
 		"SetColor":            func(b *content.Builder) { b.SetColor(0.5) },
 		"SetStrokeColor":      func(b *content.Builder) { b.SetStrokeColor(0.5) },
+		"SetPattern":          func(b *content.Builder) { b.SetPattern("P0") },
+		"SetStrokePattern":    func(b *content.Builder) { b.SetStrokePattern("P0") },
+		"SetRenderingIntent":  func(b *content.Builder) { b.SetRenderingIntent(content.Perceptual) },
+		"Shading":             func(b *content.Builder) { b.Shading("Sh0") },
 	}
 	for name, set := range cases {
 		var b content.Builder
 		set(&b)
-		if !b.SetsColor() {
+		if b.ColorOperator() == "" {
 			t.Errorf("%s did not count as setting a colour", name)
 		}
 	}
 	// And a drawing that sets none says so.
 	var plain content.Builder
 	plain.Rect(0, 0, 1, 1).Fill()
-	if plain.SetsColor() {
+	if plain.ColorOperator() != "" {
 		t.Error("a drawing that sets no colour reported that it did")
 	}
 }

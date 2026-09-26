@@ -119,7 +119,11 @@ func TestEmbedFacturXUnknownProfile(t *testing.T) {
 // TestFacturXXMPPacket checks the generated metadata declares the fx extension
 // schema and the Factur-X properties for the profile.
 func TestFacturXXMPPacket(t *testing.T) {
-	xmp := string(facturx.XMPPacket(formalis.ProfileBasic, "INVOICE", "Some & Title"))
+	packet, err := facturx.XMPPacket(formalis.ProfileBasic, "INVOICE", "Some & Title")
+	if err != nil {
+		t.Fatal(err)
+	}
+	xmp := string(packet)
 	for _, want := range []string{
 		"<pdfaid:part>3</pdfaid:part>",
 		"urn:factur-x:pdfa:CrossIndustryDocument:invoice:1p0#",

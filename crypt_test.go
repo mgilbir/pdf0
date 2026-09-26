@@ -18,7 +18,7 @@ import (
 // yields bytes that zlib rejects, so a clean inflate is strong evidence the
 // decryption is correct. Self-skips when the corpus is absent.
 func TestDecryptCorpusFiles(t *testing.T) {
-	corpus := corpusRoot(t)
+	corpusRoot(t) // skips when the corpus is absent
 	cases := []struct{ name, sub string }{
 		{"RC4 V2/R3", filepath.Join("PDFA-1b", "6.1 File structure", "6.1.3 File trailer", "isartor-6-1-3-t02-fail-a")},
 		{"AES-128 V4/R4", filepath.Join("PDF_A-2b", "6.1 File structure", "6.1.3 File trailer", "veraPDF test suite 6-1-3-t02-fail-a")},
@@ -26,10 +26,7 @@ func TestDecryptCorpusFiles(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			p := findCorpusFile(corpus, c.sub)
-			if p == "" {
-				t.Skipf("%s not found", c.sub)
-			}
+			p := corpusFileNamed(t, c.sub)
 			data, err := os.ReadFile(p)
 			if err != nil {
 				t.Fatal(err)
@@ -61,7 +58,9 @@ func TestDecryptCorpusFiles(t *testing.T) {
 				checked++
 			}
 			if checked == 0 {
-				t.Skip("no FlateDecode streams to verify")
+				// The fixture is pinned; if it stops carrying Flate streams
+				// this test checks nothing, which must not read as a pass.
+				t.Fatal("no FlateDecode streams to verify; the fixture no longer exercises decryption")
 			}
 		})
 	}
@@ -132,7 +131,7 @@ func TestAESDecryptFailureIsNotPlaintext(t *testing.T) {
 	}
 	doc.Trailer.Set("Root", object.IndirectRef{Number: 1})
 
-	doc.decryptFailures = h.DecryptDocument(doc.graph())
+	doc.decryptFailures = decryptAll(h, doc)
 
 	if bytes.Equal(st.Data, bad) {
 		t.Error("stream ciphertext was handed on unchanged as plaintext")
@@ -186,7 +185,7 @@ func TestDecryptSuccessRecordsNoFailure(t *testing.T) {
 		Encrypted: true,
 		security:  h,
 	}
-	doc.decryptFailures = h.DecryptDocument(doc.graph())
+	doc.decryptFailures = decryptAll(h, doc)
 	if !bytes.Equal(st.Data, plain) {
 		t.Errorf("stream data = %q, want %q", st.Data, plain)
 	}
@@ -195,13 +194,9 @@ func TestDecryptSuccessRecordsNoFailure(t *testing.T) {
 	}
 }
 
-func findCorpusFile(root, sub string) string {
-	var found string
-	filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
-		if err == nil && !info.IsDir() && strings.Contains(p, sub) && strings.HasSuffix(p, ".pdf") {
-			found = p
-		}
-		return nil
-	})
-	return found
+// decryptAll runs both phases of the read-side decryption over a document built
+// in memory, which has no object streams.
+func decryptAll(h *crypt.Handler, doc *Document) []int {
+	noContainers := func(int, *object.Stream) bool { return false }
+	return h.DecryptDocument(doc.graph(), noContainers).Finish(doc.graph())
 }

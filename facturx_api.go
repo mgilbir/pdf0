@@ -18,7 +18,7 @@ import (
 // cache, and the PDF/A-3 checker the container rules compose but cannot reach
 // on their own.
 func facturxRun(ctx context.Context, doc *Document, rawData []byte) core.View {
-	runDoc := *doc
+	runDoc := *doc // dictcopy: a shallow per-run copy; it shares Objects and Trailer by design and the validators never write either
 	runDoc.valCache = newValidationCache(core.NewCanceler(ctx))
 	v := runDoc.view()
 	facturx.SetPDFAChecker(v, func(core.View) []pdfa.Violation {
@@ -55,9 +55,35 @@ func ValidateOrderXContext(ctx context.Context, doc *Document, rawData []byte) f
 
 // EmbedFacturX embeds the CII invoice XML into doc as the associated file a
 // Factur-X container requires, and writes the Factur-X XMP extension schema and
-// identification into the document's metadata. doc must already be PDF/A-3; the
-// result is a Factur-X container that ValidateFacturX accepts after a round
-// trip through Write and Read.
+// identification into the document's metadata. doc must already be PDF/A-3 (or
+// claim no PDF/A part, and then claims 3b); the result is a Factur-X container
+// that ValidateFacturX accepts after a round trip through Write and Read.
+//
+// It edits the document rather than rebuilding any of it: other attachments,
+// other metadata and the PDF/A conformance letter are kept, and an invoice the
+// document already carries is replaced, so embedding twice leaves one invoice.
+// See facturx.Embed for what it refuses — empty or non-XML input among it. A
+// nil or Locked document is refused too, since the invoice would be written in
+// the clear under its /Encrypt.
 func EmbedFacturX(doc *Document, invoiceXML []byte, profile formalis.Profile, title string) error {
+	if doc == nil {
+		return errNilDocument
+	}
+	if doc.Locked() {
+		return errLockedTarget("embedding a Factur-X invoice")
+	}
 	return facturx.Embed(doc.view(), invoiceXML, profile, title)
+}
+
+// EmbedOrderX is EmbedFacturX for an Order-X order: the Cross Industry Order
+// XML is embedded as order-x.xml and identified in the Order-X XMP namespace.
+// docType is ORDER, ORDER_CHANGE or ORDER_RESPONSE.
+func EmbedOrderX(doc *Document, orderXML []byte, profile facturx.OrderXProfile, docType, title string) error {
+	if doc == nil {
+		return errNilDocument
+	}
+	if doc.Locked() {
+		return errLockedTarget("embedding an Order-X order")
+	}
+	return facturx.EmbedOrder(doc.view(), orderXML, profile, docType, title)
 }

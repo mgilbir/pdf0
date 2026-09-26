@@ -9,10 +9,10 @@ import (
 // TestUAHeadingSkip flags a skipped heading level and accepts a proper sequence.
 func TestUAHeadingSkip(t *testing.T) {
 	mk := func(levels ...string) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		cat := &object.Dictionary{}
 		cat.Set("Type", object.Name("Catalog"))
-		root := &object.Dictionary{Keys: []object.Name{"Type"}, Values: []object.Object{object.Name("StructTreeRoot")}}
+		root := object.NewDictionary(object.Entry{Key: "Type", Value: object.Name("StructTreeRoot")})
 		var kids object.Array
 		for i, lvl := range levels {
 			h := &object.Dictionary{}

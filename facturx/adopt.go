@@ -1,8 +1,6 @@
 package facturx
 
 import (
-	"strings"
-
 	"github.com/mgilbir/formalis"
 	"github.com/mgilbir/pdf0/internal/finding"
 	"github.com/mgilbir/pdf0/pdfa"
@@ -39,8 +37,9 @@ func adoptPDFAFindings(add func(rule, msg string, obj int), prefix string, errs 
 		switch {
 		case e.Rule == finding.InternalRule || e.Rule == finding.LimitRule:
 			add(e.Rule, e.Message, e.Object)
-		case e.Rule == "6.6.4" && strings.Contains(e.Message, "pdfaid:conformance"):
-			// Not a container finding.
+		case e.Check == pdfa.CheckPDFAIDConformance:
+			// Not a container finding. Keyed on the finding's identity, not on
+			// the words of its message, which may be reworded (audit C148).
 		default:
 			add(prefix+e.Rule, e.Message, e.Object)
 		}

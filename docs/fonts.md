@@ -1,7 +1,8 @@
 # Fonts
 
-This doc is about reading fonts to validate them: `fonts.go` here, and the font
-program reader it leans on, which is `font/fontprog.go` in
+This doc is about reading fonts to validate them: `pdfa/fonts.go` and the
+shared font-usage walk in `internal/core/fontuse.go` here, and the font
+program reader they lean on, which is `font/fontprog.go` in
 [github.com/mgilbir/forme](https://github.com/mgilbir/forme) along with the
 generated tables `font/font_encodings.go` and `font/cff_strings.go`. Between
 them they answer three questions the PDF/A and PDF/UA font rules keep asking:
@@ -18,7 +19,44 @@ Shaping — OpenType layout, the bidirectional algorithm, the Indic, Khmer,
 Myanmar and Universal Shaping Engine models, subsetting — is forme's `shape`
 package, because none of it is about PDF. What is about PDF stays in `fonts/`
 here: turning positioned glyphs into content-stream operators, and writing the
-font into the document as the object graph a reader needs.
+font into the document as the object graph a reader needs. [Setting text and
+getting it back](#setting-text-and-getting-it-back) below is about that half.
+
+## Setting text and getting it back
+
+`fonts.Face` has five ways to put a string on a page — `Encode`, `Shape`,
+`ShapeWith`, `Draw` and `DrawShaped` — and `htmlpdf.Render` draws through
+`Draw`. All of them go through one path in `fonts/draw.go`:
+
+- **One function writes a code** (`appendCode`): `GlyphCode`'s two bytes for a
+  composite face — the glyph index, or the CID for a CID-keyed CFF — and the
+  WinAnsi byte for a simple or standard face. `/W`, `/CIDSet` and `/ToUnicode`
+  are keyed by the same call, so they agree with the page by construction.
+- **One plan decides what the text is.** `Draw` takes the text the glyphs were
+  shaped from. Each glyph's ToUnicode entry is fixed the first time it is
+  drawn: a ligature's is the letters it replaced ("ffi", not the U+FB03 the
+  cmap registers the glyph under), a conjunct's its cluster ("क्ष"), a
+  positional form's its letter, a plain character's the character the cmap
+  prefers (日 over the radical ⽇). A cluster whose glyphs, read in drawing
+  order, do not spell it — a vowel sign drawn before its consonant, a glyph
+  already mapped to other text — is wrapped in an `/ActualText` (ISO 32000-2
+  14.9.4), and so is a run drawn in an order other than the order it is read,
+  which is every right-to-left run.
+- **The CMap covers the glyphs used** and nothing else.
+
+`Encode` returns bare codes, which cannot carry an `/ActualText`: a glyph the
+cmap reaches from two characters extracts as the one the CMap names it by.
+
+Embedding honours the font's licence (OS/2 `fsType`): Restricted License
+embedding is refused with `fonts.ErrRestrictedLicense`, bitmap-only with
+`fonts.ErrBitmapEmbeddingOnly`, and a font that forbids subsetting is embedded
+whole, without a subset tag. The program, `/CIDSet` and `/ToUnicode` streams
+are Flate-compressed.
+
+`fonts_drawpaths_test.go` draws every path in a CID-keyed CFF, a TrueType face,
+an Arabic face, a simple face and a standard face, and checks both that the
+text extracts as written and that PDF/A-1b, -2b, -3b and -4 find nothing wrong
+with the font.
 
 ## Font types and what each requires
 
@@ -91,7 +129,9 @@ Two font checks bypass the model and scan `doc.Objects` directly —
 `checkCMapEmbedded` and `checkCMapCIDLimit` — because both are about the CMap
 object, not about shown glyphs. The usage map is shared well beyond PDF/A: nine
 PDF/UA checks iterate it, `content_operators.go` uses it to find Type 3 glyph
-procedures, and `text.go` reuses `parseToUnicodeMap` for text extraction. PDF/X
+procedures. Text extraction (`text.go`) reads ToUnicode with
+`core.ParseToUnicodeRunes`, the full destination rather than its first rune,
+because a ligature's entry is several characters. PDF/X
 is the outlier — `pdfxCheckFontsEmbedded` scans resources itself.
 
 ## Font program parsing (forme's `font/fontprog.go`)
@@ -283,7 +323,7 @@ CIDs whose glyphs exist only as padding or composite components.
 
 | File | Owns | Governing spec |
 |------|------|----------------|
-| `fonts.go` | Content walking (`forEachContentItem`, `buildFontEvents`, `collectFontTextUsage`), all font rule functions, the predefined-CMap table, encoding/AGL validation, CID width parsing, CIDSet/CharSet, ToUnicode parsing | ISO 32000-2 clause 9 (9.6 simple fonts, 9.7 composite, 9.10 Unicode mapping)<br/>ISO 19005-1 6.3, -2/-3 6.2.11, -4 6.2.10 |
+| `pdfa/fonts.go`, `internal/core/fontuse.go` | Content walking (`forEachContentItem`, `buildFontEvents`, `collectFontTextUsage`), all font rule functions, the predefined-CMap table, encoding/AGL validation, CID width parsing, CIDSet/CharSet, ToUnicode parsing | ISO 32000-2 clause 9 (9.6 simple fonts, 9.7 composite, 9.10 Unicode mapping)<br/>ISO 19005-1 6.3, -2/-3 6.2.11, -4 6.2.10 |
 | forme `font/fontprog.go` | `font.Program` plus `font.ParseSFNT`, `font.ParseCFF`, `font.ParseType1`, and `parseSFNTCFF` for OpenType/CFF | OpenType/sfnt spec (`head`, `maxp`, `hhea`, `hmtx`, `loca`, `glyf`, `cmap`)<br/>Adobe TN #5176 (CFF), TN #5177 (Type 2 charstrings), TN #5015 (Type 1) |
 | forme `font/font_encodings.go` | Generated: `standardEncodingNames`, `macRomanEncodingNames`, `winAnsiEncodingNames` | ISO 32000-1 Annex D.2 |
 | forme `font/cff_strings.go` | Generated: `cffStandardStrings`, 391 entries indexed by SID | Adobe TN #5176 Appendix A |
@@ -440,13 +480,28 @@ not to notice `.notdef`.
 The corpus says where the value is: of 223 Type 0 fonts, 149 use Identity, **69
 embed a CMap** and 5 name a predefined one.
 
-**Code length comes from the first byte, not from containment** (§9.7.6.2). A
+**A valid code is cut by containment; an invalid one by its first byte**
+(§9.7.6.2). A code that lies wholly inside a codespace range — every byte within
+the range's bounds for its position — is that range's length, shortest first.
+Bytes that make no valid code take their length from the first byte: a
 mixed-width CMap has a one-byte space `<00>–<80>` and a two-byte one
-`<8140>–<9FFC>`; the string `81 20` is a *two-byte* code — invalid, outside the
-range, but two bytes. Deciding by containment reads it as one byte and the `20`
-becomes the start of the next code, so every code after it in the string is
-wrong. That is the whole of mixed-width CJK and it is what `codeAt` is careful
-about.
+`<8140>–<9FFC>`, and the string `81 20` is a *two-byte* code — invalid, outside
+the range, but two bytes. Reading it as one byte makes the `20` the start of the
+next code, so every code after it in the string is wrong. That is the whole of
+mixed-width CJK and it is what `codeAt` is careful about. The two rules agree
+wherever ranges of different lengths start with different bytes, which is
+nearly everywhere; they part on GB 18030 (`GBK2K-H`), whose two- and four-byte
+ranges share first bytes, where `81 30 81 30` is one four-byte code.
+
+Text extraction and the PDF/A Level A Private Use scan cut codes the same way,
+through `core.LoadFontCodes`: the full CMap where `LoadCMap` reads one, and
+otherwise the codespace alone — a predefined CMap's, from a table transcribed
+from Adobe's published CMaps (`cmap_predefined.go`), or an embedded CMap's own
+ranges plus those of the predefined CMap it names with `usecmap`. A codespace is
+enough to cut codes, which is all those two readers need before looking each
+code up in the ToUnicode map; the codes of the `Uni*-UCS2` and `Uni*-UTF16`
+CMaps are Unicode themselves. Both readers used to cut every Type 0 string into
+two-byte codes (audit 2026-09-22 C88).
 
 Every check that turns a shown string into glyph references goes through it:
 the PDF/A glyph, `.notdef` and width rules, the `/CIDSet` completeness rule, and

@@ -60,7 +60,7 @@ func buildObjectStream(nums []int, bodies map[int][]byte, objStmNum int) (*objec
 	dict.Set("First", object.Integer(first))
 	dict.Set("Filter", object.Name("FlateDecode"))
 	dict.Set("Length", object.Integer(len(encoded)))
-	return &object.IndirectObject{Number: objStmNum, Value: &object.Stream{Dict: *dict, Data: encoded}}, index
+	return &object.IndirectObject{Number: objStmNum, Value: object.NewStream(dict, encoded)}, index
 }
 
 // buildWriteSet returns the objects Write should serialize. When regenerating a
@@ -79,7 +79,7 @@ func (d *Document) buildWriteSet() (map[int]*object.IndirectObject, map[int][2]i
 	// those into a new object stream would be wrong — a reader does not apply
 	// per-object decryption to objects inside an /ObjStm — so leave every object
 	// individually addressable and let Write emit an all-uncompressed xref stream.
-	if (d.Encrypted || d.Trailer.Get("Encrypt") != nil) && d.security == nil {
+	if d.Locked() {
 		return d.Objects, nil
 	}
 
@@ -209,7 +209,7 @@ func (d *Document) encryptReachable() map[int]bool {
 				stack = append(stack, v.Number)
 			}
 		case *object.Dictionary:
-			for _, val := range v.Values {
+			for val := range v.Values() {
 				walk(val)
 			}
 		case object.Array:
@@ -217,7 +217,7 @@ func (d *Document) encryptReachable() map[int]bool {
 				walk(e)
 			}
 		case *object.Stream:
-			for _, val := range v.Dict.Values {
+			for val := range v.Dict.Values() {
 				walk(val)
 			}
 		}

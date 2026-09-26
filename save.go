@@ -82,6 +82,12 @@ func (d *Document) SaveContext(ctx context.Context, w io.Writer) error {
 
 func (d *Document) save(cancel core.Canceler, w io.Writer) error {
 	level, claimed := d.Conformance()
+	if id := d.existingPDFAIdentification(); id.status == core.XMPMalformed || id.status == core.XMPLimit {
+		// Whatever the metadata claims, pdf0 cannot read it, so it cannot
+		// check the document against it — and writing it unchecked would be
+		// Save quietly becoming Write.
+		return fmt.Errorf("pdf0: the document's XMP metadata cannot be read (not well-formed, or over the XMP packet limit), so the conformance it claims cannot be checked; use Write to write it anyway")
+	}
 	if !claimed {
 		if id := d.existingPDFAIdentification(); id.part != "" {
 			// The document says it is a part of ISO 19005 that names no level

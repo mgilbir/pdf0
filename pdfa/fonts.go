@@ -3,8 +3,10 @@ package pdfa
 import (
 	"fmt"
 	"github.com/mgilbir/forme/font"
+	"github.com/mgilbir/pdf0/internal/checked"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
+	"math"
 	"strings"
 	"unicode"
 )
@@ -1275,13 +1277,9 @@ func parseNumberToken(b []byte) object.Object {
 		neg = s[i] == '-'
 		i++
 	}
-	v := 0
-	for ; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
-			break
-		}
-		v = v*10 + int(s[i]-'0')
-	}
+	// Out-of-range integers saturate rather than wrap; the magnitude rules
+	// report them as out of range either way.
+	v, _, _ := checked.Decimal(s[i:])
 	if neg {
 		v = -v
 	}
@@ -1496,15 +1494,11 @@ func maxCMapCID(data []byte) int {
 	return max
 }
 
+// atoiSafe reads the leading decimal digits of s, saturating at MaxInt rather
+// than wrapping.
 func atoiSafe(s string) int {
-	v := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
-			break
-		}
-		v = v*10 + int(s[i]-'0')
-	}
-	return v
+	v, _, _ := checked.Decimal(s)
+	return int(min(v, math.MaxInt))
 }
 
 // checkCIDSetProgramComplete enforces the stricter PDF/A-1 subset rule

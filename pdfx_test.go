@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/internal/testfiles"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/pdfx"
 	"os"
@@ -57,7 +58,7 @@ func buildPDFX4Doc() *Document {
 	// so the output intent covers DeviceCMYK/DeviceGray but not DeviceRGB.
 	iccData := make([]byte, 132)
 	copy(iccData[16:], []byte("CMYK"))
-	set(5, &object.Stream{Dict: *icc, Data: iccData})
+	set(5, object.NewStream(icc, iccData))
 
 	xmp := `<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>
 <x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
@@ -67,7 +68,7 @@ func buildPDFX4Doc() *Document {
 	md := &object.Dictionary{}
 	md.Set("Type", object.Name("Metadata"))
 	md.Set("Subtype", object.Name("XML"))
-	set(6, &object.Stream{Dict: *md, Data: []byte(xmp)})
+	set(6, object.NewStream(md, []byte(xmp)))
 
 	font := &object.Dictionary{}
 	font.Set("Type", object.Name("Font"))
@@ -207,10 +208,7 @@ func TestValidatePDFXViolations(t *testing.T) {
 // to run the executed-content font walk over in a unit test. Skips when the
 // suite is absent.
 func TestValidatePDFXCalPolySuite(t *testing.T) {
-	all, _ := filepath.Glob("testdata/pdfvt/*.pdf")
-	if len(all) == 0 {
-		t.Skip("Cal Poly PDF/VT suite not present (testdata/pdfvt)")
-	}
+	all := testfiles.CalPolyPDFVT.Glob(t, "*.pdf")
 	for _, f := range all {
 		name := filepath.Base(f)
 		isDoc := strings.HasPrefix(name, "Documentation")

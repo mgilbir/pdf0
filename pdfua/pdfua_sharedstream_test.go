@@ -2,6 +2,7 @@ package pdfua
 
 import (
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/hostile"
 	"github.com/mgilbir/pdf0/object"
 	"testing"
 	"time"
@@ -14,7 +15,7 @@ import (
 // The content shows two literal strings with font F1 outside any marked-content
 // sequence.
 func buildSharedStreamDoc(nPages int) core.View {
-	d := mkViewVersion(map[int]*object.IndirectObject{}, object.Dictionary{}, "1.7")
+	d := mkViewVersion(map[int]*object.IndirectObject{}, nil, "1.7")
 	put := func(n int, v object.Object) { d.Objects[n] = &object.IndirectObject{Number: n, Value: v} }
 
 	font := &object.Dictionary{}
@@ -63,76 +64,80 @@ func buildSharedStreamDoc(nPages int) core.View {
 // and that collection stays fast. Before the per-stream memoization this doc
 // tokenized the shared stream once per page, making it quadratic.
 func TestFontUsageSharedStreamDedup(t *testing.T) {
-	const nPages = 20000
-	doc := buildSharedStreamDoc(nPages)
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		const nPages = 20000
+		doc := buildSharedStreamDoc(nPages)
 
-	done := make(chan map[*object.Dictionary]*core.FontTextUsage, 1)
-	start := time.Now()
-	go func() { done <- core.CollectFontTextUsage(doc) }()
-	var usage map[*object.Dictionary]*core.FontTextUsage
-	select {
-	case usage = <-done:
-	case <-time.After(30 * time.Second):
-		t.Fatalf("core.CollectFontTextUsage did not finish within 30s on a %d-page shared-stream doc", nPages)
-	}
-	t.Logf("core.CollectFontTextUsage over %d pages took %v", nPages, time.Since(start))
+		done := make(chan map[*object.Dictionary]*core.FontTextUsage, 1)
+		start := time.Now()
+		go func() { done <- core.CollectFontTextUsage(doc) }()
+		var usage map[*object.Dictionary]*core.FontTextUsage
+		select {
+		case usage = <-done:
+		case <-time.After(30 * time.Second):
+			t.Fatalf("core.CollectFontTextUsage did not finish within 30s on a %d-page shared-stream doc", nPages)
+		}
+		t.Logf("core.CollectFontTextUsage over %d pages took %v", nPages, time.Since(start))
 
-	font := doc.ResolveDict(object.IndirectRef{Number: 50})
-	u := usage[font]
-	if u == nil {
-		t.Fatal("shared font recorded no usage")
-	}
-	// The stream shows two strings; deduped across all pages that is exactly two,
-	// not two per page.
-	if len(u.Strings) != 2 {
-		t.Errorf("font usage has %d strings, want 2 (dedup across shared pages)", len(u.Strings))
-	}
-	if got := string(u.Strings[0]) + string(u.Strings[1]); got != "ABCD" {
-		t.Errorf("shown strings = %q, want AB+CD", got)
-	}
-	if !u.Modes[0] {
-		t.Error("render mode 0 not recorded")
-	}
-	// The single shared stream should have been tokenized once.
-	if n := doc.Run.FontEventsMemoSize(); n != 1 {
-		t.Errorf("fontEvents cache holds %d streams, want 1", n)
-	}
+		font := doc.ResolveDict(object.IndirectRef{Number: 50})
+		u := usage[font]
+		if u == nil {
+			t.Fatal("shared font recorded no usage")
+		}
+		// The stream shows two strings; deduped across all pages that is exactly two,
+		// not two per page.
+		if len(u.Strings) != 2 {
+			t.Errorf("font usage has %d strings, want 2 (dedup across shared pages)", len(u.Strings))
+		}
+		if got := string(u.Strings[0]) + string(u.Strings[1]); got != "ABCD" {
+			t.Errorf("shown strings = %q, want AB+CD", got)
+		}
+		if !u.Modes[0] {
+			t.Error("render mode 0 not recorded")
+		}
+		// The single shared stream should have been tokenized once.
+		if n := doc.Run.FontEventsMemoSize(); n != 1 {
+			t.Errorf("fontEvents cache holds %d streams, want 1", n)
+		}
+	})
 }
 
 // TestRealContentSharedStreamMemo verifies that the real-content (7.1) check
 // analyzes a shared stream once but still reports the violation for every page
 // that uses it (each under its own object number).
 func TestRealContentSharedStreamMemo(t *testing.T) {
-	const nPages = 20000
-	doc := buildSharedStreamDoc(nPages)
-	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		const nPages = 20000
+		doc := buildSharedStreamDoc(nPages)
+		cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 
-	done := make(chan []Violation, 1)
-	go func() { done <- checkUARealContent(doc, cat) }()
-	var v []Violation
-	select {
-	case v = <-done:
-	case <-time.After(30 * time.Second):
-		t.Fatalf("checkUARealContent did not finish within 30s on a %d-page shared-stream doc", nPages)
-	}
-
-	// The shown text is outside any marked-content sequence, so every page is a
-	// violation — one per page, each carrying that page's object number.
-	if len(v) != nPages {
-		t.Fatalf("got %d real-content violations, want %d (one per page)", len(v), nPages)
-	}
-	objs := map[int]bool{}
-	for _, x := range v {
-		if x.Message != "page contains text that is neither tagged nor marked as an /Artifact" {
-			t.Fatalf("unexpected message %q", x.Message)
+		done := make(chan []Violation, 1)
+		go func() { done <- checkUARealContent(doc, cat) }()
+		var v []Violation
+		select {
+		case v = <-done:
+		case <-time.After(30 * time.Second):
+			t.Fatalf("checkUARealContent did not finish within 30s on a %d-page shared-stream doc", nPages)
 		}
-		objs[x.Object] = true
-	}
-	if len(objs) != nPages {
-		t.Errorf("violations cover %d distinct pages, want %d", len(objs), nPages)
-	}
-	// The shared stream was analyzed once and cached.
-	if n := len(uaMemo(doc).streamFacts); n != 1 {
-		t.Errorf("streamFacts cache holds %d streams, want 1", n)
-	}
+
+		// The shown text is outside any marked-content sequence, so every page is a
+		// violation — one per page, each carrying that page's object number.
+		if len(v) != nPages {
+			t.Fatalf("got %d real-content violations, want %d (one per page)", len(v), nPages)
+		}
+		objs := map[int]bool{}
+		for _, x := range v {
+			if x.Message != "page contains text that is neither tagged nor marked as an /Artifact" {
+				t.Fatalf("unexpected message %q", x.Message)
+			}
+			objs[x.Object] = true
+		}
+		if len(objs) != nPages {
+			t.Errorf("violations cover %d distinct pages, want %d", len(objs), nPages)
+		}
+		// The shared stream was analyzed once and cached.
+		if n := len(uaMemo(doc).streamFacts); n != 1 {
+			t.Errorf("streamFacts cache holds %d streams, want 1", n)
+		}
+	})
 }

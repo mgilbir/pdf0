@@ -1,6 +1,8 @@
 package images
 
 import (
+	"errors"
+	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 	"image"
@@ -44,30 +46,43 @@ func (cs *imgColorSpace) toRGB16Comps(c []float64) (r, g, b uint16) {
 	return uint16(r8) * 257, uint16(g8) * 257, uint16(b8) * 257
 }
 
+// errUnsupportedLayout is buildImage declining a sample layout it cannot
+// render: a colour space it does not know, a bit depth it does not read, data
+// shorter than the geometry. The caller reports it with a codec-specific Note.
+var errUnsupportedLayout = errors.New("unsupported sample layout")
+
 // buildImage converts an image XObject's decoded samples to an image, applying
-// the colour space, bit depth, /Decode array and soft mask. ok is false for a
-// layout it cannot render.
-func buildImage(d core.View, st *object.Stream, raw []byte, w, h, bpc int) (image.Image, bool) {
+// the colour space, bit depth, /Decode array and soft mask. The error is
+// errUnsupportedLayout for a layout it cannot render, a *core.LimitError for
+// geometry over the image budget, or the colour-space resolver's refusal of a
+// space that is cyclic or nested too deeply.
+// maskErr, when not nil, says why a mask was left out of an image that was
+// otherwise built.
+func buildImage(d core.View, st *object.Stream, raw []byte, w, h, bpc int) (m image.Image, maskErr, err error) {
 	if w <= 0 || h <= 0 || bpc <= 0 {
-		return nil, false
+		return nil, nil, errUnsupportedLayout
 	}
-	cs, ok := resolveColorSpace(d, st.Dict.Get("ColorSpace"))
-	if !ok {
-		return nil, false
+	cs, err := resolveColorSpace(d, st.Dict.Get("ColorSpace"))
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := d.Limits.CheckImage(int64(w), int64(h), int64(cs.ncomp)); err != nil {
+		return nil, nil, err
 	}
 	decode := imageDecode(d, st, cs, bpc)
 	maxval := float64(int(1)<<uint(bpc) - 1)
 	if maxval <= 0 {
-		return nil, false
+		return nil, nil, errUnsupportedLayout
 	}
 	if !sampleDataFits(raw, w, h, cs.ncomp, bpc) {
-		return nil, false
+		return nil, nil, errUnsupportedLayout
 	}
 
 	colorKey := colorKeyMask(d, st, cs.ncomp) // range array making matching samples transparent
 
 	if bpc == 16 {
-		return buildImage16(d, st, raw, w, h, cs, decode, maxval, colorKey)
+		m, maskErr := buildImage16(d, st, raw, w, h, cs, decode, maxval, colorKey)
+		return m, maskErr, nil
 	}
 
 	im := image.NewNRGBA(image.Rect(0, 0, w, h))
@@ -99,15 +114,14 @@ func buildImage(d core.View, st *object.Stream, raw []byte, w, h, bpc int) (imag
 		}
 	}
 	applyStencilMask(d, st, im)
-	applySoftMask(d, st, im)
-	return im, true
+	return im, applySoftMask(d, st, im), nil
 }
 
 // buildImage16 renders a 16-bit-per-component image to an *image.NRGBA64,
 // preserving the full sample precision that an 8-bit *image.NRGBA would discard.
 // It mirrors the 8-bit path but keeps colour arithmetic in floats down to a
 // 16-bit clamp so a DeviceGray sample of 0xFFFF yields R=0xFFFF, 0x8000 ~ 0x8000.
-func buildImage16(d core.View, st *object.Stream, raw []byte, w, h int, cs *imgColorSpace, decode []float64, maxval float64, colorKey []int) (image.Image, bool) {
+func buildImage16(d core.View, st *object.Stream, raw []byte, w, h int, cs *imgColorSpace, decode []float64, maxval float64, colorKey []int) (image.Image, error) {
 	im := image.NewNRGBA64(image.Rect(0, 0, w, h))
 	sr := sampleReader{data: raw, bpc: 16, w: w, ncomp: cs.ncomp}
 	comps := make([]float64, cs.ncomp)
@@ -135,8 +149,7 @@ func buildImage16(d core.View, st *object.Stream, raw []byte, w, h int, cs *imgC
 		}
 	}
 	applyStencilMask64(d, st, im)
-	applySoftMask64(d, st, im)
-	return im, true
+	return im, applySoftMask64(d, st, im)
 }
 
 // colorKeyMask returns the /Mask colour-key range array [min1 max1 …] when
@@ -299,46 +312,125 @@ func (s *sampleReader) next() int {
 }
 
 // sampleDataFits reports whether data holds at least one full image of w x h
-// pixels with ncomp components at bpc bits, rows byte-aligned.
+// pixels with ncomp components at bpc bits, rows byte-aligned. Every argument
+// can come from the file, so nothing is multiplied that could wrap: each
+// dimension is compared against what the data could hold, by division. A
+// non-positive argument never fits.
 func sampleDataFits(data []byte, w, h, ncomp, bpc int) bool {
-	rowBytes := (w*ncomp*bpc + 7) / 8
-	return len(data) >= rowBytes*h
+	if w <= 0 || h <= 0 || ncomp <= 0 || bpc <= 0 {
+		return false
+	}
+	bits := int64(len(data)) * 8
+	if int64(w) > bits/int64(ncomp)/int64(bpc) {
+		return false // one row alone is larger than the data
+	}
+	rowBytes := (int64(w)*int64(ncomp)*int64(bpc) + 7) / 8 // ≤ len(data), no overflow
+	return int64(h) <= int64(len(data))/rowBytes
 }
 
-// resolveColorSpace resolves a PDF colour-space object to an imgColorSpace, or
-// (nil,false) for one this decoder cannot render.
-func resolveColorSpace(d core.View, obj object.Object) (*imgColorSpace, bool) {
+// maxColorSpaceDepth bounds how deeply colour spaces may nest: an Indexed base,
+// a Separation or DeviceN alternate, an ICCBased /Alternate, each of which is a
+// colour space in its own right. Real files nest two or three deep (an Indexed
+// over an ICCBased with a device alternate); sixteen is the bound the other
+// file-structure walks in this package use.
+const maxColorSpaceDepth = 16
+
+// errColorSpaceDepth is a colour space nested past maxColorSpaceDepth.
+var errColorSpaceDepth = fmt.Errorf("colour space nested more than %d deep", maxColorSpaceDepth)
+
+// colorSpaceCycleError is a colour space that contains itself: object n is its
+// own base or alternate, directly or through others. Every one of those is a
+// reference the file controls, and the resolver used to follow them until the
+// stack overflowed — a fatal error, not a recoverable panic (audit 2026-09-22
+// C13).
+type colorSpaceCycleError int
+
+func (e colorSpaceCycleError) Error() string {
+	return fmt.Sprintf("colour space object %d contains itself", int(e))
+}
+
+// csResolver resolves one image's colour space. It carries the depth and the
+// object numbers on the path from the image's /ColorSpace to the space being
+// resolved, so that a space reached again through its own base or alternate is
+// refused as a cycle and a chain that is merely long is refused at the depth
+// bound. The path is unwound as each level returns: a space may legitimately
+// be reached twice by different routes, and only a revisit on the current path
+// is a cycle. Each level has at most one nested space, so the walk is a chain
+// and the depth bound alone bounds its cost.
+type csResolver struct {
+	d     core.View
+	depth int
+	path  []int
+}
+
+// resolveColorSpace resolves a PDF colour-space object to an imgColorSpace. The
+// error is errUnsupportedLayout for a space this decoder cannot render,
+// errColorSpaceDepth or a colorSpaceCycleError for one it refuses to follow.
+func resolveColorSpace(d core.View, obj object.Object) (*imgColorSpace, error) {
+	r := &csResolver{d: d}
+	return r.resolve(obj)
+}
+
+func (r *csResolver) resolve(obj object.Object) (*imgColorSpace, error) {
+	if r.depth >= maxColorSpaceDepth {
+		return nil, errColorSpaceDepth
+	}
+	if ref, ok := obj.(object.IndirectRef); ok {
+		for _, n := range r.path {
+			if n == ref.Number {
+				return nil, colorSpaceCycleError(n)
+			}
+		}
+		r.path = append(r.path, ref.Number)
+		defer func() { r.path = r.path[:len(r.path)-1] }()
+	}
+	r.depth++
+	defer func() { r.depth-- }()
+
+	d := r.d
 	switch cs := d.Resolve(obj).(type) {
 	case object.Name:
 		return deviceColorSpace(string(cs))
 	case object.Array:
 		if len(cs) == 0 {
-			return nil, false
+			return nil, errUnsupportedLayout
 		}
 		head, _ := d.Resolve(cs[0]).(object.Name)
 		switch head {
 		case "ICCBased":
-			return iccBasedColorSpace(d, cs)
+			return r.iccBased(cs)
 		case "CalRGB":
 			return deviceColorSpace("DeviceRGB")
 		case "CalGray":
 			return deviceColorSpace("DeviceGray")
 		case "Lab":
-			return labColorSpace(d, cs)
+			return labColorSpace(d, cs), nil
 		case "Indexed", "I":
-			return indexedColorSpace(d, cs)
+			return r.indexed(cs)
 		case "DeviceGray", "DeviceRGB", "DeviceCMYK", "G", "RGB", "CMYK":
 			return deviceColorSpace(string(head))
 		case "Separation":
-			return separationColorSpace(d, cs)
+			if len(cs) < 4 {
+				return nil, errUnsupportedLayout
+			}
+			return r.tint(1, cs[2], cs[3])
 		case "DeviceN":
-			return deviceNColorSpace(d, cs)
+			// [/DeviceN names altSpace tintFn]: len(names) tint components fed
+			// through tintFn into the alternate space.
+			if len(cs) < 4 {
+				return nil, errUnsupportedLayout
+			}
+			names, ok := d.Resolve(cs[1]).(object.Array)
+			if !ok || len(names) == 0 {
+				return nil, errUnsupportedLayout
+			}
+			return r.tint(len(names), cs[2], cs[3])
 		}
 	}
-	return nil, false
+	return nil, errUnsupportedLayout
 }
 
-func deviceColorSpace(name string) (*imgColorSpace, bool) {
+func deviceColorSpace(name string) (*imgColorSpace, error) {
 	switch name {
 	case "DeviceGray", "CalGray", "G":
 		return &imgColorSpace{ncomp: 1, decode: []float64{0, 1}, toRGB: func(c []float64) (uint8, uint8, uint8) {
@@ -347,31 +439,31 @@ func deviceColorSpace(name string) (*imgColorSpace, bool) {
 		}, toRGB16: func(c []float64) (uint16, uint16, uint16) {
 			v := clamp16(c[0])
 			return v, v, v
-		}}, true
+		}}, nil
 	case "DeviceRGB", "CalRGB", "RGB":
 		return &imgColorSpace{ncomp: 3, decode: []float64{0, 1, 0, 1, 0, 1}, toRGB: func(c []float64) (uint8, uint8, uint8) {
 			return clamp8(c[0]), clamp8(c[1]), clamp8(c[2])
 		}, toRGB16: func(c []float64) (uint16, uint16, uint16) {
 			return clamp16(c[0]), clamp16(c[1]), clamp16(c[2])
-		}}, true
+		}}, nil
 	case "DeviceCMYK", "CMYK":
-		return &imgColorSpace{ncomp: 4, decode: []float64{0, 1, 0, 1, 0, 1, 0, 1}, toRGB: cmykToRGB, toRGB16: cmykToRGB16}, true
+		return &imgColorSpace{ncomp: 4, decode: []float64{0, 1, 0, 1, 0, 1, 0, 1}, toRGB: cmykToRGB, toRGB16: cmykToRGB16}, nil
 	}
-	return nil, false
+	return nil, errUnsupportedLayout
 }
 
-// iccBasedColorSpace renders an ICCBased space by its component count (/N): 1 as
+// iccBased renders an ICCBased space by its component count (/N): 1 as
 // grayscale, 3 as RGB, 4 as CMYK, matching the profile's device class. A
 // present /Alternate is used when /N is absent or unusual.
-func iccBasedColorSpace(d core.View, cs object.Array) (*imgColorSpace, bool) {
+func (r *csResolver) iccBased(cs object.Array) (*imgColorSpace, error) {
 	if len(cs) < 2 {
-		return nil, false
+		return nil, errUnsupportedLayout
 	}
-	st, ok := d.Resolve(cs[1]).(*object.Stream)
+	st, ok := r.d.Resolve(cs[1]).(*object.Stream)
 	if !ok {
-		return nil, false
+		return nil, errUnsupportedLayout
 	}
-	switch object.Int(d.Resolve(st.Dict.Get("N"))) {
+	switch object.Int(r.d.Resolve(st.Dict.Get("N"))) {
 	case 1:
 		return deviceColorSpace("DeviceGray")
 	case 3:
@@ -380,24 +472,28 @@ func iccBasedColorSpace(d core.View, cs object.Array) (*imgColorSpace, bool) {
 		return deviceColorSpace("DeviceCMYK")
 	}
 	if alt := st.Dict.Get("Alternate"); alt != nil {
-		return resolveColorSpace(d, alt)
+		return r.resolve(alt)
 	}
-	return nil, false
+	return nil, errUnsupportedLayout
 }
 
-// indexedColorSpace resolves [/Indexed base hival lookup] into a palette lookup
-// over its base colour space.
-func indexedColorSpace(d core.View, cs object.Array) (*imgColorSpace, bool) {
+// indexed resolves [/Indexed base hival lookup] into a palette lookup over its
+// base colour space.
+func (r *csResolver) indexed(cs object.Array) (*imgColorSpace, error) {
 	if len(cs) < 4 {
-		return nil, false
+		return nil, errUnsupportedLayout
 	}
-	base, ok := resolveColorSpace(d, cs[1])
-	if !ok || base.indexed {
-		return nil, false
+	base, err := r.resolve(cs[1])
+	if err != nil {
+		return nil, err
 	}
+	if base.indexed {
+		return nil, errUnsupportedLayout
+	}
+	d := r.d
 	hival := object.Int(d.Resolve(cs[2]))
 	if hival < 0 || hival > 65535 {
-		return nil, false
+		return nil, errUnsupportedLayout
 	}
 	var lookup []byte
 	switch t := d.Resolve(cs[3]).(type) {
@@ -406,10 +502,10 @@ func indexedColorSpace(d core.View, cs object.Array) (*imgColorSpace, bool) {
 	case *object.Stream:
 		lookup = d.Content(t)
 	default:
-		return nil, false
+		return nil, errUnsupportedLayout
 	}
 	if len(lookup) < (hival+1)*base.ncomp {
-		return nil, false
+		return nil, errUnsupportedLayout
 	}
 	return &imgColorSpace{
 		ncomp:   1,
@@ -418,45 +514,28 @@ func indexedColorSpace(d core.View, cs object.Array) (*imgColorSpace, bool) {
 		lookup:  lookup,
 		base:    base,
 		decode:  []float64{0, float64(hival)},
-	}, true
+	}, nil
 }
 
-// separationColorSpace resolves [/Separation name altSpace tintFn]: one tint
-// component fed through tintFn into the alternate space.
-func separationColorSpace(d core.View, cs object.Array) (*imgColorSpace, bool) {
-	if len(cs) < 4 {
-		return nil, false
+// tint builds an imgColorSpace with ncomp tint components (one for Separation,
+// one per colorant for DeviceN) whose toRGB runs the tint-transform function
+// into the alternate space's toRGB. It refuses the space if the tint function
+// does not evaluate for a probe input, so callers fall back to the raw bytes
+// rather than render garbage.
+func (r *csResolver) tint(ncomp int, altObj, tintFn object.Object) (*imgColorSpace, error) {
+	alt, err := r.resolve(altObj)
+	if err != nil {
+		return nil, err
 	}
-	return tintColorSpace(d, 1, cs[2], cs[3])
-}
-
-// deviceNColorSpace resolves [/DeviceN names altSpace tintFn]: len(names) tint
-// components fed through tintFn into the alternate space.
-func deviceNColorSpace(d core.View, cs object.Array) (*imgColorSpace, bool) {
-	if len(cs) < 4 {
-		return nil, false
+	if alt.indexed {
+		return nil, errUnsupportedLayout
 	}
-	names, ok := d.Resolve(cs[1]).(object.Array)
-	if !ok || len(names) == 0 {
-		return nil, false
-	}
-	return tintColorSpace(d, len(names), cs[2], cs[3])
-}
-
-// tintColorSpace builds an imgColorSpace with ncomp tint components whose toRGB
-// runs the tint-transform function into the alternate space's toRGB. It refuses
-// the space if the tint function does not evaluate for a probe input, so callers
-// fall back to the raw bytes rather than render garbage.
-func tintColorSpace(d core.View, ncomp int, altObj, tintFn object.Object) (*imgColorSpace, bool) {
-	alt, ok := resolveColorSpace(d, altObj)
-	if !ok || alt.indexed {
-		return nil, false
-	}
+	d := r.d
 	// Verify the tint function evaluates to the alternate space's arity.
 	probe := make([]float64, ncomp)
 	altComps, ok := d.EvalFunction(tintFn, probe)
 	if !ok || len(altComps) != alt.ncomp {
-		return nil, false
+		return nil, errUnsupportedLayout
 	}
 	decode := make([]float64, 2*ncomp)
 	for i := 0; i < ncomp; i++ {
@@ -474,12 +553,12 @@ func tintColorSpace(d core.View, ncomp int, altObj, tintFn object.Object) (*imgC
 			}
 			return alt.toRGB(comps)
 		},
-	}, true
+	}, nil
 }
 
 // labColorSpace resolves a [/Lab dict] space; toRGB converts CIE L*a*b* (D50) to
 // sRGB.
-func labColorSpace(d core.View, cs object.Array) (*imgColorSpace, bool) {
+func labColorSpace(d core.View, cs object.Array) *imgColorSpace {
 	wp := [3]float64{0.9642, 1.0, 0.8249} // D50, the usual Lab reference white
 	amin, amax, bmin, bmax := -100.0, 100.0, -100.0, 100.0
 	if len(cs) >= 2 {
@@ -506,7 +585,7 @@ func labColorSpace(d core.View, cs object.Array) (*imgColorSpace, bool) {
 			r, g, b := labToSRGB(c[0], c[1], c[2], wp)
 			return clamp16(r), clamp16(g), clamp16(b)
 		},
-	}, true
+	}
 }
 
 func cmykToRGB(c []float64) (uint8, uint8, uint8) {
@@ -590,15 +669,18 @@ func imageDecode(d core.View, st *object.Stream, cs *imgColorSpace, bpc int) []f
 }
 
 // applySoftMask composites a /SMask (a DeviceGray image giving per-pixel alpha)
-// onto im, nearest-neighbour scaling the mask to the image's dimensions.
-func applySoftMask(d core.View, st *object.Stream, im *image.NRGBA) {
+// onto im, nearest-neighbour scaling the mask to the image's dimensions. It
+// returns the budget error when the mask's own geometry was refused, so the
+// caller can say why the image carries no mask; a mask that is absent or does
+// not decode is left out silently, as it always was.
+func applySoftMask(d core.View, st *object.Stream, im *image.NRGBA) error {
 	sm, ok := d.Resolve(st.Dict.Get("SMask")).(*object.Stream)
 	if !ok {
-		return
+		return nil
 	}
-	alpha, mw, mh, ok := decodeAlphaMask(d, sm)
-	if !ok || mw <= 0 || mh <= 0 {
-		return
+	alpha, mw, mh, err := decodeAlphaMask(d, sm)
+	if err != nil || alpha == nil {
+		return err
 	}
 	w, h := im.Rect.Dx(), im.Rect.Dy()
 	for y := 0; y < h; y++ {
@@ -609,18 +691,19 @@ func applySoftMask(d core.View, st *object.Stream, im *image.NRGBA) {
 			im.Pix[o+3] = alpha[my*mw+mx]
 		}
 	}
+	return nil
 }
 
 // applySoftMask64 is the *image.NRGBA64 counterpart of applySoftMask. The mask
 // carries one alpha byte per pixel, promoted to 16 bits (byte*257).
-func applySoftMask64(d core.View, st *object.Stream, im *image.NRGBA64) {
+func applySoftMask64(d core.View, st *object.Stream, im *image.NRGBA64) error {
 	sm, ok := d.Resolve(st.Dict.Get("SMask")).(*object.Stream)
 	if !ok {
-		return
+		return nil
 	}
-	alpha, mw, mh, ok := decodeAlphaMask(d, sm)
-	if !ok || mw <= 0 || mh <= 0 {
-		return
+	alpha, mw, mh, err := decodeAlphaMask(d, sm)
+	if err != nil || alpha == nil {
+		return err
 	}
 	w, h := im.Rect.Dx(), im.Rect.Dy()
 	for y := 0; y < h; y++ {
@@ -632,15 +715,24 @@ func applySoftMask64(d core.View, st *object.Stream, im *image.NRGBA64) {
 			im.Pix[o+6], im.Pix[o+7] = uint8(a>>8), uint8(a) // 16-bit alpha, big-endian
 		}
 	}
+	return nil
 }
 
-// decodeAlphaMask decodes a soft-mask image XObject to one alpha byte per pixel.
-func decodeAlphaMask(d core.View, sm *object.Stream) (alpha []byte, w, h int, ok bool) {
+// decodeAlphaMask decodes a soft-mask image XObject to one alpha byte per
+// pixel. A nil alpha with a nil error is a mask that is absent, malformed or in
+// a codec this path does not read; a *core.LimitError is one whose geometry is
+// over the image budget. The mask's dimensions are its own, independent of the
+// image it masks, so they are held to the budget separately.
+func decodeAlphaMask(d core.View, sm *object.Stream) (alpha []byte, w, h int, err error) {
 	w = object.Int(d.Resolve(sm.Dict.Get("Width")))
 	h = object.Int(d.Resolve(sm.Dict.Get("Height")))
 	bpc := object.Int(d.Resolve(sm.Dict.Get("BitsPerComponent")))
 	if w <= 0 || h <= 0 || bpc <= 0 {
-		return nil, 0, 0, false
+		return nil, 0, 0, nil
+	}
+	if err := d.Limits.CheckImage(int64(w), int64(h), 1); err != nil {
+		d.Note(core.GuardImagePixels, err.Error(), 0)
+		return nil, 0, 0, fmt.Errorf("the /SMask was not applied: %w", err)
 	}
 	filters := d.StreamFilters(sm)
 	last := ""
@@ -648,11 +740,11 @@ func decodeAlphaMask(d core.View, sm *object.Stream) (alpha []byte, w, h int, ok
 		last = string(filters[len(filters)-1])
 	}
 	if last == "DCTDecode" || last == "JPXDecode" {
-		return nil, 0, 0, false // decoded elsewhere; rare for a mask
+		return nil, 0, 0, nil // decoded elsewhere; rare for a mask
 	}
 	raw := decodeImageSamples(d.Cancel, sm, d.Limits)
 	if !sampleDataFits(raw, w, h, 1, bpc) {
-		return nil, 0, 0, false
+		return nil, 0, 0, nil
 	}
 	dec := []float64{0, 1}
 	if arr, ok := d.Resolve(sm.Dict.Get("Decode")).(object.Array); ok && len(arr) == 2 {
@@ -668,5 +760,5 @@ func decodeAlphaMask(d core.View, sm *object.Stream) (alpha []byte, w, h int, ok
 			alpha[y*w+x] = clamp8(v)
 		}
 	}
-	return alpha, w, h, true
+	return alpha, w, h, nil
 }

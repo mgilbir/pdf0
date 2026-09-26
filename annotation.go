@@ -2,7 +2,6 @@ package pdf0
 
 import (
 	"fmt"
-	"math"
 	"strings"
 
 	"github.com/mgilbir/pdf0/object"
@@ -26,10 +25,15 @@ type Link struct {
 	// [xMin, yMin, xMax, yMax].
 	Rect [4]float64
 
-	// URI is the address to follow, for a link out of the document.
+	// URI is the address to follow, for a link out of the document. Its scheme
+	// must be http, https, ftp, mailto or tel. Surrounding spaces and control
+	// characters are removed, as a browser's URL parser removes them; one
+	// inside it is refused; and anything outside printable ASCII is
+	// percent-encoded as UTF-8.
 	URI string
 
 	// Page is a reference to a page in this document, for a link within it.
+	// It must be one of PageList's pages; anything else is refused by AddPage.
 	Page *object.IndirectRef
 
 	// To says where on that page to go. The zero value shows the whole page,
@@ -92,10 +96,11 @@ func (d Destination) destination(page object.IndirectRef) (object.Array, error) 
 		}
 		return object.Array{page, object.Name("FitH"), numberFor(d.Top)}, nil
 	case AtPosition:
-		for name, v := range map[string]float64{
-			"left": d.Left, "top": d.Top, "zoom": d.Zoom,
-		} {
-			if err := checkFinite("the link's destination "+name, v); err != nil {
+		for _, c := range []struct {
+			name string
+			v    float64
+		}{{"left", d.Left}, {"top", d.Top}, {"zoom", d.Zoom}} {
+			if err := checkFinite("the link's destination "+c.name, c.v); err != nil {
 				return nil, err
 			}
 		}
@@ -113,13 +118,6 @@ func (d Destination) destination(page object.IndirectRef) (object.Array, error) 
 	return nil, fmt.Errorf("pdf0: unknown link destination kind %d", d.Kind)
 }
 
-func checkFinite(what string, v float64) error {
-	if math.IsNaN(v) || math.IsInf(v, 0) {
-		return fmt.Errorf("pdf0: %s is %v, which is not a coordinate", what, v)
-	}
-	return nil
-}
-
 // annotation builds the annotation dictionary for a link.
 //
 // The flags are what make it conforming. A non-Popup annotation must declare
@@ -129,8 +127,8 @@ func checkFinite(what string, v float64) error {
 // width because a visible border around every link is a default nobody wants
 // and every producer overrides.
 func (l Link) annotation() (*object.Dictionary, error) {
-	if l.Rect[2] <= l.Rect[0] || l.Rect[3] <= l.Rect[1] {
-		return nil, fmt.Errorf("pdf0: the link's rectangle %v has no area, so nothing could activate it", l.Rect)
+	if err := checkBox("the link's rectangle", l.Rect, "nothing could activate it"); err != nil {
+		return nil, err
 	}
 	switch {
 	case l.URI != "" && l.Page != nil:
@@ -156,13 +154,14 @@ func (l Link) annotation() (*object.Dictionary, error) {
 	a.Set("Border", object.Array{object.Integer(0), object.Integer(0), object.Integer(0)})
 
 	if l.URI != "" {
-		if err := checkURI(l.URI); err != nil {
+		uri, err := linkURI(l.URI)
+		if err != nil {
 			return nil, err
 		}
 		action := &object.Dictionary{}
 		action.Set("Type", object.Name("Action"))
 		action.Set("S", object.Name("URI"))
-		action.Set("URI", object.String{Value: []byte(l.URI)})
+		action.Set("URI", object.String{Value: []byte(uri)})
 		a.Set("A", action)
 		return a, nil
 	}
@@ -177,23 +176,83 @@ func (l Link) annotation() (*object.Dictionary, error) {
 	return a, nil
 }
 
-// checkURI refuses the destinations that are not addresses.
+// linkURISchemes are the schemes a link may carry: the web, file transfer,
+// mail and telephone numbers — each an address a reader hands to the program
+// that opens it. Anything else is refused rather than written. javascript: and
+// vbscript: are scripts, which PDF/A forbids; data: and blob: carry a document
+// of their own, which a browser renders as one; file: points into the reader's
+// own file system. A scheme outside a list is the only rule that does not have
+// to anticipate the next of them.
+var linkURISchemes = map[string]bool{
+	"http": true, "https": true, "ftp": true, "mailto": true, "tel": true,
+}
+
+// linkURI returns the URI a link writes for uri, or why it cannot be one.
 //
-// A javascript: URI is a script by another name, and PDF/A forbids scripts. The
-// check is here rather than left to the validator because a caller building a
-// document from untrusted input — a web page, say — would otherwise carry an
-// attacker's script into a file that claims to conform.
-func checkURI(uri string) error {
-	if strings.ContainsAny(uri, "\x00\r\n") {
-		return fmt.Errorf("pdf0: the link's URI contains a control character")
+// The scheme is read the way a browser's URL parser reads it (the WHATWG URL
+// Standard, "basic URL parser"), which strips leading and trailing C0 controls
+// and spaces and removes every tab, line feed and carriage return wherever it
+// is before it looks at the scheme. A check on the string as given is a check
+// a browser does not make — "java\tscript:" and " javascript:" are both
+// javascript: to it — and a caller building a document from untrusted input, a
+// web page say, would carry an attacker's script into a file that claims to
+// conform (audit 2026-09-22 C132). So the surrounding controls and spaces are
+// stripped here too, and a control character left inside — a tab or newline a
+// browser would silently remove, or any other — is refused rather than
+// guessed at. What remains must be an absolute URI whose scheme is on the
+// list.
+//
+// What is written is that normalised URI, with every byte outside printable
+// ASCII, and the characters a URI may not carry unescaped (space " < > \ ^ `
+// { | }), percent-encoded: ISO 32000-2 12.6.4.8 makes /URI 7-bit ASCII, and
+// UTF-8 bytes written raw are read by each viewer in its own encoding. An
+// existing percent-escape is kept as it is. A non-ASCII host is percent-encoded
+// too, which a browser decodes and converts to its IDNA form.
+func linkURI(uri string) (string, error) {
+	isC0OrSpace := func(r rune) bool { return r <= 0x20 }
+	uri = strings.TrimFunc(uri, isC0OrSpace)
+	for i := 0; i < len(uri); i++ {
+		if c := uri[i]; c < 0x20 || c == 0x7f {
+			return "", fmt.Errorf("pdf0: the link's URI contains the control character %#x", c)
+		}
 	}
 	scheme, _, ok := strings.Cut(uri, ":")
-	if !ok {
-		return fmt.Errorf("pdf0: %q is not an absolute URI; a link needs a scheme", uri)
+	if !ok || !validScheme(scheme) {
+		return "", fmt.Errorf("pdf0: %q is not an absolute URI; a link needs a scheme", uri)
 	}
-	switch strings.ToLower(scheme) {
-	case "javascript", "vbscript", "data":
-		return fmt.Errorf("pdf0: a %s: URI is a script rather than an address, and may not be linked to", scheme)
+	if !linkURISchemes[strings.ToLower(scheme)] {
+		return "", fmt.Errorf("pdf0: a %s: URI is not an address a link may carry "+
+			"(the schemes allowed are http, https, ftp, mailto and tel)", strings.ToLower(scheme))
 	}
-	return nil
+	const hex = "0123456789ABCDEF"
+	var out strings.Builder
+	for i := 0; i < len(uri); i++ {
+		c := uri[i]
+		if c > 0x20 && c < 0x7f && !strings.ContainsRune("\"<>\\^`{|}", rune(c)) {
+			out.WriteByte(c)
+			continue
+		}
+		out.WriteByte('%')
+		out.WriteByte(hex[c>>4])
+		out.WriteByte(hex[c&0xF])
+	}
+	return out.String(), nil
+}
+
+// validScheme reports whether s is a URI scheme: an ASCII letter followed by
+// letters, digits, "+", "-" and "." (RFC 3986 3.1).
+func validScheme(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
+		case i > 0 && (c >= '0' && c <= '9' || c == '+' || c == '-' || c == '.'):
+		default:
+			return false
+		}
+	}
+	return true
 }

@@ -99,17 +99,14 @@ func TestEncryptedPassthroughRefusesIncompleteModel(t *testing.T) {
 // stays encrypted), written as a passthrough, then re-read with the empty
 // password it actually uses — which must still decrypt. Gated on the corpus.
 func TestEncryptedPassthroughAESCorpus(t *testing.T) {
-	corpus := corpusRoot(t)
+	corpusRoot(t) // skips when the corpus is absent
 	cases := []string{
 		filepath.Join("PDF_A-2b", "6.1 File structure", "6.1.3 File trailer", "veraPDF test suite 6-1-3-t02-fail-a"),
 		filepath.Join("PDF_A-4", "6.1 File structure", "6.1.3 File trailer", "veraPDF test suite 6-1-3-t02-fail-a"),
 	}
 	ran := 0
 	for _, sub := range cases {
-		p := findCorpusFile(corpus, sub)
-		if p == "" {
-			continue
-		}
+		p := corpusFileNamed(t, sub)
 		data, err := os.ReadFile(p)
 		if err != nil {
 			t.Fatal(err)
@@ -146,6 +143,8 @@ func TestEncryptedPassthroughAESCorpus(t *testing.T) {
 		ran++
 	}
 	if ran == 0 {
-		t.Skip("no empty-password-decryptable AES corpus file available for the passthrough check")
+		// The fixtures are pinned corpus files; with the corpus present, none
+		// of them reaching the passthrough means this test checked nothing.
+		t.Fatal("no empty-password-decryptable AES corpus file reached the passthrough check")
 	}
 }

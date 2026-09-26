@@ -152,8 +152,8 @@ func collectTextFromContainer(doc View, container *object.Dictionary, data []byt
 	}
 	var forms, patterns []candidate
 	if xobjDict := doc.ResolveDict(res.Get("XObject")); xobjDict != nil {
-		for i, name := range xobjDict.Keys {
-			if s, ok := doc.Resolve(xobjDict.Values[i]).(*object.Stream); ok {
+		for name, xref := range xobjDict.All() {
+			if s, ok := doc.Resolve(xref).(*object.Stream); ok {
 				if st, _ := doc.ResolveName(s.Dict.Get("Subtype")); st == "Form" {
 					forms = append(forms, candidate{string(name), s})
 				}
@@ -161,8 +161,8 @@ func collectTextFromContainer(doc View, container *object.Dictionary, data []byt
 		}
 	}
 	if patDict := doc.ResolveDict(res.Get("Pattern")); patDict != nil {
-		for i, name := range patDict.Keys {
-			if s, ok := doc.Resolve(patDict.Values[i]).(*object.Stream); ok {
+		for name, pref := range patDict.All() {
+			if s, ok := doc.Resolve(pref).(*object.Stream); ok {
 				patterns = append(patterns, candidate{string(name), s})
 			}
 		}

@@ -31,8 +31,8 @@ func checkNoEncrypt(doc *Document, level pdfa.Level) []pdfa.Violation {
 ```
 
 `pdfa.Violation` has four fields. `Rule` is the ISO 19005 clause string — what
-`RuleID()` returns and what the rule-coverage test greps for, so it is not
-free-form. `Level` is echoed from the argument, `Message` is human prose, and
+`RuleID()` returns and what the rule-coverage test matches against each veraPDF
+rule's clause, so it is not free-form. `Level` is echoed from the argument, `Message` is human prose, and
 `Object` is the anchoring object number (`0` if none). `Error()` renders as
 `[PDF/A-2b 6.1.3] object 12: trailer must not contain /Encrypt`, dropping the
 `object N:` segment when `Object` is 0.
@@ -124,7 +124,7 @@ thousands of objects). `ValidatePDFABytes` therefore installs a `validationCache
 
 **It is installed on a shallow copy** — `runDoc := *doc; runDoc.valCache = …; doc
 = &runDoc`. The copy shares the (read-only during validation)
-`Objects`/`Trailer`/`Offsets`, so it is cheap, and the caller's `*Document` is
+`Objects`/`Trailer` and the immutable source record, so it is cheap, and the caller's `*Document` is
 never touched. That is what makes validation non-mutating and lets one document be
 validated concurrently, at several levels at once.
 
@@ -150,8 +150,9 @@ differently per part: helpers hold a `[1b, 2b/3b, 4]` triple and switch on the
 level, so `colourClause("outputIntent", level)` yields `6.2.2` at 1b and `6.2.3`
 later, and `annotActionClause("catalogAA", level)` yields `6.6.1` / `6.5.2` /
 `6.6.3`. The numbering follows the veraPDF profiles and `TestRuleCoverage` pins
-it, grepping the source for quoted clause literals and ratcheting unmatched
-profile clauses at `ruleCoverageMaxUncovered = 0`.
+it: it validates each corpus fail file at its level and ratchets how many veraPDF
+rules are reported under their own clause (see
+[testing.md](testing.md#rule-coverage)).
 
 **A level of its own** where the target, not the document, decides. PDF/A-4e and
 PDF/A-4f are `PDFA4E` and `PDFA4F`, and validate the way Level A does: run the
@@ -216,7 +217,7 @@ A-4 ICC profile-identity rule. `walkExecutedContent` lives here — see the diag
 
 **`filestructure.go`** — the byte-level clause-6.1 rules, reading the raw file
 rather than the object model: header layout, indirect-object syntax (`obj`/`endobj`
-placement, located via `Document.Offsets`), xref table formatting, hex-string form
+placement, located via the source record's offsets, `Document.Source`), xref table formatting, hex-string form
 (scanned in object bodies *and* in decoded content streams, with an
 inline-image-aware tokenizer), `stream`/`endstream` layout, inline image filters
 and intent, name UTF-8 validity. It also hosts `checkStreamLength` and
@@ -281,8 +282,12 @@ that is ICC v4 at a level based on PDF 1.4, is refused rather than embedded —
 which is what the error on these constructors is for.
 
 **`preflight.go`** — `(*Document).Repair(level)`, the deliberately narrow repair
-path: it removes encryption and catalog/page/annotation `/AA` dictionaries and
-synthesizes a missing `/ID`. Every fix is information-free — it deletes something
+path: it removes encryption and the additional-action trigger events `level`
+forbids — every `/AA` on the catalog, pages, annotations (through each page's
+`/Annots`) and AcroForm fields before PDF/A-4, only the events 6.6.3 forbids at
+PDF/A-4, per `pdfa.TriggerEventForbidden`, the validator's own classification —
+and synthesizes a missing `/ID`. It refuses a Locked document and an unknown
+level. Every fix is information-free — it deletes something
 forbidden or supplies a value the producer may choose — so it can never turn a
 conforming document non-conforming. Anything needing information the file does not
 carry is left to the caller. Do not add a fix that has to guess.
@@ -345,8 +350,9 @@ that. The `seen` set is shared across all pages, so a shared stream is walked on
   new check must never reuse: they name the checker, not the document, and
   `IsCheckerFinding` is the caller's way to tell the two apart. A cancelled
   `ValidatePDFAContext` run reports itself the same way.
-- **Rule IDs are load-bearing.** `TestRuleCoverage` greps non-test source for
-  quoted `6.x.y` literals, so renaming or inlining a clause string can break the
-  coverage ratchet even when the rule still works. (Related sentinel asymmetry:
+- **Rule IDs are load-bearing.** `TestRuleCoverage` checks that each corpus
+  fail file is reported under its veraPDF rule's clause, so emitting a working
+  check under a different clause number breaks the coverage ratchet even when
+  the file is still rejected. (Related sentinel asymmetry:
   `objNumForDict` returns 0 on a miss to match `pdfa.Violation.Object`, while
   the underlying `dictObjNum` returns -1.)

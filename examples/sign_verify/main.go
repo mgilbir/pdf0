@@ -1,11 +1,12 @@
 // Command sign_verify signs a one-page document with a self-signed certificate
-// generated in-process and verifies it, showing the verdict a caller must
-// actually read: DocumentUnmodified (Valid AND CoversWholeDocument) plus
-// TrustedChain from VerifySignaturesWithRoots.
+// generated in-process and verifies it, showing the verdicts a caller must
+// actually read: Intact (Valid, and every change after signing permitted),
+// DocumentUnmodified (Valid, and nothing changed at all), and TrustedChain,
+// which only the trust roots passed in sign.VerifyOptions can set.
 //
 // It then modifies the signed file with an incremental update — the attack
-// Valid alone does not catch — and shows Valid staying true while
-// DocumentUnmodified goes false.
+// Valid alone does not catch — and shows Valid staying true while Intact and
+// DocumentUnmodified go false, with the change named.
 //
 // Nothing is read from or written to disk and no network is used. The program
 // exits non-zero if any verdict differs from what it expects, so it works as a
@@ -48,31 +49,36 @@ func main() {
 	signed := signedBuf.Bytes()
 	fmt.Printf("signed %d bytes\n", len(signed))
 
-	// Verify. Pass the EXACT bytes of the file: the digest is recomputed over
-	// them, not over the parsed object model.
+	// Verify. The digest is recomputed over the bytes the document was read
+	// from, not over the parsed object model. Trust comes only from the roots
+	// passed here: the signers you accept, never a web PKI pool.
 	roots := x509.NewCertPool()
 	roots.AddCert(cert) // trust anchor; with a real CA, load its root here
 	doc, err := pdf.Read(bytes.NewReader(signed), int64(len(signed)))
 	if err != nil {
 		fail("re-reading the signed document: %v", err)
 	}
-	results := doc.VerifySignaturesWithRoots(signed, roots)
+	results, err := doc.VerifySignatures(sign.VerifyOptions{Roots: roots})
+	if err != nil {
+		fail("verifying: %v", err)
+	}
 	if len(results) != 1 {
 		fail("expected 1 signature, got %d", len(results))
 	}
 	r := results[0]
 	report("as signed", r)
 
-	// This is the verdict to branch on. Valid alone is NOT enough, and without
-	// VerifySignaturesWithRoots the signer is never checked against any root.
-	if !r.DocumentUnmodified() || !r.TrustedChain {
+	// These are the verdicts to branch on. Valid alone is NOT enough, and
+	// without roots the signer is never checked against any.
+	if !r.Intact() || !r.DocumentUnmodified() || !r.TrustedChain {
 		fail("the freshly signed document should be unmodified and trusted (err=%v chainErr=%v)", r.Err, r.ChainErr)
 	}
 
 	// Now modify the signed file the way an attacker would: an incremental
 	// update that leaves the signed byte range byte-for-byte intact and appends
-	// a changed page. The signature still verifies — only CoversWholeDocument
-	// tells you the rendered document is no longer the one that was signed.
+	// a changed page. The signature still verifies — Intact and
+	// DocumentUnmodified tell you the rendered document is no longer the one
+	// that was signed, and DisallowedChanges says what changed.
 	altered, err := incrementallyAlter(signed)
 	if err != nil {
 		fail("building the incremental update: %v", err)
@@ -81,7 +87,10 @@ func main() {
 	if err != nil {
 		fail("re-reading the altered document: %v", err)
 	}
-	res2 := doc2.VerifySignaturesWithRoots(altered, roots)
+	res2, err := doc2.VerifySignatures(sign.VerifyOptions{Roots: roots})
+	if err != nil {
+		fail("verifying the altered document: %v", err)
+	}
 	if len(res2) != 1 {
 		fail("expected 1 signature after the update, got %d", len(res2))
 	}
@@ -94,8 +103,11 @@ func main() {
 	if a.CoversWholeDocument || a.DocumentUnmodified() {
 		fail("an incremental update must make CoversWholeDocument (and DocumentUnmodified) false")
 	}
+	if a.Intact() || a.ChangesAllowed || len(a.DisallowedChanges) == 0 {
+		fail("changing a page after signing is not a permitted change, so Intact must be false")
+	}
 
-	fmt.Println("\nOK: DocumentUnmodified() rejected the altered file that Valid alone accepted.")
+	fmt.Println("\nOK: Intact() rejected the altered file that Valid alone accepted.")
 }
 
 // report prints the fields of a sign.Result that a caller should look at.
@@ -104,8 +116,12 @@ func report(label string, r sign.Result) {
 	fmt.Printf("  signer               %s\n", r.SignerCommonName)
 	fmt.Printf("  Valid                %v  (the signed byte range verifies)\n", r.Valid)
 	fmt.Printf("  CoversWholeDocument  %v  (only the signature bytes are outside the range)\n", r.CoversWholeDocument)
-	fmt.Printf("  DocumentUnmodified() %v  <- the verdict to branch on\n", r.DocumentUnmodified())
-	fmt.Printf("  TrustedChain         %v  (only ever set by VerifySignaturesWithRoots)\n", r.TrustedChain)
+	fmt.Printf("  DocumentUnmodified() %v  (nothing at all was changed after signing)\n", r.DocumentUnmodified())
+	fmt.Printf("  Intact()             %v  <- the verdict to branch on: Valid, and every later change permitted\n", r.Intact())
+	for _, c := range r.DisallowedChanges {
+		fmt.Printf("    not permitted:     %s\n", c)
+	}
+	fmt.Printf("  TrustedChain         %v  (only ever set against the roots in sign.VerifyOptions)\n", r.TrustedChain)
 	fmt.Printf("  Revocation           %v\n", r.Revocation.Status)
 	if r.Err != nil {
 		fmt.Printf("  Err                  %v\n", r.Err)
@@ -116,12 +132,6 @@ func report(label string, r sign.Result) {
 }
 
 // newDocument builds a one-page document to sign.
-//
-// The page deliberately carries no /Contents entry: signing locates the
-// signature placeholder by the first literal "/Contents" in the serialized
-// output, so a page content stream (or an already-signed file) currently makes
-// WriteSigned fail with "/ByteRange placeholder not found". See the limitations
-// section of docs/signing.md.
 func newDocument() *pdf.Document {
 	catalog := &object.Dictionary{}
 	catalog.Set("Type", object.Name("Catalog"))
@@ -144,10 +154,7 @@ func newDocument() *pdf.Document {
 			2: {Number: 2, Value: pages},
 			3: {Number: 3, Value: page},
 		},
-		Trailer: object.Dictionary{
-			Keys:   []object.Name{"Root"},
-			Values: []object.Object{object.IndirectRef{Number: 1}},
-		},
+		Trailer: *object.NewDictionary(object.Entry{Key: "Root", Value: object.IndirectRef{Number: 1}}),
 	}
 }
 
@@ -166,7 +173,7 @@ func incrementallyAlter(original []byte) ([]byte, error) {
 	page.Set("MediaBox", object.Array{object.Integer(0), object.Integer(0), object.Integer(306), object.Integer(396)})
 
 	var buf bytes.Buffer
-	if err := doc.WriteIncremental(&buf, original, []int{3}); err != nil {
+	if err := doc.WriteIncremental(&buf, []int{3}); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil

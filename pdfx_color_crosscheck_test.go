@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/testfiles"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/pdfx"
 	"os"
@@ -25,24 +26,33 @@ func TestDevColorScannerMatchesPDFA(t *testing.T) {
 	// ./...` does not — so this test ran over the Cal Poly files alone and
 	// reported itself passing. It caught a real disagreement the moment CI ran
 	// it, which is exactly the run a local check should not have missed.
+	//
+	// Each set is used when present and neither is required, but a present set
+	// that yields no files fails (testfiles), and so does the corpus being
+	// walked from a symlinked root, which filepath.Walk used to turn into zero
+	// files and a Cal-Poly-only run.
 	var files []string
-	if root := corpusRoot(t); root != "" {
-		filepath.Walk(root, func(p string, i os.FileInfo, e error) error {
-			if e == nil && !i.IsDir() && filepath.Ext(p) == ".pdf" {
-				files = append(files, p)
-			}
-			return nil
-		})
+	var absent []string
+	if _, ok, why := testfiles.VeraPDFCorpus.Lookup(t); ok {
+		files = append(files, testfiles.VeraPDFCorpus.Files(t, "", func(p string) bool { return filepath.Ext(p) == ".pdf" })...)
+	} else {
+		absent = append(absent, why)
 	}
-	cp, _ := filepath.Glob("testdata/pdfvt/*.pdf")
-	for _, f := range cp {
-		b := filepath.Base(f)
-		if strings.HasSuffix(b, "- 10.pdf") || strings.HasSuffix(b, "- 100.pdf") || strings.HasPrefix(b, "Documentation") {
-			files = append(files, f)
+	if _, ok, why := testfiles.CalPolyPDFVT.Lookup(t); ok {
+		for _, f := range testfiles.CalPolyPDFVT.Glob(t, "*.pdf") {
+			b := filepath.Base(f)
+			if strings.HasSuffix(b, "- 10.pdf") || strings.HasSuffix(b, "- 100.pdf") || strings.HasPrefix(b, "Documentation") {
+				files = append(files, f)
+			}
 		}
+	} else {
+		absent = append(absent, why)
+	}
+	if len(absent) == 2 {
+		t.Skipf("neither data set is present:\n%s", strings.Join(absent, "\n"))
 	}
 	if len(files) == 0 {
-		t.Skip("no corpus or Cal Poly files available")
+		t.Fatal("the data sets are present but no file was selected; the Cal Poly name filter no longer matches")
 	}
 
 	var pages, mismatches int

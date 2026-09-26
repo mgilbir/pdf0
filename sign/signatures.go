@@ -4,11 +4,8 @@ import (
 	"bytes"
 	"crypto"
 	"crypto/rand"
-	"crypto/sha1"
-	"crypto/sha256"
 	"crypto/x509"
 	"encoding/asn1"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
@@ -19,59 +16,14 @@ import (
 	"time"
 )
 
-// This file verifies PDF digital signatures (ISO 32000-2 §12.8): it assembles
-// the bytes named by the signature's /ByteRange, checks them against the
-// CMS/PKCS#7 SignedData in /Contents (RFC 5652, plus the ESS/CAdES signed
-// attributes PAdES relies on), and verifies the signature with the embedded
-// certificate. It also holds the SignedData encoder the signing path uses, so
-// producing and verifying share one model of the structure.
-//
-// Two things must stay front of mind. Everything decoded here is
-// attacker-controlled DER from an untrusted file, so each step fails closed
-// rather than trusting a field. And a cryptographically valid signature is not
-// the same claim as an unmodified document: the digest says nothing about bytes
-// outside the signed range, so coverage is established separately.
-
-// Result reports the outcome of verifying one signature field.
-//
-// Valid and CoversWholeDocument are independent and must both be consulted:
-// Valid says the bytes inside the signed /ByteRange are intact and were signed
-// by the embedded certificate's key, but it says nothing about bytes OUTSIDE
-// that range. A signed document can be modified after signing by an incremental
-// update — the original signed range stays intact (Valid == true) while the
-// rendered content changes (CoversWholeDocument == false). Use DocumentUnmodified
-// for the combined "signed and nothing was changed" verdict.
-type Result struct {
-	// Field is the FULLY QUALIFIED name of the signature field whose /V
-	// references this signature dictionary: the field's own /T partial name
-	// prefixed by the /T of every ancestor field, joined with "." (ISO 32000-2
-	// §12.7.4.2). The qualified name is what identifies a field uniquely in a
-	// document — a partial name is only unique among its siblings — so it is
-	// what a caller can display, log, or look the field up by. For the common
-	// flat form (a top-level field, as pdf0's own signing produces) it is just
-	// the partial name, e.g. "Signature1".
-	//
-	// It is empty when nothing names the signature: a bare signature dictionary
-	// that no field's /V points at, or a field chain in which neither the field
-	// nor any of its ancestors carries a /T.
-	Field               string
-	SignerCommonName    string         // Subject CN of the signing certificate
-	CoversWholeDocument bool           // the /ByteRange covers the whole file except the /Contents window
-	Valid               bool           // the signed bytes are intact and the signature verifies
-	SigningTime         time.Time      // signing-time signed attribute, if present (self-asserted, untrusted)
-	TrustedChain        bool           // the certificate chains to a supplied trust root
-	ChainErr            error          // why the chain did not build (when roots were given)
-	Revocation          RevocationInfo // revocation status from the document's DSS material
-	Err                 error          // why signature verification failed, if it did
-}
-
-// DocumentUnmodified reports the safe combined verdict: the signature
-// cryptographically verifies AND it covers the whole document, so nothing was
-// changed after signing. Callers that read only Valid accept a document whose
-// content was altered by a post-signing incremental update; prefer this.
-func (r Result) DocumentUnmodified() bool {
-	return r.Valid && r.CoversWholeDocument
-}
+// This file holds what signature verification and signing share: the
+// signature dictionaries of a document and the names of the fields that hold
+// them, the CMS/PKCS#7 object identifiers and attribute shapes (RFC 5652, plus
+// the ESS/CAdES signed attributes PAdES relies on), and the SignedData encoder
+// the signing path uses, so producing and verifying share one model of the
+// structure. The verification itself is in verify.go (what a verdict means),
+// cmsverify.go (the CMS), byterange.go (the signed bytes), trust.go (chains),
+// revocation.go and changes.go (what changed after signing).
 
 // CMS / PKCS#7 object identifiers (RFC 5652) and the CAdES/ESS attributes PAdES
 // relies on (RFC 5035, ETSI EN 319 122).
@@ -88,53 +40,18 @@ var (
 	oidSignatureTimeStamp = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 16, 2, 14}
 )
 
-// essCertIDv2 is RFC 5035 ESSCertIDv2 with the default (SHA-256) hash algorithm
-// omitted: just the certificate hash. issuerSerial is optional and omitted.
+// essCertIDv2 is RFC 5035 ESSCertIDv2 as pdf0 writes it: the hash algorithm
+// left at its DEFAULT (SHA-256, which DER requires to be omitted) and the
+// optional issuerSerial omitted. Verification reads the full shape
+// (essCertIDv2In), because other producers write both optional fields.
 type essCertIDv2 struct {
 	CertHash []byte // OCTET STRING: hash of the certificate DER
 }
 
-// signingCertificateV2 is RFC 5035 SigningCertificateV2 (the policies field
-// omitted).
+// signingCertificateV2 is RFC 5035 SigningCertificateV2 as pdf0 writes it (the
+// policies field omitted).
 type signingCertificateV2 struct {
 	Certs []essCertIDv2
-}
-
-// VerifySignatures verifies every signature in the document against the original
-// file bytes. For each it recomputes the digest over the signed /ByteRange,
-// checks it against the signature's messageDigest attribute, and verifies the
-// signature over the signed attributes with the embedded certificate. It does
-// not build a trust chain (no root store): a Valid result means the bytes inside
-// the signed /ByteRange are intact and were signed by the holder of the embedded
-// certificate's private key. It does NOT by itself mean the document was not
-// modified after signing — an incremental update can change the rendered content
-// while leaving the signed range intact. Combine Valid with CoversWholeDocument
-// (see Result.DocumentUnmodified).
-func VerifySignatures(d core.View, raw []byte) []Result {
-	return VerifySignaturesWithRoots(d, raw, nil)
-}
-
-// VerifySignaturesWithRoots verifies every signature as VerifySignatures does and,
-// when roots is non-nil, additionally builds the signer's certificate chain to one
-// of those trust anchors (using the certificates embedded in the CMS as
-// intermediates), validating at the current time. The chain outcome is reported
-// in TrustedChain / ChainErr and does not affect Valid, which remains a statement
-// about the cryptographic integrity of the signed content.
-//
-// Results are ordered by the object number of the signature dictionary, which is
-// stable across runs (the objects are held in a map, whose iteration order is
-// not) and meaningful: in a document signed by successive incremental updates the
-// later signature is the later object.
-func VerifySignaturesWithRoots(d core.View, raw []byte, roots *x509.CertPool) []Result {
-	sigs := documentSignatures(d, true)
-	names := signatureFieldNames(d, sigs)
-	var results []Result
-	for _, s := range sigs {
-		res := verifyOneSignature(d, s.dict, raw, roots)
-		res.Field = names[s.num]
-		results = append(results, res)
-	}
-	return results
 }
 
 // signatureEntry is a signature dictionary together with the number of the
@@ -349,155 +266,6 @@ func refObjNum(d core.View, o object.Object) int {
 	return -1
 }
 
-func verifyOneSignature(d core.View, sig *object.Dictionary, raw []byte, roots *x509.CertPool) Result {
-	var res Result
-	contents, _ := d.Resolve(sig.Get("Contents")).(object.String)
-
-	segments, covers, ok := byteRangeSegments(d, sig.Get("ByteRange"), int64(len(raw)))
-	if !ok {
-		res.Err = errors.New("malformed /ByteRange")
-		return res
-	}
-	// "Covers the whole document" requires more than the segments reaching the
-	// end of the file: there must be exactly two segments, the first starting at
-	// offset 0, and the single gap between them must be exactly the signature's
-	// /Contents window (<…hex…>). Otherwise a crafted multi-segment ByteRange, or
-	// a gap that does not coincide with /Contents, could leave arbitrary file
-	// bytes unsigned while still reaching the end (audit C12).
-	res.CoversWholeDocument = covers && contentsGapIsSignature(raw, segments, contents.Value)
-	signed := make([]byte, 0, len(raw))
-	for _, s := range segments {
-		if s[0] < 0 || s[1] < 0 || s[0]+s[1] > int64(len(raw)) {
-			res.Err = errors.New("/ByteRange segment out of bounds")
-			return res
-		}
-		signed = append(signed, raw[s[0]:s[0]+s[1]]...)
-	}
-
-	cert, certs, signingTime, err := VerifyCMS(contents.Value, signed)
-	if cert != nil {
-		res.SignerCommonName = cert.Subject.CommonName
-	}
-	res.SigningTime = signingTime
-	if err != nil {
-		res.Err = err
-		return res
-	}
-	res.Valid = true
-
-	// Revocation status from the document's own long-term validation material
-	// (DSS). The issuer certificate is sought in the CMS and the DSS /Certs.
-	if issuer := issuerOf(cert, append(certs, DSSCerts(d)...)); issuer != nil {
-		crls, ocsps := DSSRevocationMaterial(d)
-		if len(crls) > 0 || len(ocsps) > 0 {
-			res.Revocation = CheckCertRevocation(cert, issuer, crls, ocsps)
-		}
-	}
-
-	// Optional trust-chain verification against a caller-supplied root store.
-	if roots != nil {
-		if err := chainTrusted(cert, certs, roots); err != nil {
-			res.ChainErr = err
-		} else {
-			res.TrustedChain = true
-		}
-	}
-	return res
-}
-
-// chainTrusted builds cert's chain to one of the trust anchors in roots, using
-// the other embedded certs as intermediates, and returns nil if it verifies.
-//
-// It validates at the current wall-clock time (VerifyOptions.CurrentTime left
-// zero). The signer's signing-time attribute is deliberately NOT used as the
-// reference time: it is signed only by the (possibly adversarial) signer, so a
-// holder of an expired or since-revoked certificate could backdate it into the
-// certificate's old validity window and forge a trusted chain (audit C4). A
-// trustworthy signing time comes only from a verified timestamp, which the PAdES
-// B-T/B-LTA path establishes separately.
-func chainTrusted(cert *x509.Certificate, certs []*x509.Certificate, roots *x509.CertPool) error {
-	intermediates := x509.NewCertPool()
-	for _, c := range certs {
-		if c != cert {
-			intermediates.AddCert(c)
-		}
-	}
-	_, err := cert.Verify(x509.VerifyOptions{
-		Roots:         roots,
-		Intermediates: intermediates,
-		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
-	})
-	return err
-}
-
-// byteRangeSegments returns the [start,length] pairs of a /ByteRange and whether
-// they reach the end of the file.
-func byteRangeSegments(d core.View, obj object.Object, fileLen int64) (segs [][2]int64, covers, ok bool) {
-	arr, isArr := d.Resolve(obj).(object.Array)
-	if !isArr || len(arr) == 0 || len(arr)%2 != 0 {
-		return nil, false, false
-	}
-	vals := make([]int64, len(arr))
-	for i, e := range arr {
-		n, isInt := d.Resolve(e).(object.Integer)
-		if !isInt {
-			return nil, false, false
-		}
-		vals[i] = int64(n)
-	}
-	var end int64
-	for i := 0; i < len(vals); i += 2 {
-		segs = append(segs, [2]int64{vals[i], vals[i+1]})
-		if s := vals[i] + vals[i+1]; s > end {
-			end = s
-		}
-	}
-	return segs, end >= fileLen, true
-}
-
-// contentsGapIsSignature reports whether the /ByteRange describes the canonical
-// two-segment signing layout: the first segment starts at offset 0, the second
-// ends at the end of the file, and the single gap between them is exactly the
-// signature's /Contents hex string (<…>) — i.e. only the signature value itself
-// is left unsigned. This is what "covers the whole document" must mean; without
-// it a ByteRange could reach the end of the file while leaving other bytes
-// unsigned (audit C12).
-func contentsGapIsSignature(raw []byte, segs [][2]int64, contents []byte) bool {
-	if len(segs) != 2 || segs[0][0] != 0 {
-		return false
-	}
-	gapStart := segs[0][0] + segs[0][1]
-	gapEnd := segs[1][0]
-	if gapStart < 0 || gapEnd <= gapStart || gapEnd > int64(len(raw)) {
-		return false
-	}
-	if segs[1][0]+segs[1][1] != int64(len(raw)) {
-		return false // the second segment must reach the very end
-	}
-	window := raw[gapStart:gapEnd]
-	if len(window) < 2 || window[0] != '<' || window[len(window)-1] != '>' {
-		return false
-	}
-	// Hex-decode the bytes between the angle brackets (PDF permits whitespace in
-	// a hex string) and require them to equal the parsed /Contents value.
-	digits := make([]byte, 0, len(window)-2)
-	for _, b := range window[1 : len(window)-1] {
-		switch b {
-		case ' ', '\t', '\r', '\n', '\f', 0:
-			continue
-		}
-		digits = append(digits, b)
-	}
-	if len(digits)%2 != 0 {
-		return false
-	}
-	decoded := make([]byte, len(digits)/2)
-	if _, err := hex.Decode(decoded, digits); err != nil {
-		return false
-	}
-	return bytes.Equal(decoded, contents)
-}
-
 // signerInfo mirrors the RFC 5652 SignerInfo fields verification needs.
 type signerInfo struct {
 	Version         int
@@ -506,6 +274,7 @@ type signerInfo struct {
 	SignedAttrs     asn1.RawValue `asn1:"optional,tag:0"`
 	SignatureAlgo   pkixAlgorithmIdentifier
 	Signature       []byte
+	UnsignedAttrs   asn1.RawValue `asn1:"optional,tag:1"`
 }
 
 type pkixAlgorithmIdentifier struct {
@@ -516,207 +285,6 @@ type pkixAlgorithmIdentifier struct {
 type attribute struct {
 	Type   asn1.ObjectIdentifier
 	Values asn1.RawValue `asn1:"set"`
-}
-
-// VerifyCMS verifies a detached CMS SignedData blob over content. It returns the
-// signer certificate, every certificate embedded in the CMS (for chain building)
-// and the signing-time attribute, or an error if the signature does not verify.
-// VerifyCMS verifies a CMS SignedData blob over the given content and returns
-// the signer certificate, the certificates the blob carried, and the claimed
-// signing time. It does not establish trust — chainTrusted does that — and a
-// nil error means only that the signature is cryptographically sound.
-func VerifyCMS(der, content []byte) (cert *x509.Certificate, certs []*x509.Certificate, signingTime time.Time, err error) {
-	var ci struct {
-		ContentType asn1.ObjectIdentifier
-		Content     asn1.RawValue `asn1:"explicit,optional,tag:0"`
-	}
-	if _, e := asn1.Unmarshal(der, &ci); e != nil || !ci.ContentType.Equal(oidSignedData) {
-		return nil, nil, signingTime, errors.New("not a CMS SignedData")
-	}
-	var sd struct {
-		Version          int
-		DigestAlgorithms asn1.RawValue
-		EncapContentInfo asn1.RawValue
-		Certificates     asn1.RawValue   `asn1:"optional,tag:0"`
-		CRLs             asn1.RawValue   `asn1:"optional,tag:1"`
-		SignerInfos      []asn1.RawValue `asn1:"set"`
-	}
-	if _, e := asn1.Unmarshal(ci.Content.Bytes, &sd); e != nil {
-		return nil, nil, signingTime, fmt.Errorf("parsing SignedData: %w", e)
-	}
-	// The eContentType declared in EncapContentInfo is what the content-type
-	// signed attribute must equal (id-data for a detached document signature,
-	// id-ct-TSTInfo for a time-stamp token, etc.).
-	var eci struct {
-		ContentType asn1.ObjectIdentifier
-		Content     asn1.RawValue `asn1:"optional,explicit,tag:0"`
-	}
-	if _, e := asn1.Unmarshal(sd.EncapContentInfo.FullBytes, &eci); e != nil {
-		return nil, nil, signingTime, fmt.Errorf("parsing EncapContentInfo: %w", e)
-	}
-	if len(sd.SignerInfos) != 1 {
-		return nil, nil, signingTime, fmt.Errorf("expected exactly one SignerInfo, got %d", len(sd.SignerInfos))
-	}
-	var si signerInfo
-	if _, e := asn1.Unmarshal(sd.SignerInfos[0].FullBytes, &si); e != nil {
-		return nil, nil, signingTime, fmt.Errorf("parsing SignerInfo: %w", e)
-	}
-	certs, err = x509.ParseCertificates(sd.Certificates.Bytes)
-	if err != nil || len(certs) == 0 {
-		return nil, nil, signingTime, errors.New("no signing certificate")
-	}
-	cert = signerCertificate(certs, si.SID)
-	if cert == nil {
-		return nil, certs, signingTime, errors.New("signer certificate not found among the embedded certificates")
-	}
-
-	hashFn, ok := hashForOID(si.DigestAlgorithm.Algorithm)
-	if !ok {
-		return cert, certs, signingTime, errors.New("unsupported digest algorithm")
-	}
-	if hashFn == crypto.SHA1 || hashFn == crypto.MD5 {
-		// SHA-1 and MD5 are collision-broken; reject them as the signature digest
-		// (they remain acceptable for the OCSP CertID issuer hashes, which are not
-		// a signature) (audit C36).
-		return cert, certs, signingTime, errors.New("weak signature digest algorithm (SHA-1/MD5) is not accepted")
-	}
-	h := hashFn.New()
-	h.Write(content)
-	contentDigest := h.Sum(nil)
-
-	if len(si.SignedAttrs.Bytes) == 0 {
-		return cert, certs, signingTime, errors.New("signature without signed attributes is not supported")
-	}
-	attrs, e := parseAttributes(si.SignedAttrs.Bytes)
-	if e != nil {
-		return cert, certs, signingTime, e
-	}
-	signingTime = signingTimeFromAttrs(si.SignedAttrs.Bytes)
-	md, ok := attrs[oidMessageDigest.String()]
-	if !ok || !bytes.Equal(md, contentDigest) {
-		return cert, certs, signingTime, errors.New("document digest does not match the signature (content was modified)")
-	}
-	// RFC 5652 §11.1: when signed attributes are present, a content-type
-	// attribute equal to the SignedData's eContentType must be among them.
-	if !signedContentTypeIs(si.SignedAttrs.Bytes, eci.ContentType) {
-		return cert, certs, signingTime, errors.New("signed content-type attribute is missing or does not match the eContentType")
-	}
-	// CAdES/ESS: when a signing-certificate attribute is present it must bind THIS
-	// signer certificate (its hash), not merely exist. pdf0 advertises checking
-	// the CAdES certificate binding, so enforce it rather than only noting its
-	// presence (audit C14).
-	if err := checkESSCertBinding(si.SignedAttrs.Bytes, cert); err != nil {
-		return cert, certs, signingTime, err
-	}
-
-	// The signature is computed over the DER of the signed attributes encoded as
-	// an explicit SET OF; in the SignerInfo they carry the [0] IMPLICIT tag, so
-	// re-tag the first byte to 0x31 (SET) before verifying.
-	signedDER := append([]byte(nil), si.SignedAttrs.FullBytes...)
-	signedDER[0] = 0x31
-	sigAlgo, ok := resolveSignatureAlgorithm(si.SignatureAlgo.Algorithm, cert.PublicKeyAlgorithm.String(), hashFn)
-	if !ok {
-		return cert, certs, signingTime, errors.New("unsupported signature algorithm")
-	}
-	if err := cert.CheckSignature(sigAlgo, signedDER, si.Signature); err != nil {
-		return cert, certs, signingTime, fmt.Errorf("signature does not verify: %w", err)
-	}
-	return cert, certs, signingTime, nil
-}
-
-// oidRSAPSS is the RSASSA-PSS signature algorithm identifier (RFC 4055).
-var oidRSAPSS = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 10}
-
-// essCertID is RFC 5035 ESSCertID (v1, SHA-1 hash); issuerSerial is optional and
-// omitted here.
-type essCertID struct {
-	CertHash []byte
-}
-
-// signingCertificateV1 is RFC 5035 SigningCertificate (the policies field
-// omitted).
-type signingCertificateV1 struct {
-	Certs []essCertID
-}
-
-// signedContentTypeIs reports whether the signed attributes carry a content-type
-// attribute equal to want.
-func signedContentTypeIs(setBytes []byte, want asn1.ObjectIdentifier) bool {
-	rest := setBytes
-	for len(rest) > 0 {
-		var a attribute
-		var err error
-		rest, err = asn1.Unmarshal(rest, &a)
-		if err != nil {
-			return false
-		}
-		if a.Type.Equal(oidContentType) {
-			var oid asn1.ObjectIdentifier
-			if _, err := asn1.Unmarshal(a.Values.Bytes, &oid); err != nil {
-				return false
-			}
-			return oid.Equal(want)
-		}
-	}
-	return false
-}
-
-// checkESSCertBinding validates the ESS signing-certificate attribute, if
-// present, against cert: the attribute's certificate hash must equal the hash of
-// cert. Absence is permitted here (requiring it is a PAdES-baseline policy); a
-// present-but-mismatched attribute is a hard failure.
-func checkESSCertBinding(setBytes []byte, cert *x509.Certificate) error {
-	rest := setBytes
-	for len(rest) > 0 {
-		var a attribute
-		var err error
-		rest, err = asn1.Unmarshal(rest, &a)
-		if err != nil {
-			return nil
-		}
-		switch {
-		case a.Type.Equal(oidSigningCertificateV2):
-			var sc signingCertificateV2
-			if _, err := asn1.Unmarshal(a.Values.Bytes, &sc); err != nil || len(sc.Certs) == 0 {
-				return errors.New("malformed signing-certificate-v2 attribute")
-			}
-			sum := sha256.Sum256(cert.Raw)
-			if !bytes.Equal(sc.Certs[0].CertHash, sum[:]) {
-				return errors.New("signing-certificate-v2 does not match the signer certificate")
-			}
-			return nil
-		case a.Type.Equal(oidSigningCertificate):
-			var sc signingCertificateV1
-			if _, err := asn1.Unmarshal(a.Values.Bytes, &sc); err != nil || len(sc.Certs) == 0 {
-				return errors.New("malformed signing-certificate attribute")
-			}
-			sum := sha1.Sum(cert.Raw)
-			if !bytes.Equal(sc.Certs[0].CertHash, sum[:]) {
-				return errors.New("signing-certificate does not match the signer certificate")
-			}
-			return nil
-		}
-	}
-	return nil
-}
-
-// resolveSignatureAlgorithm maps the SignerInfo's signature-algorithm OID and the
-// digest to an x509.SignatureAlgorithm. RSASSA-PSS is honoured (rather than being
-// forced to PKCS#1 v1.5, which made a valid PSS signature falsely fail to verify,
-// audit C36); otherwise it falls back to the public-key-algorithm mapping.
-func resolveSignatureAlgorithm(sigOID asn1.ObjectIdentifier, pubAlgo string, hash crypto.Hash) (x509.SignatureAlgorithm, bool) {
-	if sigOID.Equal(oidRSAPSS) {
-		switch hash {
-		case crypto.SHA256:
-			return x509.SHA256WithRSAPSS, true
-		case crypto.SHA384:
-			return x509.SHA384WithRSAPSS, true
-		case crypto.SHA512:
-			return x509.SHA512WithRSAPSS, true
-		}
-		return 0, false
-	}
-	return signatureAlgorithm(pubAlgo, hash)
 }
 
 // signingTimeFromAttrs extracts the signing-time signed attribute, or the zero

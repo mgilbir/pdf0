@@ -18,7 +18,7 @@ func hasUAClause(v []Violation, clause string) bool {
 
 // TestUASecurity flags encryption that disables accessibility extraction.
 func TestUASecurity(t *testing.T) {
-	doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+	doc := mkView(map[int]*object.IndirectObject{}, nil)
 	enc := &object.Dictionary{}
 	doc.Objects[9] = &object.IndirectObject{Number: 9, Value: enc}
 	doc.Trailer.Set("Encrypt", object.IndirectRef{Number: 9})
@@ -43,7 +43,7 @@ func TestUASecurity(t *testing.T) {
 
 // TestUATrapNet flags a TrapNet annotation.
 func TestUATrapNet(t *testing.T) {
-	doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+	doc := mkView(map[int]*object.IndirectObject{}, nil)
 	a := &object.Dictionary{}
 	a.Set("Type", object.Name("Annot"))
 	a.Set("Subtype", object.Name("TrapNet"))
@@ -61,7 +61,7 @@ func TestUATrapNet(t *testing.T) {
 // TestUAAnnotationTagged flags a visible, untagged annotation and accepts a
 // tagged one.
 func TestUAAnnotationTagged(t *testing.T) {
-	doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+	doc := mkView(map[int]*object.IndirectObject{}, nil)
 	a := &object.Dictionary{}
 	a.Set("Type", object.Name("Annot"))
 	a.Set("Subtype", object.Name("Text"))
@@ -84,7 +84,7 @@ func TestUAAnnotationTagged(t *testing.T) {
 
 // TestUALinkAltText flags a Link annotation without /Contents.
 func TestUALinkAltText(t *testing.T) {
-	doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+	doc := mkView(map[int]*object.IndirectObject{}, nil)
 	a := &object.Dictionary{}
 	a.Set("Type", object.Name("Annot"))
 	a.Set("Subtype", object.Name("Link"))

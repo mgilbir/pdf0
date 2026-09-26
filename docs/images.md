@@ -51,7 +51,7 @@ Each yielded value is an `ExtractedImage`:
 | `Image` | Decoded pixels, or `nil` |
 | `Decoded` | Whether `Image` holds pixels |
 | `Encoded` | The bytes that could not be turned into pixels |
-| `Note` | Why decoding did not happen |
+| `Note` | Why decoding did not happen, or — for a decoded image — what was left out of it (a soft mask over the image budget) |
 
 When a codec is not handled — or handled but the input fails — `Decoded` is
 false, `Image` is nil, and `Note` explains. `Encoded` is *not* uniformly the raw
@@ -119,7 +119,12 @@ a fresh `*image.NRGBA` first.
 the validators do, memoising page collection, decoded content streams and parsed
 type-4 function programs. The whole traversal runs over untrusted input: it
 reports failures as `Note` strings rather than panicking, and one bad image does
-not abort the walk.
+not abort the walk. That promise is kept by a recover around each image's decode
+(`extractImageSafely`): a panic becomes that image's `Note`, naming it an
+internal error, with `Decoded=false` and the encoded bytes (audit 2026-09-22
+C54). The boundary is the decode only — a panic in the caller's own loop body
+is the caller's and propagates — and it is defence in depth: every crash the
+extractor is known to have had is also fixed where it happened.
 
 ## File map
 
@@ -183,19 +188,44 @@ None of them reports a `limit` finding, and that is a consequence of the API
 rather than an omission: extraction returns no findings, so a trip surfaces per
 image in `ExtractedImage.Note` and `Decoded=false`. It is also why no validator
 is affected — no PDF/A, PDF/UA, PDF/X, PDF/VT or PDF/R rule reads a decoded
-pixel. [limits.md](limits.md) classifies these guards on that axis, and records
-why the JBIG2 trio was left un-configurable while the type-4 budget was not.
+pixel. [limits.md](limits.md) classifies these guards on that axis.
 
+- **The image pixel budget** (`WithMaxImagePixels`, default 2^26 — the same
+  bound `images.MaxPixels` puts on an image a caller embeds). One budget, held
+  by `core.Limits.CheckImage` before every allocation sized from an image's
+  geometry, whatever the codec and wherever the geometry came from: the image
+  dictionary on the raw/Flate/LZW path (checked before the samples are even
+  decoded, and again with the component count once the colour space is known),
+  the JPEG frame header (`jpeg.DecodeConfig`, before `image/jpeg` allocates the
+  frame), the JPEG 2000 SIZ header (`gopenjpeg.ReadInfo`, before the codec
+  allocates a component plane), a soft mask's own dictionary, and the fax and
+  JBIG2 decoders, which take the budget as a parameter. An image with more than
+  four components is also held to four samples per pixel. Every product is
+  formed by `internal/checked.Mul`, so a `/Width` of 2^60 is refused rather than
+  wrapped (audit 2026-09-22 C11). An image the budget refuses has
+  `Decoded=false`, its encoded bytes, and a `Note` that names the
+  `image-pixels` guard and says whether the bound was the default or the
+  caller's; a soft mask it refuses leaves the image decoded and unmasked, and
+  the `Note` says so.
+- **CCITT output** (`internal/ccitt`). A Group 4 V0 code is one bit and repeats
+  the reference row, so one byte of data can be eight full rows. The decoder is
+  given the pixel budget and holds `/Columns` × rows to it: before decoding when
+  `/Rows` is known, and at the first row past it when it is not — an error, not
+  a truncated image (audit 2026-09-22 C12). Widths over 2^20 are refused
+  outright.
 - **JBIG2 pixel budgets** (`internal/jbig2/jbig2.go`). Segment headers declare bitmap
   dimensions independently of how much coded data follows, and the MQ decoder
   keeps yielding bits past end-of-input, so a truncated stream does not stop a
-  decode loop early. `maxJBIG2Pixels` (2^26) bounds any single bitmap;
-  `newJBBitmap` is the single allocation choke point and panics with the
-  `errJBIG2Budget` sentinel, recovered at the `decodeJBIG2` boundary so no
-  allocation site can be missed while genuine bugs still propagate.
-  `maxJBIG2TotalPixels` (2^28) bounds the *sum* of all bitmap areas in one
-  stream, via `reserve`, so many individually-legal retained segments cannot add
-  up to an exhaustion. `maxJBIG2GrayCells` (2^20) separately bounds a halftone
+  decode loop early. The caller's pixel budget bounds any single bitmap (never
+  above `maxJBIG2Pixels`, 2^26); `newJBBitmap` is the single allocation choke
+  point and returns `ErrBudget`. The stream's total pixel *work* is bounded at
+  four times the budget (never above `maxJBIG2TotalPixels`, 2^28), charged
+  through `reserve` and `charge`: every bitmap decoded, every halftone grid —
+  its bit-planes are MQ-decoded whatever the region's size (audit 2026-09-22
+  C55) — every refined symbol instance, and every symbol or pattern stamped onto
+  a region, counted by the pixels the stamp actually touches. Many
+  individually-legal segments therefore cannot add up to an exhaustion of
+  either memory or time. `maxJBIG2GrayCells` (2^20) separately bounds a halftone
   grid, amplified by the bitplane count plus an int per cell. Segment-level caps
   back these up: regions ≤ 2^20 per side, symbols ≤ 2^16, ≤ 2^24 text instances,
   ≤ 2^20 referred segments.
@@ -212,11 +242,27 @@ why the JBIG2 trio was left un-configurable while the type-4 budget was not.
   64 MB, and deliberately bypasses the shared content cache: image samples are
   used once, and caching them would starve the cache of the small shared
   streams (palettes, tint functions) it exists for.
-- **CCITT and traversal bounds.** Widths over 2^20 are refused before
-  allocating; a stream with no `/Rows` decodes at most 2^20 rows; code matching
-  stops at 24 bits. Form-XObject recursion is capped at depth 16, and a `seen`
-  set of object numbers stops shared or self-referential XObjects from being
-  revisited.
+- **Traversal bounds.** CCITT code matching stops at 24 bits. Form-XObject
+  recursion is capped at depth 16, and a `seen` set of object numbers stops
+  shared or self-referential XObjects from being revisited. An annotation's
+  appearance subdictionary is followed one level, as ISO 32000-2 12.5.5 defines
+  it; following any dictionary value recursed forever on a state dictionary that
+  named itself.
+- **Colour-space nesting** (`csResolver` in `images/imagecolor.go`). An Indexed
+  base, a Separation or DeviceN alternate and an ICCBased `/Alternate` are
+  colour spaces in their own right, reached through references the file
+  controls. The resolver carries the object numbers on its current path and the
+  depth: a space that reaches itself again is refused as a cycle, and a chain
+  deeper than 16 as too deep, each with its reason in the image's `Note` (audit
+  2026-09-22 C13 — a Separation naming itself as its alternate was a fatal stack
+  overflow). The path is unwound as each level returns, so a space reached twice
+  by different routes is not a cycle.
+- **Type-4 program parse bounds** (`internal/core/function_ps.go`). The parser is
+  iterative, with procedure nesting capped at 128, the program at 1 MiB and
+  2^18 tokens (audit 2026-09-22 C14: three million `{`, 6.6 KB of Flate, overflowed
+  the stack of the recursive parser). The largest program in the corpora is 267
+  bytes. A program past a bound does not parse, so its colour space is declined
+  like any other unusable one.
 
 ## Confirmed limitations
 

@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/internal/testfiles"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,10 +14,7 @@ import (
 // PDFUA-Reference-Files suite (pdfa.org), kept locally under spec/pdfua/
 // (gitignored, not committed); the test self-skips when they are absent.
 func TestUAReferenceFilesNoFalsePositives(t *testing.T) {
-	files, _ := filepath.Glob("spec/pdfua/reference-files/*.pdf")
-	if len(files) == 0 {
-		t.Skip("PDF/UA reference files not present under spec/pdfua/reference-files")
-	}
+	files := testfiles.PDFUAReference.Glob(t, "*.pdf")
 	for _, p := range files {
 		p := p
 		t.Run(filepath.Base(p), func(t *testing.T) {

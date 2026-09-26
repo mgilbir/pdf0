@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/hostile"
 	"github.com/mgilbir/pdf0/object"
 	"math"
 	"strings"
 	"testing"
+	"time"
 )
 
 // noPanic runs fn and fails the test if it panics instead of returning an error.
@@ -62,14 +64,16 @@ func TestReadNegativePrevOffset(t *testing.T) {
 // TestObjStmHugeNPanic ensures a huge /N does not overflow the sanity guard and
 // panic in make (audit C2).
 func TestObjStmHugeNPanic(t *testing.T) {
-	s := &object.Stream{Dict: object.Dictionary{}, Data: []byte("12345678")}
-	s.Dict.Set("Type", object.Name("ObjStm"))
-	s.Dict.Set("N", object.Integer(math.MaxInt64))
-	s.Dict.Set("First", object.Integer(8))
-	noPanic(t, "objstm huge N", func() {
-		if _, _, _, err := parseObjStmIndex(core.Canceler{}, s, core.DefaultLimits()); err == nil {
-			t.Fatalf("expected an error for an absurd /N, got nil")
-		}
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		s := &object.Stream{Dict: object.Dictionary{}, Data: []byte("12345678")}
+		s.Dict.Set("Type", object.Name("ObjStm"))
+		s.Dict.Set("N", object.Integer(math.MaxInt64))
+		s.Dict.Set("First", object.Integer(8))
+		noPanic(t, "objstm huge N", func() {
+			if _, _, _, err := parseObjStmIndex(core.Canceler{}, s, core.DefaultLimits()); err == nil {
+				t.Fatalf("expected an error for an absurd /N, got nil")
+			}
+		})
 	})
 }
 

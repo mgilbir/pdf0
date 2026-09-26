@@ -1,6 +1,9 @@
-// Package pdf0 is a PDF 2.0 parser, serializer, and PDF/A validator. Its only
-// dependencies are the author's own pure-Go modules (formalis for EN 16931
-// invoice rules, golittlecms for ICC profiles, gopenjpeg for JPEG 2000).
+// Package pdf0 is a PDF 2.0 parser, serializer, and PDF/A validator. It is pure
+// Go. Its dependencies are the author's own modules (forme for text shaping and
+// font programs, formalis for EN 16931 invoice rules, golittlecms for ICC
+// profiles, gopenjpeg for JPEG 2000) and one from the Go project,
+// golang.org/x/text, whose Unicode normalisation SASLprep needs to prepare
+// PDF 2.0 passwords.
 //
 // The core is four entry points:
 //
@@ -73,7 +76,7 @@
 // Option is stored on the Document and inherited by every later call, which is
 // the wrong lifetime for a context and would make cancellation invisible at the
 // call site; limits describe what a document may cost, contexts describe how
-// long an operation may take. Every original signature is unchanged, and an
+// long an operation may take. Adding them changed no original signature, and an
 // entry point whose cost is bounded rather than document-scale — ExtractPageText
 // (one page), Images (an iterator the caller can break out of),
 // Document.VerifySignatures — deliberately has no variant. ValidateFacturX and
@@ -102,8 +105,10 @@
 // not, because AES draws a fresh random initialisation vector per object on
 // every write. Document.RemoveEncryption drops the encryption so Write emits
 // plaintext. A document whose scheme or password could not be handled stays
-// encrypted (Document.Locked reports this) and is written back unchanged as a
-// lossless passthrough. Write regenerates the
+// encrypted — Document.Locked reports this, and Document.LockReason says why:
+// a wrong password, an unsupported scheme, or a malformed /Encrypt dictionary;
+// an /Encrypt dictionary never makes Read fail — and is written back unchanged
+// as a lossless passthrough. Write regenerates the
 // on-disk layout, emitting a cross-reference stream when the source used one and
 // a traditional cross-reference table otherwise.
 //
@@ -138,11 +143,15 @@
 //
 // # Signatures
 //
-// Document.VerifySignatures reports one sign.Result per signature. Read the
-// verdict with sign.Result.DocumentUnmodified, which is Valid AND
-// CoversWholeDocument: Valid alone accepts a document whose content was changed
-// by a post-signing incremental update. VerifySignatures performs no trust-chain
-// check at all — use Document.VerifySignaturesWithRoots to populate TrustedChain.
+// Document.VerifySignatures reports one sign.Result per signature and document
+// time-stamp, verified against the file the document was read from. Read the
+// integrity verdict with sign.Result.Intact — Valid, and every change made after
+// signing a permitted one (a DSS or document time-stamp added for long-term
+// validation) — or sign.Result.DocumentUnmodified when nothing may have changed
+// at all: Valid alone accepts a document whose content was changed by a
+// post-signing incremental update. Trust comes only from the roots passed in
+// sign.VerifyOptions: with none, TrustedChain is always false. Pass the roots of
+// the signers you accept, never a web PKI pool such as x509.SystemCertPool.
 //
 // See docs/architecture.md for how bytes flow through Read and Write,
 // docs/validators.md for the validator family, and docs/signing.md for signing

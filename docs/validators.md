@@ -173,7 +173,7 @@ concurrently on the same document.
 ```mermaid
 flowchart TD
     A[ValidatePDFABytes doc, level, rawData] --> LA{level is 1a/2a/3a?}
-    LA -->|yes| LB["validatePDFALevelA:<br/>run the Level B pipeline at level.baseB(),<br/>drop the 'conformance must be B' finding,<br/>add tagged-structure + language + conformance checks"]
+    LA -->|yes| LB["validatePDFALevelA:<br/>run the Level B pipeline at level.baseB(),<br/>drop the conformance-letter finding,<br/>found by its Check (CheckPDFAIDConformance),<br/>add tagged-structure + language + conformance checks"]
     LA -->|no| B[shallow-copy doc,<br/>install per-run cache]
     B --> C[for each of 59 checks]
     C --> D[runCheck: recover panic -> 'internal' violation]
@@ -226,7 +226,7 @@ They are grouped across files by concern:
 | `pdfa_levela.go` | Level A: conformance declaration, tagged structure, language |
 | `final_rules.go` | Catalog prohibitions, trigger events, halftones, inherited XObjects |
 | `content_operators.go` | Content-stream operator whitelist, named resources |
-| `filestructure.go` | Byte-level structure rules over the raw file (`Document.Offsets`) |
+| `filestructure.go` | Byte-level structure rules over the raw file (the source record's offsets, `Document.Source`) |
 | `fonts.go` / forme `font/fontprog.go`, `font/font_encodings.go`, `font/cff_strings.go` | Font-dictionary rules; sfnt/CFF/Type1 program parsing |
 | `xmp.go` / `xmp_schemas.go` | XMP metadata parsing and schema validation |
 | `internal/core` (PDF functions) | PDF function objects (types 0/2/3/4), used by tint transforms and shadings |

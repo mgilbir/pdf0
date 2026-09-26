@@ -18,9 +18,6 @@ func (b *Builder) Save() *Builder {
 		return b.fail("q/Q nesting deeper than %d", MaxNestingDepth)
 	}
 	b.depth++
-	if b.depth > b.maxDep {
-		b.maxDep = b.depth
-	}
 	return b.op("q")
 }
 
@@ -217,7 +214,7 @@ func (b *Builder) paint(operator string) *Builder {
 		return b.fail("%s without a path to paint", operator)
 	}
 	b.inPath = false
-	b.pending = false
+	b.clipped = false
 	return b.op(operator)
 }
 
@@ -252,8 +249,9 @@ func (b *Builder) Clip() *Builder {
 	if !b.inPath {
 		return b.fail("Clip without a path")
 	}
-	b.pending = true
-	return b.op("W")
+	b.op("W")
+	b.clipped = true
+	return b
 }
 
 // ClipEvenOdd is Clip with the even-odd rule (W*).
@@ -261,8 +259,9 @@ func (b *Builder) ClipEvenOdd() *Builder {
 	if !b.inPath {
 		return b.fail("ClipEvenOdd without a path")
 	}
-	b.pending = true
-	return b.op("W*")
+	b.op("W*")
+	b.clipped = true
+	return b
 }
 
 // --- Colour (ISO 32000-2 8.6.8) ---

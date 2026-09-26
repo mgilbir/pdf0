@@ -7,7 +7,7 @@ import (
 
 // TestUACMaps covers the 7.21.3.3 predefined/embedded CMap rule.
 func TestUACMaps(t *testing.T) {
-	doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+	doc := mkView(map[int]*object.IndirectObject{}, nil)
 	type0 := func(enc object.Object) *object.Dictionary {
 		f := &object.Dictionary{}
 		f.Set("Subtype", object.Name("Type0"))

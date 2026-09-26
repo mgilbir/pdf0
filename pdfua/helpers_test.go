@@ -13,14 +13,16 @@ import (
 // nil run makes every memo a fresh one, which turns the memoization tests into
 // tautologies. The root package's Document.view supplies both, and this is the
 // equivalent for a package that does not have a Document.
-func mkView(objs map[int]*object.IndirectObject, trailer object.Dictionary) core.View {
+func mkView(objs map[int]*object.IndirectObject, trailer *object.Dictionary) core.View {
 	if objs == nil {
 		objs = map[int]*object.IndirectObject{}
 	}
-	tr := trailer
+	if trailer == nil {
+		trailer = &object.Dictionary{}
+	}
 	return core.View{
 		Objects: objs,
-		Trailer: &tr,
+		Trailer: trailer,
 		Limits:  core.DefaultLimits(),
 		Run:     core.NewRun(&core.Recorder{}),
 	}
@@ -28,7 +30,7 @@ func mkView(objs map[int]*object.IndirectObject, trailer object.Dictionary) core
 
 // mkViewVersion is mkView with the header version set, for the checks that read
 // it.
-func mkViewVersion(objs map[int]*object.IndirectObject, trailer object.Dictionary, version string) core.View {
+func mkViewVersion(objs map[int]*object.IndirectObject, trailer *object.Dictionary, version string) core.View {
 	v := mkView(objs, trailer)
 	v.Version = version
 	return v

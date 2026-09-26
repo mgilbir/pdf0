@@ -14,7 +14,6 @@ import (
 // corresponding Level B validation already reports (the Level A rule families
 // must not false-positive on conforming files). Gated on the veraPDF corpus.
 func TestLevelACorpus(t *testing.T) {
-	corpus := corpusRoot(t)
 	cases := []struct {
 		dir  string
 		a, b pdfa.Level
@@ -23,11 +22,12 @@ func TestLevelACorpus(t *testing.T) {
 		{"PDF_A-2a", pdfa.PDFA2a, pdfa.PDFA2b},
 	}
 	for _, tc := range cases {
-		files, _ := filepath.Glob(filepath.Join(corpus, tc.dir, "**", "**", "*.pdf"))
-		if len(files) == 0 {
-			continue
-		}
-		aFP := 0
+		// Every file in the suite, at any depth. This used to glob
+		// "**/**/*.pdf", which in Go matches exactly two directory levels and
+		// silently left out the 25 of 61 files that sit deeper; and a suite
+		// missing from a present corpus used to be skipped.
+		files := corpusTestFiles(t, tc.dir)
+		aFP, checked := 0, 0
 		for _, f := range files {
 			base := filepath.Base(f)
 			if !strings.Contains(base, "-pass-") {
@@ -35,12 +35,14 @@ func TestLevelACorpus(t *testing.T) {
 			}
 			data, err := os.ReadFile(f)
 			if err != nil {
-				continue
+				t.Fatalf("read %s: %v", base, err)
 			}
 			doc, err := Read(bytes.NewReader(data), int64(len(data)))
 			if err != nil {
+				t.Errorf("%s: a conforming corpus file failed to parse: %v", base, err)
 				continue
 			}
+			checked++
 			bmsgs := map[string]bool{}
 			for _, e := range ValidatePDFABytes(doc, tc.b, data) {
 				bmsgs[e.Rule+e.Message] = true
@@ -52,8 +54,11 @@ func TestLevelACorpus(t *testing.T) {
 				}
 			}
 		}
+		if checked == 0 {
+			t.Fatalf("%s: no conforming (-pass-) file was checked", tc.dir)
+		}
 		if aFP == 0 {
-			t.Logf("%s: Level A adds no false positives on conforming files", tc.dir)
+			t.Logf("%s: Level A adds no false positives on %d conforming files", tc.dir, checked)
 		}
 	}
 }

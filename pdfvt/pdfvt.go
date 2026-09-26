@@ -5,7 +5,7 @@ import (
 	"github.com/mgilbir/pdf0/dpart"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
-	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/internal/xmp"
 	"github.com/mgilbir/pdf0/pdfx"
 	"strings"
 )
@@ -63,7 +63,7 @@ func ValidateView(doc core.View, versionPrefix string, allowRefXObjects bool) []
 	// prohibition (a PDF/X-4-only rule that PDF/X-5 lifts) is dropped.
 	run(func() {
 		for _, v := range pdfx.ValidateView(doc, pdfx.PDFX4) {
-			if allowRefXObjects && v.Rule == "forbidden" && strings.Contains(v.Message, "reference XObjects") {
+			if allowRefXObjects && v.Check == pdfx.CheckRefXObject {
 				continue
 			}
 			if v.Rule == finding.LimitRule {
@@ -81,12 +81,16 @@ func ValidateView(doc core.View, versionPrefix string, allowRefXObjects bool) []
 	// Identification: the XMP pdfvtid:GTS_PDFVTVersion property shall be present
 	// and identify the requested PDF/VT version (ISO 16612-2 6.2).
 	run(func() {
+		// Read through the XMP model, by namespace URI (audit C141). A packet
+		// pdf0 declined to model has its trip on the run already; whether it
+		// identifies the file is then unknown, not "no".
 		claimed := ""
-		if cat != nil {
-			if ms, ok := doc.Resolve(cat.Get("Metadata")).(*object.Stream); ok {
-				xmp := doc.XMPText(ms)
-				claimed = strings.TrimSpace(core.ExtractXMPValue(xmp, "pdfvtid:GTS_PDFVTVersion"))
-			}
+		packet, status := doc.DocumentXMPPacket()
+		switch status {
+		case core.XMPLimit:
+			return
+		case core.XMPParsed:
+			claimed, _ = packet.Text(xmp.NSPDFVTID, "GTS_PDFVTVersion")
 		}
 		switch {
 		case claimed == "":

@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/internal/testfiles"
 	"os"
 	"strings"
 	"testing"
@@ -9,9 +10,9 @@ import (
 
 func readRef(t *testing.T, name string) *Document {
 	t.Helper()
-	data, err := os.ReadFile("testdata/pdf20examples/" + name)
+	data, err := os.ReadFile(testfiles.PDF20Examples.File(t, name))
 	if err != nil {
-		t.Skip("reference PDFs not present; run `make refpdfs`")
+		t.Fatal(err)
 	}
 	doc, err := Read(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
@@ -29,7 +30,7 @@ func TestExtractAndMergePages(t *testing.T) {
 	}
 
 	// Extract page 0 into a new document.
-	sub, err := src.ExtractPages([]int{0})
+	sub, _, err := src.ExtractPages([]int{0})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,14 +45,19 @@ func TestExtractAndMergePages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-read extracted: %v", err)
 	}
-	if !strings.Contains(re.ExtractText(), "Hello World") {
-		t.Errorf("extracted page lost its text: %q", re.ExtractText())
+	if !strings.Contains(mustExtractText(t, re), "Hello World") {
+		t.Errorf("extracted page lost its text: %q", mustExtractText(t, re))
 	}
 
 	// Merge two copies → two pages.
 	other := readRef(t, "Simple PDF 2.0 file.pdf")
-	merged, _ := src.ExtractPages([]int{0})
-	merged.AppendPages(other)
+	merged, _, err := src.ExtractPages([]int{0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := merged.AppendPages(other); err != nil {
+		t.Fatal(err)
+	}
 	if merged.PageCount() != 2 {
 		t.Errorf("merged page count = %d, want 2", merged.PageCount())
 	}

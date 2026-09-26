@@ -6,6 +6,7 @@ import (
 
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
+	"github.com/mgilbir/pdf0/internal/xmp"
 	"github.com/mgilbir/pdf0/pdfa"
 )
 
@@ -15,9 +16,21 @@ import (
 // tripped while the file was read.
 
 // GenerateXMPMetadata builds the pdfaid identification XMP packet for a level.
-func GenerateXMPMetadata(level pdfa.Level, title, author string) []byte {
+// A title or author that cannot be written as XMP text — invalid UTF-8, or a
+// character XML does not allow — is an error wrapping ErrInvalidMetadataText,
+// never a packet that is not well-formed.
+func GenerateXMPMetadata(level pdfa.Level, title, author string) ([]byte, error) {
 	return pdfa.GenerateXMPMetadata(level, title, author)
 }
+
+// ErrInvalidMetadataText is wrapped by the errors of every metadata writer —
+// SetDocumentInfo, NewPDFADocumentWithInfo, GenerateXMPMetadata, EmbedFacturX —
+// when a value cannot be written as XMP text: it is not valid UTF-8, or holds a
+// character XML 1.0 does not allow even as a reference (a C0 control other than
+// tab, LF and CR; U+FFFE; U+FFFF). Such a value is refused rather than dropped
+// or altered, since a value changed on the way in is not the value the caller
+// wrote.
+var ErrInvalidMetadataText = xmp.ErrInvalidText
 
 // DefaultSRGBProfile returns the sRGB ICC profile embedded in generated
 // PDF/A documents. The error is always nil; see pdfa.Skeleton for why it is
@@ -73,7 +86,7 @@ func NewPDFADocumentWith(opts pdfa.SkeletonOptions) (*Document, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pdf0: building the PDF/A skeleton: %w", err)
 	}
-	return &Document{Version: version, Objects: objs, Trailer: trailer}, nil
+	return &Document{Version: version, Objects: objs, Trailer: trailer}, nil // dictcopy: the skeleton's trailer is fresh and returned by value
 }
 
 // ValidatePDFA checks doc against the implemented rules for the given PDF/A
@@ -133,7 +146,7 @@ func validatePDFABytes(cancel core.Canceler, doc *Document, level pdfa.Level, ra
 	// goroutines and at several levels at once — without a data race.
 	//
 	// This is the boundary: everything below reads a view.
-	runDoc := *doc
+	runDoc := *doc // dictcopy: a shallow per-run copy; it shares Objects and Trailer by design and the validators never write either
 	runDoc.valCache = newValidationCache(cancel)
 	v := runDoc.view()
 

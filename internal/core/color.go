@@ -5,7 +5,6 @@ import (
 	"compress/zlib"
 	"io"
 	"math"
-	"strings"
 
 	"github.com/mgilbir/pdf0/object"
 )
@@ -13,33 +12,6 @@ import (
 // Colour-space and transparency queries the PDF/A and PDF/X engines both make:
 // which device colour a page reaches for, what a group or Default* entry covers,
 // and whether a page uses transparency at all.
-
-// ExtractXMPValue extracts a simple value from XMP for a given key.
-// Handles both <key>value</key> and key="value" attribute forms.
-func ExtractXMPValue(xmp, key string) string {
-	// Try element form: <key>value</key>
-	openTag := "<" + key + ">"
-	closeTag := "</" + key + ">"
-	if idx := strings.Index(xmp, openTag); idx >= 0 {
-		start := idx + len(openTag)
-		if end := strings.Index(xmp[start:], closeTag); end >= 0 {
-			return strings.TrimSpace(xmp[start : start+end])
-		}
-	}
-
-	// Try attribute form: key="value" or key='value' (both legal XML).
-	for _, q := range []byte{'"', '\''} {
-		attrPrefix := key + "=" + string(q)
-		if idx := strings.Index(xmp, attrPrefix); idx >= 0 {
-			start := idx + len(attrPrefix)
-			if end := bytes.IndexByte([]byte(xmp[start:]), q); end >= 0 {
-				return xmp[start : start+end]
-			}
-		}
-	}
-
-	return ""
-}
 
 // PageUsesTransparency checks if a page's resources reference transparency features.
 // It checks ExtGState entries for CA/ca != 1.0, BM != Normal/Compatible, and SMask != None,
@@ -130,7 +102,7 @@ func PageUsesTransparency(doc View, page *object.Dictionary) bool {
 				}
 			case *object.Dictionary:
 				// Dict of appearance states (e.g., /N << /Yes 12 0 R /Off 13 0 R >>)
-				for _, stateVal := range v.Values {
+				for stateVal := range v.Values() {
 					stateObj := doc.Resolve(stateVal)
 					if stateStream, ok := stateObj.(*object.Stream); ok {
 						if resourcesUseTransparency(doc, &stateStream.Dict, seen) {
@@ -178,7 +150,7 @@ func resourcesUseTransparency(doc View, container *object.Dictionary, seen map[*
 	if xobjRef != nil {
 		xobjDict := doc.ResolveDict(xobjRef)
 		if xobjDict != nil {
-			for _, val := range xobjDict.Values {
+			for val := range xobjDict.Values() {
 				obj := doc.Resolve(val)
 				stream, ok := obj.(*object.Stream)
 				if !ok {
@@ -216,7 +188,7 @@ func resourcesUseTransparency(doc View, container *object.Dictionary, seen map[*
 	if fontRef != nil {
 		fontDict := doc.ResolveDict(fontRef)
 		if fontDict != nil {
-			for _, val := range fontDict.Values {
+			for val := range fontDict.Values() {
 				fd := doc.ResolveDict(val)
 				if fd == nil {
 					continue
@@ -236,7 +208,7 @@ func resourcesUseTransparency(doc View, container *object.Dictionary, seen map[*
 	if patRef != nil {
 		patDict := doc.ResolveDict(patRef)
 		if patDict != nil {
-			for _, val := range patDict.Values {
+			for val := range patDict.Values() {
 				obj := doc.Resolve(val)
 				stream, ok := obj.(*object.Stream)
 				if !ok {
@@ -262,7 +234,7 @@ func extGStateUsesTransparency(doc View, res *object.Dictionary) bool {
 	if gsDict == nil {
 		return false
 	}
-	for _, val := range gsDict.Values {
+	for val := range gsDict.Values() {
 		gs := doc.ResolveDict(val)
 		if gs == nil {
 			continue
@@ -364,7 +336,7 @@ func DefaultColorSpaces(doc View, page *object.Dictionary) (hasRGB, hasCMYK, has
 	if csDict == nil {
 		return
 	}
-	for _, key := range csDict.Keys {
+	for key := range csDict.Keys() {
 		switch key {
 		case "DefaultRGB":
 			hasRGB = true

@@ -21,7 +21,7 @@ func TestWriteIncremental(t *testing.T) {
 	doc.Trailer.Set("Info", object.IndirectRef{Number: 4})
 
 	var buf bytes.Buffer
-	if err := doc.WriteIncremental(&buf, original, []int{4}); err != nil {
+	if err := doc.WriteIncremental(&buf, []int{4}); err != nil {
 		t.Fatalf("WriteIncremental: %v", err)
 	}
 	out := buf.Bytes()

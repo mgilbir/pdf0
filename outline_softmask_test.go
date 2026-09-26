@@ -185,7 +185,7 @@ func TestSoftMaskShapesTransparency(t *testing.T) {
 		t.Run(level.String(), func(t *testing.T) {
 			doc := mustPDFADoc(t, level)
 			maskRef := buildFadeMask(t, doc)
-			gs, err := LuminositySoftMask(maskRef, [3]float64{0, 0, 0})
+			gs, err := doc.LuminositySoftMask(maskRef, []float64{0, 0, 0})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -248,14 +248,14 @@ func TestSoftMaskKindsAreDistinct(t *testing.T) {
 	doc := mustPDFADoc(t, pdfa.PDFA2b)
 	form := buildFadeMask(t, doc)
 
-	lum, err := LuminositySoftMask(form, [3]float64{0, 0, 0})
+	lum, err := doc.LuminositySoftMask(form, []float64{0, 0, 0})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := doc.ResolveDict(lum.Get("SMask")).Get("S").(object.Name); got != "Luminosity" {
 		t.Errorf("luminosity mask /S = %v", got)
 	}
-	alpha, err := AlphaSoftMask(form)
+	alpha, err := doc.AlphaSoftMask(form)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,10 +270,10 @@ func TestSoftMaskKindsAreDistinct(t *testing.T) {
 	if got, _ := NoSoftMask().Get("SMask").(object.Name); got != "None" {
 		t.Errorf("NoSoftMask /SMask = %v, want None", got)
 	}
-	if _, err := LuminositySoftMask(nil, [3]float64{0, 0, 0}); err == nil {
+	if _, err := doc.LuminositySoftMask(object.IndirectRef{}, []float64{0, 0, 0}); err == nil {
 		t.Error("a mask with no form was accepted")
 	}
-	if _, err := LuminositySoftMask(form, [3]float64{2, 0, 0}); err == nil {
+	if _, err := doc.LuminositySoftMask(form, []float64{2, 0, 0}); err == nil {
 		t.Error("a backdrop outside [0,1] was accepted")
 	}
 }

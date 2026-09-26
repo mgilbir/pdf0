@@ -3,8 +3,10 @@ package pdf0
 import (
 	"bytes"
 	"compress/zlib"
+	"errors"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/hostile"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/pdfa"
 	"os"
@@ -12,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 type corpusFile struct {
@@ -555,7 +558,7 @@ func TestValidatePDFA_AnnotationOpacity(t *testing.T) {
 		annot.Set("Subtype", object.Name("Text"))
 		annot.Set("Rect", object.Array{object.Integer(0), object.Integer(0), object.Integer(100), object.Integer(100)})
 		annot.Set("F", object.Integer(4)) // Print
-		annot.Set("AP", &object.Dictionary{Keys: []object.Name{"N"}, Values: []object.Object{&object.Stream{}}})
+		annot.Set("AP", object.NewDictionary(object.Entry{Key: "N", Value: &object.Stream{}}))
 		if ca != nil {
 			annot.Set("CA", ca)
 		}
@@ -584,7 +587,7 @@ func TestValidatePDFA_AnnotationFlags(t *testing.T) {
 		annot.Set("Subtype", object.Name("Text"))
 		annot.Set("Rect", object.Array{object.Integer(0), object.Integer(0), object.Integer(100), object.Integer(100)})
 		annot.Set("F", object.Integer(0))
-		annot.Set("AP", &object.Dictionary{Keys: []object.Name{"N"}, Values: []object.Object{&object.Stream{}}})
+		annot.Set("AP", object.NewDictionary(object.Entry{Key: "N", Value: &object.Stream{}}))
 		doc.Objects[10] = &object.IndirectObject{Number: 10, Value: annot}
 
 		errs := ValidatePDFA(doc, pdfa.PDFA4)
@@ -600,7 +603,7 @@ func TestValidatePDFA_AnnotationFlags(t *testing.T) {
 		annot.Set("Subtype", object.Name("Text"))
 		annot.Set("Rect", object.Array{object.Integer(0), object.Integer(0), object.Integer(100), object.Integer(100)})
 		annot.Set("F", object.Integer(4|2)) // Print + Hidden
-		annot.Set("AP", &object.Dictionary{Keys: []object.Name{"N"}, Values: []object.Object{&object.Stream{}}})
+		annot.Set("AP", object.NewDictionary(object.Entry{Key: "N", Value: &object.Stream{}}))
 		doc.Objects[10] = &object.IndirectObject{Number: 10, Value: annot}
 
 		errs := ValidatePDFA(doc, pdfa.PDFA4)
@@ -895,7 +898,10 @@ func TestValidatePDFA_RoundTrip(t *testing.T) {
 
 func TestGenerateXMPMetadata(t *testing.T) {
 	t.Run("PDFA-4", func(t *testing.T) {
-		xmp := GenerateXMPMetadata(pdfa.PDFA4, "Test Title", "Test Author")
+		xmp, err := GenerateXMPMetadata(pdfa.PDFA4, "Test Title", "Test Author")
+		if err != nil {
+			t.Fatal(err)
+		}
 		s := string(xmp)
 
 		if !strings.Contains(s, "<pdfaid:part>4</pdfaid:part>") {
@@ -919,7 +925,10 @@ func TestGenerateXMPMetadata(t *testing.T) {
 	})
 
 	t.Run("PDFA-1b", func(t *testing.T) {
-		xmp := GenerateXMPMetadata(pdfa.PDFA1b, "", "")
+		xmp, err := GenerateXMPMetadata(pdfa.PDFA1b, "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
 		s := string(xmp)
 
 		if !strings.Contains(s, "<pdfaid:part>1</pdfaid:part>") {
@@ -931,7 +940,10 @@ func TestGenerateXMPMetadata(t *testing.T) {
 	})
 
 	t.Run("XML escaping", func(t *testing.T) {
-		xmp := GenerateXMPMetadata(pdfa.PDFA4, "Title <with> & \"special\" chars", "")
+		xmp, err := GenerateXMPMetadata(pdfa.PDFA4, "Title <with> & \"special\" chars", "")
+		if err != nil {
+			t.Fatal(err)
+		}
 		s := string(xmp)
 
 		if strings.Contains(s, "<with>") {
@@ -1081,25 +1093,6 @@ func TestPDFALevelString(t *testing.T) {
 	}
 }
 
-func TestExtractXMPValue(t *testing.T) {
-	xmp := `<pdfaid:part>4</pdfaid:part>
-      <pdfaid:rev>2020</pdfaid:rev>
-      pdfaid:conformance="B"`
-
-	if v := core.ExtractXMPValue(xmp, "pdfaid:part"); v != "4" {
-		t.Errorf("part = %q, want 4", v)
-	}
-	if v := core.ExtractXMPValue(xmp, "pdfaid:rev"); v != "2020" {
-		t.Errorf("rev = %q, want 2020", v)
-	}
-	if v := core.ExtractXMPValue(xmp, "pdfaid:conformance"); v != "B" {
-		t.Errorf("conformance = %q, want B", v)
-	}
-	if v := core.ExtractXMPValue(xmp, "pdfaid:nonexistent"); v != "" {
-		t.Errorf("nonexistent = %q, want empty", v)
-	}
-}
-
 // --- Corpus tests ---
 
 func corpusLevel(dirName string) (pdfa.Level, bool) {
@@ -1184,25 +1177,18 @@ func TestCorpusParsesEntirely(t *testing.T) {
 	corpusDir := corpusRoot(t)
 	var total int
 	var failures []string
-	filepath.Walk(corpusDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".pdf") {
-			return nil
-		}
-		base := filepath.Base(path)
-		if !strings.Contains(base, "-pass-") && !strings.Contains(base, "-fail-") {
-			return nil
-		}
+	for _, path := range corpusTestFiles(t, "") {
 		total++
+		rel, _ := filepath.Rel(corpusDir, path)
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
-			return nil
+			failures = append(failures, rel+" :: "+readErr.Error())
+			continue
 		}
 		if _, e := Read(bytes.NewReader(data), int64(len(data))); e != nil {
-			rel, _ := filepath.Rel(corpusDir, path)
 			failures = append(failures, rel+" :: "+e.Error())
 		}
-		return nil
-	})
+	}
 	t.Logf("corpus parse: %d files, %d failures", total, len(failures))
 	if len(failures) > 0 {
 		t.Errorf("%d corpus files failed to parse:\n  %s", len(failures), strings.Join(failures, "\n  "))
@@ -1220,28 +1206,19 @@ func TestCorpusParsesEntirely(t *testing.T) {
 // are the requirements they take on in exchange. 4f is fully detected; 4e keeps
 // one file, for the reason given on its baseline.
 func TestCorpusIsartor(t *testing.T) {
-	root := corpusSubdir(t, "Isartor test files")
-
 	var fail, missed, fp, parseErrors int
 	var missedFiles []string
-	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".pdf") {
-			return nil
-		}
+	for _, path := range corpusTestFiles(t, "Isartor test files") {
 		base := filepath.Base(path)
 		isPass := strings.Contains(base, "-pass-")
-		isFail := strings.Contains(base, "-fail-")
-		if !isPass && !isFail {
-			return nil
-		}
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
-			return nil
+			t.Fatalf("read %s: %v", base, readErr)
 		}
 		doc, e := Read(bytes.NewReader(data), int64(len(data)))
 		if e != nil {
 			parseErrors++
-			return nil
+			continue
 		}
 		// Isartor is a PDF/A-1b test suite.
 		errs := ValidatePDFABytes(doc, pdfa.PDFA1b, data)
@@ -1249,15 +1226,14 @@ func TestCorpusIsartor(t *testing.T) {
 			if len(errs) > 0 {
 				fp++
 			}
-			return nil
+			continue
 		}
 		fail++
 		if len(errs) == 0 {
 			missed++
 			missedFiles = append(missedFiles, base)
 		}
-		return nil
-	})
+	}
 
 	t.Logf("Isartor results: fail=%d | falsePositives=%d missed=%d parseErrors=%d",
 		fail, fp, missed, parseErrors)
@@ -1291,7 +1267,8 @@ func TestCorpusIsartor(t *testing.T) {
 // PDF/UA is a different standard entirely). This is a regression net, not a
 // claim of 1a/2a/2u/UA conformance coverage — that needs new rule families.
 func TestCorpusConformanceSuites(t *testing.T) {
-	corpusDir := corpusRoot(t)
+	// Every suite is required: corpusTestFiles skips when the corpus is absent
+	// and fails when it is present without the suite.
 
 	suites := []struct {
 		dir       string
@@ -1326,31 +1303,23 @@ func TestCorpusConformanceSuites(t *testing.T) {
 	}
 
 	for _, s := range suites {
-		root := filepath.Join(corpusDir, s.dir)
-		if _, err := os.Stat(root); os.IsNotExist(err) {
-			continue
-		}
+		// A suite missing from a present corpus fails inside corpusTestFiles:
+		// the corpus is pinned, so that is a layout change, not a download
+		// the developer skipped.
 		var fail, missed, parseErrors, falsePositives int
 		var missedFiles, fpFiles, parseErrFiles []string
-		filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".pdf") {
-				return nil
-			}
+		for _, path := range corpusTestFiles(t, s.dir) {
 			base := filepath.Base(path)
 			isPass := strings.Contains(base, "-pass-")
-			isFail := strings.Contains(base, "-fail-")
-			if !isPass && !isFail {
-				return nil
-			}
 			data, readErr := os.ReadFile(path)
 			if readErr != nil {
-				return nil
+				t.Fatalf("read %s: %v", base, readErr)
 			}
 			doc, e := Read(bytes.NewReader(data), int64(len(data)))
 			if e != nil {
 				parseErrors++
 				parseErrFiles = append(parseErrFiles, base+" :: "+e.Error())
-				return nil
+				continue
 			}
 			errs := ValidatePDFABytes(doc, s.level, data)
 			if isPass {
@@ -1358,15 +1327,14 @@ func TestCorpusConformanceSuites(t *testing.T) {
 					falsePositives++
 					fpFiles = append(fpFiles, base+" :: "+errs[0].Error())
 				}
-				return nil
+				continue
 			}
 			fail++
 			if len(errs) == 0 {
 				missed++
 				missedFiles = append(missedFiles, base)
 			}
-			return nil
-		})
+		}
 		t.Logf("%-10s @ %-8v : fail=%d missed=%d falsePositives=%d parseErrors=%d", s.dir, s.level, fail, missed, falsePositives, parseErrors)
 		if missed > s.maxMissed {
 			t.Errorf("%s: missed %d exceed baseline %d (detection regressed). Offending fail files:\n  %s",
@@ -1398,7 +1366,7 @@ func TestCorpusConformanceSuites(t *testing.T) {
 // falsePositives is the hard invariant at 0 — a Level A pass file is a
 // conforming document and rejecting it means a rule is wrong.
 func TestCorpusLevelA(t *testing.T) {
-	corpusDir := corpusRoot(t)
+	// Both suites are required; see corpusTestFiles.
 
 	suites := []struct {
 		dir       string
@@ -1410,30 +1378,19 @@ func TestCorpusLevelA(t *testing.T) {
 	}
 
 	for _, s := range suites {
-		root := filepath.Join(corpusDir, s.dir)
-		if _, err := os.Stat(root); os.IsNotExist(err) {
-			continue
-		}
 		var pass, fail, missed, falsePositives, parseErrors int
 		var fpFiles, missedFiles []string
-		filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".pdf") {
-				return nil
-			}
+		for _, path := range corpusTestFiles(t, s.dir) {
 			base := filepath.Base(path)
 			isPass := strings.Contains(base, "-pass-")
-			isFail := strings.Contains(base, "-fail-")
-			if !isPass && !isFail {
-				return nil
-			}
 			data, readErr := os.ReadFile(path)
 			if readErr != nil {
-				return nil
+				t.Fatalf("read %s: %v", base, readErr)
 			}
 			doc, e := Read(bytes.NewReader(data), int64(len(data)))
 			if e != nil {
 				parseErrors++
-				return nil
+				continue
 			}
 			errs := ValidatePDFABytes(doc, s.level, data)
 			if isPass {
@@ -1442,15 +1399,14 @@ func TestCorpusLevelA(t *testing.T) {
 					falsePositives++
 					fpFiles = append(fpFiles, base+" :: "+errs[0].Error())
 				}
-				return nil
+				continue
 			}
 			fail++
 			if len(errs) == 0 {
 				missed++
 				missedFiles = append(missedFiles, base)
 			}
-			return nil
-		})
+		}
 		t.Logf("%-10s @ %-8v : pass=%d fail=%d missed=%d falsePositives=%d parseErrors=%d",
 			s.dir, s.level, pass, fail, missed, falsePositives, parseErrors)
 
@@ -1487,28 +1443,15 @@ func TestCorpus(t *testing.T) {
 		if !ok {
 			t.Fatalf("unknown level dir: %s", levelDir)
 		}
-		root := filepath.Join(corpusDir, levelDir)
-		if _, err := os.Stat(root); os.IsNotExist(err) {
-			continue
-		}
-
 		// Collect paths first, then iterate. This avoids holding all parsed
 		// Documents in memory at once (which caused OOM kills with the full
-		// 2900+ file corpus).
+		// 2900+ file corpus). A level missing from a present corpus fails.
 		var files []corpusFile
-		filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".pdf") {
-				return nil
-			}
+		for _, path := range corpusTestFiles(t, levelDir) {
 			rel, _ := filepath.Rel(corpusDir, path)
 			isPass := strings.Contains(filepath.Base(path), "-pass-")
-			isFail := strings.Contains(filepath.Base(path), "-fail-")
-			if !isPass && !isFail {
-				return nil
-			}
 			files = append(files, corpusFile{path: path, rel: rel, isPass: isPass})
-			return nil
-		})
+		}
 
 		for i, f := range files {
 			data, err := os.ReadFile(f.path)
@@ -1646,22 +1589,24 @@ func addTestPage(doc *Document) *object.Dictionary {
 
 // A7: Resolve must follow ref->ref chains and bail out on cycles.
 func TestResolveChainsAndCycles(t *testing.T) {
-	doc := &Document{Objects: map[int]*object.IndirectObject{
-		1: {Number: 1, Value: object.IndirectRef{Number: 2}},
-		2: {Number: 2, Value: object.IndirectRef{Number: 3}},
-		3: {Number: 3, Value: object.Integer(42)},
-		7: {Number: 7, Value: object.IndirectRef{Number: 8}},
-		8: {Number: 8, Value: object.IndirectRef{Number: 7}},
-	}}
-	if v, ok := doc.Resolve(object.IndirectRef{Number: 1}).(object.Integer); !ok || v != 42 {
-		t.Errorf("chained resolve: expected 42, got %#v", doc.Resolve(object.IndirectRef{Number: 1}))
-	}
-	if v := doc.Resolve(object.IndirectRef{Number: 7}); v != nil {
-		t.Errorf("cyclic resolve: expected nil, got %#v", v)
-	}
-	if v, ok := doc.Resolve(object.Integer(5)).(object.Integer); !ok || v != 5 {
-		t.Error("non-ref must resolve to itself")
-	}
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		doc := &Document{Objects: map[int]*object.IndirectObject{
+			1: {Number: 1, Value: object.IndirectRef{Number: 2}},
+			2: {Number: 2, Value: object.IndirectRef{Number: 3}},
+			3: {Number: 3, Value: object.Integer(42)},
+			7: {Number: 7, Value: object.IndirectRef{Number: 8}},
+			8: {Number: 8, Value: object.IndirectRef{Number: 7}},
+		}}
+		if v, ok := doc.Resolve(object.IndirectRef{Number: 1}).(object.Integer); !ok || v != 42 {
+			t.Errorf("chained resolve: expected 42, got %#v", doc.Resolve(object.IndirectRef{Number: 1}))
+		}
+		if v := doc.Resolve(object.IndirectRef{Number: 7}); v != nil {
+			t.Errorf("cyclic resolve: expected nil, got %#v", v)
+		}
+		if v, ok := doc.Resolve(object.Integer(5)).(object.Integer); !ok || v != 5 {
+			t.Error("non-ref must resolve to itself")
+		}
+	})
 }
 
 // A9: annotations written as direct dictionaries in a page's /Annots must be
@@ -1776,27 +1721,29 @@ func TestValidatePDFA_TintTransformConsistency(t *testing.T) {
 
 // A19: forbidden actions hiding behind /Next chains must be found.
 func TestValidatePDFA_ActionNextChain(t *testing.T) {
-	doc := mustPDFADoc(t, pdfa.PDFA2b)
-	launch := &object.Dictionary{}
-	launch.Set("S", object.Name("Launch"))
-	action := &object.Dictionary{}
-	action.Set("S", object.Name("GoTo"))
-	action.Set("Next", object.Array{launch})
-	catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
-	catalog.Set("OpenAction", action)
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		doc := mustPDFADoc(t, pdfa.PDFA2b)
+		launch := &object.Dictionary{}
+		launch.Set("S", object.Name("Launch"))
+		action := &object.Dictionary{}
+		action.Set("S", object.Name("GoTo"))
+		action.Set("Next", object.Array{launch})
+		catalog := doc.ResolveDict(doc.Trailer.Get("Root"))
+		catalog.Set("OpenAction", action)
 
-	if !hasRule(ValidatePDFA(doc, pdfa.PDFA2b), "6.5.1") {
-		t.Error("expected 6.6.1 error for Launch action in /Next chain")
-	}
+		if !hasRule(ValidatePDFA(doc, pdfa.PDFA2b), "6.5.1") {
+			t.Error("expected 6.6.1 error for Launch action in /Next chain")
+		}
 
-	// A /Next cycle must terminate.
-	a := &object.Dictionary{}
-	a.Set("S", object.Name("GoTo"))
-	a.Set("Next", a)
-	doc2 := mustPDFADoc(t, pdfa.PDFA2b)
-	catalog2 := doc2.ResolveDict(doc2.Trailer.Get("Root"))
-	catalog2.Set("OpenAction", a)
-	ValidatePDFA(doc2, pdfa.PDFA2b) // must not hang
+		// A /Next cycle must terminate.
+		a := &object.Dictionary{}
+		a.Set("S", object.Name("GoTo"))
+		a.Set("Next", a)
+		doc2 := mustPDFADoc(t, pdfa.PDFA2b)
+		catalog2 := doc2.ResolveDict(doc2.Trailer.Get("Root"))
+		catalog2.Set("OpenAction", a)
+		ValidatePDFA(doc2, pdfa.PDFA2b) // must not hang
+	})
 }
 
 // A19: page dictionaries must not carry /AA at 1b/2b/3b.
@@ -1902,14 +1849,31 @@ func TestNewPDFADocumentWithInfo(t *testing.T) {
 	}
 }
 
-// C30: XML-illegal control characters are stripped from XMP values.
-func TestXMLEscapeControlChars(t *testing.T) {
-	got := pdfa.XMLEscape("a\x00b\x1Fc\td\ne")
-	if got != "abc\td\ne" {
-		t.Errorf("expected control chars stripped, got %q", got)
+// C72 (and the earlier C30): a value XML cannot carry is refused with an error,
+// never dropped, altered or written into a packet that does not parse.
+func TestXMPRefusesXMLIllegalText(t *testing.T) {
+	for _, bad := range []string{"a\x00b", "bell\x07", "bad\xffutf8", "a\uFFFEb", "a\uFFFFb"} {
+		if _, err := GenerateXMPMetadata(pdfa.PDFA1b, bad, ""); !errors.Is(err, ErrInvalidMetadataText) {
+			t.Errorf("GenerateXMPMetadata(title %q) = %v, want ErrInvalidMetadataText", bad, err)
+		}
+		if _, err := NewPDFADocumentWithInfo(pdfa.PDFA2b, "ok", bad); !errors.Is(err, ErrInvalidMetadataText) {
+			t.Errorf("NewPDFADocumentWithInfo(author %q) = %v, want ErrInvalidMetadataText", bad, err)
+		}
+		doc := NewDocument()
+		if err := doc.SetDocumentInfo(DocumentInfo{Title: bad}); !errors.Is(err, ErrInvalidMetadataText) {
+			t.Errorf("SetDocumentInfo(title %q) = %v, want ErrInvalidMetadataText", bad, err)
+		}
+		if doc.Trailer.Get("Info") != nil {
+			t.Errorf("SetDocumentInfo(title %q) failed but still wrote an Info dictionary", bad)
+		}
 	}
-	if pdfa.XMLEscape("<&>") != "&lt;&amp;&gt;" {
-		t.Error("metacharacter escaping broken")
+	// Tab, LF and CR are legal, and the metacharacters are escaped.
+	x, err := GenerateXMPMetadata(pdfa.PDFA1b, "a\tb\nc <&>", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(x), "&lt;&amp;&gt;") {
+		t.Errorf("metacharacters not escaped: %s", x)
 	}
 }
 

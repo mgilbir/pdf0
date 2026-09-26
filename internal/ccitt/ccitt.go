@@ -1,6 +1,8 @@
 package ccitt
 
-import "errors"
+import (
+	"errors"
+)
 
 // This file decodes CCITTFaxDecode image data: the ITU-T T.4 (Group 3) and T.6
 // (Group 4) fax coding schemes used by PDF for bilevel (1-bit) images, typically
@@ -22,27 +24,49 @@ import "errors"
 // it does not change this output — the decoded image is always emitted 0=black so
 // it renders directly as a DeviceGray sample stream.
 
-// Params carries the CCITTFaxDecode /DecodeParms that steer the decoder.
+// Params carries the CCITTFaxDecode /DecodeParms that steer the decoder, and the
+// budget its output is held to.
 type Params struct {
-	k         int  // /K: <0 Group 4, 0 Group 3 1-D, >0 Group 3 2-D
-	columns   int  // /Columns: pixels per row (default 1728)
-	rows      int  // /Rows: number of rows (0 = decode until end of data)
-	byteAlign bool // /EncodedByteAlign: each row starts on a byte boundary
+	k         int   // /K: <0 Group 4, 0 Group 3 1-D, >0 Group 3 2-D
+	columns   int   // /Columns: pixels per row (default 1728)
+	rows      int   // /Rows: number of rows (0 = decode until end of data)
+	byteAlign bool  // /EncodedByteAlign: each row starts on a byte boundary
+	maxPixels int64 // the most pixels (columns × rows) the output may hold
 }
 
-// NewParams builds the decoder parameters from the four /DecodeParms values.
+// NewParams builds the decoder parameters from the four /DecodeParms values and
+// the pixel budget the output is held to.
 //
-// The fields stay unexported and are set through this constructor so that the
-// zero Params remains meaningful — Decode reads it as "Group 4, 1728 columns,
-// decode until the data runs out" — and cannot be left half-initialised by a
-// caller in another package.
-func NewParams(k, columns, rows int, byteAlign bool) Params {
-	return Params{k: k, columns: columns, rows: rows, byteAlign: byteAlign}
+// The budget is a parameter rather than a default because a fax stream is the
+// cheapest amplifier in PDF: a Group 4 V0 code is one bit and repeats the whole
+// reference row, so one byte of data can be eight rows of 2^20 columns, and
+// 128 KiB of it (200 bytes once Flate-wrapped) asked for a terabyte (audit
+// 2026-09-22 C12). The only bound that means anything is on columns × rows, and
+// only the caller knows what it is — core.Limits.ImagePixels for extraction,
+// the region's already-reserved area for JBIG2's MMR regions.
+//
+// The fields stay unexported and are set through this constructor so that a
+// Params cannot be left half-initialised by a caller in another package. The
+// zero Params has a budget of zero and decodes nothing.
+func NewParams(k, columns, rows int, byteAlign bool, maxPixels int64) Params {
+	return Params{k: k, columns: columns, rows: rows, byteAlign: byteAlign, maxPixels: maxPixels}
 }
+
+// ErrBudget is returned when the output would exceed the pixel budget given to
+// NewParams. It is checked before anything is decoded when /Rows is known, and
+// row by row when it is not.
+var ErrBudget = errors.New("ccitt: output exceeds the pixel budget")
 
 var errCCITTData = errors.New("ccitt: malformed fax data")
 
 // Decode decodes a CCITT Group 3/4 stream into packed 1-bpp rows.
+//
+// The output is at most p's pixel budget: when the row count is known it is
+// compared with the rows the budget holds before anything is decoded, and when
+// it is not the decode stops with ErrBudget at the first row past the budget —
+// an error, not a silently truncated image. Comparing rows against budget ÷
+// columns, rather than columns × rows against the budget, is what keeps a /Rows
+// near MaxInt from wrapping the product.
 func Decode(data []byte, p Params) ([]byte, error) {
 	cols := p.columns
 	if cols <= 0 {
@@ -51,9 +75,12 @@ func Decode(data []byte, p Params) ([]byte, error) {
 	if cols > 1<<20 {
 		return nil, errCCITTData // implausible width; refuse before allocating
 	}
-	maxRows := p.rows
-	if maxRows <= 0 {
-		maxRows = 1 << 20 // decode until the data runs out, but keep it bounded
+	// With /Rows known the whole output is checked before anything is decoded.
+	// Without it the image runs until the data does, and the budget is the
+	// number of rows it may reach.
+	budgetRows := max(p.maxPixels, 0) / int64(cols)
+	if p.rows > 0 && int64(p.rows) > budgetRows {
+		return nil, ErrBudget
 	}
 
 	br := &BitReader{data: data}
@@ -61,7 +88,7 @@ func Decode(data []byte, p Params) ([]byte, error) {
 	var out []byte
 	ref := []int{} // reference line changing elements; empty = all white
 
-	for row := 0; row < maxRows; row++ {
+	for row := 0; p.rows <= 0 || row < p.rows; row++ {
 		if p.byteAlign && row > 0 {
 			br.align()
 		}
@@ -101,6 +128,12 @@ func Decode(data []byte, p Params) ([]byte, error) {
 				break // unknown length: a decode failure marks the end of data
 			}
 			return nil, err
+		}
+		if int64(row) >= budgetRows {
+			// A row past the budget decoded: the image is larger than the
+			// budget allows. Returning the rows before it would present a
+			// truncated image as a whole one.
+			return nil, ErrBudget
 		}
 		out = append(out, packCCITTRow(cur, cols, stride)...)
 		ref = cur

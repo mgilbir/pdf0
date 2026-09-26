@@ -2,8 +2,11 @@ package syntax
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"math"
 )
 
 // This file implements the tokenizer: the byte-level scanner over an in-memory
@@ -74,8 +77,9 @@ func (t TokenType) String() string {
 // Token represents a single lexer token.
 type Token struct {
 	Type   TokenType
-	Value  []byte // raw bytes of the token
-	Offset int64  // byte offset in input
+	Value  []byte // the token's value (decoded, for strings and names)
+	Offset int64  // byte offset of the token's first byte in the input
+	End    int64  // byte offset just past the token's last byte
 }
 
 func (t Token) String() string {
@@ -97,20 +101,85 @@ func NewLexer(data []byte) *Lexer {
 	}
 }
 
-// NewLexerFromReaderAt creates a Lexer from an io.ReaderAt by reading all data.
-// A reader that yields fewer than size bytes is an error: the zero padding a
-// short read would leave behind counts as PDF whitespace, silently masking
-// truncated input.
+// NewLexerFromReaderAt creates a Lexer from an io.ReaderAt by reading its first
+// size bytes; see ReadSource for what is checked.
 func NewLexerFromReaderAt(r io.ReaderAt, size int64) (*Lexer, error) {
-	data := make([]byte, size)
-	n, err := r.ReadAt(data, 0)
-	if err != nil && err != io.EOF {
-		return nil, fmt.Errorf("reading input: %w", err)
-	}
-	if int64(n) < size {
-		return nil, fmt.Errorf("short read: got %d of %d bytes", n, size)
+	data, err := ReadSource(r, size)
+	if err != nil {
+		return nil, err
 	}
 	return NewLexer(data), nil
+}
+
+// readChunk is the first allocation ReadSource makes for a source whose length
+// it cannot learn up front; it doubles from there.
+const readChunk = 1 << 20
+
+// ReadSource reads the first size bytes of r into memory. The size is the
+// caller's claim, and it is checked rather than trusted:
+//
+//   - a negative size, or one larger than a slice can hold, is an error;
+//   - a source that yields fewer than size bytes is an error, because the zero
+//     padding a short read would leave behind reads as PDF whitespace and
+//     silently masks truncated input;
+//   - memory is committed only as bytes actually arrive. When r reports its
+//     length (a Size method, as bytes.Reader, strings.Reader and
+//     io.SectionReader have, or Stat, as *os.File has) a claim beyond it fails
+//     before anything is allocated. Otherwise the buffer starts at 1 MiB and
+//     doubles as it fills, so a false claim costs memory in proportion to what
+//     the source actually holds (a small multiple of it), not to the claim.
+func ReadSource(r io.ReaderAt, size int64) ([]byte, error) {
+	if size < 0 {
+		return nil, fmt.Errorf("invalid input size %d", size)
+	}
+	if uint64(size) > uint64(math.MaxInt) {
+		return nil, fmt.Errorf("input size %d is too large to hold in memory", size)
+	}
+	if have, ok := sourceLength(r); ok {
+		if have < size {
+			return nil, fmt.Errorf("short read: the source holds %d of the %d bytes claimed", have, size)
+		}
+		data := make([]byte, size)
+		n, err := r.ReadAt(data, 0)
+		if int64(n) < size {
+			if err != nil && err != io.EOF {
+				return nil, fmt.Errorf("reading input: %w", err)
+			}
+			return nil, fmt.Errorf("short read: got %d of %d bytes", n, size)
+		}
+		return data, nil
+	}
+	buf := make([]byte, 0, min(size, readChunk))
+	for int64(len(buf)) < size {
+		if len(buf) == cap(buf) {
+			grown := make([]byte, len(buf), min(size, 2*int64(cap(buf))))
+			copy(grown, buf)
+			buf = grown
+		}
+		want := buf[len(buf):cap(buf)]
+		n, err := r.ReadAt(want, int64(len(buf)))
+		buf = buf[:len(buf)+n]
+		if n < len(want) {
+			if err != nil && err != io.EOF {
+				return nil, fmt.Errorf("reading input: %w", err)
+			}
+			return nil, fmt.Errorf("short read: got %d of %d bytes", len(buf), size)
+		}
+	}
+	return buf, nil
+}
+
+// sourceLength reports r's length when r can say what it is.
+func sourceLength(r io.ReaderAt) (int64, bool) {
+	switch s := r.(type) {
+	case interface{ Size() int64 }:
+		return s.Size(), true
+	case interface{ Stat() (fs.FileInfo, error) }:
+		if fi, err := s.Stat(); err == nil && fi.Mode().IsRegular() {
+			return fi.Size(), true
+		}
+	}
+	return 0, false
 }
 
 // Position returns the current byte offset.
@@ -179,7 +248,6 @@ func IsRegular(b byte) bool {
 	return !IsWhitespace(b) && !IsDelimiter(b)
 }
 
-// skipWhitespaceAndComments skips whitespace and comments.
 // maxTokenGap bounds how far skipWhitespaceAndComments advances looking for the
 // next token. Legitimate inter-token whitespace and comments are tiny; a run
 // this long means the cursor is inside binary data — e.g. an xref offset that
@@ -190,11 +258,19 @@ func IsRegular(b byte) bool {
 // object.
 const maxTokenGap = 1 << 20 // 1 MiB
 
-func (l *Lexer) skipWhitespaceAndComments() {
+// ErrTokenGap is returned, wrapped, when more than 1 MiB of whitespace and
+// comments separates one token from the next. Real files never do that; it
+// means the offset being read points into binary data.
+var ErrTokenGap = errors.New("no token within 1 MiB: the run of whitespace and comments is too long (is the offset inside binary data?)")
+
+// skipWhitespaceAndComments skips whitespace and comments, and reports false
+// when it stopped because the run exceeded maxTokenGap rather than because it
+// reached a token or the end of the input.
+func (l *Lexer) skipWhitespaceAndComments() bool {
 	start := l.pos
 	for !l.atEnd() {
 		if l.pos-start > maxTokenGap {
-			return
+			return false
 		}
 		b := l.peek()
 		if IsWhitespace(b) {
@@ -206,7 +282,7 @@ func (l *Lexer) skipWhitespaceAndComments() {
 			// the gap limit with no newline is binary data, not a real comment).
 			for !l.atEnd() {
 				if l.pos-start > maxTokenGap {
-					return
+					return false
 				}
 				c := l.advance()
 				if c == '\r' || c == '\n' {
@@ -217,12 +293,26 @@ func (l *Lexer) skipWhitespaceAndComments() {
 		}
 		break
 	}
+	return true
 }
 
 // NextToken returns the next token from the input.
 func (l *Lexer) NextToken() (Token, error) {
-	l.skipWhitespaceAndComments()
+	start := l.pos
+	if !l.skipWhitespaceAndComments() {
+		return Token{}, fmt.Errorf("at offset %d: %w", start, ErrTokenGap)
+	}
+	tok, err := l.scanToken()
+	if err != nil {
+		return Token{}, err
+	}
+	tok.End = l.pos
+	return tok, nil
+}
 
+// scanToken scans the token starting at the current position, which is not
+// whitespace or a comment.
+func (l *Lexer) scanToken() (Token, error) {
 	if l.atEnd() {
 		return Token{Type: TokenEOF, Offset: l.pos}, nil
 	}

@@ -152,7 +152,7 @@ func TestTextTransformReachesTheExtractedText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading back: %v", err)
 	}
-	text := doc.ExtractText()
+	text := mustExtractText(t, doc)
 	if !strings.Contains(text, "QUIET") {
 		t.Errorf("the page's text is %q; the transformed text is what is drawn "+
 			"and so what is extracted", text)

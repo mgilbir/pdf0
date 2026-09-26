@@ -5,7 +5,7 @@ each has exactly one home:
 
 | Question | Read | Code |
 | --- | --- | --- |
-| *How do I cap what a document costs?* — the eleven `With*` options, the defaults, which entry points take them | [architecture.md](architecture.md#resource-limits) | `limits.go` |
+| *How do I cap what a document costs?* — the twelve `With*` options, the defaults, which entry points take them | [architecture.md](architecture.md#resource-limits) | `limits.go` |
 | *What happens when a limit trips?* — the `limit` rule, `IsCheckerFinding`, the per-guard classification | this document | `limits_report.go` |
 | *Why is it shaped this way?* — the measurements, the rejected alternatives, which limits were deliberately left internal | [proposals/configurable-limits.md](proposals/configurable-limits.md) | — |
 
@@ -117,7 +117,7 @@ granularity; `cancel.go` carries the design record.
 | Reached | Not reached |
 | --- | --- |
 | All PDF/A, PDF/UA, PDF/UA-2, PDF/X, PDF/VT, PDF/R and DPart checks (each installs or joins a run). | The lexer and parser (`maxTokenGap`, `maxParseDepth`): they take bytes, not a `*Document`, and threading state through them for a guard that already surfaces as a parse error would be ceremony, not reach. |
-| Read-time object-stream budget trips, via `Document.readLimits`. | `ExtractImages` / `ExtractText`: they return no finding channel. Image decode failures already surface per image in `ExtractedImage.Note`; text truncation surfaces as missing text. |
+| Read-time object-stream budget trips, via `Document.readLimits`. | `ExtractImages` / `ExtractText`: they return no finding channel. Image decode failures, budget refusals (`image-pixels`) and recovered panics surface per image in `ExtractedImage.Note`; a page whose text is left out — the content budget ran out, or a recovered panic — is a `*PageTextError` in `ExtractText`'s error, never missing text alone. |
 | Font-program guards, forwarded from the parsed program. | `Write` / `WriteIncremental`: these return errors, which is the loud class already. |
 | Nested embedded-PDF/A validation (6.9), as `embedded-pdfa`. | `Equal` / `DocumentEqual`: they return a `bool`, so there is nowhere to say "too deep to tell". `maxCompareDepth` is *silently wrong by construction* (see the parsing table) and stays that way; no validator rule compares structures that deep. |
 | Cancellation of any validation run, derived in `runLimitTrips`. | `ReadContext` / `WriteContext`: loud, an error wrapping `ctx.Err()`. `ExtractTextContext` / `ExtractImagesContext`: partial result plus that error. |
@@ -166,6 +166,7 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 | `font.ParseCmapSubtable` nil-on-unreadable | forme's `font/fontprog.go` | Silently lossy (deliberate) | The subtable is ignored rather than read as "maps nothing". | Unchanged; this is the contract the fix above extends. |
 | ToUnicode / CMap section scanners (`bfrange` ≥ 65536, unterminated sections) | `fonts.go` | Silently lossy | Missing `toUni[cid]` *suppresses* the empty-outline rule (fail-open). | Unchanged. |
 | `maxTextFormDepth` | `text.go` | Silently lossy | `ExtractText` only — **no validator consumes it**. | Unchanged. |
+| text content budget (`WithMaxDecodedContentBytes`) | `text.go` | Unbounded before a form was extracted each time it is drawn (audit 2026-09-22 C87) | `ExtractText` only. Every content stream tokenized — each page's, and each form's each time it is drawn, at least 64 bytes apiece — is charged against the run's content budget, which a fan-out of forms drawing forms would otherwise make exponential. | **Loud**: the page and every one after it are left out and reported as `*PageTextError`, whose message names `decoded-content-total`. |
 | sfnt/CFF/Type1 structural bails (`return nil`) | forme's `font/fontprog.go` | Loud | `damagedFontProgramError`: *"embedded %s font program is damaged and could not be parsed"* | Unchanged: a bail is reported as a damaged program, which is the loud class. |
 
 ### Content scanning
@@ -178,7 +179,7 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 | aggregate content budget (`WithMaxDecodedContentBytes`), content proper | `pdfa.go` | Silently lossy | Same, for every stream after the budget. | Reported as `decoded-content-total`. |
 | `maxQDepth` (28) | `pdfa.go` | Loud | It *is* the rule (implementation limit), not a work cap. | Unchanged. |
 | ICC profile size (`WithMaxICCProfileBytes`) | `pdfa.go` | Silently lossy, fail-open by design | `getOutputIntentCoverage` sets `hasRGB=hasCMYK=true` on an unreadable profile precisely to avoid a false positive. | Unchanged. |
-| XMP packet size (`WithMaxXMPPacketBytes`) | `xmp.go`, `xmp_schemas.go` | Silently lossy, fail-open by design | `parseXMPProperties` errors over the cap and `checkXMPProperties` reads that as "no properties to check" — **never** a violation, so an oversized valid packet is not failed. Well-formedness still runs: `xmpWellFormed` is O(n) over the token stream and needs no tree. | Unchanged. The two rules that survive the cap are the two a caller most needs, and the skipped ones are value checks that cannot fire without a tree. |
+| XMP packet size (`WithMaxXMPPacketBytes`), XMP nesting depth (`xmp.MaxDepth`, no knob) | `internal/core/xmp.go` (`DocumentXMPPacket`) | Was **silently lossy** | Over the cap `checkXMPProperties` read "no properties to check", and the identification scrapers read the text anyway. | Fixed (audit 2026-09-22). One model, one gate: over either bound the packet is not modelled, an `xmp-packet-size` / `xmp-depth` trip is noted (a "limit" finding), and every reader — property checks, pdfaid/pdfuaid/pdfxid/pdfvtid/fx identification, Info↔XMP — declines rather than guessing or reporting a property missing. Never a violation. Well-formedness still runs: `xmpWellFormed` is O(n) over the token stream and needs no tree. The metadata writers refuse to edit such a packet. |
 | embedded PDF/A validation (no bound of its own) | `final_rules.go` | Was **silently wrong** | `checkEmbeddedPDFA` treated *any* non-empty result from the nested validation as non-conformance, so a guard trip or a recovered panic inside the embedded document became *"an embedded PDF file is not compliant with PDF/A"* (6.9). | Fixed. `embeddedPDFACompliant` returns completeness alongside the verdict; a nested `IsCheckerFinding` declines the 6.9 finding and reports `embedded-pdfa` instead. The nested read and validation now also inherit the outer document's resolved limits rather than the defaults — the one place a hostile file could otherwise spend a whole second document's budget unconfigured. Because that makes a *lowered* ceiling a possible cause of "did not read" and "declares no level", those two exits also withhold the verdict whenever the limits in force are not the defaults, which is fail-open (a missed finding, never a manufactured one). Under the defaults nothing changes. |
 | Device-colour and executed-content seen-sets | `pdfa.go`, `content_operators.go`, `pdfx/pdfx_color.go` | Silently lossy | A second visit can only add usage, so dropping it hides findings. | Unchanged. |
 
@@ -208,12 +209,18 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 ### Image codecs
 
 Every guard in `internal/jbig2`, `internal/ccitt`, `images/`,
-`images/`, `internal/core` (PDF functions, stream filters) is at worst a false negative
+`internal/core` (PDF functions, stream filters) is at worst a false negative
 **for the extraction API**. No PDF/A, PDF/UA, PDF/X, PDF/VT or PDF/R rule reads a
 decoded pixel: the image rules read dictionary keys (`/Alternates`,
 `/Interpolate`, `/OPI`, `/SMask`, `/Filter`, `/ColorSpace`) and
 `checkCSForDevice` judges colour from `/ColorSpace` alone. A budget trip
 surfaces as `ExtractedImage.Note`, not as a finding.
+
+All of the image codecs share one configurable budget, `WithMaxImagePixels`
+(default 2^26 pixels), checked by `core.Limits.CheckImage` before every
+allocation sized from an image's geometry; a refusal's `Note` names the
+`image-pixels` guard. The JBIG2 package constants are ceilings the budget
+cannot raise, not separate knobs. See [images.md](images.md#resource-budgets).
 
 The type-4 budget is in this list because of who calls it, not where it lives.
 The type-4 (PostScript calculator) work budget — `WithMaxPostScriptSteps`, the
@@ -226,7 +233,7 @@ no rule to decline.
 One exception, now fixed: `decodeGenericMMR` indexed `decodeCCITT`'s output as if
 it held every row. `decodeCCITT` stops early when its data runs out and still
 returns a nil error, so a short result produced a slice-bounds panic — and that
-panic is not `errJBIG2Budget`, so `decodeJBIG2`'s recover re-raised it and it
+panic is not `errJBIG2Budget` (now `jbig2.ErrBudget`), so `decodeJBIG2`'s recover re-raised it and it
 escaped `ExtractImages` to the caller. A short decode is now a reported decode
 failure.
 

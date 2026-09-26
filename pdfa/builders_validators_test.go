@@ -3,6 +3,8 @@ package pdfa
 import (
 	"strings"
 	"testing"
+
+	"github.com/mgilbir/pdf0/internal/xmp"
 )
 
 // TestPDFAPartConformanceLevelA pins the per-level builder metadata.
@@ -43,12 +45,15 @@ func TestCanonicalPrefixSingleQuote(t *testing.T) {
 		break
 	}
 	if uri == "" {
-		t.Skip("no canonical prefixes configured")
+		t.Fatal("canonicalXMPPrefixes is empty, so this test checks nothing")
 	}
 
 	// Bind the namespace to a deliberately wrong prefix using single quotes.
-	xmp := "<x xmlns:WRONG='" + uri + "'></x>"
-	errs := checkXMPExtensionContainer(xmp, nil, "6.6.2", PDFA2b)
+	packet, err := xmp.Parse([]byte("<x xmlns:WRONG='" + uri + "'></x>"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	errs := checkXMPExtensionContainer(packet.Declarations(), nil, "6.6.2", PDFA2b)
 	flagged := false
 	for _, e := range errs {
 		if strings.Contains(e.Message, uri) && strings.Contains(e.Message, want) {
@@ -57,5 +62,17 @@ func TestCanonicalPrefixSingleQuote(t *testing.T) {
 	}
 	if !flagged {
 		t.Errorf("single-quoted xmlns binding %s to a wrong prefix was not flagged", uri)
+	}
+}
+
+// A declaration that appears only inside a comment binds nothing, so it is not
+// judged — the raw-text scan this replaced flagged it.
+func TestCanonicalPrefixIgnoresComments(t *testing.T) {
+	packet, err := xmp.Parse([]byte("<x><!-- xmlns:WRONG=\"" + nsPDFASchema + "\" --></x>"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errs := checkXMPExtensionContainer(packet.Declarations(), nil, "6.6.2", PDFA2b); len(errs) != 0 {
+		t.Errorf("a declaration inside a comment was judged: %v", errs)
 	}
 }

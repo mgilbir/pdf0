@@ -106,7 +106,7 @@ func (s *DevColorScanner) PageDeviceUse(page *object.Dictionary) DevUse {
 				case *object.Stream:
 					u.or(s.streamEscape(v, false))
 				case *object.Dictionary:
-					for _, sv := range v.Values {
+					for sv := range v.Values() {
 						if st, ok := s.doc.Resolve(sv).(*object.Stream); ok {
 							u.or(s.streamEscape(st, false))
 						}
@@ -153,16 +153,16 @@ func (s *DevColorScanner) container(c *object.Dictionary, data []byte, key *obje
 	res := s.doc.Resources(c)
 	if res != nil {
 		if cs := s.doc.ResolveDict(res.Get("ColorSpace")); cs != nil {
-			for _, v := range cs.Values {
+			for v := range cs.Values() {
 				core.CheckCSForDevice(s.doc, v, &local.RGB, &local.CMYK, &local.Gray)
 			}
 		}
 		if xo := s.doc.ResolveDict(res.Get("XObject")); xo != nil {
-			for i, k := range xo.Keys {
+			for k, xref := range xo.All() {
 				if !used.XObjects[string(k)] {
 					continue
 				}
-				st, ok := s.doc.Resolve(xo.Values[i]).(*object.Stream)
+				st, ok := s.doc.Resolve(xref).(*object.Stream)
 				if !ok {
 					continue
 				}
@@ -174,23 +174,23 @@ func (s *DevColorScanner) container(c *object.Dictionary, data []byte, key *obje
 			}
 		}
 		if sh := s.doc.ResolveDict(res.Get("Shading")); sh != nil {
-			for i, k := range sh.Keys {
+			for k, sval := range sh.All() {
 				if !used.Shadings[string(k)] {
 					continue
 				}
-				if sd := s.doc.ResolveDict(sh.Values[i]); sd != nil {
+				if sd := s.doc.ResolveDict(sval); sd != nil {
 					core.CheckCSForDevice(s.doc, sd.Get("ColorSpace"), &local.RGB, &local.CMYK, &local.Gray)
-				} else if st, ok := s.doc.Resolve(sh.Values[i]).(*object.Stream); ok {
+				} else if st, ok := s.doc.Resolve(sval).(*object.Stream); ok {
 					core.CheckCSForDevice(s.doc, st.Dict.Get("ColorSpace"), &local.RGB, &local.CMYK, &local.Gray)
 				}
 			}
 		}
 		if pat := s.doc.ResolveDict(res.Get("Pattern")); pat != nil {
-			for i, k := range pat.Keys {
+			for k, pref := range pat.All() {
 				if !used.Patterns[string(k)] {
 					continue
 				}
-				switch v := s.doc.Resolve(pat.Values[i]).(type) {
+				switch v := s.doc.Resolve(pref).(type) {
 				case *object.Stream:
 					nested.or(s.streamEscape(v, false)) // tiling pattern: no group masking
 				case *object.Dictionary:
@@ -201,7 +201,7 @@ func (s *DevColorScanner) container(c *object.Dictionary, data []byte, key *obje
 			}
 		}
 		if fonts := s.doc.ResolveDict(res.Get("Font")); fonts != nil {
-			for _, v := range fonts.Values {
+			for v := range fonts.Values() {
 				fd := s.doc.ResolveDict(v)
 				if fd == nil {
 					continue
@@ -209,7 +209,7 @@ func (s *DevColorScanner) container(c *object.Dictionary, data []byte, key *obje
 				if sub, _ := s.doc.ResolveName(fd.Get("Subtype")); sub == "Type3" {
 					nested.or(s.container(fd, nil, nil)) // Type3 font resources, own Default* scope
 					if cp := s.doc.ResolveDict(fd.Get("CharProcs")); cp != nil {
-						for _, cpv := range cp.Values {
+						for cpv := range cp.Values() {
 							if st, ok := s.doc.Resolve(cpv).(*object.Stream); ok {
 								if d := s.doc.Content(st); d != nil {
 									r, cc, g := core.ScanStreamForDeviceOps(s.doc.Cancel, d)

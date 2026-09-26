@@ -42,7 +42,7 @@ func TestExtractTextRecursesIntoForm(t *testing.T) {
 	doc.Trailer = object.Dictionary{}
 	doc.Trailer.Set("Root", object.IndirectRef{Number: 1})
 
-	if text := doc.ExtractText(); !strings.Contains(text, "FormHello") {
+	if text := mustExtractText(t, doc); !strings.Contains(text, "FormHello") {
 		t.Fatalf("text inside a form XObject was not extracted: %q", text)
 	}
 }
@@ -94,7 +94,7 @@ func TestExtractTextInheritedResources(t *testing.T) {
 	doc.Trailer = object.Dictionary{}
 	doc.Trailer.Set("Root", object.IndirectRef{Number: 1})
 
-	text := doc.ExtractText()
+	text := mustExtractText(t, doc)
 	if !strings.Contains(text, "X") {
 		t.Fatalf("inherited-font ToUnicode mapping not applied: %q (expected the mapped 'X')", text)
 	}

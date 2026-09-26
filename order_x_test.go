@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"github.com/mgilbir/formalis"
+	"github.com/mgilbir/pdf0/internal/testfiles"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,10 +106,10 @@ func TestValidateOrderXMLWrongRootIsAFinding(t *testing.T) {
 // validate with no violations. The examples ship in the (gitignored) Order-X
 // specification bundle; the test skips when spec/order-x is absent.
 func TestValidateOrderXCorpus(t *testing.T) {
-	files, _ := filepath.Glob("spec/order-x/Order-X100_EN/05-ORDER-X EXAMPLES/**/*.pdf")
-	if len(files) == 0 {
-		t.Skip("Order-X examples not present (spec/order-x)")
-	}
+	// One directory level down: the examples. (Go's "**" is not recursive; the
+	// pattern this replaced meant exactly this, and the one PDF at the top of
+	// the directory is not an example.)
+	files := testfiles.OrderXExamples.Glob(t, "*/*.pdf")
 	seen := 0
 	for _, f := range files {
 		data, err := os.ReadFile(f)

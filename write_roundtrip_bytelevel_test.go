@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/internal/testfiles"
 	"github.com/mgilbir/pdf0/pdfa"
 	"os"
 	"path/filepath"
@@ -45,11 +46,15 @@ func TestWriteIsIdempotent(t *testing.T) {
 		"builder-2b": mustPDFADocWithInfo(t, pdfa.PDFA2b, "T", "A"),
 		"builder-4":  mustPDFADoc(t, pdfa.PDFA4),
 	}
-	files, _ := filepath.Glob("testdata/pdf20examples/*.pdf")
+	// The reference PDFs are optional here, but present-and-empty fails.
+	var files []string
+	if _, ok, _ := testfiles.PDF20Examples.Lookup(t); ok {
+		files = testfiles.PDF20Examples.Glob(t, "*.pdf")
+	}
 	for _, f := range files {
 		b, err := os.ReadFile(f)
 		if err != nil {
-			continue
+			t.Fatalf("%s: %v", filepath.Base(f), err)
 		}
 		doc, err := Read(bytes.NewReader(b), int64(len(b)))
 		if err != nil {

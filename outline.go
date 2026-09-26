@@ -23,7 +23,8 @@ type OutlineItem struct {
 	// text string, so a reader displays it whatever script it is in.
 	Title string
 
-	// Page is the page to show when the entry is chosen.
+	// Page is the page to show when the entry is chosen. It must be one of
+	// PageList's pages; anything else is refused by SetOutline.
 	Page object.IndirectRef
 
 	// To says where on that page to arrive. The zero value shows the whole
@@ -48,6 +49,12 @@ type OutlineItem struct {
 // which is how the format distinguishes "collapsed, with this many inside"
 // from "open, with this many showing".
 func (d *Document) SetOutline(items []OutlineItem) error {
+	if d == nil {
+		return errNilDocument
+	}
+	if d.Locked() {
+		return errLockedTarget("setting the outline")
+	}
 	catalog := d.ResolveDict(d.Trailer.Get("Root"))
 	if catalog == nil {
 		return fmt.Errorf("pdf0: the document has no catalog to attach an outline to")
@@ -57,6 +64,9 @@ func (d *Document) SetOutline(items []OutlineItem) error {
 		return nil
 	}
 	if err := checkOutline(items, 0); err != nil {
+		return err
+	}
+	if err := d.checkOutlinePages(items); err != nil {
 		return err
 	}
 
@@ -93,7 +103,26 @@ func checkOutline(items []OutlineItem, depth int) error {
 		if it.Page.Number <= 0 {
 			return fmt.Errorf("pdf0: outline entry %q names no page", it.Title)
 		}
+		// The destination is built here as well as when it is written, so a
+		// refusal comes before the first entry is added (audit 2026-09-22 C131).
+		if _, err := it.To.destination(it.Page); err != nil {
+			return fmt.Errorf("outline entry %q: %w", it.Title, err)
+		}
 		if err := checkOutline(it.Children, depth+1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkOutlinePages checks that every entry names a page of this document
+// (audit 2026-09-22 C136). checkOutline has already bounded the depth.
+func (d *Document) checkOutlinePages(items []OutlineItem) error {
+	for _, it := range items {
+		if err := d.requirePage(it.Page, fmt.Sprintf("outline entry %q", it.Title)); err != nil {
+			return err
+		}
+		if err := d.checkOutlinePages(it.Children); err != nil {
 			return err
 		}
 	}

@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"github.com/mgilbir/pdf0/internal/testfiles"
 	"github.com/mgilbir/pdf0/object"
 	"image"
 	"os"
@@ -55,11 +56,7 @@ func TestExtractCCITTImage(t *testing.T) {
 // The veraPDF corpus contains no CCITT images, so these external samples are the
 // decoder's real-world oracle.
 func TestCCITTRealFiles(t *testing.T) {
-	dir := "testdata/ccitt"
-	entries, err := filepath.Glob(filepath.Join(dir, "*.pdf"))
-	if err != nil || len(entries) == 0 {
-		t.Skip("no CCITT sample PDFs; run `make ccitt`")
-	}
+	entries := testfiles.CCITT.Glob(t, "*.pdf")
 	total := 0
 	for _, path := range entries {
 		data, err := os.ReadFile(path)

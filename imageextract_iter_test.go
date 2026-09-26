@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"github.com/mgilbir/pdf0/images"
+	"github.com/mgilbir/pdf0/internal/hostile"
 	"github.com/mgilbir/pdf0/object"
 	"testing"
 	"time"
@@ -24,14 +25,14 @@ func buildTwoImageDoc(expensiveProg string, w, h int) *Document {
 	small.Set("BitsPerComponent", object.Integer(8))
 	small.Set("ColorSpace", object.Name("DeviceGray"))
 	small.Set("Length", object.Integer(1))
-	smallRef := set(6, &object.Stream{Dict: small, Data: []byte{0x80}})
+	smallRef := set(6, object.NewStream(&small, []byte{0x80}))
 
 	fnDict := object.Dictionary{}
 	fnDict.Set("FunctionType", object.Integer(4))
 	fnDict.Set("Domain", object.Array{object.Integer(0), object.Integer(1)})
 	fnDict.Set("Range", object.Array{object.Integer(0), object.Integer(1), object.Integer(0), object.Integer(1), object.Integer(0), object.Integer(1)})
 	fnDict.Set("Length", object.Integer(len(expensiveProg)))
-	fnRef := set(4, &object.Stream{Dict: fnDict, Data: []byte(expensiveProg)})
+	fnRef := set(4, object.NewStream(&fnDict, []byte(expensiveProg)))
 	big := object.Dictionary{}
 	big.Set("Type", object.Name("XObject"))
 	big.Set("Subtype", object.Name("Image"))
@@ -40,7 +41,7 @@ func buildTwoImageDoc(expensiveProg string, w, h int) *Document {
 	big.Set("BitsPerComponent", object.Integer(8))
 	big.Set("ColorSpace", object.Array{object.Name("Separation"), object.Name("Spot"), object.Name("DeviceRGB"), fnRef})
 	big.Set("Length", object.Integer(w*h))
-	bigRef := set(5, &object.Stream{Dict: big, Data: make([]byte, w*h)})
+	bigRef := set(5, object.NewStream(&big, make([]byte, w*h)))
 
 	xobj := &object.Dictionary{}
 	xobj.Set("ImA", smallRef)
@@ -87,30 +88,32 @@ func TestImagesIteratorMatchesExtract(t *testing.T) {
 // cache-defeating: the run cache is per-walk, the per-pixel exec dominates)
 // tint program that takes far longer than the bound if decoded.
 func TestImagesIteratorLazy(t *testing.T) {
-	// A ~40k-operator program EXECUTED per pixel of a 200x200 image if the
-	// image is decoded: ~1.6G psExec steps, well over the bound. Breaking
-	// early must avoid all of it. (Stays under the PostScript step budget per evaluation.)
-	var b []byte
-	b = append(b, "{ pop 0 0 1"...)
-	for i := 0; i < 20000; i++ {
-		b = append(b, " 0 pop"...)
-	}
-	b = append(b, " }"...)
-	doc := buildTwoImageDoc(string(b), 200, 200)
-
-	start := time.Now()
-	got := 0
-	for im := range doc.Images() {
-		got++
-		if im.ObjNum != 6 {
-			t.Fatalf("first yielded image is %d, want the cheap image 6", im.ObjNum)
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		// A ~40k-operator program EXECUTED per pixel of a 200x200 image if the
+		// image is decoded: ~1.6G psExec steps, well over the bound. Breaking
+		// early must avoid all of it. (Stays under the PostScript step budget per evaluation.)
+		var b []byte
+		b = append(b, "{ pop 0 0 1"...)
+		for i := 0; i < 20000; i++ {
+			b = append(b, " 0 pop"...)
 		}
-		break
-	}
-	if d := time.Since(start); d > 2*time.Second {
-		t.Errorf("early break still took %v; the remaining image was decoded eagerly", d)
-	}
-	if got != 1 {
-		t.Errorf("yielded %d images before break, want 1", got)
-	}
+		b = append(b, " }"...)
+		doc := buildTwoImageDoc(string(b), 200, 200)
+
+		start := time.Now()
+		got := 0
+		for im := range doc.Images() {
+			got++
+			if im.ObjNum != 6 {
+				t.Fatalf("first yielded image is %d, want the cheap image 6", im.ObjNum)
+			}
+			break
+		}
+		if d := time.Since(start); d > 2*time.Second {
+			t.Errorf("early break still took %v; the remaining image was decoded eagerly", d)
+		}
+		if got != 1 {
+			t.Errorf("yielded %d images before break, want 1", got)
+		}
+	})
 }

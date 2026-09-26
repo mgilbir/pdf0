@@ -9,7 +9,7 @@ import (
 // TestUAReferenceXObjects flags a Form XObject with a /Ref entry.
 func TestUAReferenceXObjects(t *testing.T) {
 	mk := func(withRef bool) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		s := &object.Stream{Dict: object.Dictionary{}}
 		s.Dict.Set("Type", object.Name("XObject"))
 		s.Dict.Set("Subtype", object.Name("Form"))

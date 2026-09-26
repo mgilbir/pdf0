@@ -82,9 +82,10 @@ $(PROFILES_DIR)/.ok:
 	git clone --depth 1 https://github.com/veraPDF/veraPDF-validation-profiles $(PROFILES_DIR)
 	touch $@
 
-# Report which veraPDF PDF/A rules this validator covers (needs `make profiles`).
-rule-coverage: profiles
-	VERAPDF_PROFILES=$(PROFILES_DIR) go run -tags devtools ./internal/cmd/rulecoverage
+# Report, rule by rule, which veraPDF PDF/A rules this validator detects in the
+# corpus files that test them (needs the profiles and the corpus).
+rule-coverage: profiles corpus
+	VERAPDF_PROFILES=$(PROFILES_DIR) VERAPDF_CORPUS=$(CORPUS_DIR) go run -tags devtools ./internal/cmd/rulecoverage
 
 # Download the LaTeX Project's Well Tagged PDF / PDF/UA-2 example documents.
 wtpdf: $(WTPDF_DIR)/.ok

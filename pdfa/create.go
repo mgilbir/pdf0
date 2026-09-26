@@ -3,10 +3,12 @@ package pdfa
 import (
 	_ "embed"
 	"fmt"
+	"strconv"
 	"strings"
 
 	lcms2 "github.com/mgilbir/golittlecms"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/xmp"
 	"github.com/mgilbir/pdf0/object"
 )
 
@@ -121,7 +123,10 @@ func SkeletonWith(opts SkeletonOptions) (map[int]*object.IndirectObject, object.
 	pages.Set("Count", object.Integer(0))
 
 	// Object 3: Metadata stream (XMP, unfiltered)
-	xmpData := GenerateXMPMetadata(level, title, author)
+	xmpData, err := GenerateXMPMetadata(level, title, author)
+	if err != nil {
+		return nil, object.Dictionary{}, "", err
+	}
 	metaStream := &object.Stream{
 		Dict: object.Dictionary{},
 		Data: xmpData,
@@ -155,13 +160,10 @@ func SkeletonWith(opts SkeletonOptions) (map[int]*object.IndirectObject, object.
 			3: {Number: 3, Generation: 0, Value: metaStream},
 			4: {Number: 4, Generation: 0, Value: outputIntent},
 			5: {Number: 5, Generation: 0, Value: iccStream},
-		}, object.Dictionary{
-			Keys: []object.Name{"Root", "ID"},
-			Values: []object.Object{
-				object.IndirectRef{Number: 1},
-				object.Array{fileID, fileID},
-			},
-		}, version, nil
+		}, *object.NewDictionary(
+			object.Entry{Key: "Root", Value: object.IndirectRef{Number: 1}},
+			object.Entry{Key: "ID", Value: object.Array{fileID, fileID}},
+		), version, nil
 }
 
 func pdfaVersion(level Level) string {
@@ -248,85 +250,59 @@ func LevelFor(part, conformance string) (Level, bool) {
 	return 0, false
 }
 
-// GenerateXMPMetadata creates XMP metadata bytes for the given PDF/A level.
-func GenerateXMPMetadata(level Level, title, author string) []byte {
-	part := pdfaPart(level)
-	conformance := pdfaConformance(level)
-
-	titleXMP := ""
+// GenerateXMPMetadata creates the XMP metadata packet for the given PDF/A
+// level: the pdfaid identification, xmp:CreatorTool, and the title and author
+// when given.
+//
+// It is built through the XMP model, which escapes every value and refuses one
+// that cannot be XML at all — invalid UTF-8, a C0 control, U+FFFE — with an
+// error wrapping xmp.ErrInvalidText (audit C72). Such a title used to be passed
+// through (or its control characters silently dropped), which produced a packet
+// that was not well-formed and a document that failed its own level.
+func GenerateXMPMetadata(level Level, title, author string) ([]byte, error) {
+	p := xmp.New()
+	if err := setPDFAIdentification(p, level); err != nil {
+		return nil, err
+	}
 	if title != "" {
-		titleXMP = fmt.Sprintf(`
-      <dc:title>
-        <rdf:Alt>
-          <rdf:li xml:lang="x-default">%s</rdf:li>
-        </rdf:Alt>
-      </dc:title>`, XMLEscape(title))
-	}
-
-	authorXMP := ""
-	if author != "" {
-		authorXMP = fmt.Sprintf(`
-      <dc:creator>
-        <rdf:Seq>
-          <rdf:li>%s</rdf:li>
-        </rdf:Seq>
-      </dc:creator>`, XMLEscape(author))
-	}
-
-	conformanceXMP := ""
-	if conformance != "" {
-		conformanceXMP = fmt.Sprintf(`
-      <pdfaid:conformance>%s</pdfaid:conformance>`, conformance)
-	}
-
-	revXMP := ""
-	if level.BaseB() == PDFA4 {
-		revXMP = `
-      <pdfaid:rev>2020</pdfaid:rev>`
-	}
-
-	xmp := fmt.Sprintf(`<?xpacket begin="%s" id="W5M0MpCehiHzreSzNTczkc9d"?>
-<x:xmpmeta xmlns:x="adobe:ns:meta/">
-  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-    <rdf:Description rdf:about=""
-      xmlns:dc="http://purl.org/dc/elements/1.1/"
-      xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/"
-      xmlns:xmp="http://ns.adobe.com/xap/1.0/">
-      <pdfaid:part>%d</pdfaid:part>%s%s%s%s
-      <xmp:CreatorTool>pdf0</xmp:CreatorTool>
-    </rdf:Description>
-  </rdf:RDF>
-</x:xmpmeta>
-<?xpacket end="w"?>`, "\xEF\xBB\xBF", part, conformanceXMP, revXMP, titleXMP, authorXMP)
-
-	return []byte(xmp)
-}
-
-func XMLEscape(s string) string {
-	var result []byte
-	for _, b := range []byte(s) {
-		switch b {
-		case '<':
-			result = append(result, []byte("&lt;")...)
-		case '>':
-			result = append(result, []byte("&gt;")...)
-		case '&':
-			result = append(result, []byte("&amp;")...)
-		case '"':
-			result = append(result, []byte("&quot;")...)
-		case '\'':
-			result = append(result, []byte("&apos;")...)
-		default:
-			// Control characters other than tab/LF/CR are illegal in XML
-			// 1.0 even when escaped; passing them through produced
-			// malformed XMP. Drop them.
-			if b < 0x20 && b != '\t' && b != '\n' && b != '\r' {
-				continue
-			}
-			result = append(result, b)
+		// dc:title is a language alternative; x-default is the one a reader
+		// shows when no language matches.
+		if err := p.SetAltText(xmp.NSDC, "dc", "title", "x-default", title); err != nil {
+			return nil, fmt.Errorf("pdfa: title: %w", err)
 		}
 	}
-	return string(result)
+	if author != "" {
+		// dc:creator is an ordered sequence of authors.
+		if err := p.SetSeq(xmp.NSDC, "dc", "creator", []string{author}); err != nil {
+			return nil, fmt.Errorf("pdfa: author: %w", err)
+		}
+	}
+	if err := p.SetText(xmp.NSXMP, "xmp", "CreatorTool", "pdf0"); err != nil {
+		return nil, err
+	}
+	return p.Bytes()
+}
+
+// setPDFAIdentification writes the pdfaid identification for level into a
+// packet: part, the conformance letter where the level has one, and the
+// revision PDF/A-4 requires. A conformance letter already in the packet is
+// removed when the level has none (plain PDF/A-4).
+func setPDFAIdentification(p *xmp.Packet, level Level) error {
+	if err := p.SetText(xmp.NSPDFAID, pdfaIDPrefix, "part", strconv.Itoa(pdfaPart(level))); err != nil {
+		return err
+	}
+	if c := pdfaConformance(level); c != "" {
+		if err := p.SetText(xmp.NSPDFAID, pdfaIDPrefix, "conformance", c); err != nil {
+			return err
+		}
+	} else {
+		p.Remove(xmp.NSPDFAID, "conformance")
+	}
+	if level.BaseB() == PDFA4 {
+		return p.SetText(xmp.NSPDFAID, pdfaIDPrefix, "rev", "2020")
+	}
+	p.Remove(xmp.NSPDFAID, "rev")
+	return nil
 }
 
 // DefaultSRGBProfile returns a real sRGB ICC profile (ICC v2.1, valid at every

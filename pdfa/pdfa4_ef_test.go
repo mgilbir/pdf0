@@ -41,7 +41,7 @@ func efDoc(conformance string, catalogExtra func(*object.Dictionary), objs map[i
 	objs[1] = &object.IndirectObject{Number: 1, Value: cat}
 	tr := object.Dictionary{}
 	tr.Set("Root", object.IndirectRef{Number: 1})
-	return mkView(objs, tr)
+	return mkView(objs, &tr)
 }
 
 // TestAnFMustCarryTheFilesItsNameClaims (ISO 19005-4 6.9).
@@ -147,7 +147,7 @@ func TestAThreeDAnnotationsColourIsStillColour(t *testing.T) {
 		return page
 	}
 
-	doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+	doc := mkView(map[int]*object.IndirectObject{}, nil)
 	rgb, cmyk, gray := core.PageDeviceColourUse(doc, build(object.Name("DeviceRGB")))
 	if !rgb {
 		t.Error("DeviceRGB in a 3D annotation's artwork was not seen as device colour")

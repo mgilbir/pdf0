@@ -11,7 +11,7 @@ import (
 // non-Widget annotations.
 func TestUAAnnotDescription(t *testing.T) {
 	mk := func(subtype object.Name, contents, alt string) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		a := &object.Dictionary{}
 		a.Set("Type", object.Name("Annot"))
 		a.Set("Subtype", subtype)

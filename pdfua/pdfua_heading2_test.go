@@ -32,12 +32,12 @@ func headingDoc(doc core.View, k object.Object) *object.Dictionary {
 
 // TestUAFirstHeadingH1 flags a document whose first heading is not H1.
 func TestUAFirstHeadingH1(t *testing.T) {
-	doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+	doc := mkView(map[int]*object.IndirectObject{}, nil)
 	cat := headingDoc(doc, object.Array{heading(doc, 10, "H2"), heading(doc, 11, "H3")})
 	if !hasUAClause(checkUAHeadings(doc, cat), "7.4.2") {
 		t.Error("first heading H2 not flagged")
 	}
-	doc = mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+	doc = mkView(map[int]*object.IndirectObject{}, nil)
 	cat = headingDoc(doc, object.Array{heading(doc, 10, "H1"), heading(doc, 11, "H2")})
 	if hasUAClause(checkUAHeadings(doc, cat), "7.4.2") {
 		t.Error("first heading H1 wrongly flagged")
@@ -46,13 +46,13 @@ func TestUAFirstHeadingH1(t *testing.T) {
 
 // TestUAOneHPerNode flags a node with two child H headings.
 func TestUAOneHPerNode(t *testing.T) {
-	doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+	doc := mkView(map[int]*object.IndirectObject{}, nil)
 	sect := heading(doc, 12, "Sect", heading(doc, 10, "H"), heading(doc, 11, "H"))
 	cat := headingDoc(doc, sect)
 	if !hasUAClause(checkUAOneHPerNode(doc, cat), "7.4.4") {
 		t.Error("two H children under one node not flagged")
 	}
-	doc = mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+	doc = mkView(map[int]*object.IndirectObject{}, nil)
 	single := heading(doc, 12, "Sect", heading(doc, 10, "H"))
 	cat = headingDoc(doc, single)
 	if hasUAClause(checkUAOneHPerNode(doc, cat), "7.4.4") {
@@ -64,7 +64,7 @@ func TestUAOneHPerNode(t *testing.T) {
 // off the /RoleMap-resolved type, like the sibling heading checks, so a level
 // skip through custom types (Titre1→H1, Titre3→H3) is caught.
 func TestUAHeadingsRoleMapResolved(t *testing.T) {
-	doc := mkView(nil, object.Dictionary{})
+	doc := mkView(nil, nil)
 	cat := headingDoc(doc, object.Array{heading(doc, 10, "Titre1"), heading(doc, 11, "Titre3")})
 	roleMap := &object.Dictionary{}
 	roleMap.Set("Titre1", object.Name("H1"))

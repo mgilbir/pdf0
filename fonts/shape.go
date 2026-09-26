@@ -24,13 +24,12 @@ import "github.com/mgilbir/pdf0/content"
 //
 // The second result counts runes the font has no glyph for, as Encode's does.
 //
-// Ligatures change what the text extracts back to unless the font says
-// otherwise: a run replaced by one glyph has one ToUnicode entry, and that entry
-// maps to the single character the ligature glyph is registered for. For the
-// standard Latin ligatures a font's cmap does map them (U+FB01 for fi and so
-// on), so extraction gives "ﬁ" rather than "fi" — searchable in a reader that
-// normalises, not in one that does not. Shape is therefore opt-in, and Encode
-// without it stays the choice for text that must extract literally.
+// The text extracts back as it was written. A ligature's ToUnicode entry is
+// the characters it was drawn for — "ffi", not the U+FB03 the font's cmap
+// happens to register the glyph under — and so is a conjunct's or a positional
+// form's; a stretch no per-glyph entry can say, such as a right-to-left word
+// or a glyph already mapped to other text, is wrapped in an /ActualText
+// between ActualTextStart and ActualTextEnd spans. See plan in draw.go.
 //
 // # What a text operator cannot say
 //
@@ -50,26 +49,8 @@ import "github.com/mgilbir/pdf0/content"
 // each glyph, for text that carries marks. MeasureShaped agrees with both,
 // because a width does not depend on the vertical.
 func (f *Face) Shape(s string) (spans []content.TextSpan, missing int) {
-	if !f.composite() {
-		// A simple or standard face encodes one byte per character, and its
-		// codes name nothing in the layout tables — so there is no shaping to
-		// do, and the honest answer is the plain encoding. Returning it as a
-		// single span keeps the shape of the result the same whichever kind of
-		// face a caller was handed.
-		//
-		// Direction is not applied here, and that is a stated limit rather than
-		// an oversight: a simple face encodes one byte per character through
-		// WinAnsi, which has no right-to-left script in it at all. Text that
-		// needs reordering needs a composite face to have the letters, and
-		// ShapeGlyphs is the call for it.
-		codes, missing := f.Encode(s)
-		if len(codes) == 0 {
-			return nil, missing
-		}
-		return []content.TextSpan{{Codes: codes}}, missing
-	}
 	glyphs, missing := f.ShapeGlyphs(s)
-	return f.spansFromGlyphs(glyphs), missing
+	return f.spans(glyphs, s), missing
 }
 
 // ShapeWith is Shape with additional OpenType features applied by name — the
@@ -83,52 +64,39 @@ func (f *Face) Shape(s string) (spans []content.TextSpan, missing int) {
 //
 // A feature the font does not declare is silently no-op — asking for small
 // capitals from a face that has none should set the text plainly, not fail.
-// Features returns what a face actually offers.
+// Features returns what a face actually offers. A simple or standard face has
+// no layout tables to apply them from, and sets the text as Shape does.
 func (f *Face) ShapeWith(s string, features ...string) (spans []content.TextSpan, missing int) {
 	glyphs, missing := f.ShapeGlyphsWith(s, features...)
-	return f.spansFromGlyphs(glyphs), missing
+	return f.spans(glyphs, s), missing
 }
 
-// spansFromGlyphs turns positioned glyphs into the spans a text operator takes.
+// Encode maps a string to character codes, one glyph per character with no
+// shaping, which is what content.Builder.ShowText takes.
 //
-// Two displacements per glyph, at most, and usually none:
+// It is the embedded face's Encode, with the text recorded: a composite face's
+// ToUnicode CMap is written from what each glyph was drawn for, and a caller
+// using this has told the face exactly that. A character the face lacks is
+// .notdef in a composite face, the space in a standard one and left out of a
+// simple one, and the count of them is the second result.
 //
-//   - An offset displaces a glyph *without* moving the pen, so it is put in
-//     before the glyph and taken back out after.
-//   - The pen has moved by the advance the font's own /W array states, which is
-//     not what shaping decided, so the difference comes off.
-//
-// The two are emitted as one number where they meet, because a displacement is
-// three bytes of content stream and a page has thousands of them.
-func (f *Face) spansFromGlyphs(glyphs []Glyph) []content.TextSpan {
-	var (
-		out []content.TextSpan
-		run []byte
-	)
-	flush := func() {
-		if len(run) > 0 {
-			out = append(out, content.TextSpan{Codes: run})
-			run = nil
-		}
-	}
-	adjust := func(v float64) {
-		if v == 0 {
-			return
-		}
-		flush()
-		// The sign flips: a positive TJ number moves what follows *closer*.
-		out = append(out, content.TextSpan{Adjust: -v})
-	}
+// Bare codes cannot carry an /ActualText, which is the one thing this cannot
+// say that Draw can: a glyph the font's cmap reaches from two characters — 日
+// and the radical ⽇ are one glyph in a CJK face — extracts as the character
+// the CMap names it by, whichever of the two was written here.
+func (f *Face) Encode(s string) (codes []byte, missing int) {
+	// forme's Encode is what records the glyphs the subset keeps; its codes are
+	// the same bytes appendCode writes (TestEncodeAgreesWithFormesEncode), and
+	// are written here by appendCode so that one function writes every code
+	// this package emits.
+	_, missing = f.Face.Encode(s)
+	glyphs := f.glyphsOf(s)
+	f.plan(glyphs, s)
+	codes = make([]byte, 0, 2*len(glyphs))
 	for _, g := range glyphs {
-		adjust(g.XOffset)
-		run = append(run, byte(g.GID>>8), byte(g.GID))
-		// Take the offset back out, and correct the font's advance to the one
-		// shaping decided. Both move the pen the other way, so they are one
-		// number.
-		adjust(g.XAdvance - f.GlyphAdvance(g.GID) - g.XOffset)
+		codes = f.appendCode(codes, g.GID)
 	}
-	flush()
-	return out
+	return codes, missing
 }
 
 // Draw writes shaped glyphs to a content stream, placing each one where shaping
@@ -138,77 +106,24 @@ func (f *Face) spansFromGlyphs(glyphs []Glyph) []content.TextSpan {
 // which spans cannot express, so text carrying marks comes out where the font
 // says rather than on the baseline.
 //
+// text is the string the glyphs were shaped from — their Cluster offsets are
+// byte offsets into it — and it is what a reader extracting the page gets back.
+// Each glyph's ToUnicode entry is written from the part of text it was drawn
+// for, and a stretch whose glyphs cannot say it glyph by glyph — a right-to-left
+// run, a vowel sign drawn before its consonant, a glyph that already stands for
+// something else — is marked with an /ActualText. The glyphs must be this face's,
+// from one of its shaping calls: that is what records them for the subset.
+//
 // The builder must already be inside a text object with this face's font
 // selected at this size.
-func (f *Face) Draw(b *content.Builder, glyphs []Glyph, size float64) {
-	if len(glyphs) == 0 {
-		return
-	}
-	var (
-		run  []byte
-		rise float64
-	)
-	flush := func() {
-		if len(run) > 0 {
-			b.ShowText(run)
-			run = nil
-		}
-	}
-	move := func(d float64) {
-		if d == 0 {
-			return
-		}
-		flush()
-		// TJ subtracts its number, so moving the pen forward is negative.
-		b.ShowTextAdjusted(content.TextSpan{Adjust: -d})
-	}
-
-	for _, g := range glyphs {
-		if g.YOffset != rise {
-			flush()
-			// A rise is in unscaled text-space units, so an offset in
-			// thousandths of an em scales by the size the text is set at.
-			b.SetRise(g.YOffset * size / 1000)
-			rise = g.YOffset
-		}
-		move(g.XOffset)
-		// Two bytes for a composite face, whose codes are glyph indices; one for
-		// a simple or standard face, whose codes are WinAnsi characters. Writing
-		// two where one is expected makes a reader read every pair of characters
-		// as one, which is a page of nonsense rather than a subtle shift.
-		if f.composite() {
-			run = append(run, byte(g.GID>>8), byte(g.GID))
-		} else {
-			run = append(run, byte(g.GID))
-		}
-		// The operator will advance the pen by the font's own width; the run
-		// wants to end up XAdvance further on, with the offset undone.
-		move(g.XAdvance - f.nominalAdvance(g) - g.XOffset)
-	}
-	flush()
-	if rise != 0 {
-		b.SetRise(0)
-	}
+func (f *Face) Draw(b *content.Builder, text string, glyphs []Glyph, size float64) {
+	f.draw(b, glyphs, text, size)
 }
 
 // DrawShaped shapes a string and draws it in one call, which is the common
 // case. It returns the count of runes the font has no glyph for.
 func (f *Face) DrawShaped(b *content.Builder, s string, size float64) int {
 	glyphs, missing := f.ShapeGlyphs(s)
-	f.Draw(b, glyphs, size)
+	f.draw(b, glyphs, s, size)
 	return missing
-}
-
-// nominalAdvance is how far the text-showing operator will move the pen for one
-// glyph, which is the font's own width for whatever the code names.
-//
-// For a composite face that is the width of the glyph index. For the others no
-// positioning was applied, so the advance already in the buffer *is* the font's
-// own — and asking for it by index would look the width up under a number that
-// is a character code.
-func (f *Face) nominalAdvance(g Glyph) float64 {
-	if !f.composite() {
-		return g.XAdvance
-	}
-	return f.GlyphAdvance(g.GID)
 }

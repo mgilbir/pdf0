@@ -128,6 +128,8 @@ func (d *jbig2Decoder) readSymbolDictHuff(seg jbSegment, r *jbReader, flags uint
 	}
 	input := d.inputSymbols(seg)
 	newSyms := make([]*jbBitmap, 0, numNew)
+	// known is input followed by newSyms; see readSymbolDict.
+	known := append(make([]*jbBitmap, 0, len(input)+int(numNew)), input...)
 
 	h := &huffReader{data: r.data[r.pos:]}
 	if sdrefagg != 0 {
@@ -165,11 +167,12 @@ func (d *jbig2Decoder) readSymbolDictHuff(seg jbSegment, r *jbReader, flags uint
 				if err := d.reserve(symWidth, hcHeight); err != nil {
 					return err
 				}
-				bmp, err := decodeRefAggSymbolHuff(h, grCx, symWidth, hcHeight, aggTable, symCodeLen, input, newSyms, sdrTemplate, rAt)
+				bmp, err := d.decodeRefAggSymbolHuff(h, grCx, symWidth, hcHeight, aggTable, symCodeLen, known, sdrTemplate, rAt)
 				if err != nil {
 					return err
 				}
 				newSyms = append(newSyms, bmp)
+				known = append(known, bmp)
 			}
 		}
 	} else {
@@ -234,6 +237,7 @@ func (d *jbig2Decoder) readSymbolDictHuff(seg jbSegment, r *jbReader, flags uint
 					}
 				}
 				newSyms = append(newSyms, sym)
+				known = append(known, sym)
 				x += w
 			}
 		}
@@ -287,9 +291,8 @@ func huffRefine(h *huffReader, cx []mqState, w, height, template int, ref *jbBit
 // referenced symbol (6.5.8.2.2); larger counts aggregate several instances via a
 // text-region decoding procedure (6.5.8.2.1). cx is the dictionary-wide GR
 // context, reused across every refinement in the dictionary.
-func decodeRefAggSymbolHuff(h *huffReader, cx []mqState, symWidth, hcHeight int, aggTable *huffTable, symCodeLen int, input, newSyms []*jbBitmap, sdrTemplate int, rAt []atPixel) (*jbBitmap, error) {
+func (d *jbig2Decoder) decodeRefAggSymbolHuff(h *huffReader, cx []mqState, symWidth, hcHeight int, aggTable *huffTable, symCodeLen int, all []*jbBitmap, sdrTemplate int, rAt []atPixel) (*jbBitmap, error) {
 	nInst, _ := aggTable.decode(h)
-	all := append(append([]*jbBitmap{}, input...), newSyms...)
 	if nInst == 1 {
 		// Single-instance refinement (6.5.8.2.2): ID (fixed length), RDX/RDY via
 		// B.15, BMSIZE via SBHUFFRSIZE (B.1) — not the collective SDHUFFBMSIZE.
@@ -306,7 +309,7 @@ func decodeRefAggSymbolHuff(h *huffReader, cx []mqState, symWidth, hcHeight int,
 	if nInst <= 0 {
 		return nil, errJBIG2Unsupported
 	}
-	return decodeAggregateHuff(h, cx, symWidth, hcHeight, nInst, symCodeLen, all, sdrTemplate, rAt)
+	return d.decodeAggregateHuff(h, cx, symWidth, hcHeight, nInst, symCodeLen, all, sdrTemplate, rAt)
 }
 
 // decodeAggregateHuff decodes an aggregate symbol as a small Huffman-coded text
@@ -328,7 +331,7 @@ func decodeRefAggSymbolHuff(h *huffReader, cx []mqState, symWidth, hcHeight int,
 // decode, because the bytes the preamble would consume are not present. Fixed-length
 // is therefore retained; do not "improve" this to the runcode form without a fixture
 // that demonstrably uses it, or the passing fixtures will break.
-func decodeAggregateHuff(h *huffReader, cx []mqState, w, height, numInst, symCodeLen int, syms []*jbBitmap, sbrTemplate int, rAt []atPixel) (*jbBitmap, error) {
+func (d *jbig2Decoder) decodeAggregateHuff(h *huffReader, cx []mqState, w, height, numInst, symCodeLen int, syms []*jbBitmap, sbrTemplate int, rAt []atPixel) (*jbBitmap, error) {
 	fsTable, dsTable, dtTable := stdHuffTable(6), stdHuffTable(8), stdHuffTable(11)
 	rdwT, rdhT := stdHuffTable(15), stdHuffTable(15)
 	rdxT, rdyT := stdHuffTable(15), stdHuffTable(15)
@@ -377,13 +380,18 @@ func decodeAggregateHuff(h *huffReader, cx []mqState, w, height, numInst, symCod
 				if rw <= 0 || rh <= 0 || rw > 1<<16 || rh > 1<<16 {
 					return nil, errJBIG2Unsupported
 				}
+				if err := d.reserve(rw, rh); err != nil {
+					return nil, err
+				}
 				refined, err := huffRefine(h, cx, rw, rh, sbrTemplate, sym, (rdw>>1)+rdx, (rdh>>1)+rdy, rAt, bmSize)
 				if err != nil {
 					return nil, err
 				}
 				sym = refined
 			}
-			placeSymbol(region, sym, &curS, stripT, 1 /*TOPLEFT*/, false, 0 /*OR*/)
+			if err := d.charge(placeSymbol(region, sym, &curS, stripT, 1 /*TOPLEFT*/, false, 0 /*OR*/)); err != nil {
+				return nil, err
+			}
 			inst++
 		}
 	}
@@ -561,13 +569,18 @@ func (d *jbig2Decoder) readTextRegionHuff(seg jbSegment, r *jbReader, ri regionI
 				if rw <= 0 || rh <= 0 || rw > 1<<16 || rh > 1<<16 {
 					return errJBIG2Unsupported
 				}
+				if err := d.reserve(rw, rh); err != nil {
+					return err
+				}
 				refined, err := huffRefine(h, grCx, rw, rh, sbrTemplate, sym, (rdw>>1)+rdx, (rdh>>1)+rdy, rAt, bmSize)
 				if err != nil {
 					return err
 				}
 				sym = refined
 			}
-			placeSymbol(region, sym, &curS, t, refCorner, transposed, sbCombOp)
+			if err := d.charge(placeSymbol(region, sym, &curS, t, refCorner, transposed, sbCombOp)); err != nil {
+				return err
+			}
 			inst++
 		}
 	}

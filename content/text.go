@@ -19,6 +19,7 @@ func (b *Builder) BeginText() *Builder {
 		return b.fail("BeginText with a path under construction")
 	}
 	b.inText = true
+	b.textFloor = b.marked
 	return b.op("BT")
 }
 
@@ -26,6 +27,10 @@ func (b *Builder) BeginText() *Builder {
 func (b *Builder) EndText() *Builder {
 	if !b.inText {
 		return b.fail("EndText without a matching BeginText")
+	}
+	if b.marked > b.textFloor {
+		return b.fail("EndText with %d marked-content sequence(s) begun inside the text object still open; "+
+			"a sequence and a text object nest, so it has to end first", b.marked-b.textFloor)
 	}
 	b.inText = false
 	return b.op("ET")
@@ -154,10 +159,50 @@ func (b *Builder) ShowTextNextLine(codes []byte) *Builder {
 type TextSpan struct {
 	Codes  []byte  // character codes to show; nil for a pure adjustment
 	Adjust float64 // displacement in thousandths of text space
+
+	// marker is set on the two spans ActualTextStart and ActualTextEnd make,
+	// which carry no codes and no displacement: they say where a stretch of
+	// the other spans begins and ends. Unexported, so that the only way to
+	// make one is the constructor that states what it means.
+	marker spanMarker
+	// actual is the text an ActualTextStart span names.
+	actual string
 }
+
+type spanMarker uint8
+
+const (
+	noMarker spanMarker = iota
+	actualStart
+	actualEnd
+)
+
+// ActualTextStart begins a stretch of spans that stand for the given text,
+// and ActualTextEnd ends it. ShowTextAdjusted writes the stretch inside a
+// marked-content sequence carrying the text as /ActualText (ISO 32000-2
+// 14.9.4), which is what a reader extracts in place of what the codes'
+// ToUnicode mapping says.
+//
+// It is how a shaped run says what it was set from where no per-glyph mapping
+// can: a glyph drawn for two different texts, glyphs reordered across a
+// cluster, a right-to-left run whose glyphs are in the order they are drawn
+// rather than the order they are read. Stretches do not nest, and each start
+// needs its end within the same ShowTextAdjusted call.
+func ActualTextStart(text string) TextSpan {
+	return TextSpan{marker: actualStart, actual: text}
+}
+
+// ActualTextEnd ends the stretch ActualTextStart began.
+func ActualTextEnd() TextSpan { return TextSpan{marker: actualEnd} }
 
 // ShowTextAdjusted paints a sequence of runs with displacements between them
 // (TJ). This is how kerning and justification reach the page.
+//
+// A stretch marked by ActualTextStart and ActualTextEnd splits the array: the
+// marked-content operators cannot appear inside a TJ, so the spans before, in
+// and after the stretch become TJ operators of their own. That changes nothing
+// on the page, because a displacement in one TJ moves the same text matrix the
+// next one starts from.
 func (b *Builder) ShowTextAdjusted(spans ...TextSpan) *Builder {
 	if b.err != nil {
 		return b
@@ -165,8 +210,52 @@ func (b *Builder) ShowTextAdjusted(spans ...TextSpan) *Builder {
 	if len(spans) == 0 {
 		return b.fail("ShowTextAdjusted needs at least one span")
 	}
-	arr := []byte{'['}
+	// Checked before anything is written, so a malformed sequence leaves no
+	// half-open marked-content sequence behind it.
+	open := false
 	for _, s := range spans {
+		switch s.marker {
+		case actualStart:
+			if open {
+				return b.fail("ActualTextStart inside another: the stretches do not nest")
+			}
+			open = true
+		case actualEnd:
+			if !open {
+				return b.fail("ActualTextEnd without a matching ActualTextStart")
+			}
+			open = false
+		}
+	}
+	if open {
+		return b.fail("ActualTextStart without a matching ActualTextEnd")
+	}
+
+	var arr []byte
+	wrote := false
+	flush := func(always bool) {
+		// A stretch boundary with nothing before it writes no empty TJ; the
+		// end of a call with nothing written at all does, which keeps a span
+		// list of pure zeros the operator it always was, text-object check
+		// included.
+		if len(arr) > 0 || (always && !wrote) {
+			b.textOp("TJ", append(append([]byte{'['}, arr...), ']'))
+			arr = arr[:0]
+			wrote = true
+		}
+	}
+	for _, s := range spans {
+		switch s.marker {
+		case actualStart:
+			flush(false)
+			b.BeginActualText(s.actual)
+			wrote = true
+			continue
+		case actualEnd:
+			flush(false)
+			b.EndMarked()
+			continue
+		}
 		if s.Codes != nil {
 			arr = append(arr, encodeString(s.Codes)...)
 		}
@@ -180,8 +269,51 @@ func (b *Builder) ShowTextAdjusted(spans ...TextSpan) *Builder {
 			arr = append(arr, ' ')
 		}
 	}
-	arr = append(arr, ']')
-	return b.textOp("TJ", arr)
+	flush(true)
+	return b
+}
+
+// BeginActualText opens a marked-content sequence whose content stands for the
+// given text: /Span with an inline /ActualText (ISO 32000-2 14.9.4). EndMarked
+// closes it.
+//
+// A reader extracting text takes this in place of what the enclosed glyphs'
+// ToUnicode mapping would give, which is the one way to say what a run of
+// glyphs was set from when no mapping of individual glyphs can: a ligature
+// glyph drawn for "ffi" in one place and for "ﬃ" in another, a conjunct whose
+// parts are reordered, a right-to-left word drawn in visual order.
+//
+// The text is written as UTF-16BE with a byte-order mark, which is the text
+// string encoding every reader supports (ISO 32000-2 7.9.2.2), in hexadecimal
+// so that no byte of it needs escaping.
+func (b *Builder) BeginActualText(text string) *Builder {
+	if b.err != nil {
+		return b
+	}
+	props := append([]byte(nil), "<</ActualText <FEFF"...)
+	props = appendUTF16BEHex(props, text)
+	props = append(props, ">>>"...)
+	return b.beginMarked("BDC", object.Name("Span"), props)
+}
+
+// appendUTF16BEHex writes text as the hexadecimal digits of its UTF-16BE form,
+// with surrogate pairs for characters beyond the Basic Multilingual Plane.
+// Invalid UTF-8 becomes U+FFFD, which is what ranging over a string yields.
+func appendUTF16BEHex(dst []byte, text string) []byte {
+	const digits = "0123456789ABCDEF"
+	unit := func(u uint16) {
+		dst = append(dst, digits[u>>12], digits[u>>8&0xF], digits[u>>4&0xF], digits[u&0xF])
+	}
+	for _, r := range text {
+		if r > 0xFFFF {
+			r -= 0x10000
+			unit(uint16(0xD800 + r>>10))
+			unit(uint16(0xDC00 + r&0x3FF))
+			continue
+		}
+		unit(uint16(r))
+	}
+	return dst
 }
 
 // encodeString writes character codes as a PDF literal string, escaping the
@@ -211,14 +343,27 @@ func encodeString(codes []byte) []byte {
 // These carry the structure a tagged PDF needs. They are here from the start
 // because retrofitting them means re-deriving where each mark belonged.
 
+// beginMarked writes BMC or BDC and opens the sequence it begins. Every
+// sequence needs its EndMarked: Bytes refuses a stream that leaves one open.
+func (b *Builder) beginMarked(operator string, operands ...any) *Builder {
+	if b.err != nil {
+		return b
+	}
+	b.op(operator, operands...)
+	if b.err == nil {
+		b.marked++
+	}
+	return b
+}
+
 // BeginMarked opens a marked-content sequence with a tag alone (BMC).
-func (b *Builder) BeginMarked(tag object.Name) *Builder { return b.op("BMC", tag) }
+func (b *Builder) BeginMarked(tag object.Name) *Builder { return b.beginMarked("BMC", tag) }
 
 // BeginMarkedProperties opens a marked-content sequence whose properties are a
 // named entry in the page's /Resources /Properties (BDC).
 func (b *Builder) BeginMarkedProperties(tag, properties object.Name) *Builder {
 	record(&b.res.Properties, properties)
-	return b.op("BDC", tag, properties)
+	return b.beginMarked("BDC", tag, properties)
 }
 
 // BeginTagged opens a marked-content sequence carrying a marked-content
@@ -238,18 +383,49 @@ func (b *Builder) BeginMarkedProperties(tag, properties object.Name) *Builder {
 // the order the content is drawn. Nesting is allowed and is how a heading
 // inside a section is expressed; every BeginTagged needs its EndMarked.
 func (b *Builder) BeginTagged(tag object.Name, mcid int) *Builder {
-	if mcid < 0 {
-		return b.fail("marked-content identifier %d is negative", mcid)
+	if mcid < 0 || mcid > MaxMCID {
+		return b.fail("marked-content identifier %d is outside [0, %d]", mcid, MaxMCID)
 	}
 	var props []byte
 	props = append(props, "<</MCID "...)
 	props = strconv.AppendInt(props, int64(mcid), 10)
 	props = append(props, ">>"...)
-	return b.op("BDC", tag, props)
+	return b.beginMarked("BDC", tag, props)
 }
 
-// EndMarked closes a marked-content sequence (EMC).
-func (b *Builder) EndMarked() *Builder { return b.op("EMC") }
+// MaxMCID is the largest marked-content identifier BeginTagged writes and
+// pdf0's SetStructureTree accepts.
+//
+// A page's entry in the structure tree's parent tree is an array indexed by
+// identifier (ISO 32000-2 14.7.5.4), so it is as long as the page's largest
+// identifier whatever the others are: one identifier of 1<<28 is an array of a
+// quarter of a billion entries. Identifiers are conventionally assigned from
+// zero in drawing order, and no page carries a million marked spans; the bound
+// is far above any real page and far below an allocation that matters.
+const MaxMCID = 1<<20 - 1
+
+// EndMarked closes the innermost open marked-content sequence (EMC).
+//
+// One with nothing open is refused, and so is one inside a text object that
+// would close a sequence begun outside it: that EMC would end a sequence the
+// text object sits inside, and the two no longer nest.
+func (b *Builder) EndMarked() *Builder {
+	if b.err != nil {
+		return b
+	}
+	if b.marked == 0 {
+		return b.fail("EndMarked without a matching BeginMarked or BeginTagged")
+	}
+	if b.inText && b.marked == b.textFloor {
+		return b.fail("EndMarked inside a text object would close a sequence begun outside it; " +
+			"end the text object first")
+	}
+	b.op("EMC")
+	if b.err == nil {
+		b.marked--
+	}
+	return b
+}
 
 // MarkPoint records a marked-content point: a place in the stream rather than a
 // span of it (MP). It is what an anchor, a footnote reference or a

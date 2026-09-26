@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/hostile"
 	"github.com/mgilbir/pdf0/object"
 	"testing"
 	"time"
@@ -12,29 +13,31 @@ import (
 // makeFlateContentStream builds a FlateDecode content stream whose decoded size
 // is decodedLen bytes (a run of a valid content operator, so it also tokenizes).
 func TestContentBombBoundedValidation(t *testing.T) {
-	const nPages = 200
-	const perPage = 8 << 20 // 8 MB decoded per page → ~1.6 GB total content
-	// Lower the budget to 16 MB so only ~2 streams are processed; total content
-	// is ~100x the budget, so a regression (no budget) does far more work. This
-	// also exercises the public option path end to end.
-	pdf := buildContentBombPDF(t, nPages, perPage)
-	doc, err := Read(bytes.NewReader(pdf), int64(len(pdf)), WithMaxDecodedContentBytes(16<<20))
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	start := time.Now()
-	done := make(chan int, 1)
-	go func() { done <- len(ValidatePDFUA(doc)) }()
-	select {
-	case <-done:
-	case <-time.After(30 * time.Second):
-		t.Fatal("ValidatePDFUA did not finish within 30s on a content-bomb file; budget not bounding work")
-	}
-	// With the budget, only ~budget bytes of content are decoded regardless of
-	// how much the file claims, so validation is quick.
-	if el := time.Since(start); el > 20*time.Second {
-		t.Errorf("validation took %v on a bounded content-bomb; expected the budget to keep it short", el)
-	}
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		const nPages = 200
+		const perPage = 8 << 20 // 8 MB decoded per page → ~1.6 GB total content
+		// Lower the budget to 16 MB so only ~2 streams are processed; total content
+		// is ~100x the budget, so a regression (no budget) does far more work. This
+		// also exercises the public option path end to end.
+		pdf := buildContentBombPDF(t, nPages, perPage)
+		doc, err := Read(bytes.NewReader(pdf), int64(len(pdf)), WithMaxDecodedContentBytes(16<<20))
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		start := time.Now()
+		done := make(chan int, 1)
+		go func() { done <- len(ValidatePDFUA(doc)) }()
+		select {
+		case <-done:
+		case <-time.After(30 * time.Second):
+			t.Fatal("ValidatePDFUA did not finish within 30s on a content-bomb file; budget not bounding work")
+		}
+		// With the budget, only ~budget bytes of content are decoded regardless of
+		// how much the file claims, so validation is quick.
+		if el := time.Since(start); el > 20*time.Second {
+			t.Errorf("validation took %v on a bounded content-bomb; expected the budget to keep it short", el)
+		}
+	})
 }
 
 // makeFlateContentStream is repeated here from the core package's own copy:
@@ -49,7 +52,7 @@ func makeFlateContentStream(decodedLen int) *object.Stream {
 	d := &object.Dictionary{}
 	d.Set("Length", object.Integer(zb.Len()))
 	d.Set("Filter", object.Name("FlateDecode"))
-	return &object.Stream{Dict: *d, Data: zb.Bytes()}
+	return object.NewStream(d, zb.Bytes())
 }
 
 // buildContentBombPDF assembles a PDF with npages pages, each /Contents a

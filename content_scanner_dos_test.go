@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/hostile"
 	"testing"
 	"time"
 )
@@ -12,26 +13,28 @@ import (
 // default token read cannot consume, leaving the cursor unadvanced. Each
 // scanner must terminate.
 func TestContentScannersTerminateOnStrayParen(t *testing.T) {
-	inputs := [][]byte{
-		[]byte(")"),
-		[]byte("BT /F1 12 Tf ) Tj ET"),
-		[]byte(") ) ) ) )"),
-		[]byte("q 1 0 0 1 0 0 cm ))) /X Do Q"),
-		append([]byte("/P <</MCID 0>>BDC "), []byte(")))abc)))def")...),
-	}
-	run := func(name string, fn func()) {
-		done := make(chan struct{})
-		go func() { defer close(done); fn() }()
-		select {
-		case <-done:
-		case <-time.After(5 * time.Second):
-			t.Fatalf("%s did not terminate on stray ')'", name)
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		inputs := [][]byte{
+			[]byte(")"),
+			[]byte("BT /F1 12 Tf ) Tj ET"),
+			[]byte(") ) ) ) )"),
+			[]byte("q 1 0 0 1 0 0 cm ))) /X Do Q"),
+			append([]byte("/P <</MCID 0>>BDC "), []byte(")))abc)))def")...),
 		}
-	}
-	for _, in := range inputs {
-		in := in
-		run("core.ForEachContentItem", func() { core.ForEachContentItem(core.Canceler{}, in, func(core.ContentItemKind, []byte) {}) })
-		run("core.ForEachContentToken", func() { core.ForEachContentToken(core.Canceler{}, in, func([]byte, bool) {}) })
-		run("core.ContentUsedNames", func() { core.ContentUsedNames(core.Canceler{}, in) })
-	}
+		run := func(name string, fn func()) {
+			done := make(chan struct{})
+			go func() { defer close(done); fn() }()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatalf("%s did not terminate on stray ')'", name)
+			}
+		}
+		for _, in := range inputs {
+			in := in
+			run("core.ForEachContentItem", func() { core.ForEachContentItem(core.Canceler{}, in, func(core.ContentItemKind, []byte) {}) })
+			run("core.ForEachContentToken", func() { core.ForEachContentToken(core.Canceler{}, in, func([]byte, bool) {}) })
+			run("core.ContentUsedNames", func() { core.ContentUsedNames(core.Canceler{}, in) })
+		}
+	})
 }

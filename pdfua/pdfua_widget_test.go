@@ -10,7 +10,7 @@ import (
 // including /TU inherited from a parent field.
 func TestUAWidgetDescription(t *testing.T) {
 	base := func() (core.View, *object.Dictionary) {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		w := &object.Dictionary{}
 		w.Set("Type", object.Name("Annot"))
 		w.Set("Subtype", object.Name("Widget"))

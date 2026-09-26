@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"compress/zlib"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/hostile"
 	"strings"
 	"testing"
+	"time"
 )
 
 // buildTwoObjStmPDF assembles a PDF with a direct catalog/pages/page plus two
@@ -79,44 +81,46 @@ func buildTwoObjStmPDF(t *testing.T, fillerBytes int) []byte {
 // unmaterialized (recorded as broken) rather than parsed — bounding the work a
 // small, heavily-amplified file can force — while a normal budget loads both.
 func TestObjStmDecompressionBudget(t *testing.T) {
-	const filler = 4000
-	pdf := buildTwoObjStmPDF(t, filler)
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		const filler = 4000
+		pdf := buildTwoObjStmPDF(t, filler)
 
-	// Default (large) budget: both compressed objects load.
-	doc, err := Read(bytes.NewReader(pdf), int64(len(pdf)))
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	for _, n := range []int{6, 8} {
-		if _, ok := doc.Objects[n]; !ok {
-			t.Fatalf("under default budget, compressed object %d not loaded", n)
+		// Default (large) budget: both compressed objects load.
+		doc, err := Read(bytes.NewReader(pdf), int64(len(pdf)))
+		if err != nil {
+			t.Fatalf("read: %v", err)
 		}
-	}
-	if len(doc.brokenObjStms) != 0 {
-		t.Fatalf("under default budget, unexpected broken object streams: %v", doc.brokenObjStms)
-	}
+		for _, n := range []int{6, 8} {
+			if _, ok := doc.Objects[n]; !ok {
+				t.Fatalf("under default budget, compressed object %d not loaded", n)
+			}
+		}
+		if len(doc.brokenObjStms) != 0 {
+			t.Fatalf("under default budget, unexpected broken object streams: %v", doc.brokenObjStms)
+		}
 
-	// Lower the budget below one stream's decompressed size: the first stream
-	// (container 1) still loads because the budget is only consulted before a
-	// stream is decoded (it starts at zero), but it exhausts the budget, so the
-	// second stream (container 7) is skipped.
-	doc2, err := Read(bytes.NewReader(pdf), int64(len(pdf)), WithMaxObjectStreamBytes(int64(filler/2)))
-	if err != nil {
-		t.Fatalf("read with lowered budget: %v", err)
-	}
-	if _, ok := doc2.Objects[6]; !ok {
-		t.Error("object 6 (first object stream) should still load within budget")
-	}
-	if _, ok := doc2.Objects[8]; ok {
-		t.Error("object 8 (second object stream) should be skipped once the budget is exhausted")
-	}
-	found := false
-	for _, n := range doc2.brokenObjStms {
-		if n == 7 {
-			found = true
+		// Lower the budget below one stream's decompressed size: the first stream
+		// (container 1) still loads because the budget is only consulted before a
+		// stream is decoded (it starts at zero), but it exhausts the budget, so the
+		// second stream (container 7) is skipped.
+		doc2, err := Read(bytes.NewReader(pdf), int64(len(pdf)), WithMaxObjectStreamBytes(int64(filler/2)))
+		if err != nil {
+			t.Fatalf("read with lowered budget: %v", err)
 		}
-	}
-	if !found {
-		t.Errorf("object stream 7 should be recorded as broken; got %v", doc2.brokenObjStms)
-	}
+		if _, ok := doc2.Objects[6]; !ok {
+			t.Error("object 6 (first object stream) should still load within budget")
+		}
+		if _, ok := doc2.Objects[8]; ok {
+			t.Error("object 8 (second object stream) should be skipped once the budget is exhausted")
+		}
+		found := false
+		for _, n := range doc2.brokenObjStms {
+			if n == 7 {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("object stream 7 should be recorded as broken; got %v", doc2.brokenObjStms)
+		}
+	})
 }

@@ -10,7 +10,7 @@ import (
 // ToUnicode CMap, and clears it once ToUnicode is present.
 func TestUACharMapping(t *testing.T) {
 	mk := func(withToUnicode bool) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		font := &object.Dictionary{}
 		font.Set("Type", object.Name("Font"))
 		font.Set("Subtype", object.Name("Type0"))

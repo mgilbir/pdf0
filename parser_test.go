@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"github.com/mgilbir/pdf0/object"
+	"slices"
 	"testing"
 )
 
@@ -265,8 +266,8 @@ func TestParseDictionary(t *testing.T) {
 	}
 
 	// Key order preserved
-	if dict.Keys[0] != "Type" || dict.Keys[1] != "Pages" || dict.Keys[2] != "Count" {
-		t.Errorf("key order not preserved: %v", dict.Keys)
+	if keys := slices.Collect(dict.Keys()); len(keys) != 3 || keys[0] != "Type" || keys[1] != "Pages" || keys[2] != "Count" {
+		t.Errorf("key order not preserved: %v", keys)
 	}
 }
 

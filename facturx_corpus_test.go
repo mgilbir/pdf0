@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"context"
+	"github.com/mgilbir/pdf0/internal/testfiles"
 	"os"
 	"path/filepath"
 	"sort"
@@ -23,10 +24,7 @@ import (
 // (facturxInvoiceRuleFindings); what pdf0 owns is that a container it accepts
 // yields XML the engine can read and hands it to the right rule set.
 func TestValidateFacturXInvoiceCorpus(t *testing.T) {
-	files, _ := filepath.Glob("testdata/facturx/*.pdf")
-	if len(files) == 0 {
-		t.Skip("Factur-X corpus not present")
-	}
+	files := testfiles.FacturX.Glob(t, "*.pdf")
 	sort.Strings(files)
 	seen := 0
 	for _, f := range files {

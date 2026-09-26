@@ -10,7 +10,7 @@ import (
 // and accepts text inside one.
 func TestUARealContent(t *testing.T) {
 	mk := func(content string) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		cat := &object.Dictionary{}
 		cat.Set("Type", object.Name("Catalog"))
 		cat.Set("Pages", object.IndirectRef{Number: 2})
@@ -65,7 +65,7 @@ func TestUARealContent(t *testing.T) {
 // element type and clears it under the right one.
 func TestUAAnnotStructType(t *testing.T) {
 	mk := func(parentType object.Name) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		cat := &object.Dictionary{}
 		cat.Set("Type", object.Name("Catalog"))
 		cat.Set("StructTreeRoot", object.IndirectRef{Number: 2})

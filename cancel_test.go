@@ -84,7 +84,7 @@ func heavyDoc(pages, bytesPerPage int) *Document {
 	objs[2] = &object.IndirectObject{Number: 2, Value: pagesDict}
 
 	return &Document{Version: "2.0", Objects: objs,
-		Trailer: dictWith("Root", object.IndirectRef{Number: 1})}
+		Trailer: *dictWith("Root", object.IndirectRef{Number: 1})}
 }
 
 // cancelledCtx returns a context that is already done.
@@ -434,7 +434,7 @@ func TestExtractTextContextCancelled(t *testing.T) {
 	doc := heavyDoc(24, 2<<20)
 
 	start := time.Now()
-	full := doc.ExtractText()
+	full := mustExtractText(t, doc)
 	baseline := time.Since(start)
 	t.Logf("uncancelled ExtractText: %v (%d runes)", baseline, len([]rune(full)))
 
@@ -517,7 +517,7 @@ func TestContextlessAPIUnchanged(t *testing.T) {
 	if a, b := len(ValidateDParts(doc)), len(ValidateDPartsContext(bg, doc)); a != b {
 		t.Errorf("ValidateDParts %d findings vs ValidateDPartsContext %d", a, b)
 	}
-	if a, _ := doc.ExtractTextContext(bg); a != doc.ExtractText() {
+	if a, _ := doc.ExtractTextContext(bg); a != mustExtractText(t, doc) {
 		t.Error("ExtractText differs from ExtractTextContext(Background)")
 	}
 	if a, _ := doc.ExtractImagesContext(bg); len(a) != len(doc.ExtractImages()) {

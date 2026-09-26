@@ -3,6 +3,8 @@ package pdfa
 import (
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/hostile"
+	"github.com/mgilbir/pdf0/internal/xmp"
 	"github.com/mgilbir/pdf0/object"
 	"strings"
 	"testing"
@@ -16,7 +18,7 @@ func docWithXMP(xmp []byte) core.View {
 	ms.Dict.Set("Type", object.Name("Metadata"))
 	ms.Dict.Set("Subtype", object.Name("XML"))
 	ms.Dict.Set("Length", object.Integer(len(xmp)))
-	d := mkViewVersion(map[int]*object.IndirectObject{}, object.Dictionary{}, "1.7")
+	d := mkViewVersion(map[int]*object.IndirectObject{}, nil, "1.7")
 	d.Objects[2] = &object.IndirectObject{Number: 2, Value: ms}
 	cat := &object.Dictionary{}
 	cat.Set("Type", object.Name("Catalog"))
@@ -61,8 +63,9 @@ func TestXMPWellFormedStreaming(t *testing.T) {
 }
 
 // TestXMPStreamingMatchesTree confirms the streaming well-formedness check
-// agrees with the previous parseXMLTree + findRDF result across representative
-// packets — the streaming path must not change any validation outcome.
+// agrees with the XMP model the property readers use, across representative
+// packets: a packet the well-formedness rule accepts is one the readers can
+// read, and one it rejects is one they cannot.
 func TestXMPStreamingMatchesTree(t *testing.T) {
 	packets := []string{
 		validXMP(`<dc:title>hello</dc:title>`),
@@ -74,47 +77,57 @@ func TestXMPStreamingMatchesTree(t *testing.T) {
 	}
 	for i, p := range packets {
 		wf, rdf := xmpWellFormed([]byte(p))
-		tree, err := parseXMLTree([]byte(p))
+		packet, err := xmp.Parse([]byte(p))
 		treeWF := err == nil
-		treeRDF := treeWF && findRDF(tree) != nil
+		treeRDF := treeWF && packet.HasRDF()
 		if wf != treeWF || rdf != treeRDF {
 			t.Errorf("packet %d: streaming (%v,%v) != tree (%v,%v)", i, wf, rdf, treeWF, treeRDF)
 		}
 	}
 }
 
-// TestXMPLargePacketBounded is the DoS regression: a large but perfectly
-// well-formed XMP packet must not build a node tree (an O(n²) blow-up), yet its
-// well-formedness must still be validated and no false positive raised. With the
-// property-parse cap lowered, the property extraction is skipped while the
-// streaming well-formedness check still passes.
+// TestXMPLargePacketBounded is the DoS regression: a packet over the XMP
+// packet limit must not have a node tree built for it, yet its well-formedness
+// must still be validated and no false positive raised. With the limit lowered,
+// the property checks are skipped — and say so, with a trip on the run that
+// becomes a "limit" finding, rather than looking clean (audit C109's XMP half).
 func TestXMPLargePacketBounded(t *testing.T) {
-	const capBytes = 4 << 10 // 4 KiB, for the test
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		const capBytes = 4 << 10 // 4 KiB, for the test
 
-	var b strings.Builder
-	for i := 0; b.Len() < 64<<10; i++ { // 64 KiB of valid properties, well over the cap
-		fmt.Fprintf(&b, `<dc:item%d>value %d</dc:item%d>`, i, i, i)
-	}
-	xmp := validXMP(b.String())
-	doc := docWithXMP([]byte(xmp))
-	// Lower the cap on this view only, so the whole check pipeline sees it
-	// (not just the direct call below). The root package's public option
-	// resolves to exactly this field.
-	doc.Limits.XMPPacketBytes = capBytes
+		var b strings.Builder
+		for i := 0; b.Len() < 64<<10; i++ { // 64 KiB of valid properties, well over the cap
+			fmt.Fprintf(&b, `<dc:item%d>value %d</dc:item%d>`, i, i, i)
+		}
+		xmp := validXMP(b.String())
+		doc := docWithXMP([]byte(xmp))
+		// Lower the cap on this view only, so the whole check pipeline sees it
+		// (not just the direct call below). The root package's public option
+		// resolves to exactly this field.
+		doc.Limits.XMPPacketBytes = capBytes
 
-	// Property extraction is skipped (capped), reported as an error the caller
-	// turns into "no properties to check" — never a violation.
-	if _, err := parseXMPProperties([]byte(xmp), capBytes); err == nil {
-		t.Error("expected parseXMPProperties to refuse the oversized packet")
-	}
-	// Well-formedness still validated by streaming, with no false positive.
-	for _, e := range checkXMPWellFormed(doc, PDFA1b) {
-		t.Errorf("unexpected well-formedness violation on a valid large packet: %s", e.Message)
-	}
-	// The property check must not flag anything on the capped packet.
-	if errs := checkXMPProperties(doc, PDFA1b); len(errs) != 0 {
-		t.Errorf("unexpected property violations on a capped packet: %v", errs)
-	}
+		// The model declines the oversized packet and notes the trip.
+		if _, status := doc.DocumentXMPPacket(); status != core.XMPLimit {
+			t.Errorf("DocumentXMPPacket status = %v, want XMPLimit", status)
+		}
+		tripped := false
+		for _, tr := range doc.Run.Trips.Snapshot() {
+			if strings.Contains(tr.Message(), core.GuardXMPPacket) {
+				tripped = true
+			}
+		}
+		if !tripped {
+			t.Error("the oversized packet was skipped without a trip")
+		}
+		// Well-formedness still validated by streaming, with no false positive.
+		for _, e := range checkXMPWellFormed(doc, PDFA1b) {
+			t.Errorf("unexpected well-formedness violation on a valid large packet: %s", e.Message)
+		}
+		// The property check must not flag anything on the capped packet.
+		if errs := checkXMPProperties(doc, PDFA1b); len(errs) != 0 {
+			t.Errorf("unexpected property violations on a capped packet: %v", errs)
+		}
+	})
 }
 
 // TestXMPManyElementsFast guards the quadratic-GC blow-up: validating a document
@@ -123,16 +136,18 @@ func TestXMPLargePacketBounded(t *testing.T) {
 // tens of seconds; here even a large element count completes well under a second
 // because the tree is never built.
 func TestXMPManyElementsFast(t *testing.T) {
-	var b strings.Builder
-	for i := 0; i < 200000; i++ {
-		fmt.Fprintf(&b, `<dc:i%d>v</dc:i%d>`, i, i)
-	}
-	xmp := validXMP(b.String())
-	doc := docWithXMP([]byte(xmp))
-	start := time.Now()
-	_ = checkXMPWellFormed(doc, PDFA1b)
-	_ = checkXMPProperties(doc, PDFA1b)
-	if d := time.Since(start); d > 5*time.Second {
-		t.Errorf("XMP checks on a many-element packet took %v; expected sub-second", d)
-	}
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		var b strings.Builder
+		for i := 0; i < 200000; i++ {
+			fmt.Fprintf(&b, `<dc:i%d>v</dc:i%d>`, i, i)
+		}
+		xmp := validXMP(b.String())
+		doc := docWithXMP([]byte(xmp))
+		start := time.Now()
+		_ = checkXMPWellFormed(doc, PDFA1b)
+		_ = checkXMPProperties(doc, PDFA1b)
+		if d := time.Since(start); d > 5*time.Second {
+			t.Errorf("XMP checks on a many-element packet took %v; expected sub-second", d)
+		}
+	})
 }

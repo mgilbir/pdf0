@@ -2,7 +2,6 @@ package pdf0
 
 import (
 	"fmt"
-	"math"
 
 	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/fonts"
@@ -24,9 +23,12 @@ import (
 // A coloured pattern carries its own colours. An uncoloured one carries only
 // shape, and takes its colour from wherever it is painted — the same cell in
 // black on one element and red on another, stated once. The distinction is not
-// a hint: the contents of an uncoloured pattern's cell *may not* set a colour,
-// and a file that does so is undefined rather than wrong, which means it looks
-// different in different readers. AddTilingPattern refuses it.
+// a hint: in an uncoloured pattern's cell, and in every content stream it
+// invokes, the colour operators, ri, sh, the colour-related graphics-state
+// entries and every image but a stencil mask are *ignored* (ISO 32000-2 8.6.8,
+// 8.7.3.3). A reader skips them and carries on, so the file is not malformed —
+// it silently draws something other than what was written. AddTilingPattern
+// refuses such a cell.
 
 // TilingPattern is a drawing that repeats to fill whatever is painted with it.
 type TilingPattern struct {
@@ -58,7 +60,10 @@ type TilingPattern struct {
 	Content *content.Builder
 
 	// Uncolored makes the pattern carry shape without colour, taking its colour
-	// from wherever it is painted. Its Content may then not set any colour.
+	// from wherever it is painted. Its Content, and anything it draws, may then
+	// not set a colour or a rendering intent, paint a shading or an image
+	// other than a stencil mask, or use a graphics state with a colour-related
+	// entry: a reader ignores all of them there.
 	Uncolored bool
 
 	// Spacing chooses how a reader may adjust the step to the device's pixel
@@ -103,6 +108,12 @@ const (
 // As with AddPage, a name the drawing used and no resource map defines is an
 // error rather than a pattern that paints with something missing.
 func (d *Document) AddTilingPattern(p TilingPattern) (object.IndirectRef, error) {
+	if d == nil {
+		return object.IndirectRef{}, errNilDocument
+	}
+	if d.Locked() {
+		return object.IndirectRef{}, errLockedTarget("adding a tiling pattern")
+	}
 	if p.Content == nil {
 		return object.IndirectRef{}, fmt.Errorf("pdf0: the pattern has no content")
 	}
@@ -110,14 +121,13 @@ func (d *Document) AddTilingPattern(p TilingPattern) (object.IndirectRef, error)
 	if err != nil {
 		return object.IndirectRef{}, err
 	}
-	if p.BBox[2] <= p.BBox[0] || p.BBox[3] <= p.BBox[1] {
-		return object.IndirectRef{}, fmt.Errorf(
-			"pdf0: the pattern's cell %v has no area; every tile would be clipped away", p.BBox)
+	// Everything is checked before anything is written (audit 2026-09-22
+	// C131).
+	if err := checkBox("the pattern's cell", p.BBox, "every tile would be clipped away"); err != nil {
+		return object.IndirectRef{}, err
 	}
-	for i, v := range p.BBox {
-		if math.IsNaN(v) || math.IsInf(v, 0) {
-			return object.IndirectRef{}, fmt.Errorf("pdf0: the pattern's cell has a non-finite bound at %d: %v", i, v)
-		}
+	if err := checkMatrix("the pattern's matrix", p.Matrix); err != nil {
+		return object.IndirectRef{}, err
 	}
 
 	// A step of zero means "tiles that abut", which is the common case and the
@@ -138,27 +148,24 @@ func (d *Document) AddTilingPattern(p TilingPattern) (object.IndirectRef, error)
 		return object.IndirectRef{}, err
 	}
 
-	if p.Uncolored && p.Content.SetsColor() {
-		return object.IndirectRef{}, fmt.Errorf(
-			"pdf0: an uncoloured pattern takes its colour from where it is painted, " +
-				"so its cell may not set one (ISO 32000-2 8.7.3.1)")
+	if p.Uncolored {
+		if err := d.checkUncoloredCell(p); err != nil {
+			return object.IndirectRef{}, err
+		}
 	}
 	if p.Spacing < ConstantSpacing || p.Spacing > FasterConstantSpacing {
 		return object.IndirectRef{}, fmt.Errorf("pdf0: unknown tiling spacing %d", p.Spacing)
 	}
 
-	embedded, err := d.embedFaces(p.Faces, p.Fonts)
+	res := newResourceSet(p.Faces, p.Fonts, p.XObjects, p.ExtGStates, p.ColorSpaces, p.Shadings, p.Patterns, p.Properties)
+	if err := res.check(p.Content.Resources()); err != nil {
+		return object.IndirectRef{}, err
+	}
+	faceRefs, err := d.embedFaces(p.Faces)
 	if err != nil {
 		return object.IndirectRef{}, err
 	}
-	resources, err := Page{
-		Content: p.Content, Fonts: embedded, XObjects: p.XObjects,
-		ExtGStates: p.ExtGStates, ColorSpaces: p.ColorSpaces, Shadings: p.Shadings,
-		Patterns: p.Patterns, Properties: p.Properties,
-	}.resources()
-	if err != nil {
-		return object.IndirectRef{}, err
-	}
+	resources := res.build(p.Content.Resources(), faceRefs)
 
 	compressed := core.FlateEncode(drawn)
 	pattern := &object.Stream{Dict: object.Dictionary{}, Data: compressed}
@@ -180,9 +187,6 @@ func (d *Document) AddTilingPattern(p TilingPattern) (object.IndirectRef, error)
 	if p.Matrix != nil {
 		m := object.Array{}
 		for _, v := range p.Matrix {
-			if math.IsNaN(v) || math.IsInf(v, 0) {
-				return object.IndirectRef{}, fmt.Errorf("pdf0: the pattern's matrix has a non-finite entry: %v", v)
-			}
 			m = append(m, numberFor(v))
 		}
 		pattern.Dict.Set("Matrix", m)
@@ -196,11 +200,11 @@ func (d *Document) AddTilingPattern(p TilingPattern) (object.IndirectRef, error)
 // all. The sign is free — a negative step tiles in the other direction — but
 // zero is not a direction and neither is a non-finite number.
 func checkStep(name string, v float64) error {
+	if err := checkFinite("the pattern's "+name, v); err != nil {
+		return err
+	}
 	if v == 0 {
 		return fmt.Errorf("pdf0: the pattern's %s is zero; every tile would land on the last", name)
-	}
-	if math.IsNaN(v) || math.IsInf(v, 0) {
-		return fmt.Errorf("pdf0: the pattern's %s is %v, which is not a distance", name, v)
 	}
 	return nil
 }

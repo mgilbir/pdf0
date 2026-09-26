@@ -29,7 +29,7 @@ func TestPermsAllowsOnlyUR3AndDocMDP(t *testing.T) {
 	trailer.Set("Root", object.IndirectRef{Number: 1})
 	doc := mkView(map[int]*object.IndirectObject{
 		1: {Number: 1, Value: catalog},
-	}, trailer)
+	}, &trailer)
 
 	errs := checkPermsDict(doc, PDFA2b)
 	if !hasMessage(errs, "/Whatever") {
@@ -115,7 +115,7 @@ func TestPermsDocMDPRejectsDeprecatedDigestKeys(t *testing.T) {
 			trailer := object.Dictionary{}
 			trailer.Set("Root", object.IndirectRef{Number: 1})
 
-			errs := checkPermsDict(mkView(objs, trailer), PDFA2b)
+			errs := checkPermsDict(mkView(objs, &trailer), PDFA2b)
 			if !hasMessage(errs, "DigestMethod") {
 				t.Errorf("the deprecated /DigestMethod was not reported: %v", errs)
 			}
@@ -133,7 +133,7 @@ func TestPermsDocMDPRejectsDeprecatedDigestKeys(t *testing.T) {
 		catalog.Set("Perms", perms)
 		trailer := object.Dictionary{}
 		trailer.Set("Root", object.IndirectRef{Number: 1})
-		doc := mkView(map[int]*object.IndirectObject{1: {Number: 1, Value: catalog}}, trailer)
+		doc := mkView(map[int]*object.IndirectObject{1: {Number: 1, Value: catalog}}, &trailer)
 		if !hasMessage(checkPermsDict(doc, PDFA2b), key) {
 			t.Errorf("/%s was not reported", key)
 		}
@@ -152,7 +152,7 @@ func TestPermsDocMDPRejectsDeprecatedDigestKeys(t *testing.T) {
 	catalog.Set("Perms", perms)
 	trailer := object.Dictionary{}
 	trailer.Set("Root", object.IndirectRef{Number: 1})
-	doc := mkView(map[int]*object.IndirectObject{1: {Number: 1, Value: catalog}}, trailer)
+	doc := mkView(map[int]*object.IndirectObject{1: {Number: 1, Value: catalog}}, &trailer)
 	if errs := checkPermsDict(doc, PDFA2b); len(errs) != 0 {
 		t.Errorf("a conforming /Perms reported %d violations: %v", len(errs), errs)
 	}
@@ -181,7 +181,7 @@ func TestPermsSurvivesAnArrayEntryThatIsNotADictionary(t *testing.T) {
 	catalog.Set("Perms", perms)
 	trailer := object.Dictionary{}
 	trailer.Set("Root", object.IndirectRef{Number: 1})
-	doc := mkView(map[int]*object.IndirectObject{1: {Number: 1, Value: catalog}}, trailer)
+	doc := mkView(map[int]*object.IndirectObject{1: {Number: 1, Value: catalog}}, &trailer)
 
 	errs := checkPermsDict(doc, PDFA2b) // must not panic
 	if !hasMessage(errs, "DigestValue") {
@@ -214,7 +214,7 @@ func TestNeedsRenderingIsTheOtherHalfOfClause642(t *testing.T) {
 		objs[1] = &object.IndirectObject{Number: 1, Value: catalog}
 		trailer := object.Dictionary{}
 		trailer.Set("Root", object.IndirectRef{Number: 1})
-		return mkView(objs, trailer)
+		return mkView(objs, &trailer)
 	}
 
 	const want = "NeedsRendering"
@@ -248,7 +248,7 @@ func TestNeedsRenderingIsTheOtherHalfOfClause642(t *testing.T) {
 	objs[1] = &object.IndirectObject{Number: 1, Value: catalog}
 	trailer := object.Dictionary{}
 	trailer.Set("Root", object.IndirectRef{Number: 1})
-	if !hasMessage(checkNoXFA(mkView(objs, trailer), PDFA4), want) {
+	if !hasMessage(checkNoXFA(mkView(objs, &trailer), PDFA4), want) {
 		t.Error("an indirect /NeedsRendering was not reported")
 	}
 
@@ -263,7 +263,7 @@ func TestNeedsRenderingIsTheOtherHalfOfClause642(t *testing.T) {
 	objs[1] = &object.IndirectObject{Number: 1, Value: catalog}
 	trailer = object.Dictionary{}
 	trailer.Set("Root", object.IndirectRef{Number: 1})
-	if !hasMessage(checkNoXFA(mkView(objs, trailer), PDFA4), "/XFA") {
+	if !hasMessage(checkNoXFA(mkView(objs, &trailer), PDFA4), "/XFA") {
 		t.Error("the /XFA half of the clause stopped reporting")
 	}
 }

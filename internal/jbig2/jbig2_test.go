@@ -8,7 +8,7 @@ import "testing"
 
 // TestJBIG2Malformed rejects garbage without panicking.
 func TestJBIG2Malformed(t *testing.T) {
-	if _, err := Decode(nil, []byte{0, 0, 0, 0, 0x30, 0x00, 0x01}, 8, 8); err == nil {
+	if _, err := Decode(nil, []byte{0, 0, 0, 0, 0x30, 0x00, 0x01}, 8, 8, testBudget); err == nil {
 		t.Error("expected an error on malformed JBIG2 data")
 	}
 }
@@ -17,7 +17,7 @@ func TestJBIG2Malformed(t *testing.T) {
 // was not a wrong finding but a crash: ccitt.Decode stops early and returns a
 // nil error when its data runs out, and decodeGenericMMR indexed the short
 // result as if it held every row. The resulting slice-bounds panic is not
-// errJBIG2Budget, so Decode's recover re-raised it and it escaped
+// ErrBudget, so Decode's recover re-raised it and it escaped
 // ExtractImages to the caller.
 //
 // Before the fix this failed with:

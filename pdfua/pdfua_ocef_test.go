@@ -8,7 +8,7 @@ import (
 
 // TestUAOptionalContent covers the 7.10 OC-configuration rules.
 func TestUAOptionalContent(t *testing.T) {
-	doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+	doc := mkView(map[int]*object.IndirectObject{}, nil)
 	mk := func(cfg *object.Dictionary) *object.Dictionary {
 		ocp := &object.Dictionary{}
 		ocp.Set("D", cfg)
@@ -39,7 +39,7 @@ func TestUAOptionalContent(t *testing.T) {
 // TestUAEmbeddedFiles covers the 7.11 embedded-file filespec rules.
 func TestUAEmbeddedFiles(t *testing.T) {
 	mk := func(setF, setUF bool) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		fs := &object.Dictionary{}
 		fs.Set("Type", object.Name("Filespec"))
 		fs.Set("EF", &object.Dictionary{})

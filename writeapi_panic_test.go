@@ -272,14 +272,21 @@ func TestFreeFunctionsSurviveDegenerateArguments(t *testing.T) {
 			_, err := RadialGradient(0, 0, 1, 0, 0, 2, nil)
 			return err
 		},
-		"shading pattern over nil": func() error { _ = ShadingPattern(nil); return nil },
-		"luminosity mask over nil": func() error { _, err := LuminositySoftMask(nil, [3]float64{}); return err },
-		"luminosity mask, bad backdrop": func() error {
-			_, err := LuminositySoftMask(object.Null{}, [3]float64{nan, inf, -1})
+		"shading pattern over nil": func() error { _, err := ShadingPattern(nil, nil); return err },
+		"luminosity mask on a nil document": func() error {
+			_, err := (*Document)(nil).LuminositySoftMask(object.IndirectRef{Number: 1}, nil)
 			return err
 		},
-		"alpha mask over nil": func() error { _, err := AlphaSoftMask(nil); return err },
-		"no soft mask":        func() error { _ = NoSoftMask(); return nil },
+		"luminosity mask over nothing": func() error {
+			_, err := NewDocument().LuminositySoftMask(object.IndirectRef{}, nil)
+			return err
+		},
+		"luminosity mask, bad backdrop": func() error {
+			_, err := NewDocument().LuminositySoftMask(object.IndirectRef{Number: 1}, []float64{nan, inf, -1})
+			return err
+		},
+		"alpha mask over nothing": func() error { _, err := NewDocument().AlphaSoftMask(object.IndirectRef{Number: 99}); return err },
+		"no soft mask":            func() error { _ = NoSoftMask(); return nil },
 		"uncoloured pattern space with an empty name": func() error {
 			_ = UncoloredPatternSpace("")
 			return nil

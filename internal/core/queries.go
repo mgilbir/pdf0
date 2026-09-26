@@ -9,6 +9,7 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
+	"github.com/mgilbir/pdf0/internal/pdfdoc"
 	"github.com/mgilbir/pdf0/object"
 )
 
@@ -318,7 +319,7 @@ func (doc View) DocumentXMP() string {
 	return doc.XMPText(stream)
 }
 
-// decodePDFTextString converts a PDF text string to UTF-8. Text strings are
+// DecodePDFTextString converts a PDF text string to UTF-8. Text strings are
 // either UTF-16BE with a BOM (PDF 2.0 adds UTF-8 with a BOM) or
 // PDFDocEncoded; comparing raw bytes against UTF-8 XMP values made every
 // UTF-16 Info entry "inconsistent" with its metadata counterpart.
@@ -343,8 +344,11 @@ func DecodePDFTextString(b []byte) string {
 	if len(b) >= 3 && b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF {
 		return string(b[3:]) // UTF-8 with BOM (PDF 2.0)
 	}
-	// PDFDocEncoding matches ASCII in the printable range; pass through.
-	return string(b)
+	// Neither byte-order mark: the string is PDFDocEncoded (ISO 32000-2
+	// 7.9.2.2). It agrees with ASCII only in the printable range, so passing
+	// the bytes through made "Caf\351" the invalid UTF-8 "Caf\xe9" rather than
+	// "Café", and every comparison against XMP (which is Unicode) failed on it.
+	return pdfdoc.Decode(b)
 }
 
 // parseToUnicodeMap parses a font's ToUnicode CMap into a map from character
@@ -666,7 +670,7 @@ func StreamFiltersSupported(stream *object.Stream) bool {
 // IsSupportedFilter reports whether applyFilter can decode the named filter.
 func IsSupportedFilter(name object.Name) bool {
 	switch name {
-	case "FlateDecode", "LZWDecode", "ASCIIHexDecode":
+	case "FlateDecode", "LZWDecode", "ASCIIHexDecode", "Crypt":
 		return true
 	}
 	return false

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mgilbir/pdf0/internal/testfiles"
 )
 
 // This test cross-checks pdf0's hand-coded XMP schema tables (xmp_schemas.go)
@@ -314,11 +316,11 @@ var completeNamespaces = map[string]bool{
 }
 
 func TestXMPTablesMatchRNG(t *testing.T) {
-	dir := "testdata/xmp-rng"
-	files, _ := filepath.Glob(filepath.Join(dir, "XMP_Properties-*.rng"))
-	if len(files) == 0 {
-		t.Skip("vendored XMP RNG schemas not present")
-	}
+	// Resolved against the module root, and fatal when absent: the schemas are
+	// committed. The package-relative "testdata/xmp-rng" this used to name is
+	// pdfa/testdata, which does not exist, so the guard skipped on every run
+	// from the package split on (audit 2026-09-22 C103).
+	files := testfiles.CommittedGlob(t, "testdata/xmp-rng/XMP_Properties-*.rng")
 	schemas := map[string]*xmpRNGSchema{} // nsURI -> schema
 	for _, f := range files {
 		s := parseXMPRNG(t, f)

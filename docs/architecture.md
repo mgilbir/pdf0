@@ -92,11 +92,19 @@ own caller.
 Every PDF value implements the `object.Object` interface: `Boolean`, `Integer`, `Real`, `String`,
 `Name`, `Array`, `Dictionary`, `Stream`, `Null`, `IndirectObject`,
 `IndirectRef`. A `Document` holds `Objects` (object number →
-`IndirectObject`), the `Trailer` dictionary, and — after `Read` — `Offsets`
-(object number → absolute byte offset, used by the byte-level validation rules).
-`Dictionary` uses parallel `Keys`/`Values` slices to preserve key order for
-faithful round-tripping, with a lazy name→slot index above 64 keys — see
-[ADR 0005](adr/0005-parallel-slice-dictionary.md).
+`IndirectObject`), the `Trailer` dictionary, and — after `Read` — a source
+record, `Source()`: the file's bytes, its cross-reference sections and
+revisions, the highest object number and `/Size` it uses, and each object's byte
+offset (used by the byte-level validation rules). Read normalises the file
+structure out of `Objects` and `Trailer`; the record keeps what incremental
+writers, the object-number allocator (`Add`) and byte-level checks still need.
+`Dictionary` is opaque: it keeps its entries in insertion order for faithful
+round-tripping, holds one entry per key, and is read and changed only through
+its methods, whose mutators maintain the lookup index so that reads are pure and
+safe to run concurrently — see [ADR 0008](adr/0008-opaque-dictionary.md).
+`Dictionary`, `Stream` and `IndirectObject` are `Object`s only as pointers
+(their marker method has a pointer receiver), so each type has exactly one form
+a type switch has to handle.
 
 ## Read
 
@@ -107,30 +115,39 @@ escaping the parse is recovered and returned as an error.
 ```mermaid
 flowchart TD
     A[Read bytes + size] --> B[parseHeader: version + headerOffset]
-    B --> C[findStartXref: scan last 1KB]
+    B --> C[locateXRef: last 1KB, then whole file]
     C --> D{xref offset valid?<br/>absolute vs header-relative probe}
-    D --> E["parse xref sections, follow /Prev<br/>visited-set guards cycles<br/>(recovery ladder below)"]
+    D -->|no startxref, or outside file| E2[rebuild table by scan]
+    D --> E["parse xref sections, follow /Prev<br/>hybrid /XRefStm merged into its section<br/>visited-set guards cycles<br/>(recovery ladder below)"]
     E --> F[load uncompressed objects<br/>xref key is the object number]
-    F --> G["decrypt strings + streams<br/>(standard security handler)"]
+    F --> G["validate /Encrypt, derive the key<br/>decrypt strings + /ObjStm containers<br/>(or record why it stays Locked)"]
     G --> H[loadCompressedObjects<br/>materialize /ObjStm entries]
-    H -->|decode fails| H2[record brokenObjStms<br/>non-fatal]
-    H --> I[normalizeStructure<br/>drop XRef/ObjStm objects + their Offsets]
+    H -->|decode fails, container missing<br/>or not a stream| H2[record brokenObjStms<br/>non-fatal]
+    H --> G2["decrypt the remaining streams<br/>(their crypt filter can depend on the whole graph)"]
+    G2 --> S[source record: high-water mark,<br/>/Size, sections, revisions]
+    S --> I[normalizeStructure<br/>drop XRef/ObjStm objects + their offsets]
     I --> J[set Encrypted from /Encrypt]
     J --> K[(Document)]
     A -.panic anywhere.-> R[recover -> error, never crash]
 ```
 
-**Decryption runs before object streams are materialized**, and the order is
-load-bearing: an `/ObjStm` container is itself an encrypted stream, but the
-objects stored inside it are *not* separately encrypted. Materializing first
-would decrypt the inner objects a second time and corrupt them.
+**Decryption of strings and object-stream containers runs before object streams
+are materialized**, and the order is load-bearing: an `/ObjStm` container is
+itself an encrypted stream, but the objects stored inside it are *not*
+separately encrypted. Materializing first would decrypt the inner objects a
+second time and corrupt them. The other streams are decrypted *after*, because
+which crypt filter applies to one — an embedded file follows `/EFF` — is decided
+by a file specification that may itself be inside an object stream. An
+`/Encrypt` dictionary never fails the read; see
+[encryption.md](encryption.md#the-ordering-constraint-and-what-is-exempt).
 
 ### The recovery ladder
 
 Most defects are recovered rather than fatal. A wrong or wrong-typed stream
 `/Length` falls back to searching for `endstream`; an offset-shifted
-cross-reference is probed absolute-vs-header-relative; an undecodable object
-stream is recorded in `brokenObjStms` and its objects are simply absent.
+cross-reference is probed absolute-vs-header-relative; an object stream that
+does not decode, is missing, is not a stream, or holds an object that does not
+parse is recorded in `brokenObjStms` and its objects are simply absent.
 
 The cross-reference table has the deepest recovery, because a damaged xref is the
 most common way a real-world file is broken. `Read` escalates through a ladder
@@ -138,7 +155,8 @@ and only fails when every rung is exhausted:
 
 ```mermaid
 flowchart TD
-    ST["findStartXref → offset<br/>(probe absolute vs header-relative)"] --> PS[parseXRefSection]
+    ST["locateXRef → offset<br/>(last 1KB, then whole file;<br/>probe absolute vs header-relative)"] --> PS[parseXRefSection]
+    ST -->|"no startxref,<br/>or outside the file"| RB
     PS -->|ok| MERGE["merge section, follow /Prev<br/>visited-set guards cycles"]
     PS -->|error| PK["precedingXrefKeyword:<br/>nearest standalone 'xref' at or before the offset<br/>(producers point INTO the table)"]
     PK -->|reparsed| MERGE
@@ -163,13 +181,19 @@ flowchart TD
     SYN --> OK
 ```
 
-**What is actually fatal.** `Read` returns an error only when: the header or
-`startxref` cannot be found at all; the newest cross-reference section fails to
-parse *and* a full rebuild by scanning finds no usable table; a rebuilt document
-contains no `/Type /Catalog` to synthesize `/Root` from; or the input is short
-(a truncated read would otherwise look like trailing whitespace). A parse failure
-on an individual uncompressed object is fatal only for a table the file itself
-supplied — it triggers the scan-rebuild first.
+**What is actually fatal.** `Read` returns an error only when: the header cannot
+be found; the cross-reference data is unusable (no `startxref`, one outside the
+file, or a newest section that does not parse) *and* a full rebuild by scanning
+finds no usable table; a rebuilt document contains no `/Type /Catalog` to
+synthesize `/Root` from; the input is short (a truncated read would otherwise
+look like trailing whitespace); or a type-2 entry's index names a different
+object in its object stream's own index. That last one is deliberate: it is not
+missing data but two parts of the file disagreeing about which object is object
+N, and choosing either is a guess a crafted file could steer. A parse failure on
+an individual uncompressed object is fatal only for a table the file itself
+supplied — it triggers the scan-rebuild first. A section whose cross-reference
+stream decodes to more in-use entries than the file could hold (one per four
+bytes, plus 4096) counts as unparseable.
 
 This depth is deliberate: it lets the PDF/A validator *report* a malformation
 instead of failing to open the file. A validator that cannot read a broken file
@@ -204,8 +228,11 @@ output (guarded by `TestWriteIsIdempotent`).
 round-trips exactly, but object order and which objects share an `/ObjStm` are
 regenerated. To amend a file without rewriting it, use `WriteIncremental`
 (`incremental.go`), which appends a new section listing only the changed object
-numbers and leaves the original bytes untouched — this is what signature
-workflows require, since rewriting would break every existing signature.
+numbers to the bytes in the source record and leaves them untouched — this is
+what signature workflows require, since rewriting would break every existing
+signature. The new section has the form of the one it chains to (a
+cross-reference stream after a stream, a table otherwise), its `/Size` is never
+below the file's, and its second `/ID` string is refreshed.
 
 ## Validate
 
@@ -257,6 +284,7 @@ one `Document` from several goroutines stays safe — the property package-level
 | `WithMaxTableGridFills` | 1<<24 | grid slots filled for one PDF/UA table |
 | `WithMaxPostScriptSteps` | 1<<20 | operators one type-4 function evaluation may run |
 | `WithMaxCmapWork` | 1<<18 | work spent expanding one TrueType cmap subtable of format 4 or 12 |
+| `WithMaxImagePixels` | 1<<26 | pixels in one image extraction decodes, for every codec (four samples per pixel beyond that) |
 
 Defaults are evidence-based where the evidence exists: the figures come from
 measuring the veraPDF corpus (2,907 files) and a 978-file Common Crawl sample.
@@ -329,9 +357,9 @@ images — rather than to a bounded structural count.
 | `Read`, `ReadWithPassword` | `PageList`, `PageCount`, `Resolve`, `Equal`, `DocumentEqual`, `Repair`, `ExtractPages`, `AppendPages` | Structural walks over objects already in memory: no decompression, no content scanning. Microseconds to low milliseconds. |
 | `Write` | `WriteIncremental`, `SetEncryption` | Bounded by the changed-object set. |
 | All eleven validators (`ValidatePDFA`, `ValidatePDFABytes`, `ValidatePDFUA`, `ValidatePDFUA2`, `ValidatePDFX`, `ValidatePDFVT`, `ValidatePDFVT2`, `ValidatePDFR`, `ValidateDParts`, `ValidateFacturX`, `ValidateOrderX`) | — | The two invoice containers were the exception until `formalis` v0.2.0, and on two counts, both now lapsed: their findings were `formalis.Violation` values, which could not satisfy `pdf0.Violation` and so were outside `IsCheckerFinding`, and the invoice half of the work was a rule engine that took no context. The findings are `facturx.Violation` / `facturx.OrderXViolation` now and the engine takes one, so both halves honour `ctx` and a cancelled run reports `limit` like every other validator. |
-| `ExtractText`, `ExtractImages` | `ExtractPageText` | One page *is* the unit of work; a caller iterating pages already has a loop to check a context in. |
+| `ExtractText`, `ExtractImages` | `ExtractPageText` | One page *is* the unit of work; a caller iterating pages already has a loop to check a context in. Like `ExtractText`, it returns an error for a page it had to leave out. |
 | | `Images` | An iterator is already cancellable by `break`, and because each image is decoded only as it is yielded, breaking after image N skips exactly what a context checked between images would have. |
-| | `VerifySignatures`, `ValidatePAdES`, `WriteSigned*` | Bounded by the signature count (single digits), and each signature's crypto is bounded. |
+| | `VerifySignatures`, `ValidatePAdES`, `WriteSigned*` | Linear in the file: every signed range is hashed where it lies, with the prefix the signatures share hashed once, and the revision comparison behind the allowed-changes analysis has a work budget, past which the changes are reported unknown (never permitted). |
 
 The rule that falls out of the third row is worth stating on its own: **an entry
 point gets a `…Context` variant only if it has somewhere honest to report the

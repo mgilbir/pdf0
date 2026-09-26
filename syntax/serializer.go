@@ -16,15 +16,21 @@ import (
 // cross-reference entries; it knows nothing of file structure — the header,
 // cross-reference section and trailer belong to document.go.
 //
-// Its output must be readable by this package's own lexer, which is why a NUL
-// in a name and a non-finite Real are refused rather than approximated, and why
-// recursion is depth-capped: unlike anything the parser produces, a
-// caller-constructed object graph can be cyclic.
+// Its contract is the parser's, mirrored: WriteObject emits only what
+// ParseObject accepts and WriteIndirectObject only what ParseIndirectObject
+// accepts, so every successful write reparses to an Equal object. A model the
+// parser could not have produced is an error, never a panic and never bytes the
+// parser rejects: a nil value, a negative object or generation number, an
+// indirect object definition in a value position, a NUL in a name, a
+// non-finite Real, a pointer to a scalar value. On an error the bytes already
+// written are incomplete and must be discarded. Recursion is depth-capped:
+// unlike anything the parser produces, a caller-constructed object graph can be
+// cyclic.
 
 // maxSerializeDepth bounds recursion through nested arrays/dictionaries so a
 // cyclic direct object cannot exhaust the goroutine stack (an unrecoverable
-// fatal error). The parser cannot build such cycles, but Dictionary fields are
-// exported and callers construct object graphs programmatically.
+// fatal error). The parser cannot build such cycles, but callers construct
+// object graphs programmatically, and a dictionary can hold itself.
 const maxSerializeDepth = 1000
 
 // Serializer writes PDF objects to an io.Writer.
@@ -54,7 +60,11 @@ func (s *Serializer) WriteString(str string) error {
 	return s.write([]byte(str))
 }
 
-// WriteObject writes any PDF object to the output.
+// WriteObject writes any PDF object. An *IndirectObject is written as a
+// definition only when it is the object passed in, where it is equivalent to
+// WriteIndirectObject; nested inside an array, a dictionary or another
+// definition it is refused, because the parser rejects "N G obj" where a value
+// is expected. Reference it with an IndirectRef instead.
 func (s *Serializer) WriteObject(obj object.Object) error {
 	if s.depth > maxSerializeDepth {
 		return fmt.Errorf("maximum nesting depth %d exceeded (cyclic object graph?)", maxSerializeDepth)
@@ -88,12 +98,19 @@ func (s *Serializer) WriteObject(obj object.Object) error {
 	case object.Null:
 		return s.WriteString("null")
 	case *object.IndirectObject:
-		if v == nil {
-			return fmt.Errorf("cannot serialize a nil *IndirectObject")
+		if s.depth == 1 {
+			return s.WriteIndirectObject(v)
 		}
-		return s.WriteIndirectObject(v)
+		return fmt.Errorf("an indirect object definition (%d %d obj) cannot appear in a value position; reference it with an IndirectRef", indirectNumber(v), indirectGeneration(v))
 	case object.IndirectRef:
 		return s.writeIndirectRef(v)
+	case nil:
+		return fmt.Errorf("cannot serialize a nil object")
+	case *object.Boolean, *object.Integer, *object.Real, *object.String, *object.Name,
+		*object.Array, *object.Null, *object.IndirectRef:
+		// These satisfy Object only through Go's method-set rules; the value
+		// is the one representation (see the object package documentation).
+		return fmt.Errorf("%T is a pointer to a PDF value, not a PDF object: store the value itself", obj)
 	default:
 		return fmt.Errorf("unsupported object type: %T", obj)
 	}
@@ -233,11 +250,15 @@ func (s *Serializer) writeArray(arr object.Array) error {
 	return s.WriteString("]")
 }
 
+// WriteDictionary writes dict as a dictionary object.
 func (s *Serializer) WriteDictionary(dict *object.Dictionary) error {
+	if dict == nil {
+		return fmt.Errorf("cannot serialize a nil *Dictionary")
+	}
 	if err := s.WriteString("<<"); err != nil {
 		return err
 	}
-	for i, key := range dict.Keys {
+	for key, val := range dict.All() {
 		if err := s.WriteString(" "); err != nil {
 			return err
 		}
@@ -247,7 +268,7 @@ func (s *Serializer) WriteDictionary(dict *object.Dictionary) error {
 		if err := s.WriteString(" "); err != nil {
 			return err
 		}
-		if err := s.WriteObject(dict.Values[i]); err != nil {
+		if err := s.WriteObject(val); err != nil {
 			return err
 		}
 	}
@@ -277,8 +298,30 @@ func (s *Serializer) writeStream(stream *object.Stream) error {
 	return s.WriteString("\nendstream")
 }
 
-// WriteIndirectObject writes an indirect object definition to the output.
+// WriteIndirectObject writes an indirect object definition to the output. The
+// object number must be in 0..MaxObjectNumber, the generation in
+// 0..MaxGeneration, and the value must be a value, not another definition:
+// what ParseIndirectObject accepts. Everything checkable before the first byte
+// is checked before it.
 func (s *Serializer) WriteIndirectObject(obj *object.IndirectObject) error {
+	if obj == nil {
+		return fmt.Errorf("cannot serialize a nil *IndirectObject")
+	}
+	// The header is what the cross-reference entry for this object repeats, and
+	// a number or generation outside what the parser accepts would produce a
+	// header (and an xref line) no reader, pdf0 included, reads back.
+	if obj.Number < 0 || obj.Number > MaxObjectNumber {
+		return fmt.Errorf("indirect object %d %d: object number is outside 0..%d", obj.Number, obj.Generation, MaxObjectNumber)
+	}
+	if obj.Generation < 0 || obj.Generation > MaxGeneration {
+		return fmt.Errorf("indirect object %d %d: generation is outside 0..%d", obj.Number, obj.Generation, MaxGeneration)
+	}
+	if obj.Value == nil {
+		return fmt.Errorf("indirect object %d %d has no value", obj.Number, obj.Generation)
+	}
+	if _, nested := obj.Value.(*object.IndirectObject); nested {
+		return fmt.Errorf("indirect object %d %d: its value is another indirect object definition", obj.Number, obj.Generation)
+	}
 	if err := s.WriteString(fmt.Sprintf("%d %d obj\n", obj.Number, obj.Generation)); err != nil {
 		return err
 	}
@@ -289,5 +332,24 @@ func (s *Serializer) WriteIndirectObject(obj *object.IndirectObject) error {
 }
 
 func (s *Serializer) writeIndirectRef(ref object.IndirectRef) error {
+	if ref.Number < 0 || ref.Generation < 0 {
+		return fmt.Errorf("reference %d %d R: object and generation numbers must be non-negative", ref.Number, ref.Generation)
+	}
 	return s.WriteString(fmt.Sprintf("%d %d R", ref.Number, ref.Generation))
+}
+
+// indirectNumber and indirectGeneration read a possibly nil *IndirectObject for
+// an error message.
+func indirectNumber(o *object.IndirectObject) int {
+	if o == nil {
+		return 0
+	}
+	return o.Number
+}
+
+func indirectGeneration(o *object.IndirectObject) int {
+	if o == nil {
+		return 0
+	}
+	return o.Generation
 }

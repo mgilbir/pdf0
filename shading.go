@@ -31,13 +31,23 @@ type Stop struct {
 	Color [3]float64
 }
 
-// LinearGradient builds an axial shading running from (x0, y0) to (x1, y1),
-// in the coordinate space the shading is used in.
+// LinearGradient builds an axial shading running from (x0, y0) to (x1, y1).
+//
+// The coordinates are in the space the shading is painted in, which depends on
+// how it is used. Painted with sh (content.Builder.Shading) that is the current
+// user space, so a cm before it moves and scales the gradient. Used through a
+// ShadingPattern it is the pattern's space, which is anchored to the page (or
+// form) and not to the current transformation — see ShadingPattern.
 //
 // The gradient is extended past both ends, so a shape larger than the axis is
 // filled with the end colours rather than left unpainted — which is what CSS
 // does and what a caller almost always means.
 func LinearGradient(x0, y0, x1, y1 float64, stops []Stop) (*object.Dictionary, error) {
+	for i, v := range []float64{x0, y0, x1, y1} {
+		if err := checkFinite(fmt.Sprintf("the linear gradient's coordinate %d", i), v); err != nil {
+			return nil, err
+		}
+	}
 	fn, err := gradientFunction(stops)
 	if err != nil {
 		return nil, err
@@ -63,6 +73,11 @@ func LinearGradient(x0, y0, x1, y1 float64, stops []Stop) (*object.Dictionary, e
 // the same centre; the general two-circle form is what PDF offers, and it also
 // expresses a cone.
 func RadialGradient(x0, y0, r0, x1, y1, r1 float64, stops []Stop) (*object.Dictionary, error) {
+	for i, v := range []float64{x0, y0, r0, x1, y1, r1} {
+		if err := checkFinite(fmt.Sprintf("the radial gradient's coordinate %d", i), v); err != nil {
+			return nil, err
+		}
+	}
 	fn, err := gradientFunction(stops)
 	if err != nil {
 		return nil, err
@@ -92,12 +107,34 @@ func RadialGradient(x0, y0, r0, x1, y1, r1 float64, stops []Stop) (*object.Dicti
 // the clip allows, ignoring the current path; a pattern is a colour, selected
 // in the /Pattern colour space and used by any fill. Filling a rounded
 // rectangle with a gradient is the second.
-func ShadingPattern(shading object.Object) *object.Dictionary {
+//
+// They also place the shading differently. A pattern's coordinates are in
+// pattern space, which matrix maps into the default coordinate space of the
+// page — or of the form, for a pattern a form's content uses — whatever the
+// current transformation is when the fill happens (ISO 32000-2 8.7.2). A cm
+// before the fill does not move the gradient; matrix does. Nil means the
+// identity: the shading's coordinates are the page's own. To fill a shape
+// drawn under a transformation T with a gradient that moves with it, pass T
+// (composed with any transformation above it) as the matrix.
+func ShadingPattern(shading object.Object, matrix *[6]float64) (*object.Dictionary, error) {
+	if shading == nil {
+		return nil, fmt.Errorf("pdf0: a shading pattern needs a shading")
+	}
+	if err := checkMatrix("the shading pattern's matrix", matrix); err != nil {
+		return nil, err
+	}
 	p := &object.Dictionary{}
 	p.Set("Type", object.Name("Pattern"))
 	p.Set("PatternType", object.Integer(2)) // shading pattern
 	p.Set("Shading", shading)
-	return p
+	if matrix != nil {
+		m := make(object.Array, 0, 6)
+		for _, v := range matrix {
+			m = append(m, numberFor(v))
+		}
+		p.Set("Matrix", m)
+	}
+	return p, nil
 }
 
 // gradientFunction builds the PDF function that maps a position along the
@@ -114,16 +151,16 @@ func gradientFunction(stops []Stop) (object.Object, error) {
 	}
 	prev := -1.0
 	for i, s := range stops {
-		if s.Offset < 0 || s.Offset > 1 {
-			return nil, fmt.Errorf("pdf0: colour stop %d is at %g, outside [0,1]", i, s.Offset)
+		if err := checkUnit(fmt.Sprintf("colour stop %d's offset", i), s.Offset); err != nil {
+			return nil, err
 		}
 		if s.Offset < prev {
 			return nil, fmt.Errorf("pdf0: colour stop %d is at %g, before the one before it at %g", i, s.Offset, prev)
 		}
 		prev = s.Offset
 		for c, v := range s.Color {
-			if v < 0 || v > 1 {
-				return nil, fmt.Errorf("pdf0: colour stop %d component %d is %g, outside [0,1]", i, c, v)
+			if err := checkUnit(fmt.Sprintf("colour stop %d's component %d", i, c), v); err != nil {
+				return nil, err
 			}
 		}
 	}

@@ -10,7 +10,7 @@ import (
 // placed on a pure-widget child, and accepts the conformant arrangements.
 func TestUAFieldDescription(t *testing.T) {
 	mk := func(fieldTU string, kid *object.Dictionary) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		field := &object.Dictionary{}
 		field.Set("FT", object.Name("Btn"))
 		if fieldTU != "" {

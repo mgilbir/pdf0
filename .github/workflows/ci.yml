@@ -33,6 +33,13 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      - name: no unintended Dictionary copies
+        # A copied Dictionary shares its entries with the original, so a copy
+        # made expecting a snapshot silently edits the original. Under the
+        # dictcopycheck tag go vet's copylocks reports every copy; each one
+        # that is meant carries a "dictcopy:" comment saying why (ADR 0008).
+        run: ./scripts/check-dict-copies.sh
+
       - name: build
         run: go build ./...
 

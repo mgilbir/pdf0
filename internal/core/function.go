@@ -1,8 +1,10 @@
 package core
 
 import (
-	"github.com/mgilbir/pdf0/object"
 	"math"
+
+	"github.com/mgilbir/pdf0/internal/checked"
+	"github.com/mgilbir/pdf0/object"
 )
 
 // This file evaluates PDF functions (ISO 32000-1 clause 7.10): type 0 sampled,
@@ -167,13 +169,19 @@ func evalType0(d View, stream *object.Stream, dict *object.Dictionary, domain []
 		return nil, false
 	}
 	size := make([]int, m)
-	total := 1
+	total := int64(1)
 	for i := range size {
 		size[i] = object.Int(d.Resolve(sizeArr[i]))
 		if size[i] < 1 {
 			return nil, false
 		}
-		total *= size[i]
+		// The product must not wrap: [MaxInt MaxInt] multiplies to 1 and would
+		// pass the sample-table check below, then index outside the table
+		// (audit 2026-09-22 C15).
+		var ok bool
+		if total, ok = checked.Mul(total, int64(size[i])); !ok {
+			return nil, false
+		}
 	}
 	bps := object.Int(d.Resolve(dict.Get("BitsPerSample")))
 	switch bps {
@@ -200,9 +208,11 @@ func evalType0(d View, stream *object.Stream, dict *object.Dictionary, domain []
 		return nil, false
 	}
 	data := d.Content(stream)
-	// Guard against a sample table that does not hold every grid sample.
-	needBits := int64(total) * int64(n) * int64(bps)
-	if int64(len(data))*8 < needBits {
+	// Guard against a sample table that does not hold every grid sample:
+	// total*n samples of bps bits each, compared by division so that no
+	// product of file-supplied numbers can overflow. Every sample offset below
+	// is then less than len(data)*8.
+	if total > int64(len(data))*8/int64(bps)/int64(n) {
 		return nil, false
 	}
 	maxSample := float64(uint64(1)<<uint(bps) - 1)

@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"encoding/csv"
+	"github.com/mgilbir/pdf0/internal/testfiles"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/pdfa"
 	"os"
@@ -388,38 +389,14 @@ func arlValidate(m *arlModel, data []byte) (findings []string, readErr error) {
 // So: unset and absent is a skip, because the model is fetched on demand and a
 // developer without it should still be able to run the suite. Set and wrong is
 // a failure, because somebody meant to run this and did not.
+//
+// The resolution is testfiles.Arlington's: ARLINGTON_MODEL may name the
+// tsv/2.0 directory or the checkout above it (the usual mistake, and
+// unambiguous), the checkout must carry the .ok stamp `make arlington` writes,
+// and Catalog.tsv, which every version of the model has, must be there.
 func arlModelDir(t *testing.T) string {
-	const marker = "Catalog.tsv" // every version of the model has one
-
-	env := os.Getenv("ARLINGTON_MODEL")
-	dir := env
-	if dir == "" {
-		dir = "testdata/arlington-pdf-model/tsv/2.0"
-	}
-	if _, err := os.Stat(filepath.Join(dir, marker)); err == nil {
-		return dir
-	}
-
-	// The usual mistake is naming the checkout rather than the grammar inside
-	// it. That is unambiguous, so take it rather than making someone guess.
-	if nested := filepath.Join(dir, "tsv", "2.0"); fileExists(filepath.Join(nested, marker)) {
-		return nested
-	}
-
-	if env == "" {
-		t.Skip("Arlington model not present; run `make arlington`")
-	}
-	t.Fatalf("ARLINGTON_MODEL is set to %q, and there is no %s there or in %s.\n"+
-		"It must name the directory holding the grammar — testdata/arlington-pdf-model/tsv/2.0 —\n"+
-		"not the checkout above it. Failing rather than skipping: this test is a ratchet,\n"+
-		"and a skip would report success having checked nothing.",
-		env, marker, filepath.Join(env, "tsv", "2.0"))
-	return ""
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
+	t.Helper()
+	return filepath.Dir(testfiles.Arlington.File(t, "Catalog.tsv"))
 }
 
 // TestArlingtonParserFaithful checks that pdf0 represents known-conforming
@@ -453,8 +430,14 @@ func TestArlingtonParserFaithful(t *testing.T) {
 		check("generated "+lv.name, buf.Bytes())
 	}
 
-	// Reference PDFs: parse-check and Read->Write round-trip-check.
-	refs, _ := filepath.Glob("testdata/pdf20examples/*.pdf")
+	// Reference PDFs: parse-check and Read->Write round-trip-check, when they
+	// are present; present and empty fails.
+	var refs []string
+	if _, ok, why := testfiles.PDF20Examples.Lookup(t); ok {
+		refs = testfiles.PDF20Examples.Glob(t, "*.pdf")
+	} else {
+		t.Logf("checking builder output only: %s", why)
+	}
 	for _, f := range refs {
 		data, err := os.ReadFile(f)
 		if err != nil {
@@ -496,17 +479,17 @@ func TestArlingtonCorpusParserFaithful(t *testing.T) {
 
 	var passTotal, passWith, failWith int
 	passFindings := map[string]int{}
-	filepath.Walk(corpus, func(p string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(strings.ToLower(p), ".pdf") {
-			return nil
-		}
+	// Listed through testfiles, which fails on an empty or symlink-hidden
+	// corpus: filepath.Walk from a symlinked root visits nothing, and this
+	// test used to report "conformant files=0" and pass (C104).
+	for _, p := range testfiles.VeraPDFCorpus.PDFs(t, "") {
 		data, rerr := os.ReadFile(p)
 		if rerr != nil {
-			return nil
+			t.Fatalf("read %s: %v", p, rerr)
 		}
 		findings, verr := arlValidate(m, data)
 		if verr != nil {
-			return nil
+			continue
 		}
 		isPass := strings.Contains(filepath.Base(p), "-pass-")
 		if isPass {
@@ -519,11 +502,13 @@ func TestArlingtonCorpusParserFaithful(t *testing.T) {
 		} else if len(findings) > 0 {
 			failWith++
 		}
-		return nil
-	})
+	}
 
 	t.Logf("conformant files=%d with structural finding=%d (baseline %d); malformed files with finding=%d (expected)",
 		passTotal, passWith, arlCorpusPassBaseline, failWith)
+	if passTotal == 0 {
+		t.Fatal("no conformant (-pass-) corpus file reached the oracle; the ratchet checked nothing")
+	}
 	if passWith > arlCorpusPassBaseline {
 		var names []string
 		for n := range passFindings {

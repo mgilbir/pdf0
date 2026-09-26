@@ -6,25 +6,54 @@ import (
 	"testing"
 )
 
-func TestXMPPDFUAPart(t *testing.T) {
-	cases := map[string]string{
-		`<pdfuaid:part>1</pdfuaid:part>`:  "1",
-		`<pdfuaid:part>2</pdfuaid:part>`:  "2",
-		`pdfuaid:part="1"`:                "1",
-		`pdfuaid:part='3'`:                "3",
-		`rdf:about="" pdfuaid:part="1" x`: "1",
-		`no part here`:                    "",
+// uaXMPView is a document whose catalog carries the given XMP packet.
+func uaXMPView(packet string) (core.View, *object.Dictionary) {
+	doc := mkView(nil, nil)
+	ms := object.NewStream(object.NewDictionary(), []byte(packet))
+	doc.Objects[2] = &object.IndirectObject{Number: 2, Value: ms}
+	cat := object.NewDictionary(object.Entry{Key: "Metadata", Value: object.IndirectRef{Number: 2}})
+	doc.Objects[1] = &object.IndirectObject{Number: 1, Value: cat}
+	doc.Trailer.Set("Root", object.IndirectRef{Number: 1})
+	return doc, cat
+}
+
+func uaPacket(descAttrs, body string) string {
+	return `<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">` +
+		`<rdf:Description rdf:about=""` + descAttrs + `>` + body + `</rdf:Description></rdf:RDF></x:xmpmeta>`
+}
+
+// TestUAIdentifierReadByModel: pdfuaid:part is read through the XMP model, so
+// every legal spelling is read as what it says and no text that merely looks
+// like it is (audit C141).
+func TestUAIdentifierReadByModel(t *testing.T) {
+	const ns = ` xmlns:pdfuaid="http://www.aiim.org/pdfua/ns/id/"`
+	cases := []struct {
+		name, packet string
+		wantClean    bool
+	}{
+		{"element", uaPacket(ns, `<pdfuaid:part>1</pdfuaid:part>`), true},
+		{"attribute, double quotes", uaPacket(ns+` pdfuaid:part="1"`, ``), true},
+		{"attribute, single quotes, spaces", uaPacket(ns+` pdfuaid:part = '1'`, ``), true},
+		{"comment holding a stale value", uaPacket(ns, `<!-- <pdfuaid:part>2</pdfuaid:part> --><pdfuaid:part>1</pdfuaid:part>`), true},
+		{"wrong part", uaPacket(ns, `<pdfuaid:part>2</pdfuaid:part>`), false},
+		{"only in a comment", uaPacket(ns, `<!-- <pdfuaid:part>1</pdfuaid:part> -->`), false},
+		{"prefix bound elsewhere", uaPacket(` xmlns:pdfuaid="urn:other"`, `<pdfuaid:part>1</pdfuaid:part>`), false},
+		{"another prefix", uaPacket(` xmlns:ua="http://www.aiim.org/pdfua/ns/id/"`, `<ua:part>1</ua:part>`), false},
 	}
-	for in, want := range cases {
-		if got := xmpPDFUAPart(in); got != want {
-			t.Errorf("xmpPDFUAPart(%q) = %q, want %q", in, got, want)
-		}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			d, cat := uaXMPView(c.packet)
+			got := checkUAIdentifier(d, cat, "1")
+			if clean := len(got) == 0; clean != c.wantClean {
+				t.Errorf("checkUAIdentifier = %v, want clean=%v", got, c.wantClean)
+			}
+		})
 	}
 }
 
 func TestUAStructParent(t *testing.T) {
 	mk := func(withP bool) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		e := &object.Dictionary{}
 		e.Set("S", object.Name("P"))
 		if withP {
@@ -50,7 +79,7 @@ func TestUAStructParent(t *testing.T) {
 
 func TestUARoleMapIntegrity(t *testing.T) {
 	mk := func(roleMap *object.Dictionary) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		root := &object.Dictionary{}
 		root.Set("Type", object.Name("StructTreeRoot"))
 		root.Set("RoleMap", roleMap)

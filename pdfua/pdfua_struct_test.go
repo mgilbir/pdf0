@@ -2,6 +2,7 @@ package pdfua
 
 import (
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/hostile"
 	"github.com/mgilbir/pdf0/object"
 	"testing"
 	"time"
@@ -13,7 +14,7 @@ func TestUAStructNesting(t *testing.T) {
 	// Build: StructTreeRoot -> Table -> kids. In the bad case a TD hangs directly
 	// off the Table; in the good case Table -> TR -> TD.
 	mk := func(good bool) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		elem := func(num int, s object.Name, kids object.Array) {
 			d := &object.Dictionary{}
 			d.Set("S", s)
@@ -53,7 +54,7 @@ func TestUAStructNesting(t *testing.T) {
 
 // TestUAHeaderVersion flags a 2.0 header and accepts a 1.x one.
 func TestUAHeaderVersion(t *testing.T) {
-	d := mkViewVersion(nil, object.Dictionary{}, "2.0")
+	d := mkViewVersion(nil, nil, "2.0")
 	if len(checkUAHeaderVersion(d)) == 0 {
 		t.Error("2.0 header not flagged for PDF/UA-1")
 	}
@@ -65,7 +66,7 @@ func TestUAHeaderVersion(t *testing.T) {
 
 // TestUASuspects flags /MarkInfo /Suspects true.
 func TestUASuspects(t *testing.T) {
-	doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+	doc := mkView(map[int]*object.IndirectObject{}, nil)
 	cat := &object.Dictionary{}
 	mark := &object.Dictionary{}
 	mark.Set("Suspects", object.Boolean(true))
@@ -82,7 +83,7 @@ func TestUASuspects(t *testing.T) {
 // TestUAStrongWeak flags a document mixing H and Hn headings.
 func TestUAStrongWeak(t *testing.T) {
 	mk := func(types ...object.Name) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		var kids object.Array
 		n := 10
 		for _, ty := range types {
@@ -115,7 +116,7 @@ func TestUAStrongWeak(t *testing.T) {
 // TestUANotes flags Note elements lacking IDs or sharing an ID.
 func TestUANotes(t *testing.T) {
 	mk := func(ids ...string) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		var kids object.Array
 		n := 10
 		for _, id := range ids {
@@ -152,7 +153,7 @@ func TestUANotes(t *testing.T) {
 // StructTreeRoot -> MyTable -> MyRow -> TD, with the custom types reaching their
 // standard types through the supplied /RoleMap.
 func roleMapChainDoc(roleMap *object.Dictionary) core.View {
-	doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+	doc := mkView(map[int]*object.IndirectObject{}, nil)
 	elem := func(num int, s object.Name, kids object.Array) {
 		d := &object.Dictionary{}
 		d.Set("S", s)
@@ -213,29 +214,31 @@ func TestRoleMapChainResolves(t *testing.T) {
 // still report the types as unmapped: following chains must not trade a
 // single-hop false positive for a hang.
 func TestRoleMapChainTerminates(t *testing.T) {
-	rm := &object.Dictionary{}
-	rm.Set("MyTable", object.Name("MyRow"))
-	rm.Set("MyRow", object.Name("MyTable")) // a two-key cycle reaching no standard type
-	doc := roleMapChainDoc(rm)
-	cat := doc.ResolveDict(object.IndirectRef{Number: 1})
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		rm := &object.Dictionary{}
+		rm.Set("MyTable", object.Name("MyRow"))
+		rm.Set("MyRow", object.Name("MyTable")) // a two-key cycle reaching no standard type
+		doc := roleMapChainDoc(rm)
+		cat := doc.ResolveDict(object.IndirectRef{Number: 1})
 
-	done := make(chan []Violation, 1)
-	go func() { done <- checkUARoleMap(doc, cat) }()
-	select {
-	case v := <-done:
-		if len(v) != 2 {
-			t.Errorf("cyclic /RoleMap: got %d findings, want one per unmapped type: %+v", len(v), v)
+		done := make(chan []Violation, 1)
+		go func() { done <- checkUARoleMap(doc, cat) }()
+		select {
+		case v := <-done:
+			if len(v) != 2 {
+				t.Errorf("cyclic /RoleMap: got %d findings, want one per unmapped type: %+v", len(v), v)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatal("checkUARoleMap did not terminate on a cyclic /RoleMap")
 		}
-	case <-time.After(30 * time.Second):
-		t.Fatal("checkUARoleMap did not terminate on a cyclic /RoleMap")
-	}
-	// A type mapping to itself is a cycle of length one.
-	self := &object.Dictionary{}
-	self.Set("MyTable", object.Name("MyTable"))
-	sdoc := roleMapChainDoc(self)
-	if got := standardStructType(sdoc, sdoc.ResolveDict(object.IndirectRef{Number: 10}), self); got != "MyTable" {
-		t.Errorf("self-mapping type resolved to %q, want the raw type back", got)
-	}
+		// A type mapping to itself is a cycle of length one.
+		self := &object.Dictionary{}
+		self.Set("MyTable", object.Name("MyTable"))
+		sdoc := roleMapChainDoc(self)
+		if got := standardStructType(sdoc, sdoc.ResolveDict(object.IndirectRef{Number: 10}), self); got != "MyTable" {
+			t.Errorf("self-mapping type resolved to %q, want the raw type back", got)
+		}
+	})
 }
 
 // TestRoleMapChainBudgetDeclines pins the incomplete-result rule for this walk:

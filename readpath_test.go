@@ -20,11 +20,20 @@ func TestOverflowingObjectNumberRejected(t *testing.T) {
 	}
 }
 
-// C16: a lexer error following an integer must surface, not be swallowed.
+// C16 (2026-07-26): a lexer error following an integer must surface, not be
+// swallowed. Since audit 2026-09-22 C116 it surfaces from the parse that
+// reaches the malformed token rather than failing the valid integer before
+// it; inside an array the array still fails.
 func TestLexerErrorAfterIntegerPropagates(t *testing.T) {
 	p := NewParser([]byte("5 <zz>"))
-	if _, err := p.ParseObject(); err == nil {
-		t.Error("expected invalid-hex error to propagate through look-ahead")
+	if obj, err := p.ParseObject(); err != nil || obj != object.Integer(5) {
+		t.Fatalf("first object = %v, %v; want the integer 5", obj, err)
+	}
+	if _, err := p.ParseObject(); err == nil || !strings.Contains(err.Error(), "invalid hex") {
+		t.Errorf("second object: err = %v; the invalid-hex error must surface", err)
+	}
+	if _, err := NewParser([]byte("[5 <zz>]")).ParseObject(); err == nil {
+		t.Error("expected invalid-hex error to fail the array")
 	}
 }
 
@@ -115,7 +124,9 @@ func TestEncryptedDocumentDetectedAndNotWritten(t *testing.T) {
 	s := string(base)
 	s = strings.Replace(s, "<< /Size 4 /Root 1 0 R >>", "<< /Size 4 /Root 1 0 R /Encrypt 9 0 R >>", 1)
 	if s == string(base) {
-		t.Skip("minimal PDF trailer changed; update this test")
+		// A security regression test that stops exercising its case must fail,
+		// not skip: a skip reads as a pass (audit 2026-09-22 C167).
+		t.Fatal("the minimal PDF's trailer changed, so the /Encrypt entry was not planted; update this test")
 	}
 	doc, err := Read(bytes.NewReader([]byte(s)), int64(len(s)))
 	if err != nil {

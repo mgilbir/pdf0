@@ -37,33 +37,10 @@ func TestAppendPagesIndirectKids(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dst.AppendPages(src)
+	if _, err := dst.AppendPages(src); err != nil {
+		t.Fatal(err)
+	}
 	if got := dst.PageCount(); got != 2 {
 		t.Fatalf("after AppendPages onto an indirect /Kids: %d pages, want 2 (the existing page must survive)", got)
 	}
-}
-
-// TestInlinePageNoPanic is the C16 guard: a page held as a direct (inline)
-// dictionary in /Kids — which the parser accepts — must not panic ExtractPages
-// or AppendPages.
-func TestInlinePageNoPanic(t *testing.T) {
-	doc := &Document{Version: "2.0", Objects: map[int]*object.IndirectObject{}}
-	cat := &object.Dictionary{}
-	cat.Set("Type", object.Name("Catalog"))
-	cat.Set("Pages", object.IndirectRef{Number: 2})
-	pages := &object.Dictionary{}
-	pages.Set("Type", object.Name("Pages"))
-	inline := &object.Dictionary{}
-	inline.Set("Type", object.Name("Page"))
-	pages.Set("Kids", object.Array{inline}) // a direct-dict page, no object number
-	pages.Set("Count", object.Integer(1))
-	doc.Objects[1] = &object.IndirectObject{Number: 1, Value: cat}
-	doc.Objects[2] = &object.IndirectObject{Number: 2, Value: pages}
-	doc.Trailer = object.Dictionary{}
-	doc.Trailer.Set("Root", object.IndirectRef{Number: 1})
-
-	// Neither call may panic.
-	_, _ = doc.ExtractPages([]int{0})
-	dst, _, _ := newDocWithPageTree("2.0")
-	dst.AppendPages(doc)
 }

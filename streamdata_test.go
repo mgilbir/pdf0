@@ -3,8 +3,10 @@ package pdf0
 import (
 	"bytes"
 	"context"
+	"github.com/mgilbir/pdf0/internal/hostile"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
@@ -52,24 +54,26 @@ func TestStreamDataDecodesTheFilterChain(t *testing.T) {
 // is exactly who needs the bomb guard, and an entry point that skipped it would
 // be the way around every other one.
 func TestStreamDataHonoursTheDecodedSizeLimit(t *testing.T) {
-	bomb := core.FlateEncode(bytes.Repeat([]byte{0}, 1<<20))
-	s := &object.Stream{Dict: object.Dictionary{}, Data: bomb}
-	s.Dict.Set("Filter", object.Name("FlateDecode"))
-	s.Dict.Set("Length", object.Integer(len(bomb)))
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		bomb := core.FlateEncode(bytes.Repeat([]byte{0}, 1<<20))
+		s := &object.Stream{Dict: object.Dictionary{}, Data: bomb}
+		s.Dict.Set("Filter", object.Name("FlateDecode"))
+		s.Dict.Set("Length", object.Integer(len(bomb)))
 
-	doc := &Document{Objects: map[int]*object.IndirectObject{}}
-	if _, err := doc.StreamData(s); err != nil {
-		t.Fatalf("a megabyte is within the default ceiling: %v", err)
-	}
+		doc := &Document{Objects: map[int]*object.IndirectObject{}}
+		if _, err := doc.StreamData(s); err != nil {
+			t.Fatalf("a megabyte is within the default ceiling: %v", err)
+		}
 
-	raw := minimalPDF(t)
-	tight, err := Read(bytes.NewReader(raw), int64(len(raw)), WithMaxDecodedStreamBytes(1024))
-	if err != nil {
-		t.Fatalf("reading with a lowered ceiling: %v", err)
-	}
-	if _, err := tight.StreamData(s); err == nil {
-		t.Error("a stream decoding past the configured ceiling was expanded anyway")
-	}
+		raw := minimalPDF(t)
+		tight, err := Read(bytes.NewReader(raw), int64(len(raw)), WithMaxDecodedStreamBytes(1024))
+		if err != nil {
+			t.Fatalf("reading with a lowered ceiling: %v", err)
+		}
+		if _, err := tight.StreamData(s); err == nil {
+			t.Error("a stream decoding past the configured ceiling was expanded anyway")
+		}
+	})
 }
 
 // TestStreamDataRefusesALockedDocument pins that ciphertext is never handed

@@ -84,12 +84,17 @@ Two things can go wrong, and a caller who cares which asks:
 var refused *htmlpdf.RefusedError
 switch {
 case errors.As(err, &refused):
-    // The document is wrong: it would only have fitted illegibly, or a face
-    // has no glyph for a character on the page. refused.Findings says how.
+    // The document is wrong: it would only have fitted illegibly, a face has
+    // no glyph for a character on the page, or the page asks for something
+    // the PDF backend cannot draw. refused.Findings says how.
 case err != nil:
-    // Writing failed: a full disk, a broken io.Writer.
+    // Building the document failed: an image that could not be embedded, a
+    // font whose licence forbids embedding it.
 }
 ```
+
+`Render` writes nothing — it returns a `*pdf0.Document` — so there is no I/O
+in it to fail. Writing is `Document.Write`, and its error is `Write`'s.
 
 The thresholds behind a refusal are `Options.MinScale` and
 `Options.MinFontSizePt`, both with defaults, and `Input.Policy` can lower any
@@ -131,6 +136,50 @@ Two are worth knowing before you meet them:
   character, and text extraction that silently disagrees with the page.
 - **`min-scale`** and **`min-font-size`** are the "made to fit but illegible"
   guards described above.
+
+## What the backend cannot draw, and says so
+
+The engine reports what it could not lay out; the backend reports what it
+could not *write*. Each of these is a rule with a default severity of `error`,
+so the document is refused, and each can be lowered by `Input.Policy` like any
+engine rule — `layout.Policy{htmlpdf.RuleLinkDropped: layout.Warn}` gets the
+document with the finding, for a caller who can live with the loss:
+
+| rule | what the display list says | why it is refused |
+|---|---|---|
+| `backend-vertical-text` (`RuleVerticalText`) | a run set down the page: `writing-mode` `vertical-rl`, `vertical-lr`, `sideways-rl`, `sideways-lr`, or `text-orientation: upright` | the glyphs would be drawn across the page, in the wrong place and the wrong way up |
+| `backend-link-dropped` (`RuleLinkDropped`) | an `<a href>` | the display list carries no links, so the page would have the link's text and nothing to follow |
+| `backend-unknown-op` (`RuleUnknownOp`) | an operation a newer forme added | part of the page would be undrawn |
+
+Every field of every display-list operation is either drawn or refused, and
+`drawnFields` in `htmlpdf/pdfout.go` says which; a test holds that list to
+forme's types, so a field forme adds fails the tests until the backend
+accounts for it.
+
+What is drawn:
+
+- **The sheet** is the one the document was laid out on — `Options.Page` with
+  the document's own `@page` rules applied — so `@page { size: 100mm 100mm;
+  margin: 0 }` gives a 100 mm page with the content at its corner.
+- **Text** is the glyphs layout measured (`layout.ShapedGlyphs`): the run's
+  direction, its context either side and the features the document turned off
+  (`font-variant-ligatures: none`, `font-kerning: none`) are the ones layout
+  used, so the page is the width layout placed. `letter-spacing` goes after
+  each typographic character unit, not after each glyph. Every run extracts as
+  the text it was set from — a ligature as its letters, a right-to-left word in
+  reading order; see [fonts.md](fonts.md#setting-text-and-getting-it-back).
+- **Translucency.** A colour's alpha — including the `opacity` layout folds
+  into it — is an ExtGState with `/ca` and `/CA`, and a page that uses one is a
+  transparency group. A fill at alpha zero is left out; text at alpha zero is
+  drawn invisible (render mode 3), so it is still in the page's text, as it is
+  selectable in a browser.
+
+## One page
+
+A document is one page. forme composes a document onto a single sheet and
+scales it to fit (next section) rather than paginating it, so there is no
+second page to write; a document too long to fit legibly is refused by
+`min-scale` or `min-font-size`, not continued.
 
 ## Fonts
 

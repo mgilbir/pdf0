@@ -67,6 +67,14 @@ type View struct {
 	// Cancel is this operation's cancellation signal, or the zero value when the
 	// operation cannot be cancelled.
 	Cancel Canceler
+	// Alloc returns an object number nothing uses — no object in Objects and no
+	// number the source file uses, including the cross-reference and object
+	// streams Read removed from Objects — for a subsystem that adds objects to
+	// the document. Document.view sets it to the Document's one allocator. It is
+	// nil on a hand-built View, and a function that needs it refuses rather than
+	// numbering objects itself: one past the highest key in Objects is a number
+	// the source file may still use (audit 2026-09-22 C3).
+	Alloc func() int
 	// Run holds what the calls of one operation share. It is nil outside a run —
 	// a bare Read, say — and every method here tolerates that.
 	Run *Run
@@ -275,6 +283,13 @@ const (
 	GuardCIDWidthRange = "cid-width-range"           // Limits.CIDRangeSpan, WithMaxCIDRangeSpan
 	GuardEmbeddedPDFA  = "embedded-pdfa"             // no bound of its own; the recursive embedded check
 	GuardObjStmTotal   = "objstm-decompressed-total" // Limits.ObjectStreamBytes, WithMaxObjectStreamBytes
+	GuardDecodedStream = "decoded-stream-size"       // Limits.DecodedStreamBytes, WithMaxDecodedStreamBytes
+	GuardImagePixels   = "image-pixels"              // Limits.ImagePixels, WithMaxImagePixels
+
+	// GuardUnsupportedFilter is not a resource guard: a stream the check
+	// needed is encoded with a filter pdf0 does not implement. It is reported
+	// the same way for the reason GuardPredefinedCMap is.
+	GuardUnsupportedFilter = "unsupported-filter" // no bound
 
 	// GuardPredefinedCMap is not a resource guard either. No budget stopped
 	// anything: the code-to-CID data for the predefined CJK CMaps is not
@@ -306,6 +321,48 @@ func (v View) Pages(ref object.Object) []PageInfo {
 }
 
 func (v View) collectPages(ref object.Object, pages *[]PageInfo, seen map[int]bool) {
+	v.walkPageTree(ref, seen, InheritedAttrs{}, func(p PageInfo, _ InheritedAttrs) {
+		*pages = append(*pages, p)
+	})
+}
+
+// InheritablePageAttrs are the page attributes a page takes from its ancestors
+// in the page tree when it does not state them itself: ISO 32000-2 Table 31
+// marks exactly these four inheritable, and 7.7.3.4 says no other attribute is.
+var InheritablePageAttrs = [4]object.Name{"Resources", "MediaBox", "CropBox", "Rotate"}
+
+// InheritedAttrs holds, for each of InheritablePageAttrs in order, the value
+// that applies to a page: its own entry, or else the nearest ancestor's, as
+// written (an indirect reference is not resolved). nil means neither the page
+// nor any ancestor states it.
+type InheritedAttrs [4]object.Object
+
+// PageWithAttrs is a page of the flattened tree together with the inheritable
+// attributes that apply to it.
+type PageWithAttrs struct {
+	PageInfo
+	Attrs InheritedAttrs
+}
+
+// PagesWithAttrs is Pages with the inheritable attributes of each page resolved
+// the way 7.7.3.4 defines them: from the page's position in the tree, walking
+// down from the root, rather than by following /Parent up from the page. The
+// two agree on a well-formed tree; where /Parent is missing or wrong — a direct
+// /Pages root cannot be named by any /Parent at all — only the tree position is
+// what the file says. It visits exactly the pages Pages does, in the same order.
+func (v View) PagesWithAttrs(ref object.Object) []PageWithAttrs {
+	var out []PageWithAttrs
+	v.walkPageTree(ref, make(map[int]bool), InheritedAttrs{}, func(p PageInfo, a InheritedAttrs) {
+		out = append(out, PageWithAttrs{PageInfo: p, Attrs: a})
+	})
+	return out
+}
+
+// walkPageTree is the one page-tree traversal: nodes typed /Pages are
+// descended, nodes typed /Page are visited, anything else is skipped, and a
+// node reached through a reference already seen is not entered again (a /Kids
+// cycle would otherwise recurse until the stack ran out).
+func (v View) walkPageTree(ref object.Object, seen map[int]bool, inherited InheritedAttrs, visit func(PageInfo, InheritedAttrs)) {
 	objNum := 0
 	if iref, ok := ref.(object.IndirectRef); ok {
 		objNum = iref.Number
@@ -318,15 +375,23 @@ func (v View) collectPages(ref object.Object, pages *[]PageInfo, seen map[int]bo
 	if node == nil {
 		return
 	}
-	switch nodeType, _ := v.ResolveName(node.Get("Type")); nodeType {
-	case "Pages":
-		if kids, ok := v.Resolve(node.Get("Kids")).(object.Array); ok {
-			for _, kid := range kids {
-				v.collectPages(kid, pages, seen)
-			}
+	nodeType, _ := v.ResolveName(node.Get("Type"))
+	if nodeType != "Pages" && nodeType != "Page" {
+		return
+	}
+	for i, key := range InheritablePageAttrs {
+		if val := node.Get(key); val != nil {
+			inherited[i] = val
 		}
-	case "Page":
-		*pages = append(*pages, PageInfo{Dict: node, ObjNum: objNum})
+	}
+	if nodeType == "Page" {
+		visit(PageInfo{Dict: node, ObjNum: objNum}, inherited)
+		return
+	}
+	if kids, ok := v.Resolve(node.Get("Kids")).(object.Array); ok {
+		for _, kid := range kids {
+			v.walkPageTree(kid, seen, inherited, visit)
+		}
 	}
 }
 

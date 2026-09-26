@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/xmp"
 	"github.com/mgilbir/pdf0/object"
 )
 
@@ -744,22 +745,14 @@ func checkXMPProperties(doc core.View, level Level) []Violation {
 	if level == PDFA4 {
 		return nil
 	}
-	catalog := doc.Catalog()
-	if catalog == nil {
+	// Absent metadata and malformed XML are checked elsewhere; a packet over
+	// the limit has had its trip noted on the run, so the report says these
+	// checks did not run rather than looking clean.
+	packet, status := doc.DocumentXMPPacket()
+	if status != core.XMPParsed {
 		return nil
 	}
-	stream, ok := doc.Resolve(catalog.Get("Metadata")).(*object.Stream)
-	if !ok {
-		return nil
-	}
-	xmp := doc.XMPText(stream)
-	if xmp == "" {
-		return nil
-	}
-	props, err := parseXMPProperties([]byte(xmp), doc.Limits.XMPPacketBytes)
-	if err != nil {
-		return nil // malformed XML is checked elsewhere
-	}
+	props := packet.Properties()
 
 	rule := metadataClause("xmpProperties", level)
 
@@ -771,7 +764,7 @@ func checkXMPProperties(doc core.View, level Level) []Violation {
 	// canonical prefixes and required description fields (ISO 19005-1 6.7.8,
 	// -2/-3 6.6.2.3.3).
 	containerRule := metadataClause("extSchema", level)
-	errs = append(errs, checkXMPExtensionContainer(xmp, props, containerRule, level)...)
+	errs = append(errs, checkXMPExtensionContainer(packet.Declarations(), props, containerRule, level)...)
 	typeFields := extensionTypeFields(props)
 	for _, p := range props {
 		// The extension schema machinery itself is validated separately.
@@ -935,7 +928,7 @@ var standardXMPValueTypes = map[string]bool{
 	"LayerGroup": true, "Frame": true, "CuePointParam": true,
 }
 
-func checkXMPExtensionContainer(xmp string, props []xmpProperty, rule string, level Level) []Violation {
+func checkXMPExtensionContainer(decls []xmp.Binding, props []xmpProperty, rule string, level Level) []Violation {
 	var errs []Violation
 	report := func(format string, args ...interface{}) {
 		errs = append(errs, Violation{
@@ -945,29 +938,14 @@ func checkXMPExtensionContainer(xmp string, props []xmpProperty, rule string, le
 		})
 	}
 
-	// Canonical prefix rule, checked on the raw packet text because XML
-	// parsing resolves prefixes away. XML permits either quote style around an
-	// attribute value, so match both — otherwise a single-quoted xmlns
-	// declaration evades the rule (audit C33).
-	for uri, want := range canonicalXMPPrefixes {
-		for _, quote := range []string{`"`, `'`} {
-			needle := "=" + quote + uri + quote
-			for rest := xmp; ; {
-				i := strings.Index(rest, needle)
-				if i < 0 {
-					break
-				}
-				// Walk back over the prefix to the "xmlns:" marker.
-				j := i
-				for j > 0 && rest[j-1] != ':' && rest[j-1] != ' ' && rest[j-1] != '\t' && rest[j-1] != '\n' {
-					j--
-				}
-				prefix := rest[j:i]
-				if j > 6 && rest[j-1] == ':' && strings.HasSuffix(rest[:j-1], "xmlns") && prefix != want {
-					report("extension schema namespace %s must use prefix %q, found %q", uri, want, prefix)
-				}
-				rest = rest[i+1:]
-			}
+	// Canonical prefix rule, over the namespace declarations the XMP model
+	// found — every one, in any quote style or spacing, and none that merely
+	// appear inside a comment, which a scan of the packet text could not tell
+	// apart. A default-namespace declaration binds no prefix and is not judged.
+	for _, d := range decls {
+		want, canonical := canonicalXMPPrefixes[d.URI]
+		if canonical && d.Prefix != "" && d.Prefix != want {
+			report("extension schema namespace %s must use prefix %q, found %q", d.URI, want, d.Prefix)
 		}
 	}
 

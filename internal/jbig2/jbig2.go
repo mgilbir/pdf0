@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"github.com/mgilbir/pdf0/internal/ccitt"
+	"github.com/mgilbir/pdf0/internal/checked"
 )
 
 // This file decodes the JBIG2 bilevel image codec (ISO/IEC 14492 / ITU-T T.88)
@@ -45,32 +46,41 @@ type jbBitmap struct {
 // decodeGenericInto would loop width*height times (the MQ decoder keeps yielding
 // bits past the end of input, so a truncated stream does not stop it early).
 //
-//   - maxJBIG2Pixels bounds any single bitmap, capping both the allocation and
-//     the per-region decode loop.
-//   - maxJBIG2TotalPixels bounds the sum of all bitmap areas decoded from one
-//     stream, so a file packing many retained region/dictionary segments cannot
-//     exhaust memory even though each fits under the per-bitmap cap.
+// The caller's pixel budget (Decode's maxPixels, core.Limits.ImagePixels in
+// extraction) sets two bounds, and the constants below are the ceilings neither
+// may exceed however the budget is configured:
+//
+//   - one bitmap is at most maxPixels, and never more than maxJBIG2Pixels,
+//     capping both the allocation and the per-region decode loop;
+//   - the pixel work of one stream — every bitmap decoded, every halftone
+//     bit-plane, every symbol or pattern stamped onto a region — is at most
+//     four times maxPixels, and never more than maxJBIG2TotalPixels, so a file
+//     packing many regions, retained dictionaries or symbol instances cannot
+//     exhaust memory or time even though each fits under the per-bitmap cap;
 //   - maxJBIG2GrayCells bounds a halftone grid, whose area is amplified by the
 //     bit-plane count and an int-per-cell buffer.
 const (
 	maxJBIG2Pixels      = 1 << 26 // 64 Mpx per bitmap
-	maxJBIG2TotalPixels = 1 << 28 // 256 Mpx across the whole stream
+	maxJBIG2TotalPixels = 1 << 28 // 256 Mpx of work across the whole stream
 	maxJBIG2GrayCells   = 1 << 20 // halftone grid cells
+	jbig2WorkFactor     = 4       // stream work allowed per pixel of budget
 )
 
-// errJBIG2Budget is returned by newJBBitmap for an allocation that is negative
-// or over the per-bitmap pixel budget.
+// ErrBudget is returned for work over the pixel budget: an allocation that is
+// negative or over the per-bitmap bound, or a stream whose pixel work runs past
+// the total.
 //
 // It used to be panicked and recovered at the Decode boundary, which kept the
 // single choke point authoritative at the price of a library that panicked.
 // Every allocation still goes through newJBBitmap — that part was worth
 // keeping — but it is an error now, returned and carried out through every
-// caller like any other.
-var errJBIG2Budget = errors.New("jbig2: bitmap exceeds pixel budget")
+// caller like any other, and distinct from errJBIG2Unsupported so that a caller
+// can say "too large" rather than "not understood".
+var ErrBudget = errors.New("jbig2: bitmap exceeds pixel budget")
 
 func newJBBitmap(w, h int, fill byte) (*jbBitmap, error) {
-	if w < 0 || h < 0 || int64(w)*int64(h) > maxJBIG2Pixels {
-		return nil, errJBIG2Budget
+	if w < 0 || h < 0 || !checked.Within(maxJBIG2Pixels, int64(w), int64(h)) {
+		return nil, ErrBudget
 	}
 	b := &jbBitmap{w: w, h: h, pix: make([]byte, w*h)}
 	if fill != 0 {
@@ -82,22 +92,42 @@ func newJBBitmap(w, h int, fill byte) (*jbBitmap, error) {
 }
 
 // reserve charges the area w*h against the stream-wide pixel budget, returning
-// an error once the cumulative decoded area would exceed maxJBIG2TotalPixels or
-// a single area exceeds maxJBIG2Pixels. Decoder methods call it after reading a
-// region's or dictionary's declared dimensions, before allocating.
+// ErrBudget when a single area exceeds the per-bitmap bound or the cumulative
+// work would exceed the total. Decoder methods call it after reading a region's
+// or dictionary's declared dimensions, before allocating.
 func (d *jbig2Decoder) reserve(w, h int) error {
 	if w < 0 || h < 0 {
 		return errJBIG2Unsupported
 	}
-	area := int64(w) * int64(h)
-	if area > maxJBIG2Pixels {
-		return errJBIG2Unsupported
+	area, ok := checked.Mul(int64(w), int64(h))
+	if !ok || area > d.bitmapMax {
+		return ErrBudget
 	}
-	d.allocPixels += area
-	if d.allocPixels > maxJBIG2TotalPixels {
-		return errJBIG2Unsupported
+	return d.charge(area)
+}
+
+// charge adds n pixels of work to the stream total: a bitmap about to be
+// decoded, or a symbol or pattern about to be stamped. It is the one counter
+// every kind of pixel work draws on, because the attacks multiply whichever
+// kind is not counted — the halftone grid was not, and a 1×1 region could ask
+// for a 1024×1024 grid over a 65,536-pattern dictionary (audit 2026-09-22 C55).
+func (d *jbig2Decoder) charge(n int64) error {
+	if n < 0 || d.allocPixels > d.totalMax-n {
+		return ErrBudget
 	}
+	d.allocPixels += n
 	return nil
+}
+
+// newDecoder builds a decoder for a width×height page under a pixel budget of
+// maxPixels, clamped to the package ceilings.
+func newDecoder(width, height int, maxPixels int64) *jbig2Decoder {
+	bitmapMax := min(max(maxPixels, 0), maxJBIG2Pixels)
+	totalMax := int64(maxJBIG2TotalPixels)
+	if t, ok := checked.Mul(max(maxPixels, 0), jbig2WorkFactor); ok {
+		totalMax = min(t, maxJBIG2TotalPixels)
+	}
+	return &jbig2Decoder{imgW: width, imgH: height, bitmapMax: bitmapMax, totalMax: totalMax}
 }
 
 func (b *jbBitmap) get(x, y int) byte {
@@ -162,15 +192,15 @@ func (r *jbReader) s8() (int, bool) {
 }
 
 // Decode decodes a JBIG2 image (globals + page stream) into packed 1-bpp
-// rows in the PDF convention (0 = black), sized to width x height.
-func Decode(globals, data []byte, width, height int) (out []byte, err error) {
+// rows in the PDF convention (0 = black), sized to width x height. maxPixels is
+// the caller's pixel budget: the page, and every bitmap the stream decodes, is
+// at most that many pixels, and the stream's pixel work in total at most four
+// times as many (see the budget constants). Work over the budget is ErrBudget.
+func Decode(globals, data []byte, width, height int, maxPixels int64) (out []byte, err error) {
 	if width <= 0 || height <= 0 || width > 1<<20 || height > 1<<20 {
 		return nil, errJBIG2Unsupported
 	}
-	if int64(width)*int64(height) > maxJBIG2Pixels {
-		return nil, errJBIG2Unsupported
-	}
-	d := &jbig2Decoder{imgW: width, imgH: height}
+	d := newDecoder(width, height, maxPixels)
 	// Account the page canvas once; region and dictionary segments add their own
 	// areas as they are decoded.
 	if err := d.reserve(width, height); err != nil {
@@ -219,7 +249,9 @@ func (b *jbBitmap) packPDF() []byte {
 
 type jbig2Decoder struct {
 	imgW, imgH  int
-	allocPixels int64 // cumulative decoded bitmap area, bounded by reserve
+	allocPixels int64 // cumulative pixel work, bounded by reserve and charge
+	bitmapMax   int64 // the most pixels one bitmap may hold
+	totalMax    int64 // the most pixel work the whole stream may do
 	page        *jbBitmap
 	symbols     map[uint32][]*jbBitmap // exported symbols per symbol-dict segment
 	patterns    map[uint32][]*jbBitmap // patterns per pattern-dict segment
@@ -673,7 +705,7 @@ type atPixel struct{ x, y int }
 // the CCITT decoder. Its packed output (0 = black) is expanded to the internal
 // one-byte-per-pixel form (1 = black).
 func decodeGenericMMR(data []byte, w, h int) (*jbBitmap, error) {
-	packed, err := ccitt.Decode(data, ccitt.NewParams(-1, w, h, false))
+	packed, err := ccitt.Decode(data, ccitt.NewParams(-1, w, h, false, int64(w)*int64(h)))
 	if err != nil {
 		return nil, err
 	}

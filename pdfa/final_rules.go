@@ -266,7 +266,7 @@ func checkA4TriggerEvents(doc core.View, level Level) []Violation {
 		if aa == nil {
 			return
 		}
-		for _, k := range aa.Keys {
+		for k := range aa.Keys() {
 			if forbiddenAAEvents[k] {
 				errs = append(errs, Violation{Rule: "6.6.3", Level: level,
 					Message: "an /AA dictionary must not contain the forbidden trigger event /" + string(k),
@@ -412,7 +412,7 @@ func checkType5Halftones(doc core.View, level Level) []Violation {
 			continue
 		}
 		num := objNumForDict(doc, d)
-		for _, key := range d.Keys {
+		for key := range d.Keys() {
 			if halftoneReserved[key] || key == "Default" {
 				continue
 			}
@@ -456,11 +456,11 @@ func collectAppliedHalftones(doc core.View) []*object.Dictionary {
 		used := doc.ContentUsedNamesCached(data, key)
 		gsNames := scanContentColorUsage(doc.Cancel, data).gsNames
 		if gsDict := doc.ResolveDict(res.Get("ExtGState")); gsDict != nil {
-			for i, key := range gsDict.Keys {
+			for key, gref := range gsDict.All() {
 				if !gsNames[string(key)] {
 					continue
 				}
-				gs := doc.ResolveDict(gsDict.Values[i])
+				gs := doc.ResolveDict(gref)
 				if gs == nil {
 					continue
 				}
@@ -471,11 +471,11 @@ func collectAppliedHalftones(doc core.View) []*object.Dictionary {
 			}
 		}
 		if xobj := doc.ResolveDict(res.Get("XObject")); xobj != nil {
-			for i, key := range xobj.Keys {
+			for key, xref := range xobj.All() {
 				if !used.XObjects[string(key)] {
 					continue
 				}
-				if s, ok := doc.Resolve(xobj.Values[i]).(*object.Stream); ok {
+				if s, ok := doc.Resolve(xref).(*object.Stream); ok {
 					if st, _ := doc.ResolveName(s.Dict.Get("Subtype")); st == "Form" {
 						walk(&s.Dict, doc.Content(s), s)
 					}
@@ -501,7 +501,7 @@ func checkEmbeddedPDFA(doc core.View, level Level) []Violation {
 	// PDF/A-4f and PDF/A-4e permit arbitrary embedded files; plain PDF/A-4
 	// requires every embedded file to itself be a compliant PDF/A document
 	// (ISO 19005-4 6.9).
-	if c := pdfaConformanceFlag(doc); c == "F" || c == "E" {
+	if relaxedAsVariant(pdfaConformanceFlag(doc), "F", "E") {
 		return nil
 	}
 	var errs []Violation
@@ -519,7 +519,7 @@ func checkEmbeddedPDFA(doc core.View, level Level) []Violation {
 		if efDict == nil {
 			continue
 		}
-		for _, val := range efDict.Values {
+		for val := range efDict.Values() {
 			stream, ok := doc.Resolve(val).(*object.Stream)
 			if !ok {
 				continue
@@ -553,22 +553,36 @@ func checkEmbeddedPDFA(doc core.View, level Level) []Violation {
 	return errs
 }
 
-// pdfaConformanceFlag returns the document's XMP pdfaid:conformance value
-// ("F", "E", "B", "A", ...) or "" if absent.
+// conformanceUnread is what pdfaConformanceFlag returns when the metadata was
+// over the XMP packet limit and so was not read: the document may declare a
+// variant or not, and pdf0 does not know which. A relaxation a variant grants
+// is then applied rather than withheld — the limit finding already says the
+// run was incomplete, and withholding it would assert a violation the
+// document's own declaration may excuse.
+const conformanceUnread = "?"
+
+// pdfaConformanceFlag returns the document's XMP pdfaid:conformance value,
+// uppercased ("F", "E", "B", "A", ...), "" if absent, or conformanceUnread.
 func pdfaConformanceFlag(doc core.View) string {
-	catalog := doc.Catalog()
-	if catalog == nil {
-		return ""
+	id := readPDFAIdentification(doc)
+	if id.status == core.XMPLimit {
+		return conformanceUnread
 	}
-	stream, ok := doc.Resolve(catalog.Get("Metadata")).(*object.Stream)
-	if !ok {
-		return ""
+	return strings.ToUpper(id.conformance)
+}
+
+// relaxedAsVariant reports whether a relaxation that PDF/A-4e or -4f grants
+// applies: the document declares that variant, or its declaration was not read.
+func relaxedAsVariant(flag string, variants ...string) bool {
+	if flag == conformanceUnread {
+		return true
 	}
-	xmp := doc.XMPText(stream)
-	if v := core.ExtractXMPValue(xmp, "pdfaid:conformance"); v != "" {
-		return strings.ToUpper(v)
+	for _, v := range variants {
+		if flag == v {
+			return true
+		}
 	}
-	return strings.ToUpper(ExtractXMPAttr(xmp, "pdfaid:conformance"))
+	return false
 }
 
 // isPDFMIME reports whether a stream /Subtype names the application/pdf MIME
@@ -576,27 +590,6 @@ func pdfaConformanceFlag(doc core.View) string {
 func isPDFMIME(subtype object.Object) bool {
 	n, ok := subtype.(object.Name)
 	return ok && string(n) == "application/pdf"
-}
-
-// ExtractXMPAttr reads an attribute-form XMP value (key="value").
-func ExtractXMPAttr(xmp, key string) string {
-	i := strings.Index(xmp, key+"=")
-	if i < 0 {
-		return ""
-	}
-	rest := xmp[i+len(key)+1:]
-	if len(rest) == 0 {
-		return ""
-	}
-	q := rest[0]
-	if q != '"' && q != '\'' {
-		return ""
-	}
-	end := strings.IndexByte(rest[1:], q)
-	if end < 0 {
-		return ""
-	}
-	return rest[1 : 1+end]
 }
 
 // checkInheritedPageXObject enforces that an XObject drawn (Do) by a page's

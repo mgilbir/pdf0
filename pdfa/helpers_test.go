@@ -16,14 +16,16 @@ import (
 // nil run makes every memo a fresh one, which turns the memoization tests into
 // tautologies. The root package's Document.view supplies both; this is the
 // equivalent for a package that has no Document.
-func mkView(objs map[int]*object.IndirectObject, trailer object.Dictionary) core.View {
+func mkView(objs map[int]*object.IndirectObject, trailer *object.Dictionary) core.View {
 	if objs == nil {
 		objs = map[int]*object.IndirectObject{}
 	}
-	tr := trailer
+	if trailer == nil {
+		trailer = &object.Dictionary{}
+	}
 	return core.View{
 		Objects: objs,
-		Trailer: &tr,
+		Trailer: trailer,
 		Limits:  core.DefaultLimits(),
 		Run:     core.NewRun(&core.Recorder{}),
 	}
@@ -41,7 +43,7 @@ func mkPDFAView(level Level) core.View {
 	if err != nil {
 		panic("pdfa: test fixture: building the " + level.String() + " skeleton: " + err.Error())
 	}
-	v := mkView(objs, trailer)
+	v := mkView(objs, &trailer)
 	v.Version = version
 	return v
 }
@@ -54,13 +56,13 @@ func mkPDFAViewT(tb testing.TB, level Level) core.View {
 	if err != nil {
 		tb.Fatalf("building the %s skeleton: %v", level, err)
 	}
-	v := mkView(objs, trailer)
+	v := mkView(objs, &trailer)
 	v.Version = version
 	return v
 }
 
 // mkViewVersion is mkView with the header version set.
-func mkViewVersion(objs map[int]*object.IndirectObject, trailer object.Dictionary, version string) core.View {
+func mkViewVersion(objs map[int]*object.IndirectObject, trailer *object.Dictionary, version string) core.View {
 	v := mkView(objs, trailer)
 	v.Version = version
 	return v
@@ -69,7 +71,7 @@ func mkViewVersion(objs map[int]*object.IndirectObject, trailer object.Dictionar
 // mkViewBroken is mkView with the object-stream containers Read could not
 // decode, which the object-stream rules report on.
 func mkViewBroken(objs map[int]*object.IndirectObject, broken []int) core.View {
-	v := mkView(objs, object.Dictionary{})
+	v := mkView(objs, nil)
 	v.BrokenObjStms = broken
 	return v
 }
@@ -108,14 +110,9 @@ func addTestPage(v core.View) *object.Dictionary {
 }
 
 // dictWith is the one-entry dictionary these fixtures build over and over.
-func dictWith(k object.Name, v object.Object) object.Dictionary {
-	d := object.Dictionary{}
-	d.Set(k, v)
-	return d
+func dictWith(k object.Name, v object.Object) *object.Dictionary {
+	return object.NewDictionary(object.Entry{Key: k, Value: v})
 }
-
-// ptrDict makes an addressable copy, for the view fields that hold a pointer.
-func ptrDict(d object.Dictionary) *object.Dictionary { return &d }
 
 // utf16be encodes s as a PDF text string: a UTF-16BE byte-order mark followed
 // by big-endian code units, the form /Lang and Unicode file-spec entries use.

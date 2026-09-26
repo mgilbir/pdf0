@@ -79,9 +79,12 @@ func TestDrawnPageValidatesAsPDFA(t *testing.T) {
 			SetGray(0.85).
 			Rect(50, 380, 300, 200).Fill().
 			Restore()
+		// The colour comes before the path: inside one, only path operators
+		// are permitted (ISO 32000-2 Figure 9), and the builder refuses the rest.
 		b.Save().Translate(300, 300).Scale(2, 2).
+			SetGray(0.4).
 			MoveTo(0, 0).CurveTo(10, 20, 30, 20, 40, 0).ClosePath().
-			SetGray(0.4).FillStroke().
+			FillStroke().
 			Restore()
 		b.BeginMarked("Artifact").EndMarked()
 	})

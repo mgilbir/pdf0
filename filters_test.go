@@ -40,11 +40,11 @@ func TestParseXRefStreamWithPredictor(t *testing.T) {
 	parms.Set("Columns", object.Integer(4))
 	dict.Set("DecodeParms", parms)
 
-	table, err := ParseXRefStream(&object.Stream{Dict: dict, Data: buf.Bytes()})
+	table, err := ParseXRefStream(object.NewStream(&dict, buf.Bytes()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !table.Entries[0].Free {
+	if !table.IsFree(0) {
 		t.Error("entry 0 should be free")
 	}
 	if table.Entries[1].Offset != 15 {

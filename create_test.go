@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"encoding/xml"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -249,19 +250,20 @@ func TestDescriptionsAreEscaped(t *testing.T) {
 	assertWellFormedXML(t, packet)
 }
 
-// TestControlCharactersAreDroppedNotEscaped pins the one case where escaping is
-// not enough. A control character is illegal in XML 1.0 even as a character
-// reference, so a packet that escapes one is a packet no parser will read.
-func TestControlCharactersAreDroppedNotEscaped(t *testing.T) {
+// TestControlCharactersAreRefused pins the one case where escaping is not
+// enough. A control character is illegal in XML 1.0 even as a character
+// reference, so it cannot be written at all. It is refused with an error
+// rather than dropped: a title silently changed on the way in is not the title
+// the caller gave (audit 2026-09-22 C72), and nothing is written.
+func TestControlCharactersAreRefused(t *testing.T) {
 	doc := NewDocument()
-	if err := doc.SetDocumentInfo(DocumentInfo{Title: "a\x01b\x1fc"}); err != nil {
-		t.Fatalf("describing: %v", err)
+	err := doc.SetDocumentInfo(DocumentInfo{Title: "a\x01b\x1fc"})
+	if !errors.Is(err, ErrInvalidMetadataText) {
+		t.Fatalf("SetDocumentInfo with control characters = %v, want ErrInvalidMetadataText", err)
 	}
-	packet := metadataPacket(t, doc)
-	if !strings.Contains(packet, ">abc<") {
-		t.Errorf("control characters were not dropped from the title: %s", excerpt(packet, "dc:title"))
+	if doc.Trailer.Get("Info") != nil {
+		t.Error("a refused SetDocumentInfo still wrote an Info dictionary")
 	}
-	assertWellFormedXML(t, packet)
 }
 
 // TestPDFDateOffsets pins the timezone form, which is the part of a PDF date

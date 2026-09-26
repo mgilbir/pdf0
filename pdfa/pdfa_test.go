@@ -3,6 +3,7 @@ package pdfa
 import (
 	"bytes"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/xmp"
 	"github.com/mgilbir/pdf0/object"
 	"strings"
 	"testing"
@@ -80,7 +81,7 @@ func TestValidatePDFA_AnnotationSubtypes(t *testing.T) {
 			annot.Set("Subtype", tt.subtype)
 			annot.Set("Rect", object.Array{object.Integer(0), object.Integer(0), object.Integer(100), object.Integer(100)})
 			annot.Set("F", object.Integer(4))
-			annot.Set("AP", &object.Dictionary{Keys: []object.Name{"N"}, Values: []object.Object{&object.Stream{}}})
+			annot.Set("AP", object.NewDictionary(object.Entry{Key: "N", Value: &object.Stream{}}))
 			doc.Objects[10] = &object.IndirectObject{Number: 10, Value: annot}
 
 			errs := ValidateView(doc, tt.level, nil)
@@ -99,7 +100,7 @@ func TestValidatePDFA_AnnotationSubtypes(t *testing.T) {
 			annot.Set("Subtype", st)
 			annot.Set("Rect", object.Array{object.Integer(0), object.Integer(0), object.Integer(100), object.Integer(100)})
 			annot.Set("F", object.Integer(4))
-			annot.Set("AP", &object.Dictionary{Keys: []object.Name{"N"}, Values: []object.Object{&object.Stream{}}})
+			annot.Set("AP", object.NewDictionary(object.Entry{Key: "N", Value: &object.Stream{}}))
 			doc.Objects[10] = &object.IndirectObject{Number: 10, Value: annot}
 
 			errs := filterRule(ValidateView(doc, PDFA4, nil), "6.3.1")
@@ -110,23 +111,34 @@ func TestValidatePDFA_AnnotationSubtypes(t *testing.T) {
 	})
 }
 
-func TestXmpHasKey(t *testing.T) {
+// TestIdentificationPresence: whether pdfaid:conformance is present at all is
+// distinct from its value, in element and attribute form, empty or not — and
+// a conformance inside a comment, or before the real one, is not the value.
+func TestIdentificationPresence(t *testing.T) {
+	const decl = ` xmlns:pdfaid="http://www.aiim.org/pdfa/ns/id/"`
+	pkt := func(attrs, body string) string {
+		return `<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">` +
+			`<rdf:Description rdf:about=""` + decl + attrs + `>` + body + `</rdf:Description></rdf:RDF></x:xmpmeta>`
+	}
 	tests := []struct {
-		name   string
-		xmp    string
-		key    string
-		expect bool
+		name      string
+		xmp       string
+		present   bool
+		wantValue string
 	}{
-		{"element present", `<pdfaid:conformance>B</pdfaid:conformance>`, "pdfaid:conformance", true},
-		{"attribute present", `pdfaid:conformance="B"`, "pdfaid:conformance", true},
-		{"attribute empty", `pdfaid:conformance=""`, "pdfaid:conformance", true},
-		{"not present", `<pdfaid:part>4</pdfaid:part>`, "pdfaid:conformance", false},
-		{"self-closing element", `<pdfaid:conformance/>`, "pdfaid:conformance", true},
+		{"element present", pkt("", `<pdfaid:conformance>B</pdfaid:conformance>`), true, "B"},
+		{"attribute present", pkt(` pdfaid:conformance="B"`, ""), true, "B"},
+		{"attribute empty", pkt(` pdfaid:conformance=""`, ""), true, ""},
+		{"not present", pkt("", `<pdfaid:part>4</pdfaid:part>`), false, ""},
+		{"self-closing element", pkt("", `<pdfaid:conformance/>`), true, ""},
+		{"comment before the value", pkt("", `<!-- was <pdfaid:conformance>B</pdfaid:conformance> --><pdfaid:conformance>A</pdfaid:conformance>`), true, "A"},
+		{"only in a comment", pkt("", `<!-- <pdfaid:conformance>B</pdfaid:conformance> -->`), false, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := xmpHasKey(tt.xmp, tt.key); got != tt.expect {
-				t.Errorf("xmpHasKey(%q, %q) = %v, want %v", tt.xmp, tt.key, got, tt.expect)
+			id := readPDFAIdentification(docWithXMP([]byte(tt.xmp)))
+			if id.hasConformance != tt.present || id.conformance != tt.wantValue {
+				t.Errorf("conformance = %q present=%v, want %q present=%v", id.conformance, id.hasConformance, tt.wantValue, tt.present)
 			}
 		})
 	}
@@ -487,11 +499,14 @@ func TestCheckTransparencyBlending(t *testing.T) {
 	})
 }
 
-func TestExtractXMPListValue(t *testing.T) {
-	xmp := `<dc:title><rdf:Alt><rdf:li xml:lang="x-default">My Title</rdf:li></rdf:Alt></dc:title>`
-	got := extractXMPListValue(xmp, "dc:title")
-	if got != "My Title" {
-		t.Errorf("extractXMPListValue = %q, want %q", got, "My Title")
+func TestXMPComparableText(t *testing.T) {
+	packet, err := xmp.Parse([]byte(validXMP(`<dc:title><rdf:Alt><rdf:li xml:lang="fr">Mon titre</rdf:li><rdf:li xml:lang="x-default">My Title</rdf:li></rdf:Alt></dc:title>`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _ := packet.Get(xmp.NSDC, "title")
+	if got := xmpComparableText(p.Value); got != "My Title" {
+		t.Errorf("xmpComparableText = %q, want the x-default item %q", got, "My Title")
 	}
 }
 

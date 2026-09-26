@@ -184,3 +184,23 @@ func WithMaxPostScriptSteps(n int) Option {
 func WithMaxCmapWork(n int) Option {
 	return optionFunc(func(l *core.Limits) { l.CmapWork = n })
 }
+
+// WithMaxImagePixels caps the size of an image that extraction will decode
+// (default 1<<26, 67 megapixels — the same bound images.EmbedImage applies to
+// an image a caller embeds, so pdf0 reads back anything it writes). An A4 page
+// scanned at 600 dpi is 35 megapixels.
+//
+// It is one budget for every image codec and every buffer sized from an
+// image's geometry: the raw, Flate and LZW sample path, CCITT fax, JBIG2 (whose
+// per-bitmap bound it sets, with four times as much across all the bitmaps one
+// stream decodes), JPEG, JPEG 2000, and the /Mask and /SMask images composited
+// onto them. An image with more than four components is also held to four
+// samples per pixel. The product is computed with overflow checks, so a
+// /Width of 2^60 is refused rather than wrapped.
+//
+// An image over the budget is not decoded: its ExtractedImage has Decoded
+// false, its encoded bytes, and a Note naming the image-pixels guard, and the
+// walk continues with the next image.
+func WithMaxImagePixels(n int64) Option {
+	return optionFunc(func(l *core.Limits) { l.ImagePixels = n })
+}

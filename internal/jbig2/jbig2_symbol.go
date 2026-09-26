@@ -140,6 +140,11 @@ func (d *jbig2Decoder) readSymbolDict(seg jbSegment) error {
 
 	input := d.inputSymbols(seg)
 	newSyms := make([]*jbBitmap, 0, numNew)
+	// known is input followed by newSyms, the symbols a refinement or aggregate
+	// may refer to by ID. It grows with newSyms rather than being rebuilt for
+	// each symbol, which made a dictionary of n refined symbols cost n² pointer
+	// copies — 2^40 for the 2^20 symbols a dictionary may declare.
+	known := append(make([]*jbBitmap, 0, len(input)+int(numNew)), input...)
 
 	dec := newMQDecoder(r.data[r.pos:], 0, r.remaining())
 	iadh, iadw, iaex := newIAx(), newIAx(), newIAx()
@@ -198,7 +203,7 @@ func (d *jbig2Decoder) readSymbolDict(seg jbSegment) error {
 			} else {
 				// Aggregate/refinement coding (6.5.8.2).
 				nInst, _ := decodeInt(dec, iaai)
-				all := append(append([]*jbBitmap{}, input...), newSyms...)
+				all := known
 				if nInst == 1 {
 					// Single-instance refinement (6.5.8.2.2).
 					id := decodeIAID(dec, iaid, refCodeLen)
@@ -218,7 +223,7 @@ func (d *jbig2Decoder) readSymbolDict(seg jbSegment) error {
 					// Multiple instances aggregate into the symbol via a text-region
 					// decoding procedure (6.5.8.2.1).
 					c := aggCtx{iadt: iadt, iafs: iafs, iads: iads, iait: newIAx(), iari: iari, iardw: iardw, iardh: iardh, iardx: iardx, iardy: iardy, iaid: iaid, gr: grCx}
-					b, err := decodeAggregateArith(dec, c, symWidth, hcHeight, nInst, refCodeLen, all, sdrTemplate, rAt)
+					b, err := d.decodeAggregateArith(dec, c, symWidth, hcHeight, nInst, refCodeLen, all, sdrTemplate, rAt)
 					if err != nil {
 						return err
 					}
@@ -226,6 +231,7 @@ func (d *jbig2Decoder) readSymbolDict(seg jbSegment) error {
 				}
 			}
 			newSyms = append(newSyms, bmp)
+			known = append(known, bmp)
 		}
 	}
 
@@ -386,6 +392,9 @@ func (d *jbig2Decoder) readTextRegion(seg jbSegment) error {
 					if rw <= 0 || rh <= 0 || rw > 1<<16 || rh > 1<<16 {
 						return errJBIG2Unsupported
 					}
+					if err := d.reserve(rw, rh); err != nil {
+						return err
+					}
 					refined, err := decodeRefinement(dec, grCx, rw, rh, sbrTemplate, sym,
 						(rdw>>1)+rdx, (rdh>>1)+rdy, false, rAt)
 					if err != nil {
@@ -394,7 +403,9 @@ func (d *jbig2Decoder) readTextRegion(seg jbSegment) error {
 					sym = refined
 				}
 			}
-			placeSymbol(region, sym, &curS, t, refCorner, transposed, sbCombOp)
+			if err := d.charge(placeSymbol(region, sym, &curS, t, refCorner, transposed, sbCombOp)); err != nil {
+				return err
+			}
 			inst++
 		}
 	}
@@ -421,7 +432,7 @@ type aggCtx struct {
 // arithmetic text region of numInst instances (T.88 6.5.8.2.1): single-pixel
 // strips, top-left reference corner, OR compositing, no S offset. It reads from
 // the dictionary's ongoing MQ stream and shared contexts.
-func decodeAggregateArith(dec *mqDecoder, c aggCtx, w, height, numInst, symCodeLen int, syms []*jbBitmap, sbrTemplate int, rAt []atPixel) (*jbBitmap, error) {
+func (d *jbig2Decoder) decodeAggregateArith(dec *mqDecoder, c aggCtx, w, height, numInst, symCodeLen int, syms []*jbBitmap, sbrTemplate int, rAt []atPixel) (*jbBitmap, error) {
 	region, err := newJBBitmap(w, height, 0)
 	if err != nil {
 		return nil, err
@@ -463,13 +474,18 @@ func decodeAggregateArith(dec *mqDecoder, c aggCtx, w, height, numInst, symCodeL
 				if rw <= 0 || rh <= 0 || rw > 1<<16 || rh > 1<<16 {
 					return nil, errJBIG2Unsupported
 				}
+				if err := d.reserve(rw, rh); err != nil {
+					return nil, err
+				}
 				refined, err := decodeRefinement(dec, c.gr, rw, rh, sbrTemplate, sym, (rdw>>1)+rdx, (rdh>>1)+rdy, false, rAt)
 				if err != nil {
 					return nil, err
 				}
 				sym = refined
 			}
-			placeSymbol(region, sym, &curS, stripT, 1 /*TOPLEFT*/, false, 0 /*OR*/)
+			if err := d.charge(placeSymbol(region, sym, &curS, stripT, 1 /*TOPLEFT*/, false, 0 /*OR*/)); err != nil {
+				return nil, err
+			}
 			inst++
 		}
 	}
@@ -479,7 +495,7 @@ func decodeAggregateArith(dec *mqDecoder, c aggCtx, w, height, numInst, symCodeL
 // placeSymbol draws one symbol instance into the region at the current S
 // coordinate and strip T, per the reference corner and transposition, advancing
 // curS so the next instance follows. See T.88 6.4.5.
-func placeSymbol(region, sym *jbBitmap, curS *int, t, refCorner int, transposed bool, combOp int) {
+func placeSymbol(region, sym *jbBitmap, curS *int, t, refCorner int, transposed bool, combOp int) (work int64) {
 	w, h := sym.w, sym.h
 	rightCorner := refCorner == 2 || refCorner == 3 // BOTTOMRIGHT, TOPRIGHT
 	topCorner := refCorner == 1 || refCorner == 3   // TOPLEFT, TOPRIGHT
@@ -495,7 +511,7 @@ func placeSymbol(region, sym *jbBitmap, curS *int, t, refCorner int, transposed 
 		if !topCorner {
 			y0 = t - h + 1
 		}
-		blitSymbol(region, sym, x0, y0, combOp)
+		work = blitSymbol(region, sym, x0, y0, combOp)
 		if !rightCorner {
 			*curS += w - 1
 		}
@@ -512,25 +528,32 @@ func placeSymbol(region, sym *jbBitmap, curS *int, t, refCorner int, transposed 
 		if rightCorner {
 			x0 = t - w + 1
 		}
-		blitSymbol(region, sym, x0, y0, combOp)
+		work = blitSymbol(region, sym, x0, y0, combOp)
 		if !bottomCorner {
 			*curS += h - 1
 		}
 	}
+	return work
 }
 
-// blitSymbol composes a symbol bitmap onto a region using a combination operator.
-func blitSymbol(region, sym *jbBitmap, x0, y0, op int) {
-	for y := 0; y < sym.h; y++ {
+// blitSymbol composes a symbol bitmap onto a region using a combination
+// operator, and returns the pixels it touched.
+//
+// The loops run over the part of the symbol that lands inside the region, not
+// the whole symbol: a symbol stamped wholly outside costs nothing but the
+// clipping arithmetic, and one partly inside costs the overlap. The returned
+// count is what the caller charges against the stream's pixel work, so that
+// stamping is bounded by what it does rather than by how often it is asked.
+func blitSymbol(region, sym *jbBitmap, x0, y0, op int) int64 {
+	ys, ye := max(0, -y0), min(sym.h, region.h-y0)
+	xs, xe := max(0, -x0), min(sym.w, region.w-x0)
+	if ys >= ye || xs >= xe {
+		return 0
+	}
+	for y := ys; y < ye; y++ {
 		py := y0 + y
-		if py < 0 || py >= region.h {
-			continue
-		}
-		for x := 0; x < sym.w; x++ {
+		for x := xs; x < xe; x++ {
 			px := x0 + x
-			if px < 0 || px >= region.w {
-				continue
-			}
 			s := sym.pix[y*sym.w+x]
 			i := py*region.w + px
 			switch op {
@@ -547,4 +570,5 @@ func blitSymbol(region, sym *jbBitmap, x0, y0, op int) {
 			}
 		}
 	}
+	return int64(ye-ys) * int64(xe-xs)
 }

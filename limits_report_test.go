@@ -6,11 +6,13 @@ import (
 	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
+	"github.com/mgilbir/pdf0/internal/hostile"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/pdfa"
 	"github.com/mgilbir/pdf0/pdfx"
 	"strings"
 	"testing"
+	"time"
 )
 
 // These tests pin the rule limits_report.go states: a check must never assert a
@@ -60,16 +62,18 @@ func hasMessage(msgs []string, sub string) bool {
 }
 
 func TestCmapFormat4BudgetReportsPartial(t *testing.T) {
-	m, partial := font.ParseCmapSubtable(budgetBustingCmap(), core.DefaultMaxCmapWork)
-	if !partial {
-		t.Fatal("the work budget did not trip; the fixture no longer exercises it")
-	}
-	if m == nil {
-		t.Fatal("a budget trip must still return the mappings it did read")
-	}
-	if _, ok := m[0x41]; ok {
-		t.Fatal("fixture wrong: code 0x41 was mapped, so nothing is missing")
-	}
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		m, partial := font.ParseCmapSubtable(budgetBustingCmap(), core.DefaultMaxCmapWork)
+		if !partial {
+			t.Fatal("the work budget did not trip; the fixture no longer exercises it")
+		}
+		if m == nil {
+			t.Fatal("a budget trip must still return the mappings it did read")
+		}
+		if _, ok := m[0x41]; ok {
+			t.Fatal("fixture wrong: code 0x41 was mapped, so nothing is missing")
+		}
+	})
 }
 
 // TestMetadataSurvivesContentBudget is the widest false positive of the set: the
@@ -271,7 +275,7 @@ func TestIncrementalRefusesMissingObjects(t *testing.T) {
 	reread.brokenObjStms = append(reread.brokenObjStms, 3)
 
 	var out bytes.Buffer
-	if err := reread.WriteIncremental(&out, original, []int{1}); err == nil {
+	if err := reread.WriteIncremental(&out, []int{1}); err == nil {
 		t.Fatal("WriteIncremental accepted a document with 1 unmaterialised object stream(s)")
 	} else if !strings.Contains(err.Error(), "object stream") {
 		t.Errorf("unexpected error: %v", err)

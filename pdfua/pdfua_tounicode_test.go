@@ -15,7 +15,7 @@ func TestUAToUnicodeForbidden(t *testing.T) {
 			"1 beginbfchar\n<0041> <" + dst + ">\nendbfchar\nendcmap end end"
 		return &object.Stream{Dict: object.Dictionary{}, Data: []byte(body)}
 	}
-	doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+	doc := mkView(map[int]*object.IndirectObject{}, nil)
 	if !core.HasForbiddenUnicodeTargets(doc, mk("0000")) {
 		t.Error("mapping to U+0000 not detected")
 	}

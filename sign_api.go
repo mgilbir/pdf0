@@ -2,38 +2,64 @@ package pdf0
 
 import (
 	"crypto/x509"
+	"fmt"
+	"time"
 
 	"github.com/mgilbir/pdf0/sign"
 )
 
 // Digital signatures. The verification logic lives in the sign package, which
-// works from the document seen as an object graph; these are the methods and
-// names that make it reachable from a Document. Signature *production* stays in
-// this package (sign.go, doctimestamp.go): writing a signed file means laying
-// out a whole new document, which is the writer's job, not the verifier's.
+// works from the document seen as an object graph and from the file it was
+// read from; these are the methods and names that make it reachable from a
+// Document. Signature *production* stays in this package (sign.go,
+// doctimestamp.go): writing a signed file means laying out a whole new
+// document, which is the writer's job, not the verifier's.
 
 // CheckCertRevocation reports what the supplied CRLs and OCSP responses say
-// about cert, which issuer is expected to have issued.
-func CheckCertRevocation(cert, issuer *x509.Certificate, crls, ocsps [][]byte) sign.RevocationInfo {
-	return sign.CheckCertRevocation(cert, issuer, crls, ocsps)
+// about cert at time at (pass time.Now() for a live check). issuer must be the
+// certificate that issued cert — the next certificate of a chain you have
+// verified — and only material that issuer authenticates is consulted. A
+// revocation from any source wins over a "good" from another; see
+// sign.CheckCertRevocation for the freshness rules.
+func CheckCertRevocation(cert, issuer *x509.Certificate, crls, ocsps [][]byte, at time.Time) sign.RevocationInfo {
+	return sign.CheckCertRevocation(cert, issuer, crls, ocsps, at)
 }
 
-// VerifySignatures verifies every signature in the document against the
-// system's root store. raw must be the bytes the document was read from: a
-// signature covers a byte range of the file, not the object graph.
-func (d *Document) VerifySignatures(raw []byte) []sign.Result {
-	return sign.VerifySignatures(d.view(), raw)
+// VerifySignatures verifies every signature and document time-stamp in the
+// document against the file it was read from (Document.Source): a signature
+// covers bytes of that file, not the object graph, so a Document built in
+// memory has no signature that verifies.
+//
+// Trust is only ever established against opts.Roots. With nil roots no chain
+// is built and every result has TrustedChain false: a signature from an
+// unknown signer is then indistinguishable from one from your CA. Do not pass
+// x509.SystemCertPool() or another web PKI pool: those roots vouch for domain
+// names, not for document signers. See sign.Result for what each field
+// promises; Intact and DocumentUnmodified are the integrity verdicts.
+//
+// The error is non-nil only when verification could not run to completion
+// (an internal failure on a hostile file, recovered rather than crashing the
+// caller); the results are then nil and must not be read as "no signatures".
+func (d *Document) VerifySignatures(opts sign.VerifyOptions) (res []sign.Result, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			res, err = nil, fmt.Errorf("verifying signatures: recovered from panic: %v", r)
+		}
+	}()
+	return sign.VerifySignatures(d.view(), d.signedFile(d.canceler()), opts), nil
 }
 
-// VerifySignaturesWithRoots is VerifySignatures against a caller-supplied trust
-// anchor set. A nil pool means the system store.
-func (d *Document) VerifySignaturesWithRoots(raw []byte, roots *x509.CertPool) []sign.Result {
-	return sign.VerifySignaturesWithRoots(d.view(), raw, roots)
-}
-
-// ValidatePAdES reports the PAdES baseline level each signature reaches.
-func (d *Document) ValidatePAdES(raw []byte) []sign.PAdESResult {
-	return sign.ValidatePAdES(d.view(), raw)
+// ValidatePAdES reports, for each approval signature, the PAdES baseline level
+// its material reaches and whether it conforms (sign.PAdESResult), against the
+// file the document was read from. opts decides trust exactly as for
+// VerifySignatures. The error has the same meaning as VerifySignatures's.
+func (d *Document) ValidatePAdES(opts sign.VerifyOptions) (res []sign.PAdESResult, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			res, err = nil, fmt.Errorf("validating PAdES signatures: recovered from panic: %v", r)
+		}
+	}()
+	return sign.ValidatePAdES(d.view(), d.signedFile(d.canceler()), opts), nil
 }
 
 // DSSRevocationMaterial returns the CRLs and OCSP responses the document's

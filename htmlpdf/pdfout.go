@@ -25,13 +25,17 @@ package htmlpdf
 import (
 	"fmt"
 	"image"
+	"sort"
 
+	"github.com/mgilbir/forme/html"
 	"github.com/mgilbir/forme/layout"
+	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/shape"
 	pdf0 "github.com/mgilbir/pdf0"
 	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/fonts"
 	"github.com/mgilbir/pdf0/images"
+	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 )
 
@@ -88,14 +92,14 @@ type Result struct {
 	NaturalSize layout.Size
 }
 
-// Render lays a document out and writes it onto one PDF page.
-// RefusedError is the engine declining to produce a document.
+// RefusedError is the engine, or this backend, declining to produce a document.
 //
 // It means a rule fired at Error severity: the content had to be shrunk past
 // legibility to fit, or a face had no glyph for a character the page needs, or
-// something else that would have produced a document nobody should ship. The
-// page was laid out — that is how the rule fired — so the Result returned
-// beside this says how far it got.
+// the page asks for something this backend cannot draw (see RuleVerticalText
+// and its siblings), or something else that would have produced a document
+// nobody should ship. The page was laid out — that is how the rule fired — so
+// the Result returned beside this says how far it got.
 //
 // It is an error and not a quiet nil because the caller asked for a document
 // and has not got one, and Go has one place a caller looks for that.
@@ -107,7 +111,8 @@ type Result struct {
 //	case errors.As(err, &refused):
 //		// The document is wrong. refused.Findings says how.
 //	case err != nil:
-//		// Writing failed: out of disk, a broken io.Writer.
+//		// Building the document failed: an image that could not be
+//		// embedded, a font whose licence forbids embedding it.
 //	}
 //
 // A caller who does not care which just checks err, which is the point.
@@ -190,6 +195,11 @@ func (e *RefusedError) Error() string {
 // Findings are on the Result either way. A document can be produced and still
 // be worth complaining about — a property the engine does not implement, an
 // image it was not allowed to load — and those are not refusals.
+//
+// The document is one page: forme composes a document onto a single sheet,
+// scaled to fit (see Result.Scale), and there is no pagination to write. The
+// sheet is the one the document laid out on — the caller's, with the
+// document's own @page rules applied.
 func Render(in layout.Input, opts layout.Options) (Result, error) {
 	composed := layout.Compose(in, opts)
 
@@ -199,14 +209,20 @@ func Render(in layout.Input, opts layout.Options) (Result, error) {
 		Findings:    composed.Findings,
 		Truncated:   composed.Truncated,
 	}
-	if composed.Refused {
+	// What the display list says that this backend cannot write, checked
+	// before anything is written: a page that would say something else is
+	// refused the way the engine refuses one, unless the caller's policy says
+	// the loss is acceptable.
+	backend, refused := checkDrawable(composed, in.Policy)
+	out.Findings = append(out.Findings, backend...)
+	if composed.Refused || refused {
 		return out, &RefusedError{
-			Findings:  composed.Findings,
+			Findings:  out.Findings,
 			Truncated: composed.Truncated,
 		}
 	}
 
-	doc, err := writePage(composed.Ops, pageOf(opts), composed.Scale)
+	doc, err := writePage(composed.Ops, composed.Page, composed.Scale)
 	if err != nil {
 		return out, err
 	}
@@ -214,16 +230,94 @@ func Render(in layout.Input, opts layout.Options) (Result, error) {
 	return out, nil
 }
 
-// pageOf is the sheet Compose used, which is the one to write.
+// checkDrawable reads the display list and the box tree for what this backend
+// cannot draw, and reports each at the severity the caller's policy gives it,
+// Error by default. It returns the findings and whether any of them refuses
+// the document.
 //
-// Compose fills in the default when the caller left it zero and does not hand
-// the filled-in value back, so this repeats that one line rather than have two
-// places disagree about what layout.A4 means.
-func pageOf(opts layout.Options) layout.PageSize {
-	if opts.Page.Width == 0 || opts.Page.Height == 0 {
-		return layout.A4
+// One finding per rule, however many operations raised it: a vertical page is
+// one fact about the document, and a line per run would bury it.
+func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, bool) {
+	counts := map[layout.Rule]int{}
+	for _, op := range c.Ops {
+		switch v := op.(type) {
+		case layout.DrawText:
+			if v.Sideways || v.Anticlockwise || v.Upright {
+				counts[RuleVerticalText]++
+			}
+		case layout.FillRect, layout.DrawImage, layout.TileImage:
+		default:
+			counts[RuleUnknownOp]++
+		}
 	}
-	return opts.Page
+	if c.Root != nil {
+		counts[RuleLinkDropped] = countLinks(c.Root.Box)
+	}
+
+	messages := map[layout.Rule]string{
+		RuleVerticalText: "%d run(s) of text are set down the page (a vertical writing-mode " +
+			"or text-orientation: upright), which this PDF backend cannot draw; they would " +
+			"be drawn across the page",
+		RuleLinkDropped: "the document has %d hyperlink(s), and the display list carries no " +
+			"links, so the PDF would show their text with nothing to follow",
+		RuleUnknownOp: "the display list has %d operation(s) of a kind this backend does not " +
+			"know, which a newer layout engine added; the page would be missing them",
+	}
+	var (
+		out     []layout.Finding
+		refused bool
+	)
+	for _, rule := range []layout.Rule{RuleVerticalText, RuleLinkDropped, RuleUnknownOp} {
+		n := counts[rule]
+		if n == 0 {
+			continue
+		}
+		sev := layout.Error
+		if s, ok := policy[rule]; ok {
+			sev = s
+		}
+		if sev == layout.Ignore {
+			continue
+		}
+		if sev == layout.Error {
+			refused = true
+		}
+		out = append(out, layout.Finding{
+			Rule: rule, Severity: sev,
+			Message: fmt.Sprintf(messages[rule], n),
+			Source:  layout.Source{HTMLOffset: -1, CSSOffset: -1},
+		})
+	}
+	return out, refused
+}
+
+// countLinks counts the <a href> elements that generated a box, which are the
+// links the page would have had: an element with display: none generates none
+// and is not one.
+//
+// The box tree is walked with a stack rather than by recursion, because its
+// depth is the document's nesting depth and a document is untrusted input.
+func countLinks(root *layout.Box) int {
+	if root == nil {
+		return 0
+	}
+	n := 0
+	seen := map[*html.Node]bool{}
+	stack := []*layout.Box{root}
+	for len(stack) > 0 {
+		b := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if el := b.Element; el != nil && !seen[el] && el.Type == html.ElementNode && el.Name == "a" {
+			// One element can generate several boxes — an inline split
+			// around a block, a continuation — and is still one link.
+			seen[el] = true
+			if el.HasAttr("href") {
+				n++
+			}
+		}
+		stack = append(stack, b.Children...)
+	}
+	return n
 }
 
 // writePage turns a display list into a one-page document.
@@ -235,6 +329,10 @@ func pageOf(opts layout.Options) layout.PageSize {
 // subsetted to the glyphs it was asked to set, so it can only be embedded once
 // the drawing is finished — which is why AddPage takes the faces and this
 // passes the images.
+//
+// Every field of every operation is either drawn here or refused by
+// checkDrawable before this runs; drawnFields in this file lists which, and a
+// test holds that list against the operations layout declares.
 func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Document, error) {
 	doc := pdf0.NewDocument()
 	b := &content.Builder{}
@@ -261,6 +359,7 @@ func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Docu
 	names := map[*shape.Face]object.Name{}
 	xobjects := map[object.Name]object.Object{}
 	patterns := map[object.Name]object.Object{}
+	alphas := newAlphaStates()
 	// Keyed by the source bytes rather than by the decoded image, so a logo
 	// drawn on every row of a table is one image XObject in the file.
 	imageNames := map[string]object.Name{}
@@ -288,10 +387,13 @@ func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Docu
 	for _, op := range ops {
 		switch v := op.(type) {
 		case layout.FillRect:
-			if v.Rect.Empty() {
-				continue
+			// Overhang is about the page-overflow guard in layout and says
+			// nothing about how the rectangle is painted.
+			if v.Rect.Empty() || !(v.Color.A > 0) {
+				continue // no area, or no ink: nothing is painted
 			}
 			b.Save()
+			alphas.use(b, v.Color.A)
 			b.SetRGB(v.Color.R/255, v.Color.G/255, v.Color.B/255)
 			// The rectangle is given in layout.layout units and the transform above
 			// converts them, so the numbers written here are the layout.layout's own.
@@ -312,29 +414,30 @@ func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Docu
 			face := faces[name]
 			b.Save()
 			clipTo(b, v.Clip)
+			alphas.use(b, v.Color.A)
 			b.SetRGB(v.Color.R/255, v.Color.G/255, v.Color.B/255)
 			b.BeginText()
 			b.SetFont(name, v.Size.Px())
-			if v.CharSpacing != 0 {
-				// Tc, in unscaled text space units — the same units the size above
-				// is given in, since the text matrix below has no scale of its own.
-				//
-				// word-spacing needs no operator to go with it, and that is worth
-				// stating rather than leaving as an omission. Tw applies only to
-				// the single-byte code 32, so it would silently do nothing for a
-				// composite face, and it is not needed anyway: line breaking
-				// already makes every run of spaces an item of its own with a
-				// position of its own, so the extra advance is spent between runs
-				// rather than inside one, and no run of spaces shows ink for the
-				// spread to be visible in.
-				b.SetCharSpacing(v.CharSpacing.Px())
+			if !(v.Color.A > 0) {
+				// Transparent text is not painted and is still text: CSS
+				// "color: transparent" leaves it selectable, and so does this.
+				b.SetTextRenderMode(content.InvisibleText)
 			}
 			// The y axis is inverted by the transform, so text drawn through it
 			// would be mirrored. The text matrix undoes that inversion locally,
 			// which leaves the glyphs upright while the position still comes
 			// from the flipped system.
 			b.SetTextMatrix(1, 0, 0, -1, v.At.X.Px(), v.At.Y.Px())
-			face.DrawShaped(b, layout.ShapedText(v), v.Size.Px())
+			// The glyphs layout measured, shaped with the run's direction, its
+			// context either side and the features the document turned off —
+			// layout.ShapedGlyphs is the pairing of all of them, and a backend
+			// that reshapes the text alone draws a different run from the one
+			// placed (a ligature measured as two letters, a kern turned back on,
+			// an Arabic word in isolated forms).
+			text := layout.ShapedText(v)
+			glyphs, _ := layout.ShapedGlyphs(v)
+			glyphs = withLetterSpacing(glyphs, text, v)
+			face.Draw(b, text, glyphs, v.Size.Px())
 			b.EndText()
 			b.Restore()
 
@@ -400,21 +503,172 @@ func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Docu
 				b.Fill()
 			}
 			b.Restore()
+
+		default:
+			// checkDrawable refused this document or the caller's policy let
+			// it through knowing the operation is not drawn.
 		}
 	}
 	b.Restore()
 
 	if _, err := doc.AddPage(pdf0.Page{
-		Width:    page.Width.Pt(),
-		Height:   page.Height.Pt(),
-		Content:  b,
-		Faces:    faces,
-		XObjects: xobjects,
-		Patterns: patterns,
+		Width:      page.Width.Pt(),
+		Height:     page.Height.Pt(),
+		Content:    b,
+		Faces:      faces,
+		XObjects:   xobjects,
+		Patterns:   patterns,
+		ExtGStates: alphas.states,
+		// A translucent mark composites against whatever is behind it, and
+		// without a page group what that is is left to the reader.
+		Group: len(alphas.states) > 0,
 	}); err != nil {
 		return nil, err
 	}
 	return doc, nil
+}
+
+// drawnFields says, for every display-list operation, what this backend does
+// with each of its fields: draws it, or refuses the document over it.
+//
+// It is here so that a field cannot be ignored by omission. forme's DrawText
+// has grown a field for every thing a run of text can be — a direction, three
+// kinds of vertical, a context either side, features turned off — and a
+// backend that reads the ones it knew about draws the rest wrong without a
+// word. TestEveryDrawOpFieldIsAccountedFor holds this list to the types
+// themselves, so a field or an operation a newer forme adds fails the build's
+// tests until this says what happens to it.
+var drawnFields = map[string]map[string]string{
+	"FillRect": {
+		"Rect":     "the rectangle filled",
+		"Color":    "the fill colour; alpha through an ExtGState, and nothing painted at zero",
+		"Overhang": "read by layout's page-overflow guard; it says nothing about painting",
+	},
+	"DrawText": {
+		"At":            "the origin of the text matrix",
+		"Text":          "what the glyphs were shaped from and what the page extracts as",
+		"RTL":           "through layout.ShapedText and layout.ShapedGlyphs",
+		"Sideways":      "refused: RuleVerticalText",
+		"Anticlockwise": "refused: RuleVerticalText",
+		"Upright":       "refused: RuleVerticalText",
+		"Face":          "the font, adopted and embedded",
+		"Size":          "the font size",
+		"Color":         "the fill colour; alpha through an ExtGState, and invisible text at zero",
+		"PreContext":    "through layout.ShapedGlyphs",
+		"PostContext":   "through layout.ShapedGlyphs",
+		"MergePre":      "through layout.ShapedGlyphs",
+		"MergePost":     "through layout.ShapedGlyphs",
+		"ContextKerns":  "through layout.ShapedGlyphs",
+		"Features":      "through layout.ShapedGlyphs",
+		"CharSpacing":   "added after each typographic character unit: withLetterSpacing",
+		"Clip":          "clipTo",
+	},
+	"DrawImage": {
+		"Rect":  "the placement matrix",
+		"Image": "embedded through images.Embed",
+		"Key":   "one image XObject per key",
+		"Clip":  "clipTo",
+	},
+	"TileImage": {
+		"Clip":  "the area painted",
+		"Tile":  "the first cell",
+		"StepX": "the pattern's /XStep",
+		"StepY": "the pattern's /YStep",
+		"Image": "embedded through images.Embed",
+		"Key":   "one image XObject per key",
+	},
+}
+
+// alphaStates is the ExtGStates a page's translucent marks select, one per
+// distinct alpha.
+type alphaStates struct {
+	states map[object.Name]object.Object
+	byA    map[float64]object.Name
+}
+
+func newAlphaStates() *alphaStates {
+	return &alphaStates{states: map[object.Name]object.Object{}, byA: map[float64]object.Name{}}
+}
+
+// use selects the state for an alpha, inside the Save the mark already opened,
+// so the Restore that ends the mark takes it away again.
+//
+// The same alpha for filling and stroking (/ca and /CA): the display list's
+// colour is the mark's, and every mark here is painted by filling, a glyph
+// included — the stroke alpha is set so that a later stroked mark cannot
+// inherit an opaque one by accident. An opaque colour selects nothing, which
+// keeps a page with no transparency free of it, and so free of the PDF/A
+// rules about it.
+func (a *alphaStates) use(b *content.Builder, alpha float64) {
+	if !(alpha > 0) || alpha >= 1 {
+		return
+	}
+	name, ok := a.byA[alpha]
+	if !ok {
+		name = object.Name(fmt.Sprintf("GS%d", len(a.byA)+1))
+		gs := &object.Dictionary{}
+		gs.Set("Type", object.Name("ExtGState"))
+		gs.Set("ca", object.Real(alpha))
+		gs.Set("CA", object.Real(alpha))
+		a.byA[alpha] = name
+		a.states[name] = gs
+	}
+	b.SetExtGState(name)
+}
+
+// withLetterSpacing adds a run's letter-spacing to the glyphs it falls after.
+//
+// CSS Text §8.2 adds it after each typographic character unit, not after each
+// glyph: a letter with a mark on it is one unit and two glyphs, and a ligature
+// is one glyph and as many units as letters. So it goes on the last glyph of
+// each shaping cluster, once for every unit that ends in the cluster's text —
+// which is how layout measured the run, and how forme's own reference drawing
+// places it. The Tc operator this used to set adds it after every glyph,
+// which moved a mark off its letter by the spacing and made a run with
+// ligatures narrower on the page than layout said it was.
+//
+// The spacing is in the run's units and a glyph's advance in thousandths of
+// its em, so it is scaled by the size the run is set at.
+func withLetterSpacing(glyphs []shape.Glyph, text string, v layout.DrawText) []shape.Glyph {
+	if v.CharSpacing == 0 || len(glyphs) == 0 || !(v.Size.Px() > 0) {
+		return glyphs
+	}
+	ends := paragraph.SpacingAfterOffsets(text)
+	if len(ends) == 0 {
+		return glyphs
+	}
+	// Each cluster's extent in the text, from its offset to the next one's.
+	starts := make([]int, 0, len(glyphs))
+	seen := map[int]bool{}
+	for _, g := range glyphs {
+		if !seen[g.Cluster] {
+			seen[g.Cluster] = true
+			starts = append(starts, g.Cluster)
+		}
+	}
+	sort.Ints(starts)
+	end := make(map[int]int, len(starts))
+	for i, c := range starts {
+		end[c] = len(text)
+		if i+1 < len(starts) {
+			end[c] = starts[i+1]
+		}
+	}
+	perUnit := v.CharSpacing.Px() * 1000 / v.Size.Px()
+	out := append([]shape.Glyph(nil), glyphs...)
+	for i := range out {
+		if i+1 < len(out) && out[i+1].Cluster == out[i].Cluster {
+			continue // not the last glyph of its cluster
+		}
+		units := 0
+		for at := range ends {
+			if at >= out[i].Cluster && at < end[out[i].Cluster] {
+				units++
+			}
+		}
+		out[i].XAdvance += perUnit * float64(units)
+	}
+	return out
 }
 
 // clipTo narrows the graphics state to a clip, if the operation carries one.
@@ -489,7 +743,10 @@ func tilingPattern(doc *pdf0.Document, name object.Name, ref object.Object, v la
 	res := &object.Dictionary{}
 	res.Set("XObject", xobjects)
 
-	stream := &object.Stream{Dict: object.Dictionary{}, Data: drawn}
+	// Flate-compressed like every other stream this module writes.
+	compressed := core.FlateEncode(drawn)
+	stream := object.NewStream(nil, compressed)
+	stream.Dict.Set("Filter", object.Name("FlateDecode"))
 	stream.Dict.Set("Type", object.Name("Pattern"))
 	stream.Dict.Set("PatternType", object.Integer(1))
 	// PaintType 1 is a coloured pattern: the cell brings its own colour, which
@@ -511,7 +768,7 @@ func tilingPattern(doc *pdf0.Document, name object.Name, ref object.Object, v la
 		numberOf(k), object.Integer(0), object.Integer(0), numberOf(-k),
 		numberOf(tx), numberOf(ty),
 	})
-	stream.Dict.Set("Length", object.Integer(len(drawn)))
+	stream.Dict.Set("Length", object.Integer(len(compressed)))
 	// Indirect, because a stream cannot be a direct object in a dictionary.
 	return doc.Add(stream), nil
 }

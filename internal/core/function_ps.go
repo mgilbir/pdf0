@@ -94,9 +94,37 @@ func psProgram(d View, stream *object.Stream) ([]psItem, bool) {
 	return items, ok
 }
 
+// Bounds on a type-4 program. The parser used to recurse once per '{', and
+// Flate compresses braces about a thousand to one: three million of them made a
+// 6.6 KB file whose parse ended in a fatal stack overflow (audit 2026-09-22
+// C14), and twenty million an out-of-memory. psExec bounded the *execution*
+// depth; nothing bounded the parse.
+//
+// A tint transform is a handful of arithmetic operators. Across the veraPDF,
+// PDF 2.0 example, PDF/VT and WTPDF corpora (2,957 files, 230 type-4
+// functions) the largest is 267 bytes and 64 tokens, so each bound is orders
+// of magnitude above any real program:
+//
+//   - maxPSProgramBytes, the decoded program's length, bounds the tokenizer;
+//   - maxPSTokens bounds the token and item slices, whatever the length;
+//   - maxPSNesting bounds how deeply procedures nest. It is above psExec's
+//     maxFunctionDepth deliberately: a program may carry a deeper procedure it
+//     never executes, and the parse should not be the stricter of the two.
+const (
+	maxPSProgramBytes = 1 << 20
+	maxPSTokens       = 1 << 18
+	maxPSNesting      = 4 * maxFunctionDepth
+)
+
 func parsePSProgram(d View, stream *object.Stream) ([]psItem, bool) {
 	data := d.Content(stream)
-	toks := psTokenize(data)
+	if len(data) > maxPSProgramBytes {
+		return nil, false
+	}
+	toks, ok := psTokenize(data)
+	if !ok {
+		return nil, false
+	}
 	items, rest, ok := psParseProc(toks)
 	if !ok || len(rest) != 0 {
 		// The whole program is expected to be a single procedure.
@@ -107,39 +135,52 @@ func parsePSProgram(d View, stream *object.Stream) ([]psItem, bool) {
 
 // psParseProc parses a { ... } procedure starting at toks[0] == "{" and returns
 // its body items plus the remaining tokens.
+//
+// It is iterative: the open procedures are an explicit stack, bounded by
+// maxPSNesting, so no program can drive the parse's own recursion.
 func psParseProc(toks []string) (items []psItem, rest []string, ok bool) {
 	if len(toks) == 0 || toks[0] != "{" {
 		return nil, nil, false
 	}
-	toks = toks[1:]
-	for len(toks) > 0 {
-		t := toks[0]
-		switch t {
-		case "}":
-			return items, toks[1:], true
+	open := [][]psItem{nil} // the bodies of the procedures being read, innermost last
+	for i := 1; i < len(toks); i++ {
+		top := len(open) - 1
+		switch t := toks[i]; t {
 		case "{":
-			sub, r, k := psParseProc(toks)
-			if !k {
+			if len(open) >= maxPSNesting {
 				return nil, nil, false
 			}
-			items = append(items, psItem{isProc: true, proc: sub})
-			toks = r
+			open = append(open, nil)
+		case "}":
+			body := open[top]
+			open = open[:top]
+			if top == 0 {
+				return body, toks[i+1:], true
+			}
+			open[top-1] = append(open[top-1], psItem{isProc: true, proc: body})
 		default:
 			if f, err := strconv.ParseFloat(t, 64); err == nil {
-				items = append(items, psItem{isNum: true, num: f})
+				open[top] = append(open[top], psItem{isNum: true, num: f})
 			} else {
-				items = append(items, psItem{op: t})
+				open[top] = append(open[top], psItem{op: t})
 			}
-			toks = toks[1:]
 		}
 	}
 	return nil, nil, false // unterminated procedure
 }
 
 // psTokenize splits a PostScript calculator program into tokens: braces are
-// their own tokens, whitespace separates, and % begins a line comment.
-func psTokenize(data []byte) []string {
+// their own tokens, whitespace separates, and % begins a line comment. It
+// refuses a program of more than maxPSTokens tokens.
+func psTokenize(data []byte) ([]string, bool) {
 	var toks []string
+	add := func(t string) bool {
+		if len(toks) >= maxPSTokens {
+			return false
+		}
+		toks = append(toks, t)
+		return true
+	}
 	i := 0
 	for i < len(data) {
 		c := data[i]
@@ -149,7 +190,9 @@ func psTokenize(data []byte) []string {
 				i++
 			}
 		case c == '{' || c == '}':
-			toks = append(toks, string(c))
+			if !add(string(c)) {
+				return nil, false
+			}
 			i++
 		case c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f' || c == 0:
 			i++
@@ -162,10 +205,12 @@ func psTokenize(data []byte) []string {
 				}
 				i++
 			}
-			toks = append(toks, string(data[start:i]))
+			if !add(string(data[start:i])) {
+				return nil, false
+			}
 		}
 	}
-	return toks
+	return toks, true
 }
 
 // psBudget accumulates the operator count across a whole (recursive) type-4

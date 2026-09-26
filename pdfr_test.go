@@ -45,7 +45,7 @@ func buildPDFRDoc() *Document {
 	img.Set("Width", object.Integer(2))
 	img.Set("Height", object.Integer(2))
 	img.Set("Filter", object.Name("FlateDecode"))
-	set(5, &object.Stream{Dict: *img, Data: []byte{0x78, 0x9c, 0x00}})
+	set(5, object.NewStream(img, []byte{0x78, 0x9c, 0x00}))
 
 	xmp := `<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">` +
 		`<rdf:Description xmlns:pdfr="http://www.iso.org/pdf/r/">` +
@@ -53,7 +53,7 @@ func buildPDFRDoc() *Document {
 	md := &object.Dictionary{}
 	md.Set("Type", object.Name("Metadata"))
 	md.Set("Subtype", object.Name("XML"))
-	set(6, &object.Stream{Dict: *md, Data: []byte(xmp)})
+	set(6, object.NewStream(md, []byte(xmp)))
 
 	d.Trailer = object.Dictionary{}
 	d.Trailer.Set("Root", object.IndirectRef{Number: 1})

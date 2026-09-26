@@ -99,7 +99,7 @@ func rc4EncryptedDoc(t *testing.T) *Document {
 	tr := doc.Trailer.Clone()
 	tr.Set("Encrypt", object.IndirectRef{Number: encNum})
 	tr.Set("ID", object.Array{object.String{Value: id, IsHex: true}, object.String{Value: append([]byte(nil), id...), IsHex: true}})
-	doc.Trailer = *tr
+	doc.Trailer = *tr // dictcopy: installs the edited clone; nothing else holds it
 	return doc
 }
 
@@ -226,7 +226,7 @@ func TestEncryptedSignedFileVerifies(t *testing.T) {
 		t.Fatal("no signature dictionary in the re-read document")
 	}
 
-	res := got.VerifySignatures(file)
+	res := verifySigs(t, got, sign.VerifyOptions{})
 	if len(res) != 1 {
 		t.Fatalf("got %d signatures, want 1", len(res))
 	}
@@ -257,7 +257,7 @@ func TestWriteEncryptedSignedKeepsContentsClear(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sdoc.SetEncryption("", "owner"); err != nil {
+	if err := sdoc.SetEncryption("user", "owner"); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
@@ -358,7 +358,7 @@ func TestEncryptionExemptionIsNarrow(t *testing.T) {
 func TestTrailerIDNotDecrypted(t *testing.T) {
 	for _, xrefStream := range []bool{false, true} {
 		doc := encMatrixDoc(xrefStream, false)
-		if err := doc.SetEncryption("", ""); err != nil {
+		if err := doc.SetEncryption("id-user", ""); err != nil {
 			t.Fatal(err)
 		}
 		want, _ := doc.Trailer.Get("ID").(object.Array)
@@ -368,7 +368,7 @@ func TestTrailerIDNotDecrypted(t *testing.T) {
 			t.Fatal(err)
 		}
 		enc := buf.Bytes()
-		back, err := Read(bytes.NewReader(enc), int64(len(enc)))
+		back, err := ReadWithPassword(bytes.NewReader(enc), int64(len(enc)), "id-user")
 		if err != nil {
 			t.Fatal(err)
 		}

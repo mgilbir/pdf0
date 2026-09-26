@@ -1,6 +1,7 @@
 # 0005 — `Dictionary` is parallel slices with a lazy index, not a map
 
-**Status:** accepted, in force.
+**Status:** superseded by [0008](0008-opaque-dictionary.md). The record below is
+kept as it was written.
 
 ## Context
 

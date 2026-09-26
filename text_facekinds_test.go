@@ -175,7 +175,7 @@ func TestTextRoundTripsThroughEveryFaceKind(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reparse: %v", err)
 			}
-			got := strings.TrimSpace(rd.ExtractText())
+			got := strings.TrimSpace(mustExtractText(t, rd))
 			if got != text {
 				t.Errorf("extracted %q, want %q", got, text)
 			}

@@ -19,13 +19,11 @@ func pageDoc(page *object.Dictionary) *Document {
 		1: {Number: 1, Value: cat},
 		2: {Number: 2, Value: pages},
 		3: {Number: 3, Value: page},
-	}, Trailer: dictWith("Root", object.IndirectRef{Number: 1})}
+	}, Trailer: *dictWith("Root", object.IndirectRef{Number: 1})}
 }
 
-func dictWith(k object.Name, v object.Object) object.Dictionary {
-	d := object.Dictionary{}
-	d.Set(k, v)
-	return d
+func dictWith(k object.Name, v object.Object) *object.Dictionary {
+	return object.NewDictionary(object.Entry{Key: k, Value: v})
 }
 
 func countRule(errs []pdfa.Violation, rule string) int {

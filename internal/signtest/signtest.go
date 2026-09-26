@@ -123,6 +123,7 @@ func CAAndLeaf(t *testing.T) (ca *x509.Certificate, caKey *rsa.PrivateKey, leaf 
 		Subject:      pkix.Name{CommonName: "pdf0 test leaf"},
 		NotBefore:    NotBefore,
 		NotAfter:     NotAfter,
+		KeyUsage:     x509.KeyUsageDigitalSignature,
 	}
 	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, ca, &leafKey.PublicKey, caKey)
 	if err != nil {
@@ -132,7 +133,15 @@ func CAAndLeaf(t *testing.T) (ca *x509.Certificate, caKey *rsa.PrivateKey, leaf 
 	return ca, caKey, leaf
 }
 
+// MakeCRL issues a CRL from ca revoking revoked at RevTime, current from Base
+// for 30 days.
 func MakeCRL(t *testing.T, ca *x509.Certificate, caKey crypto.Signer, revoked []*x509.Certificate) []byte {
+	t.Helper()
+	return MakeCRLAt(t, ca, caKey, revoked, Base, Base.Add(30*24*time.Hour))
+}
+
+// MakeCRLAt is MakeCRL with the CRL's thisUpdate and nextUpdate given.
+func MakeCRLAt(t *testing.T, ca *x509.Certificate, caKey crypto.Signer, revoked []*x509.Certificate, thisUpdate, nextUpdate time.Time) []byte {
 	t.Helper()
 	var entries []x509.RevocationListEntry
 	for _, c := range revoked {
@@ -140,8 +149,8 @@ func MakeCRL(t *testing.T, ca *x509.Certificate, caKey crypto.Signer, revoked []
 	}
 	tmpl := &x509.RevocationList{
 		Number:                    big.NewInt(1),
-		ThisUpdate:                Base,
-		NextUpdate:                Base.Add(30 * 24 * time.Hour),
+		ThisUpdate:                thisUpdate,
+		NextUpdate:                nextUpdate,
 		RevokedCertificateEntries: entries,
 	}
 	der, err := x509.CreateRevocationList(rand.Reader, tmpl, ca, caKey)
@@ -152,8 +161,16 @@ func MakeCRL(t *testing.T, ca *x509.Certificate, caKey crypto.Signer, revoked []
 }
 
 // MakeOCSP hand-builds a signed OCSP response (RFC 6960) for cert, with the given
-// status ("good", "revoked", "unknown"), signed by issuerKey.
+// status ("good", "revoked", "unknown"), signed by issuerKey, current from Base
+// for 7 days.
 func MakeOCSP(t *testing.T, cert, issuer *x509.Certificate, issuerKey crypto.Signer, status string) []byte {
+	t.Helper()
+	return MakeOCSPAt(t, cert, issuer, issuerKey, status, Base, Base.Add(7*24*time.Hour))
+}
+
+// MakeOCSPAt is MakeOCSP with the response's thisUpdate and nextUpdate given;
+// a zero nextUpdate omits the field.
+func MakeOCSPAt(t *testing.T, cert, issuer *x509.Certificate, issuerKey crypto.Signer, status string, thisUpdate, nextUpdate time.Time) []byte {
 	t.Helper()
 	nameHash := sha1.Sum(issuer.RawSubject)
 	keyHash := sha1.Sum(issuerPublicKeyBytes(issuer))
@@ -178,10 +195,10 @@ func MakeOCSP(t *testing.T, cert, issuer *x509.Certificate, issuerKey crypto.Sig
 		cs = asn1.RawValue{Class: 2, Tag: 2} // [2] IMPLICIT NULL
 	}
 
-	sr := singleResponseASN{CertID: certID, CertStatus: cs, ThisUpdate: Base}
+	sr := singleResponseASN{CertID: certID, CertStatus: cs, ThisUpdate: thisUpdate, NextUpdate: nextUpdate}
 	rd := responseDataASN{
 		ResponderID: asn1.RawValue{Class: 2, Tag: 1, IsCompound: true, Bytes: issuer.RawSubject},
-		ProducedAt:  Base,
+		ProducedAt:  thisUpdate,
 		Responses:   []singleResponseASN{sr},
 	}
 	rdDER, err := asn1.Marshal(rd)
@@ -215,6 +232,7 @@ func CertKey(t *testing.T) (*x509.Certificate, *rsa.PrivateKey) {
 		Subject:      pkix.Name{CommonName: "pdf0 test signer"},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
@@ -251,4 +269,59 @@ func TSACertKey(t *testing.T) (*x509.Certificate, *rsa.PrivateKey) {
 		t.Fatal(err)
 	}
 	return cert, key
+}
+
+// Issue creates a certificate from tmpl, issued by parent with parentKey, or
+// self-signed when parent is nil, with a fresh RSA key. The caller's template
+// decides everything else — key usage, extended key usage, CA constraints —
+// so a test can build exactly the certificate a policy is to judge.
+func Issue(t *testing.T, tmpl, parent *x509.Certificate, parentKey crypto.Signer) (*x509.Certificate, *rsa.PrivateKey) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer := crypto.Signer(key)
+	if parent == nil {
+		parent = tmpl
+	} else {
+		signer = parentKey
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, parent, &key.PublicKey, signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cert, key
+}
+
+// CA creates a self-signed certificate authority named cn.
+func CA(t *testing.T, cn string) (*x509.Certificate, *rsa.PrivateKey) {
+	t.Helper()
+	return Issue(t, &x509.Certificate{
+		SerialNumber:          big.NewInt(time.Now().UnixNano()),
+		Subject:               pkix.Name{CommonName: cn},
+		NotBefore:             NotBefore,
+		NotAfter:              NotAfter,
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}, nil, nil)
+}
+
+// TSAIssuedBy creates a time-stamp authority certificate (id-kp-timeStamping)
+// issued by ca, so a verifier that trusts ca trusts its tokens.
+func TSAIssuedBy(t *testing.T, ca *x509.Certificate, caKey crypto.Signer) (*x509.Certificate, *rsa.PrivateKey) {
+	t.Helper()
+	return Issue(t, &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject:      pkix.Name{CommonName: "pdf0 test chained TSA"},
+		NotBefore:    NotBefore,
+		NotAfter:     NotAfter,
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageTimeStamping},
+	}, ca, caKey)
 }

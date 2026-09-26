@@ -72,7 +72,7 @@ func TestGradientsValidate(t *testing.T) {
 		_, err = doc.AddPage(Page{
 			Width: 612, Height: 792, Content: &b,
 			Shadings: map[object.Name]object.Object{"Sh0": doc.Add(linear)},
-			Patterns: map[object.Name]object.Object{"P0": doc.Add(ShadingPattern(doc.Add(radial)))},
+			Patterns: map[object.Name]object.Object{"P0": doc.Add(mustShadingPattern(t, doc.Add(radial)))},
 		})
 		return err
 	})

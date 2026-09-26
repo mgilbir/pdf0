@@ -1,7 +1,9 @@
 package core
 
 import (
+	"github.com/mgilbir/pdf0/internal/hostile"
 	"testing"
+	"time"
 
 	"github.com/mgilbir/pdf0/object"
 )
@@ -187,7 +189,8 @@ endcmap`
 // bound refuses the whole map rather than being truncated — a truncated map
 // answers "undefined" for codes it simply did not reach.
 func TestACMapCannotBeAskedForUnboundedWork(t *testing.T) {
-	huge := `begincmap
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		huge := `begincmap
 1 begincodespacerange
 <00000000> <FFFFFFFF>
 endcodespacerange
@@ -195,23 +198,24 @@ endcodespacerange
 <00000000> <FFFFFFFF> 1
 endcidrange
 endcmap`
-	if _, ok := ParseCMap(huge); ok {
-		t.Error("a cidrange spanning four billion codes was accepted")
-	}
+		if _, ok := ParseCMap(huge); ok {
+			t.Error("a cidrange spanning four billion codes was accepted")
+		}
 
-	// And the bound is not so tight that a real CMap trips it: Adobe's largest
-	// published CMaps run to a few thousand entries.
-	var b []byte
-	b = append(b, "begincmap\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n"...)
-	b = append(b, "begincidrange\n"...)
-	for i := 0; i < 3000; i++ {
-		b = append(b, []byte("<"+hex4(i*16)+"> <"+hex4(i*16+15)+"> 1\n")...)
-	}
-	b = append(b, "endcidrange\nendcmap"...)
-	if _, ok := ParseCMap(string(b)); !ok {
-		t.Error("a three-thousand-range CMap was refused; the bound is too tight " +
-			"for a real font")
-	}
+		// And the bound is not so tight that a real CMap trips it: Adobe's largest
+		// published CMaps run to a few thousand entries.
+		var b []byte
+		b = append(b, "begincmap\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n"...)
+		b = append(b, "begincidrange\n"...)
+		for i := 0; i < 3000; i++ {
+			b = append(b, []byte("<"+hex4(i*16)+"> <"+hex4(i*16+15)+"> 1\n")...)
+		}
+		b = append(b, "endcidrange\nendcmap"...)
+		if _, ok := ParseCMap(string(b)); !ok {
+			t.Error("a three-thousand-range CMap was refused; the bound is too tight " +
+				"for a real font")
+		}
+	})
 }
 
 func hex4(v int) string {

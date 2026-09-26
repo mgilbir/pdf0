@@ -66,8 +66,12 @@ type Page struct {
 	// know and cannot be reminded of.
 	//
 	// Naming the face here removes the question: the drawing is complete by the
-	// time a page is added, so this embeds it then. Use Fonts instead only for
-	// a font dictionary built some other way.
+	// time a page is added, so this embeds it then. A face is embedded once
+	// per document: every page, form and pattern naming it refers to one font,
+	// and when a later page sets glyphs that font lacks it is rewritten in
+	// place, under the same object numbers, as a subset of everything the face
+	// has set. Use Fonts instead only for a font dictionary built some other
+	// way — a face embedded with Face.Embed is a separate font per call.
 	Faces map[object.Name]*fonts.Face
 
 	// The resources the drawing named, by the name it used.
@@ -86,8 +90,22 @@ type Page struct {
 // The content stream is Flate-compressed, which is what a producer does and
 // what every reader expects; StreamData reads it back. The page is appended to
 // the tree the catalog names, so a document that has none is an error rather
-// than a page nothing points at.
+// than a page nothing points at. The tree may be any shape a file has: /Count
+// stays the number of pages, and where the tree states a /Rotate or /CropBox
+// the page would otherwise inherit, the page states its own.
+//
+// A link's Page must already be a page of this document, so a link can only
+// lead backwards; a Locked document is refused, since Write passes its content
+// through as ciphertext and the new page would be read back as noise.
 func (d *Document) AddPage(p Page) (object.IndirectRef, error) {
+	if d == nil {
+		return object.IndirectRef{}, errNilDocument
+	}
+	if d.Locked() {
+		return object.IndirectRef{}, errLockedTarget("adding a page")
+	}
+	// Everything is checked before anything is written, so a refusal leaves
+	// the document as it was (audit 2026-09-22 C131).
 	if p.Content == nil {
 		return object.IndirectRef{}, fmt.Errorf("pdf0: the page has no content")
 	}
@@ -95,36 +113,55 @@ func (d *Document) AddPage(p Page) (object.IndirectRef, error) {
 	if err != nil {
 		return object.IndirectRef{}, err
 	}
-	if p.Width <= 0 || p.Height <= 0 {
-		return object.IndirectRef{}, fmt.Errorf("pdf0: page size %g×%g has no area", p.Width, p.Height)
+	if err := checkPositive("the page width", p.Width); err != nil {
+		return object.IndirectRef{}, err
+	}
+	if err := checkPositive("the page height", p.Height); err != nil {
+		return object.IndirectRef{}, err
 	}
 	if p.Rotate%90 != 0 {
 		return object.IndirectRef{}, fmt.Errorf("pdf0: page rotation %d is not a multiple of 90", p.Rotate)
 	}
-	// After the content is final, which is what makes subsetting correct, and
-	// before the resources are checked, which is what the names have to satisfy.
-	if p.Fonts, err = d.embedFaces(p.Faces, p.Fonts); err != nil {
+	// The tree too. (A direct /Pages root is promoted here; that is a repair,
+	// not a partial page.)
+	if _, _, err := d.pageTreeRoot(); err != nil {
 		return object.IndirectRef{}, err
 	}
-	resources, err := p.resources()
+	links := make([]*object.Dictionary, 0, len(p.Links))
+	for i, l := range p.Links {
+		if l.Page != nil {
+			if err := d.requirePage(*l.Page, fmt.Sprintf("link %d", i)); err != nil {
+				return object.IndirectRef{}, err
+			}
+		}
+		a, err := l.annotation()
+		if err != nil {
+			return object.IndirectRef{}, fmt.Errorf("link %d: %w", i, err)
+		}
+		links = append(links, a)
+	}
+	res := p.resourceSet()
+	if err := res.check(p.Content.Resources()); err != nil {
+		return object.IndirectRef{}, err
+	}
+	// After the content is final, which is what makes subsetting correct. It
+	// is the one step past this point that can fail, and it adds nothing to
+	// the document when it does.
+	faceRefs, err := d.embedFaces(p.Faces)
 	if err != nil {
 		return object.IndirectRef{}, err
 	}
-
-	pagesRef, pages, err := d.pageTree()
-	if err != nil {
-		return object.IndirectRef{}, err
-	}
+	resources := res.build(p.Content.Resources(), faceRefs)
 
 	compressed := core.FlateEncode(drawn)
-	stream := &object.Stream{Dict: object.Dictionary{}, Data: compressed}
-	stream.Dict.Set("Filter", object.Name("FlateDecode"))
-	stream.Dict.Set("Length", object.Integer(len(compressed)))
+	stream := object.NewStream(object.NewDictionary(
+		object.Entry{Key: "Filter", Value: object.Name("FlateDecode")},
+		object.Entry{Key: "Length", Value: object.Integer(len(compressed))},
+	), compressed)
 	contentRef := d.Add(stream)
 
 	page := &object.Dictionary{}
 	page.Set("Type", object.Name("Page"))
-	page.Set("Parent", pagesRef)
 	page.Set("MediaBox", object.Array{
 		object.Integer(0), object.Integer(0),
 		numberFor(p.Width), numberFor(p.Height),
@@ -145,121 +182,137 @@ func (d *Document) AddPage(p Page) (object.IndirectRef, error) {
 		group.Set("CS", object.Name("DeviceRGB"))
 		page.Set("Group", group)
 	}
-	if len(p.Links) > 0 {
-		annots := make(object.Array, 0, len(p.Links))
-		for i, l := range p.Links {
-			a, err := l.annotation()
-			if err != nil {
-				return object.IndirectRef{}, fmt.Errorf("link %d: %w", i, err)
-			}
+	if len(links) > 0 {
+		annots := make(object.Array, 0, len(links))
+		for _, a := range links {
 			annots = append(annots, d.Add(a))
 		}
 		page.Set("Annots", annots)
 	}
 	pageRef := d.Add(page)
-
-	kids, _ := d.Resolve(pages.Get("Kids")).(object.Array)
-	pages.Set("Kids", append(kids, pageRef))
-	pages.Set("Count", object.Integer(len(kids)+1))
+	// The tree code sets /Parent, keeps /Count the number of pages, and writes
+	// /Rotate 0 or a /CropBox when the tree above would otherwise lend the page
+	// its own (audit 2026-09-22 C29).
+	if err := d.appendToPageTree([]object.IndirectRef{pageRef}); err != nil {
+		return object.IndirectRef{}, err
+	}
 	return pageRef, nil
 }
 
-// embedFaces writes each named face into the document and merges the references
-// into the font map, which is what the resource dictionary is built from.
-//
-// It is called once the content stream is final: a face is subsetted to the
-// glyphs it was asked to set, so embedding it any earlier produces a font that
-// contains nothing the page uses.
-func (d *Document) embedFaces(faces map[object.Name]*fonts.Face, refs map[object.Name]object.Object) (map[object.Name]object.Object, error) {
-	if len(faces) == 0 {
-		return refs, nil
-	}
-	// A fresh map: the caller's must not gain entries it did not put there,
-	// least of all when the same Page value is used twice.
-	merged := make(map[object.Name]object.Object, len(refs)+len(faces))
-	for name, value := range refs {
-		merged[name] = value
-	}
-	for name, face := range faces {
-		if face == nil {
-			return nil, fmt.Errorf("pdf0: the face named /%s is nil", name)
-		}
-		if _, clash := merged[name]; clash {
-			return nil, fmt.Errorf(
-				"pdf0: /%s names both a face to embed and a font dictionary; it can be one of them", name)
-		}
-		ref, err := face.Embed(d)
-		if err != nil {
-			return nil, fmt.Errorf("embedding the face named /%s: %w", name, err)
-		}
-		merged[name] = ref
-	}
-	return merged, nil
+// resourceSet is the resources a page, form or pattern was given: the faces to
+// embed and the maps naming everything else, by the /Resources subdictionary
+// each belongs in.
+type resourceSet struct {
+	faces  map[object.Name]*fonts.Face
+	groups []resourceGroup
 }
 
-// pageTree finds the /Pages node the catalog names, which is what a new page is
-// appended to.
-func (d *Document) pageTree() (object.IndirectRef, *object.Dictionary, error) {
-	catalog := d.ResolveDict(d.Trailer.Get("Root"))
-	if catalog == nil {
-		return object.IndirectRef{}, nil, fmt.Errorf("pdf0: the document has no catalog to add a page to")
-	}
-	ref, ok := catalog.Get("Pages").(object.IndirectRef)
-	if !ok {
-		return object.IndirectRef{}, nil, fmt.Errorf("pdf0: the catalog names no page tree")
-	}
-	pages := d.ResolveDict(ref)
-	if pages == nil {
-		return object.IndirectRef{}, nil, fmt.Errorf("pdf0: the catalog's page tree is missing")
-	}
-	// A page tree with its own /Kids of page-tree nodes would need the new page
-	// placed in one of them; this appends to a flat tree, which is what
-	// NewPDFADocument builds and what this package writes.
-	return ref, pages, nil
+type resourceGroup struct {
+	key  object.Name
+	defs map[object.Name]object.Object
 }
 
-// resources builds the page's /Resources, and reports any name the drawing used
-// that nothing defines.
-func (p Page) resources() (*object.Dictionary, error) {
-	used := p.Content.Resources()
-	groups := []struct {
-		key   object.Name
-		names []object.Name
-		defs  map[object.Name]object.Object
-	}{
-		{"Font", used.Fonts, p.Fonts},
-		{"XObject", used.XObjects, p.XObjects},
-		{"ExtGState", used.ExtGStates, p.ExtGStates},
-		{"ColorSpace", used.ColorSpaces, p.ColorSpaces},
-		{"Shading", used.Shadings, p.Shadings},
-		{"Pattern", used.Patterns, p.Patterns},
-		{"Properties", used.Properties, p.Properties},
+func newResourceSet(faces map[object.Name]*fonts.Face, fonts, xobjects, extGStates, colorSpaces,
+	shadings, patterns, properties map[object.Name]object.Object) resourceSet {
+	return resourceSet{faces: faces, groups: []resourceGroup{
+		{"Font", fonts}, {"XObject", xobjects}, {"ExtGState", extGStates},
+		{"ColorSpace", colorSpaces}, {"Shading", shadings}, {"Pattern", patterns},
+		{"Properties", properties},
+	}}
+}
+
+func (p Page) resourceSet() resourceSet {
+	return newResourceSet(p.Faces, p.Fonts, p.XObjects, p.ExtGStates, p.ColorSpaces, p.Shadings, p.Patterns, p.Properties)
+}
+
+// used lists a group's names in the drawing, in first-use order.
+func (g resourceGroup) used(u content.Resources) []object.Name {
+	switch g.key {
+	case "Font":
+		return u.Fonts
+	case "XObject":
+		return u.XObjects
+	case "ExtGState":
+		return u.ExtGStates
+	case "ColorSpace":
+		return u.ColorSpaces
+	case "Shading":
+		return u.Shadings
+	case "Pattern":
+		return u.Patterns
+	case "Properties":
+		return u.Properties
 	}
+	return nil
+}
+
+// check refuses what build could not write: a nil face, a name that is both a
+// face and a font dictionary, an entry with no value, and a name the drawing
+// used that nothing defines — which is the check Builder.Resources exists to
+// make possible. A face defines its name as a font.
+func (r resourceSet) check(used content.Resources) error {
+	for _, name := range sortedNames(r.faces) {
+		if r.faces[name] == nil {
+			return fmt.Errorf("pdf0: the face named %s is nil", name)
+		}
+		if _, clash := r.groups[0].defs[name]; clash {
+			return fmt.Errorf(
+				"pdf0: %s names both a face to embed and a font dictionary; it can be one of them", name)
+		}
+	}
+	for _, g := range r.groups {
+		for _, name := range sortedNames(g.defs) {
+			if g.defs[name] == nil {
+				return fmt.Errorf("pdf0: the %s resource %s has no value", g.key, name)
+			}
+		}
+		for _, name := range g.used(used) {
+			if _, ok := g.defs[name]; ok {
+				continue
+			}
+			if _, ok := r.faces[name]; ok && g.key == "Font" {
+				continue
+			}
+			return fmt.Errorf("pdf0: the content stream uses %s but no %s resource defines it", name, g.key)
+		}
+	}
+	return nil
+}
+
+// build writes the /Resources dictionary: the names the drawing used, in the
+// order it used them, then the ones it did not, in name order. A resource the
+// caller defined and the drawing did not use is kept: a page may legitimately
+// carry one for an annotation appearance, and dropping it silently would be a
+// surprise. check has passed, so every name resolves.
+func (r resourceSet) build(used content.Resources, faceRefs map[object.Name]object.IndirectRef) *object.Dictionary {
 	out := &object.Dictionary{}
-	for _, g := range groups {
-		if len(g.names) == 0 && len(g.defs) == 0 {
+	for _, g := range r.groups {
+		defs := g.defs
+		if g.key == "Font" && len(faceRefs) > 0 {
+			defs = make(map[object.Name]object.Object, len(g.defs)+len(faceRefs))
+			for name, v := range g.defs {
+				defs[name] = v
+			}
+			for name, ref := range faceRefs {
+				defs[name] = ref
+			}
+		}
+		names := g.used(used)
+		if len(names) == 0 && len(defs) == 0 {
 			continue
 		}
 		sub := &object.Dictionary{}
-		for _, name := range g.names {
-			value, ok := g.defs[name]
-			if !ok {
-				return nil, fmt.Errorf("pdf0: the content stream uses /%s but no /%s resource defines it",
-					name, g.key)
-			}
-			sub.Set(name, value)
+		for _, name := range names {
+			sub.Set(name, defs[name])
 		}
-		// A resource the caller defined and the drawing did not use is kept:
-		// a page may legitimately carry one for an annotation appearance, and
-		// dropping it silently would be a surprise.
-		for name, value := range g.defs {
-			if sub.Get(name) == nil {
-				sub.Set(name, value)
+		for _, name := range sortedNames(defs) {
+			if !sub.Has(name) {
+				sub.Set(name, defs[name])
 			}
 		}
 		out.Set(g.key, sub)
 	}
-	return out, nil
+	return out
 }
 
 // Opacity builds the graphics state dictionary that makes drawing translucent
@@ -269,8 +322,11 @@ func (p Page) resources() (*object.Dictionary, error) {
 // not in the content package: the content stream names it with gs, and this is
 // what the name has to refer to.
 func Opacity(fill, stroke float64) (*object.Dictionary, error) {
-	if fill < 0 || fill > 1 || stroke < 0 || stroke > 1 {
-		return nil, fmt.Errorf("pdf0: opacity (%g, %g) is outside [0,1]", fill, stroke)
+	if err := checkUnit("the fill opacity", fill); err != nil {
+		return nil, err
+	}
+	if err := checkUnit("the stroke opacity", stroke); err != nil {
+		return nil, err
 	}
 	gs := &object.Dictionary{}
 	gs.Set("Type", object.Name("ExtGState"))
@@ -349,20 +405,11 @@ func BlendWithOpacity(mode BlendMode, fill, stroke float64) (*object.Dictionary,
 	if err != nil {
 		return nil, err
 	}
-	for i, key := range alpha.Keys {
+	for key, aval := range alpha.All() {
 		if key == "Type" {
 			continue
 		}
-		gs.Set(key, alpha.Values[i])
+		gs.Set(key, aval)
 	}
 	return gs, nil
-}
-
-// numberFor writes a value as an integer when it is one, which keeps the file
-// tidy and matches what a reader expects to see for a page size.
-func numberFor(v float64) object.Object {
-	if v == float64(int(v)) {
-		return object.Integer(int(v))
-	}
-	return object.Real(v)
 }

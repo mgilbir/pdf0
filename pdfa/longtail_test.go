@@ -96,7 +96,7 @@ func TestSameICCProfile(t *testing.T) {
 		s.Dict.Set("Length", object.Integer(len(data)))
 		return s
 	}
-	doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+	doc := mkView(map[int]*object.IndirectObject{}, nil)
 
 	if !sameICCProfile(doc, mk(1, 1), mk(1, 1)) {
 		t.Error("two identical profiles must be the same")
@@ -151,7 +151,7 @@ func TestColorantUTF8Nested(t *testing.T) {
 }
 
 func TestAnnotFieldType(t *testing.T) {
-	doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+	doc := mkView(map[int]*object.IndirectObject{}, nil)
 	parent := &object.Dictionary{}
 	parent.Set("FT", object.Name("Btn"))
 	doc.Objects[5] = &object.IndirectObject{Number: 5, Value: parent}

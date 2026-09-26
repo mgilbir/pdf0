@@ -3,6 +3,7 @@ package core
 import (
 	"bytes"
 	"compress/zlib"
+	"errors"
 	"fmt"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/syntax"
@@ -111,7 +112,7 @@ func LZWDecode(cancel Canceler, data []byte, earlyChange int, lim Limits) ([]byt
 
 		out = append(out, entry...)
 		if len(out) > lim.DecodedStreamBytes {
-			return nil, fmt.Errorf("LZW: decompressed data exceeds maximum size (%d bytes)", lim.DecodedStreamBytes)
+			return nil, fmt.Errorf("LZW: %w (%d bytes)", ErrDecodeLimit, lim.DecodedStreamBytes)
 		}
 
 		if prev != nil {
@@ -397,10 +398,26 @@ func ApplyFilter(cancel Canceler, name object.Name, data []byte, parms *object.D
 		return ApplyPredictor(decoded, PredictorFromDict(parms))
 	case "ASCIIHexDecode":
 		return asciiHexDecode(data)
+	case "Crypt":
+		// A stream's own crypt filter (ISO 32000-2 7.4.10) is applied by the
+		// security handler when Read decrypts the document, so the data here
+		// is already past it. On a document that was not decrypted it is
+		// ciphertext, but so is every other stream: that state is Locked, and
+		// callers check it.
+		return data, nil
 	default:
-		return nil, fmt.Errorf("unsupported filter: %s", name)
+		return nil, fmt.Errorf("%w: %s", ErrUnsupportedFilter, name)
 	}
 }
+
+// Decode errors a caller must be able to tell from a corrupt stream: the
+// stream may be perfectly good, and pdf0 declined (a size limit) or does not
+// implement the filter. Reporting either as a defect of the file would be a
+// false non-conformance; a validator reports them as "limit" instead.
+var (
+	ErrDecodeLimit       = errors.New("decompressed data exceeds maximum size")
+	ErrUnsupportedFilter = errors.New("unsupported filter")
+)
 
 func FlateDecode(cancel Canceler, data []byte, lim Limits) ([]byte, error) {
 	r, err := zlib.NewReader(bytes.NewReader(data))
@@ -416,7 +433,7 @@ func FlateDecode(cancel Canceler, data []byte, lim Limits) ([]byte, error) {
 		return nil, fmt.Errorf("zlib decompress: %w", err)
 	}
 	if len(decoded) > maxDecode {
-		return nil, fmt.Errorf("decompressed data exceeds maximum size (%d bytes)", maxDecode)
+		return nil, fmt.Errorf("%w (%d bytes)", ErrDecodeLimit, maxDecode)
 	}
 	return decoded, nil
 }

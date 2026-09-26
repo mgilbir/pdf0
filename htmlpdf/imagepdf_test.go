@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -147,7 +148,7 @@ func TestRepeatedImageIsEmbeddedOnce(t *testing.T) {
 	if xobjects == nil {
 		t.Fatal("the page names no XObjects")
 	}
-	if n := len(xobjects.Keys); n != 1 {
+	if n := xobjects.Len(); n != 1 {
 		t.Errorf("three draws of one file produced %d XObjects, want 1", n)
 	}
 
@@ -194,10 +195,10 @@ func TestImageWithTransparencyGetsASoftMask(t *testing.T) {
 	pages := doc.PageList()
 	resources := doc.ResolveDict(pages[0].Get("Resources"))
 	xobjects := doc.ResolveDict(resources.Get("XObject"))
-	if xobjects == nil || len(xobjects.Keys) != 1 {
+	if xobjects == nil || xobjects.Len() != 1 {
 		t.Fatal("the page does not name exactly one XObject")
 	}
-	stream, _ := doc.Resolve(xobjects.Values[0]).(*object.Stream)
+	stream, _ := doc.Resolve(slices.Collect(xobjects.Values())[0]).(*object.Stream)
 	if stream == nil {
 		t.Fatal("the XObject is not a stream")
 	}
@@ -237,8 +238,8 @@ func TestSingleBackgroundTileIsDrawnDirectly(t *testing.T) {
 	page, text := pageContent(t, doc)
 
 	if resources := doc.ResolveDict(page.Get("Resources")); resources != nil {
-		if p := doc.ResolveDict(resources.Get("Pattern")); p != nil && len(p.Keys) > 0 {
-			t.Errorf("a single tile produced %d patterns, want none", len(p.Keys))
+		if p := doc.ResolveDict(resources.Get("Pattern")); p != nil && p.Len() > 0 {
+			t.Errorf("a single tile produced %d patterns, want none", p.Len())
 		}
 	}
 	if !strings.Contains(text, " Do") {
@@ -276,10 +277,10 @@ func TestRepeatingBackgroundBecomesATilingPattern(t *testing.T) {
 		t.Fatal("the page has no resources")
 	}
 	patterns := doc.ResolveDict(resources.Get("Pattern"))
-	if patterns == nil || len(patterns.Keys) != 1 {
+	if patterns == nil || patterns.Len() != 1 {
 		t.Fatalf("the page names %v patterns, want exactly one", patterns)
 	}
-	stream, _ := doc.Resolve(patterns.Values[0]).(*object.Stream)
+	stream, _ := doc.Resolve(slices.Collect(patterns.Values())[0]).(*object.Stream)
 	if stream == nil {
 		t.Fatal("the pattern is not a stream")
 	}

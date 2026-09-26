@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/mgilbir/pdf0/internal/signtest"
+	"github.com/mgilbir/pdf0/sign"
 	"testing"
 )
 
@@ -69,11 +70,11 @@ func TestSignDocumentWithPageContents(t *testing.T) {
 	if len(pages) != 1 {
 		t.Fatalf("got %d pages, want 1", len(pages))
 	}
-	if got := signed.ExtractText(); !bytes.Contains([]byte(got), []byte("hello")) {
+	if got := mustExtractText(t, signed); !bytes.Contains([]byte(got), []byte("hello")) {
 		t.Errorf("page content lost or corrupted by signing: %q", got)
 	}
 
-	res := signed.VerifySignatures(out)
+	res := verifySigs(t, signed, sign.VerifyOptions{})
 	if len(res) != 1 {
 		t.Fatalf("got %d signatures, want 1", len(res))
 	}
@@ -98,7 +99,7 @@ func TestSignIncrementalWithPageContents(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	if err := doc.WriteSignedIncremental(&buf, original, cert, key); err != nil {
+	if err := doc.WriteSignedIncremental(&buf, cert, key); err != nil {
 		t.Fatalf("WriteSignedIncremental on a document with page content: %v", err)
 	}
 	out := buf.Bytes()
@@ -109,7 +110,7 @@ func TestSignIncrementalWithPageContents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-read: %v", err)
 	}
-	res := signed.VerifySignatures(out)
+	res := verifySigs(t, signed, sign.VerifyOptions{})
 	if len(res) != 1 || !res[0].Valid || !res[0].CoversWholeDocument {
 		t.Fatalf("incremental signature did not verify: %+v", res)
 	}
@@ -143,7 +144,7 @@ func TestSignIncrementalSecondSignature(t *testing.T) {
 		t.Fatalf("re-read once-signed: %v", err)
 	}
 	var second bytes.Buffer
-	if err := reread.WriteSignedIncremental(&second, onceSigned, cert, key); err != nil {
+	if err := reread.WriteSignedIncremental(&second, cert, key); err != nil {
 		t.Fatalf("second (incremental) WriteSignedIncremental: %v", err)
 	}
 	out := second.Bytes()
@@ -157,7 +158,7 @@ func TestSignIncrementalSecondSignature(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-read twice-signed: %v", err)
 	}
-	res := twice.VerifySignatures(out)
+	res := verifySigs(t, twice, sign.VerifyOptions{})
 	if len(res) != 2 {
 		t.Fatalf("got %d signatures, want 2", len(res))
 	}

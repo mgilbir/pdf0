@@ -10,7 +10,7 @@ import (
 // than once and accepts one painted a single time.
 func TestUAFormXObjectMCID(t *testing.T) {
 	mk := func(pageContent string) core.View {
-		doc := mkView(map[int]*object.IndirectObject{}, object.Dictionary{})
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		form := &object.Stream{Dict: object.Dictionary{}, Data: []byte("/P <</MCID 0>> BDC (hi) Tj EMC")}
 		form.Dict.Set("Type", object.Name("XObject"))
 		form.Dict.Set("Subtype", object.Name("Form"))

@@ -22,7 +22,6 @@ unusable, not merely malformed.** In practice you will see one of:
 | `startxref offset N outside file (size M)` | The pointer lands past the end of the file — usually a truncated download. |
 | `rebuilt cross-reference table found no document catalog` | The scan-rebuild ran and recovered objects, but none is a `/Type /Catalog`, so there is no document to hand back. |
 | `parsing object N at offset M: …` | An individual object failed to parse *and* the scan-rebuild retry also failed. |
-| `encryption: …` | Reserved for a malformed `/Encrypt` dictionary, but **currently unreachable**: `buildStdSecurityHandler` returns a nil handler and a nil error on every failure path, so a malformed `/Encrypt` yields a `Locked()` document rather than an error. See [encryption.md](encryption.md). |
 | `recovered from panic while reading PDF: …` | A bug. `Read` converts panics into errors so a hostile file cannot crash your process, but please report it (and see [testing.md](testing.md#fuzzing) — the fuzzers exist for exactly this). |
 
 ## `short read: got N of M bytes`
@@ -44,17 +43,26 @@ Two fields, and they mean different things:
 
 - **`Document.Encrypted`** — the file *carried* an `/Encrypt` dictionary. It stays
   `true` on a file that was decrypted successfully.
-- **`Document.Locked()`** — `Encrypted && no usable security handler`: the
-  password was wrong or the scheme is unsupported, and *the strings and streams
-  are still ciphertext*.
+- **`Document.Locked()`** — the file carries `/Encrypt` but has no usable
+  security handler, and *the strings and streams are still ciphertext*.
+  **`Document.LockReason()`** says why, wrapping one of `ErrWrongPassword`,
+  `ErrEncryptionUnsupported` or `ErrEncryptionMalformed` (test with
+  `errors.Is`); its text names the entry at fault. An `/Encrypt` dictionary
+  never makes `Read` fail — a malformed one is a `Locked` document with
+  `ErrEncryptionMalformed`, not an error.
+- **`Document.DecryptFailures()`** — on a document that is *not* Locked, the
+  objects whose content could not be decrypted: corrupt ciphertext, or a stream
+  whose crypt filter pdf0 cannot apply (an embedded file under an unsupported
+  `/EFF`, a `/Crypt` filter naming an undefined filter). Their bodies are empty,
+  and `Write` refuses the document.
 
 From the godoc on `Locked`:
 
 > Encrypted alone does not distinguish this from a successfully decrypted file
 > (both keep Encrypted true). Callers that intend to read content, validate,
 > extract, or re-encrypt should check Locked first: on a locked document
-> RemoveEncryption is a no-op, ExtractText and the validators see ciphertext, and
-> SetEncryption/Write refuse.
+> RemoveEncryption is a no-op, ExtractText and the validators see ciphertext,
+> SetEncryption refuses, and Write writes the file back verbatim.
 
 **Empty password vs `ReadWithPassword`.** `Read` tries the empty password, which
 covers the common "owner-restricted, no user password" case. For anything else
@@ -85,7 +93,18 @@ cannot write encrypted document: N object stream(s) could not be decrypted, so s
 ```
 
 The first would produce a file readers wrongly try to decrypt; the second would
-silently drop the objects locked inside the undecryptable container.
+silently drop the objects locked inside the undecryptable container. A
+*decrypted* document is refused when `DecryptFailures` is non-empty
+(`cannot write: object(s) [N …] could not be decrypted on read, so their content
+is missing`), and when a stream added since `Read` names a crypt filter the
+handler does not define.
+
+**`SetEncryption` refusals.** It needs a non-empty user password (an empty one
+opens the file for anyone, and `SetEncryption` grants every permission), and
+refuses a password SASLprep prohibits — control characters, private-use or
+Unicode-3.2-unassigned code points, mixed right-to-left and left-to-right text —
+because no conforming reader could reproduce it. An empty *owner* password is
+replaced by a random one. See [encryption.md](encryption.md#passwords).
 
 Two related refusals that are not about encryption:
 
@@ -105,7 +124,8 @@ A `pdfa.Violation` prints as `[LEVEL CLAUSE] object N: message`, e.g.
 `PDF/A-4` is the level whose rules require this; `6.2.10` is the ISO 19005
 clause; `object 12` is the offending object number (omitted entirely when the
 violation is document-level). Look the clause up in the standard, or in the
-veraPDF profiles — `make rule-coverage` prints each clause's description.
+veraPDF profiles — `go run -tags devtools ./internal/cmd/rulecoverage -v` prints
+each rule's description.
 
 **An empty result is not a conformance guarantee.** From the `ValidatePDFA`
 godoc: *"An empty result means 'none of the implemented checks fired', not a
@@ -205,16 +225,18 @@ none of those document-level defects were present, not that the file is clean.
 says nothing about bytes outside that range, and nothing about whether the
 certificate is trustworthy. From the godoc:
 
-> A signed document can be modified after signing by an incremental update — the
-> original signed range stays intact (Valid == true) while the rendered content
-> changes (CoversWholeDocument == false). Use DocumentUnmodified for the combined
-> "signed and nothing was changed" verdict.
+> Intact: Valid, and every change made after signing is a permitted one
+> (ChangesAllowed): a Document Security Store or document time-stamp added for
+> long-term validation, say. A timestamp never makes a change permitted; it
+> proves only when bytes existed.
 
-Use `result.DocumentUnmodified()` (`Valid && CoversWholeDocument`) as your
-baseline verdict. For trust, `VerifySignatures` builds no chain at all — you must
-call `VerifySignaturesWithRoots(raw, roots)` and check `TrustedChain` / `ChainErr`,
-which are reported separately and never affect `Valid`. For long-term validation
-(PAdES B-T through B-LTA, timestamps, revocation) see
+Use `result.Intact()` (`Valid && ChangesAllowed`) as your baseline verdict, or
+`result.DocumentUnmodified()` (`Valid && CoversWholeDocument`) when nothing may
+have changed at all; `DisallowedChanges` names what changed. For trust,
+`VerifySignatures` builds a chain only to the roots you pass in
+`sign.VerifyOptions{Roots: …}` — with none, `TrustedChain` is always false —
+and reports `TrustedChain` / `ChainErr` separately; they never affect `Valid`.
+For long-term validation (PAdES B-T through B-LTA, timestamps, revocation) see
 [docs/signing.md](signing.md).
 
 ## An image came back with `Decoded=false`
@@ -255,13 +277,17 @@ Consequences worth knowing:
 
 - **Do not re-`Write` a signed document.** Regenerating the layout invalidates
   every signature over the original bytes.
-- **To amend a file, use `WriteIncremental`.** It writes "the original file bytes
-  verbatim followed by only the objects listed in changed, a new cross-reference
-  section whose /Prev chains back to the original, and a new trailer. The
-  original bytes are preserved exactly, so any signature over them stays valid
-  and the update can be undone by truncation." It refuses encrypted documents
+- **To amend a file, use `WriteIncremental`.** It writes the bytes of the file
+  the document was read from verbatim, followed by only the objects listed in
+  changed, a new cross-reference section whose /Prev chains back to the file's
+  newest one, and a new trailer. The original bytes are preserved exactly, so
+  any signature over them stays valid and the update can be undone by
+  truncation. The document must have been read from a file: a document built in
+  memory is refused (`this document was built in memory, so use Write`), as is
+  one whose cross-reference data was rebuilt by scanning, an encrypted one
   (`incremental update of an encrypted document is not supported`) and an empty
-  change list (`incremental update with no changed objects`).
+  change list (`incremental update with no changed objects`). Number new objects
+  with `Add`, which never reuses a number the file uses.
 - **`Read` normalizes structure.** It drops `/XRef` and `/ObjStm` objects and
   strips the xref-stream-only trailer keys, so a second `Read` of your output
   will not show them where the input did. Compare with `DocumentEqual`, not with

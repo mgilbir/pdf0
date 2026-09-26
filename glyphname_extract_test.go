@@ -67,7 +67,7 @@ found:
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := rd.ExtractText()
+	got := mustExtractText(t, rd)
 	for _, r := range []string{"“", "”", "—", "€", "…"} {
 		if !strings.Contains(got, r) {
 			t.Errorf("extracted %q, which is missing %q", got, r)

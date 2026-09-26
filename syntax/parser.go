@@ -2,8 +2,10 @@ package syntax
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"github.com/mgilbir/pdf0/object"
+	"math"
 	"strconv"
 )
 
@@ -17,9 +19,23 @@ import (
 // searching for the endstream keyword — a search that over-reads pathologically
 // on binary data.
 //
-// Input is untrusted: recursion is depth-capped (maxParseDepth), and large
-// dictionaries switch to a name index so duplicate-key elimination stays off an
-// O(n^2) path.
+// Input is untrusted: recursion is depth-capped (maxParseDepth), and duplicate
+// keys are resolved through Dictionary.Set, which is O(1) amortised at any size.
+
+// MaxGeneration is the largest generation number an indirect object can carry.
+// ISO 32000-2 7.5.4 gives the generation a five-digit field in a
+// cross-reference table and reserves 65535 as the generation after which an
+// object number is never reused.
+const MaxGeneration = 65535
+
+// MaxObjectNumber is the largest object number pdf0 reads or writes.
+//
+// ISO 32000-2 sets no upper bound (PDF 1.7's Annex C suggested 8,388,607 as an
+// implementation limit), so this is pdf0's own: 2^31 − 1, the largest value
+// every platform's int holds. It keeps "start + count" in a cross-reference
+// subsection from wrapping (audit 2026-09-22 C128), and it is far above any
+// real file's numbering.
+const MaxObjectNumber = 1<<31 - 1
 
 // maxParseDepth bounds recursion through nested arrays and dictionaries so that
 // adversarial input (e.g. millions of nested '[') cannot exhaust the goroutine
@@ -29,10 +45,17 @@ const maxParseDepth = 1000
 
 // Parser builds PDF Object values from a token stream.
 type Parser struct {
-	lexer  *Lexer
-	buf    []Token // look-ahead buffer
-	bufLen int
-	depth  int // current nesting depth (arrays/dictionaries)
+	lexer *Lexer
+	// buf is a ring of the tokens lexed ahead of the parse: head is the next
+	// one to consume and n how many are held. The grammar never looks more
+	// than maxLookahead tokens ahead ("N G R"), so it is a fixed array and
+	// peeking allocates nothing. An entry can be an error: a malformed token
+	// found while looking ahead is kept in its place and reported by whichever
+	// parse reaches it, not by the one that peeked.
+	buf     [maxLookahead]lookahead
+	head, n int
+	depth   int   // current nesting depth (arrays/dictionaries)
+	end     int64 // offset just past the last consumed token; see Offset
 
 	// ResolveLength, when set, resolves an indirect stream /Length reference to
 	// its integer value (typically via the cross-reference table). It lets
@@ -43,51 +66,101 @@ type Parser struct {
 	ResolveLength func(ref object.IndirectRef) (int64, bool)
 }
 
-// NewParser creates a new Parser for the given data.
-func NewParser(data []byte) *Parser {
-	return &Parser{
-		lexer: NewLexer(data),
-	}
+// maxLookahead is the most tokens the parser holds before consuming one.
+const maxLookahead = 3
+
+// lookahead is one look-ahead slot: a token, or the error lexing it gave.
+type lookahead struct {
+	tok Token
+	err error
 }
 
-// NewParserFromLexer creates a new Parser using the given lexer.
+// NewParser creates a new Parser for the given data.
+func NewParser(data []byte) *Parser {
+	return NewParserFromLexer(NewLexer(data))
+}
+
+// NewParserFromLexer creates a new Parser using the given lexer, starting at
+// the lexer's current position.
 func NewParserFromLexer(lexer *Lexer) *Parser {
 	return &Parser{
 		lexer: lexer,
+		end:   lexer.pos,
 	}
 }
 
-// Lexer returns the underlying lexer (for position access, etc).
+// Lexer returns the underlying lexer. Its Position is where lexing has reached,
+// which can be past tokens the parser has looked at but not consumed; Offset is
+// the position of the parse. To move the parser, use SetOffset: moving the lexer
+// directly leaves the look-ahead describing the old position.
 func (p *Parser) Lexer() *Lexer {
 	return p.lexer
 }
 
+// Offset returns the byte offset just past the last token the parser consumed:
+// after ParseObject, the end of the object it returned. Look-ahead is not
+// counted, so parsing "5" from "5 /Next 7" leaves Offset at 1.
+func (p *Parser) Offset() int64 {
+	return p.end
+}
+
+// SetOffset moves the parser to offset, discarding any look-ahead.
+func (p *Parser) SetOffset(offset int64) {
+	p.head, p.n = 0, 0
+	p.lexer.SetPosition(offset)
+	p.end = offset
+}
+
+// peekToken returns the token n places ahead without consuming it. A lexing
+// error at or before that place is returned instead; it stays buffered, so the
+// parse that reaches it reports it.
 func (p *Parser) peekToken(n int) (Token, error) {
-	for p.bufLen <= n {
-		tok, err := p.lexer.NextToken()
-		if err != nil {
-			return Token{}, err
-		}
-		p.buf = append(p.buf, tok)
-		p.bufLen++
+	if n >= maxLookahead {
+		return Token{}, fmt.Errorf("internal error: look-ahead of %d tokens exceeds %d", n+1, maxLookahead)
 	}
-	return p.buf[n], nil
+	for p.n <= n {
+		if p.n > 0 {
+			if last := &p.buf[(p.head+p.n-1)%maxLookahead]; last.err != nil {
+				return Token{}, last.err // nothing can be read past an error
+			}
+		}
+		tok, err := p.lexer.NextToken()
+		p.buf[(p.head+p.n)%maxLookahead] = lookahead{tok, err}
+		p.n++
+	}
+	e := &p.buf[(p.head+n)%maxLookahead]
+	return e.tok, e.err
+}
+
+// pop removes the next buffered token; the caller has checked there is one.
+func (p *Parser) pop() lookahead {
+	e := p.buf[p.head]
+	p.buf[p.head] = lookahead{} // drop the reference to the token's bytes
+	p.head = (p.head + 1) % maxLookahead
+	p.n--
+	return e
 }
 
 func (p *Parser) nextToken() (Token, error) {
-	if p.bufLen > 0 {
-		tok := p.buf[0]
-		p.buf = p.buf[1:]
-		p.bufLen--
-		return tok, nil
+	if p.n > 0 {
+		if e := p.buf[p.head]; e.err != nil {
+			return Token{}, e.err
+		}
+		e := p.pop()
+		p.end = e.tok.End
+		return e.tok, nil
 	}
-	return p.lexer.NextToken()
+	tok, err := p.lexer.NextToken()
+	if err == nil {
+		p.end = tok.End
+	}
+	return tok, err
 }
 
+// consumeToken consumes the token a successful peekToken(0) returned.
 func (p *Parser) consumeToken() {
-	if p.bufLen > 0 {
-		p.buf = p.buf[1:]
-		p.bufLen--
+	if p.n > 0 {
+		p.end = p.pop().tok.End
 	}
 }
 
@@ -115,11 +188,7 @@ func (p *Parser) ParseObject() (object.Object, error) {
 
 	case TokenReal:
 		p.consumeToken()
-		val, err := strconv.ParseFloat(string(tok.Value), 64)
-		if err != nil {
-			return nil, fmt.Errorf("invalid real %q at offset %d: %w", tok.Value, tok.Offset, err)
-		}
-		return object.Real(val), nil
+		return p.toReal(tok)
 
 	case TokenString:
 		p.consumeToken()
@@ -155,41 +224,36 @@ func (p *Parser) ParseObject() (object.Object, error) {
 }
 
 // parseIntegerOrRef handles the ambiguity between integer, indirect ref, and indirect obj.
-// Look-ahead failures are real lexer errors and are propagated: the lexer only
-// returns an error for malformed input (clean end of input is TokenEOF), and
-// swallowing it here would silently drop the diagnostic while the lexer has
-// already advanced past the bad bytes.
+//
+// The look-ahead only decides which of the three this is. A malformed token
+// after the integer means "not a reference", so the integer is returned and
+// the error stays buffered for the parse that reaches it — exactly as it would
+// be after any other object. Failing the integer instead would drop a valid
+// object because its neighbour is broken (an object-stream member followed by
+// a malformed one, audit C116). A lexer error is never swallowed: clean end of
+// input is TokenEOF, not an error, and the buffered error is still reported.
 func (p *Parser) parseIntegerOrRef(tok Token) (object.Object, error) {
 	// Try to look ahead for "N G R" or "N G obj"
-	tok2, err := p.peekToken(1)
-	if err != nil {
-		return nil, err
-	}
-
-	if tok2.Type == TokenInteger {
+	if tok2, err := p.peekToken(1); err == nil && tok2.Type == TokenInteger {
 		tok3, err := p.peekToken(2)
-		if err != nil {
-			return nil, err
-		}
-
-		if tok3.Type == TokenRef {
+		if err == nil && tok3.Type == TokenRef {
 			// N G R → indirect reference
 			p.consumeToken() // consume first int
 			p.consumeToken() // consume second int
 			p.consumeToken() // consume R
 
-			num, err := p.toObjectNumber(tok)
+			num, err := p.toObjectNumber(tok, math.MaxInt, "object")
 			if err != nil {
 				return nil, err
 			}
-			gen, err := p.toObjectNumber(tok2)
+			gen, err := p.toObjectNumber(tok2, math.MaxInt, "generation")
 			if err != nil {
 				return nil, err
 			}
 			return object.IndirectRef{Number: num, Generation: gen}, nil
 		}
 
-		if tok3.Type == TokenObj {
+		if err == nil && tok3.Type == TokenObj {
 			// "N G obj" is an indirect object DEFINITION, valid only at the top
 			// level, where ParseIndirectObject consumes it. Reaching it here means
 			// it appeared as a nested value — an array element or dictionary value —
@@ -205,24 +269,63 @@ func (p *Parser) parseIntegerOrRef(tok Token) (object.Object, error) {
 	return p.toInteger(tok)
 }
 
-func (p *Parser) toInteger(tok Token) (object.Integer, error) {
+// toInteger converts an integer token. ISO 32000-2 Annex C treats the range of
+// integers as an implementation limit, not a syntax rule, so an integer too
+// large for int64 is read as the Real nearest to it (which is how its value
+// survives; a conforming file never contains one) rather than failing the
+// object around it (audit C117).
+func (p *Parser) toInteger(tok Token) (object.Object, error) {
 	val, err := strconv.ParseInt(string(tok.Value), 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("invalid integer %q at offset %d: %w", tok.Value, tok.Offset, err)
+	if err == nil {
+		return object.Integer(val), nil
 	}
-	return object.Integer(val), nil
+	if errors.Is(err, strconv.ErrRange) {
+		return p.toReal(tok)
+	}
+	return nil, fmt.Errorf("invalid integer %q at offset %d: %w", tok.Value, tok.Offset, err)
+}
+
+// toReal converts a real (or out-of-range integer) token. A value beyond the
+// range of float64 is clamped to the largest finite value of its sign — an
+// infinity is not a PDF number and could not be written back — and one below
+// its precision rounds toward zero, as strconv does (audit C117).
+func (p *Parser) toReal(tok Token) (object.Object, error) {
+	val, err := strconv.ParseFloat(string(tok.Value), 64)
+	if err != nil && !errors.Is(err, strconv.ErrRange) {
+		return nil, fmt.Errorf("invalid real %q at offset %d: %w", tok.Value, tok.Offset, err)
+	}
+	switch {
+	case math.IsInf(val, 1):
+		val = math.MaxFloat64
+	case math.IsInf(val, -1):
+		val = -math.MaxFloat64
+	}
+	return object.Real(val), nil
 }
 
 // toObjectNumber parses an object or generation number, rejecting values that
-// overflow or are negative. Overflow was previously swallowed (strconv.Atoi
-// error dropped), yielding garbage references like Number=MaxInt64.
-func (p *Parser) toObjectNumber(tok Token) (int, error) {
+// overflow, are negative, or exceed max. Overflow was previously swallowed
+// (strconv.Atoi error dropped), yielding garbage references like
+// Number=MaxInt64.
+//
+// A definition ("N G obj") passes MaxObjectNumber and MaxGeneration: a
+// generation above 65535 (ISO 32000-2 7.5.4: the field is five digits and
+// 65535 is the largest value it holds) cannot be written back in a
+// cross-reference table, and the scan that rebuilds a damaged table rejects
+// the same header, so a definition carrying one is refused here rather than
+// accepted by one path and dropped by the other (audit 2026-09-22 C125). A
+// reference ("N G R") passes math.MaxInt: a reference to an object that cannot
+// exist is harmless, and refusing it would fail the whole containing object.
+func (p *Parser) toObjectNumber(tok Token, max int, what string) (int, error) {
 	val, err := strconv.Atoi(string(tok.Value))
 	if err != nil {
-		return 0, fmt.Errorf("invalid object number %q at offset %d: %w", tok.Value, tok.Offset, err)
+		return 0, fmt.Errorf("invalid %s number %q at offset %d: %w", what, tok.Value, tok.Offset, err)
 	}
 	if val < 0 {
-		return 0, fmt.Errorf("negative object number %d at offset %d", val, tok.Offset)
+		return 0, fmt.Errorf("negative %s number %d at offset %d", what, val, tok.Offset)
+	}
+	if val > max {
+		return 0, fmt.Errorf("%s number %d at offset %d exceeds %d", what, val, tok.Offset, max)
 	}
 	return val, nil
 }
@@ -280,21 +383,10 @@ func (p *Parser) parseArray() (object.Object, error) {
 	}
 }
 
-// dictIndexThreshold is the key count past which parseDictOrStream stops
-// deduplicating keys by a linear scan (Dictionary.Set) and builds a name→index
-// map instead. Below it the linear scan is cheaper than a map allocation;
-// above it the O(n²) scan is what makes a dictionary with hundreds of thousands
-// of keys (from a crafted object stream) take minutes to parse.
-const dictIndexThreshold = 64
-
 // parseDictOrStream parses a dictionary, and if followed by 'stream', parses it as a Stream.
 func (p *Parser) parseDictOrStream() (object.Object, error) {
 	p.consumeToken() // consume '<<'
-	dict := object.Dictionary{}
-	// index maps a key to its slot in dict once the dictionary grows past
-	// dictIndexThreshold, so duplicate-key handling stays O(1) instead of a
-	// linear scan per key. It is nil (and unused) for small dictionaries.
-	var index map[object.Name]int
+	dict := &object.Dictionary{}
 
 	for {
 		tok, err := p.peekToken(0)
@@ -322,44 +414,32 @@ func (p *Parser) parseDictOrStream() (object.Object, error) {
 			return nil, fmt.Errorf("parsing dictionary value for key %s: %w", key, err)
 		}
 
-		// Duplicate keys are legal to tolerate but undefined by the spec; keep
-		// the last value at the key's first position, matching Dictionary.Set
-		// and common reader behavior.
-		if index != nil {
-			if i, ok := index[key]; ok {
-				dict.Values[i] = val
-			} else {
-				index[key] = len(dict.Keys)
-				dict.Keys = append(dict.Keys, key)
-				dict.Values = append(dict.Values, val)
-			}
-		} else {
-			dict.Set(key, val)
-			if len(dict.Keys) >= dictIndexThreshold {
-				index = make(map[object.Name]int, len(dict.Keys)*2)
-				for i, k := range dict.Keys {
-					index[k] = i
-				}
-			}
-		}
+		// A duplicated key is undefined by the spec; keep the last value at the
+		// key's first position, which is Dictionary.Set's rule and common reader
+		// behaviour. Set is O(1) amortised, so a crafted dictionary with
+		// hundreds of thousands of keys still parses in linear time.
+		dict.Set(key, val)
 	}
 
-	// Check if followed by 'stream'. A look-ahead failure is a real lexer
-	// error (clean end of input is TokenEOF, not an error).
-	tok, err := p.peekToken(0)
-	if err != nil {
-		return nil, err
-	}
-	if tok.Type == TokenStream {
-		return p.parseStream(dict)
+	// Check if followed by 'stream'. As in parseIntegerOrRef, a malformed
+	// token here only means "not a stream": the dictionary is complete, and
+	// the error stays buffered for the parse that reaches it (audit C116).
+	if tok, err := p.peekToken(0); err == nil && tok.Type == TokenStream {
+		return p.parseStream(dict, tok)
 	}
 
-	return &dict, nil
+	return dict, nil
 }
 
 // parseStream parses stream data after the dictionary has been parsed.
-func (p *Parser) parseStream(dict object.Dictionary) (object.Object, error) {
+func (p *Parser) parseStream(dict *object.Dictionary, streamTok Token) (object.Object, error) {
 	p.consumeToken() // consume 'stream'
+	// The data is read from the bytes after the keyword, not through the
+	// lexer, so nothing may be buffered past it. Look-ahead never reaches past
+	// "stream" (it follows ">>", which ends any look-ahead), but a stale token
+	// here would be data misread as syntax, so drop it rather than trust that.
+	p.head, p.n = 0, 0
+	p.lexer.pos = streamTok.End
 
 	// After 'stream' keyword, there must be a single EOL marker (\r\n or \n)
 	// The lexer has already advanced past the keyword, so we need to check
@@ -435,11 +515,14 @@ func (p *Parser) parseStream(dict object.Dictionary) (object.Object, error) {
 	// reader must recover from (ISO 32000-1 7.3.8.1, NOTE 2) — fall back to
 	// locating endstream by search. The resulting Stream.Data then reflects
 	// the true byte count, letting the validator flag the mismatch.
-	if length >= 0 && EndstreamFollowsAt(p.lexer.data, pos+length) {
+	kwAt := int64(-1) // offset of the endstream keyword
+	if length >= 0 {
+		kwAt = endstreamAfterWhitespace(p.lexer.data, pos+length)
+	}
+	if kwAt >= 0 {
 		endPos := pos + length
 		data = make([]byte, length)
 		copy(data, p.lexer.data[pos:endPos])
-		p.lexer.pos = endPos
 	} else {
 		// Search for the endstream keyword. It must stand alone as a token —
 		// followed by a non-regular character or end of input — but must NOT be
@@ -450,7 +533,7 @@ func (p *Parser) parseStream(dict object.Dictionary) (object.Object, error) {
 		// that follows binary data and slurp forward to a distant one — an
 		// O(n^2) over-read across many streams (a 55 MB file with streams
 		// sharing one wrong /Length expanded to 6.3 GB of stream data on read).
-		endPos := FindDelimitedKeyword(p.lexer.data, pos, "endstream", false)
+		endPos := findEndstream(p.lexer.data, pos)
 		if endPos < 0 {
 			return nil, fmt.Errorf("could not find endstream marker")
 		}
@@ -466,20 +549,16 @@ func (p *Parser) parseStream(dict object.Dictionary) (object.Object, error) {
 		}
 		data = make([]byte, dataEnd-pos)
 		copy(data, p.lexer.data[pos:dataEnd])
-		p.lexer.pos = endPos
+		kwAt = endPos
 	}
 
-	// Skip whitespace and expect 'endstream'
-	p.lexer.skipWhitespaceAndComments()
-	tok, err := p.nextToken()
-	if err != nil {
-		return nil, fmt.Errorf("expecting endstream: %w", err)
-	}
-	if tok.Type != TokenEndStream {
-		return nil, fmt.Errorf("expected endstream, got %v at offset %d", tok.Type, tok.Offset)
-	}
-
-	return &object.Stream{Dict: dict, Data: data}, nil
+	// Consume exactly the keyword. It is located by the byte search above, not
+	// lexed, because the lexer reads a keyword to the next delimiter: in
+	// "endstreamendobj", which real writers emit, it would see one unknown
+	// keyword (audit C120).
+	p.lexer.pos = kwAt + int64(len(endstreamKeyword))
+	p.end = p.lexer.pos
+	return object.NewStream(dict, data), nil
 }
 
 // FindDelimitedKeyword returns the offset of the first occurrence of keyword
@@ -522,7 +601,7 @@ func (p *Parser) ParseIndirectObject() (*object.IndirectObject, error) {
 	if numTok.Type != TokenInteger {
 		return nil, fmt.Errorf("expected integer for object number, got %v at offset %d", numTok.Type, numTok.Offset)
 	}
-	num, err := p.toObjectNumber(numTok)
+	num, err := p.toObjectNumber(numTok, MaxObjectNumber, "object")
 	if err != nil {
 		return nil, err
 	}
@@ -534,7 +613,7 @@ func (p *Parser) ParseIndirectObject() (*object.IndirectObject, error) {
 	if genTok.Type != TokenInteger {
 		return nil, fmt.Errorf("expected integer for generation number, got %v at offset %d", genTok.Type, genTok.Offset)
 	}
-	gen, err := p.toObjectNumber(genTok)
+	gen, err := p.toObjectNumber(genTok, MaxGeneration, "generation")
 	if err != nil {
 		return nil, err
 	}
@@ -568,24 +647,62 @@ func (p *Parser) ParseIndirectObject() (*object.IndirectObject, error) {
 }
 
 // EndstreamFollowsAt reports whether the endstream keyword appears at offset
-// off, allowing a single optional EOL marker of whitespace before it. Used to
-// decide whether a declared stream Length can be trusted.
+// off, allowing whitespace before it. Used to decide whether a declared stream
+// Length can be trusted.
 func EndstreamFollowsAt(data []byte, off int64) bool {
+	return endstreamAfterWhitespace(data, off) >= 0
+}
+
+const endstreamKeyword = "endstream"
+
+// endstreamAfterWhitespace returns the offset of an endstream keyword at off
+// or after whitespace following off, or -1. Any amount of whitespace is
+// tolerated between the declared data end and the keyword (a correct stream
+// has exactly one EOL, but some writers add more); a genuinely wrong Length
+// lands on non-whitespace, non-keyword bytes and is rejected.
+func endstreamAfterWhitespace(data []byte, off int64) int64 {
 	n := int64(len(data))
 	if off < 0 || off > n {
-		return false
+		return -1
 	}
 	i := off
-	// Tolerate any trailing whitespace between the declared data end and the
-	// keyword (a correct stream has exactly one EOL, but some writers add
-	// more); a genuinely wrong Length lands on non-whitespace, non-keyword
-	// bytes and is rejected.
 	for i < n && IsWhitespace(data[i]) {
 		i++
 	}
-	marker := []byte("endstream")
-	if i+int64(len(marker)) > n {
+	if isEndstreamAt(data, i) {
+		return i
+	}
+	return -1
+}
+
+// isEndstreamAt reports whether the endstream keyword stands at off as a
+// token: followed by the end of the input, a non-regular byte, or directly by
+// the endobj keyword ("endstreamendobj" is common enough in real files to
+// read; audit C120). "endstreamX" is not the keyword.
+func isEndstreamAt(data []byte, off int64) bool {
+	end := off + int64(len(endstreamKeyword))
+	if off < 0 || end > int64(len(data)) || string(data[off:end]) != endstreamKeyword {
 		return false
 	}
-	return bytes.Equal(data[i:i+int64(len(marker))], marker)
+	return end == int64(len(data)) || !IsRegular(data[end]) || bytes.HasPrefix(data[end:], []byte("endobj"))
+}
+
+// findEndstream returns the offset of the first endstream keyword at or after
+// start that isEndstreamAt accepts, or -1. Like FindDelimitedKeyword with no
+// leading-whitespace requirement — a stream's raw data may end in any byte —
+// and it also accepts endobj directly after the keyword.
+func findEndstream(data []byte, start int64) int64 {
+	marker := []byte(endstreamKeyword)
+	for from := start; from >= 0 && from < int64(len(data)); {
+		idx := bytes.Index(data[from:], marker)
+		if idx < 0 {
+			return -1
+		}
+		at := from + int64(idx)
+		if isEndstreamAt(data, at) {
+			return at
+		}
+		from = at + 1
+	}
+	return -1
 }

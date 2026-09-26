@@ -3,10 +3,12 @@
 A PDF parser, serializer, and conformance validator written in Go. The object
 model is ISO 32000-2 (PDF 2.0); files of any version are read into it, and most
 of the standards below are defined against PDF 1.x — PDF/A-1, -2 and -3 require
-a 1.x header, PDF/X-1a and -3 require 1.3/1.4. Its only dependencies are the
-author's own pure-Go modules (`forme` for text shaping, font programs and the
+a 1.x header, PDF/X-1a and -3 require 1.3/1.4. It is pure Go. Its dependencies
+are the author's own modules (`forme` for text shaping, font programs and the
 HTML/CSS layout engine, `formalis` for EN 16931 invoice rules, `golittlecms` for
-ICC profiles, `gopenjpeg` for JPEG 2000).
+ICC profiles, `gopenjpeg` for JPEG 2000) and one from the Go project,
+`golang.org/x/text`, for the Unicode normalisation that PDF 2.0 password
+preparation (SASLprep) requires.
 
 ```
 go get github.com/mgilbir/pdf0
@@ -48,10 +50,12 @@ go get github.com/mgilbir/pdf0
 - **Sign and verify** digital signatures (`WriteSigned` / `VerifySignatures`,
   CMS/PKCS#7), including PAdES B-B through B-LTA (`ValidatePAdES`), RFC 3161
   timestamps, and CRL/OCSP revocation. Read the verdict with
-  `sign.Result.DocumentUnmodified()`, not `Valid` alone — `Valid` accepts a
-  document altered by a post-signing incremental update. `VerifySignatures`
-  performs no trust-chain check; use `VerifySignaturesWithRoots` for that.
-- **Extract** text (`ExtractText`) and images (`ExtractImages`, or the lazy
+  `sign.Result.Intact()` (or `DocumentUnmodified()`), not `Valid` alone —
+  `Valid` accepts a document altered by a post-signing incremental update.
+  Trust is established only against the roots you pass in
+  `sign.VerifyOptions`; with none, no signer is trusted.
+- **Extract** text (`ExtractText`, which reports any page it had to leave
+  out) and images (`ExtractImages`, or the lazy
   `Images` iterator for bounded memory on large scan files; decoding
   DCTDecode, CCITTFax, JBIG2 and JPXDecode), **repair** common conformance
   failures (`Repair`), and **manipulate pages** (`ExtractPages`, `AppendPages`).
@@ -263,7 +267,7 @@ The subsystems, and the doc that maps each:
 | HTML and CSS to PDF | `htmlpdf/`, with the whole layout engine in [forme](https://github.com/mgilbir/forme) | [htmlpdf.md](docs/htmlpdf.md) |
 | XMP metadata | `xmp.go`, `xmp_schemas.go` | [xmp.md](docs/xmp.md) |
 | Signatures and PAdES | `cms.go`, `signatures.go`, `sign.go`, `pades.go`, `timestamp.go`, `doctimestamp.go`, `revocation.go` | [signing.md](docs/signing.md) |
-| Encryption (standard security handler) | `crypt.go`, `crypt_encrypt.go` | [encryption.md](docs/encryption.md) |
+| Encryption (standard security handler) | `crypt_api.go`, `internal/crypt`, `internal/saslprep`, `internal/pdfdoc` | [encryption.md](docs/encryption.md) |
 | Images and codecs | `images/`, `images_api.go`, `internal/ccitt`, `internal/jbig2`, `internal/core` (PDF functions) | [images.md](docs/images.md) |
 | Text and pages | `text.go`, `pages.go` | [architecture.md](docs/architecture.md) |
 | Command-line front end (dev aid, not the supported surface) | `cmd/pdf0` | [cli.md](docs/cli.md) |

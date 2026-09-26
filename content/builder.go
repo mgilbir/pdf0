@@ -17,7 +17,14 @@
 //   - q and Q are balanced, and nesting stays inside the 28 levels PDF/A allows.
 //   - Text operators appear only between BT and ET, and text objects do not
 //     nest.
+//   - Marked-content sequences (BMC and BDC, each closed by EMC) are balanced,
+//     and nest with text objects: a sequence begun inside BT ends before ET,
+//     and one begun outside does not end inside one.
 //   - A path is painted or explicitly discarded before anything else is drawn.
+//     Between m or re and the painting operator only path construction and
+//     clipping operators may appear, and after W or W* only the painting
+//     operator (ISO 32000-2 8.2, Figure 9). A colour, graphics-state,
+//     marked-content, sh or Do operator inside a path is refused.
 //   - Every number written is finite. A NaN reaching a content stream is not a
 //     rendering bug, it is a malformed file, and the layout of a hostile input
 //     is exactly where one would come from.
@@ -58,17 +65,24 @@ type Builder struct {
 	buf []byte
 	err error
 
-	depth   int  // current q/Q nesting
-	maxDep  int  // deepest nesting reached, for the limit check
-	inText  bool // between BT and ET
-	inPath  bool // a path is under construction
-	pending bool // a clip (W/W*) awaits its painting operator
+	depth  int  // current q/Q nesting
+	inText bool // between BT and ET
+	inPath bool // a path is under construction
+	// clipped records a W or W* awaiting the painting operator that applies
+	// it: Figure 9 admits nothing else there, not even path construction.
+	clipped bool
 
-	// setsColor records that the stream chose a colour or a colour space. It is
-	// not a question about the drawing but about where the drawing may be used:
-	// an uncoloured tiling pattern takes its colour from the place it is
-	// painted, and its cell is only defined if it sets none.
-	setsColor bool
+	// marked is the current marked-content nesting (BMC/BDC not yet closed by
+	// EMC), and textFloor what it was when the open text object began: the
+	// sequences opened inside BT are the ones above the floor, and they have
+	// to close before ET.
+	marked    int
+	textFloor int
+
+	// colorOp is the first operator the stream used that an uncoloured tiling
+	// pattern's cell has ignored (see ColorOperator). It is not a question
+	// about the drawing but about where the drawing may be used.
+	colorOp string
 
 	res Resources
 }
@@ -91,22 +105,29 @@ type Resources struct {
 // order and carry no duplicates.
 func (b *Builder) Resources() Resources { return b.res }
 
-// SetsColor reports whether the stream chose a colour or a colour space.
+// ColorOperator returns the first operator the stream used that sets a colour,
+// a colour space or the rendering intent, or paints a shading — "" if it used
+// none.
 //
-// It exists for one caller: an uncoloured tiling pattern (PaintType 2) takes
-// its colour from wherever it is painted, and ISO 32000-2 8.7.3.1 leaves the
-// result undefined if its cell sets one. Undefined means each reader picks, so
-// the file looks different in different viewers — which is exactly the kind of
-// fault that is never traced back to the pattern.
-func (b *Builder) SetsColor() bool { return b.setsColor }
+// Those are the operators ISO 32000-2 8.6.8 lists as *ignored* in the content
+// stream of an uncoloured tiling pattern (PaintType 2, 8.7.3.3), which takes
+// its colour from wherever it is painted: CS cs SC SCN sc scn G g RG rg K k ri
+// sh. A reader skips them and carries on, so a cell that uses one draws
+// something other than what was written, silently. AddTilingPattern asks this
+// to refuse such a cell while the mistake can still be attributed. (Images
+// other than stencil masks are ignored there too; which kind of image a Do
+// paints is the document's to say, and AddTilingPattern checks it.)
+func (b *Builder) ColorOperator() string { return b.colorOp }
 
 // Bytes returns the finished content stream, or the first error that made it
 // invalid.
 //
-// It is an error to finish with unbalanced q/Q, inside a text object, or with
-// an unpainted path: each leaves a stream whose meaning depends on what a
-// consumer does with the leftover state, and none of them is recoverable by the
-// caller after the fact.
+// It is an error to finish with unbalanced q/Q, inside a text object, inside a
+// marked-content sequence, or with an unpainted path: each leaves a stream
+// whose meaning depends on what a consumer does with the leftover state, and
+// none of them is recoverable by the caller after the fact. An unclosed
+// sequence is not harmless either: it runs on into whatever the reader
+// appends, and a tagged page's structure then claims content it never marked.
 func (b *Builder) Bytes() ([]byte, error) {
 	if b.err != nil {
 		return nil, b.err
@@ -118,6 +139,8 @@ func (b *Builder) Bytes() ([]byte, error) {
 		return nil, fmt.Errorf("content: stream ends inside a text object (BeginText without EndText)")
 	case b.inPath:
 		return nil, fmt.Errorf("content: stream ends with an unpainted path")
+	case b.marked != 0:
+		return nil, fmt.Errorf("content: %d unclosed marked-content sequence(s) (BeginMarked or BeginTagged without EndMarked)", b.marked)
 	}
 	return b.buf, nil
 }
@@ -141,6 +164,18 @@ func (b *Builder) op(name string, operands ...any) *Builder {
 	if b.err != nil {
 		return b
 	}
+	// The path object of Figure 9, checked here for every operator rather than
+	// in each method, so that a method added later cannot forget it. The
+	// painting operators clear inPath before they get here.
+	if b.inPath {
+		if b.clipped && !paintingOps[name] {
+			return b.fail("%s after a clip (W or W*): only the painting operator that applies the clip may follow", name)
+		}
+		if !pathOps[name] {
+			return b.fail("%s with a path under construction: between m or re and the painting operator only "+
+				"path construction and clipping operators are permitted (ISO 32000-2 8.2, Figure 9)", name)
+		}
+	}
 	for _, o := range operands {
 		switch v := o.(type) {
 		case float64:
@@ -163,13 +198,30 @@ func (b *Builder) op(name string, operands ...any) *Builder {
 	b.buf = append(b.buf, name...)
 	b.buf = append(b.buf, '\n')
 	switch name {
-	// Every operator that sets a colour or a colour space, recorded in one place
-	// rather than in each setter, so that a setter added later cannot forget to.
-	// An uncoloured tiling pattern is defined only when its cell sets none.
-	case "g", "G", "rg", "RG", "k", "K", "cs", "CS", "sc", "SC", "scn", "SCN":
-		b.setsColor = true
+	// Every operator an uncoloured tiling pattern ignores (ISO 32000-2 8.6.8),
+	// recorded in one place rather than in each method, so that a method added
+	// later cannot forget to.
+	case "g", "G", "rg", "RG", "k", "K", "cs", "CS", "sc", "SC", "scn", "SCN", "ri", "sh":
+		if b.colorOp == "" {
+			b.colorOp = name
+		}
 	}
 	return b
+}
+
+// pathOps are the operators Figure 9 admits inside a path object: path
+// construction, clipping, and the painting operators that end it.
+var pathOps = map[string]bool{
+	"m": true, "l": true, "c": true, "v": true, "y": true, "h": true, "re": true,
+	"W": true, "W*": true,
+	"f": true, "F": true, "f*": true, "S": true, "s": true, "B": true, "B*": true,
+	"b": true, "b*": true, "n": true,
+}
+
+// paintingOps are the operators that end a path object.
+var paintingOps = map[string]bool{
+	"f": true, "F": true, "f*": true, "S": true, "s": true, "B": true, "B*": true,
+	"b": true, "b*": true, "n": true,
 }
 
 // num appends a PDF number, refusing the non-finite values that would make the

@@ -12,6 +12,19 @@ import (
 // object/generation numbers only; Equal does not resolve references (it has no
 // document to resolve against), so an IndirectRef is never equal to the object
 // it points to.
+//
+// Numbers compare by value across the two numeric types, because a serializer
+// may legally rewrite 1.0 as 1. Two Integers compare exactly. Any comparison
+// involving a Real uses one tolerance, whichever the other operand's type:
+// the values are equal when they differ by at most 1e-10 of the larger
+// magnitude, or by at most 1e-12 absolutely, so float noise near zero is not a
+// difference but a small value such as 1e-11 still differs from zero. The comparison is symmetric and reflexive; a NaN equals a NaN
+// (so any object equals itself) and nothing else, and an infinity equals only
+// the same infinity. Like any tolerance it is not transitive across a chain of
+// values each within tolerance of the next.
+//
+// A pointer to a scalar value (*Name, *Integer, ...) is not a PDF object (see
+// the package documentation) and is equal to nothing.
 func Equal(a, b Object) bool {
 	return equalDepth(a, b, 0)
 }
@@ -37,21 +50,16 @@ func equalDepth(a, b Object, depth int) bool {
 		case Integer:
 			return av == bv
 		case Real:
-			// Cross-type numeric equality is deliberate (serializers may legally
-			// rewrite 1.0 as 1). It uses a RELATIVE tolerance rather than the
-			// absolute Real-Real epsilon: an absolute 1e-10 is both too loose near
-			// zero (Integer(0) would equal Real(1e-11)) and too tight at large
-			// magnitudes (audit C32).
-			return intRealEqual(int64(av), float64(bv))
+			return numbersEqual(float64(av), float64(bv))
 		}
 		return false
 
 	case Real:
 		switch bv := b.(type) {
 		case Real:
-			return realEqual(float64(av), float64(bv))
+			return numbersEqual(float64(av), float64(bv))
 		case Integer:
-			return intRealEqual(int64(bv), float64(av))
+			return numbersEqual(float64(av), float64(bv))
 		}
 		return false
 
@@ -88,13 +96,6 @@ func equalDepth(a, b Object, depth int) bool {
 		}
 		return dictionaryEqualDepth(av, bv, depth)
 
-	case Dictionary:
-		bv, ok := b.(Dictionary)
-		if !ok {
-			return false
-		}
-		return dictionaryEqualDepth(&av, &bv, depth)
-
 	case *Stream:
 		bv, ok := b.(*Stream)
 		if !ok {
@@ -102,16 +103,6 @@ func equalDepth(a, b Object, depth int) bool {
 		}
 		if av == nil || bv == nil {
 			return av == nil && bv == nil
-		}
-		if !dictionaryEqualDepth(&av.Dict, &bv.Dict, depth) {
-			return false
-		}
-		return bytes.Equal(av.Data, bv.Data)
-
-	case Stream:
-		bv, ok := b.(Stream)
-		if !ok {
-			return false
 		}
 		if !dictionaryEqualDepth(&av.Dict, &bv.Dict, depth) {
 			return false
@@ -145,8 +136,10 @@ func equalDepth(a, b Object, depth int) bool {
 	return false
 }
 
-// dictionaryEqual compares two dictionaries semantically.
-// Key order is ignored for semantic comparison.
+// DictionaryEqual reports whether two dictionaries hold the same keys with
+// Equal values. Key order is ignored. A Dictionary holds at most one entry per
+// key, so this is a lookup per entry, linear in the size of the dictionaries.
+// Two nil dictionaries are equal; a nil and a non-nil one are not.
 func DictionaryEqual(a, b *Dictionary) bool {
 	return dictionaryEqualDepth(a, b, 0)
 }
@@ -155,63 +148,54 @@ func dictionaryEqualDepth(a, b *Dictionary, depth int) bool {
 	if depth > maxCompareDepth {
 		return false
 	}
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
 	if a.Len() != b.Len() {
 		return false
 	}
-	// Match each of a's (key, value) entries to a distinct entry of b. Using
-	// b.Get (first occurrence) would give false positives on duplicate keys —
-	// e.g. {A:1, A:1} would compare equal to {A:1, B:99}, and {A:1, A:2} would
-	// not compare equal to itself (audit C26). Equal lengths plus a full
-	// one-to-one matching is correct multiset equality.
-	//
-	// Group b's slots by key so the candidates for each of a's keys are only the
-	// same-key slots, not all of b: a dictionary with distinct keys then compares
-	// in linear time instead of O(n^2), which a crafted large tint-transform dict
-	// otherwise exploited (audit C22). Duplicate keys keep exact multiset
-	// semantics (their slots share a candidate list).
-	bByKey := make(map[Name][]int, len(b.Keys))
-	for j, k := range b.Keys {
-		bByKey[k] = append(bByKey[k], j)
-	}
-	used := make([]bool, len(b.Keys))
-	for i, key := range a.Keys {
-		matched := false
-		for _, j := range bByKey[key] {
-			if used[j] {
-				continue
-			}
-			if equalDepth(a.Values[i], b.Values[j], depth+1) {
-				used[j] = true
-				matched = true
-				break
-			}
-		}
-		if !matched {
+	for k, av := range a.All() {
+		bv, ok := b.Lookup(k)
+		if !ok || !equalDepth(av, bv, depth+1) {
 			return false
 		}
 	}
 	return true
 }
 
-func realEqual(a, b float64) bool {
+// numbersEqual is the one tolerance policy for every comparison that involves
+// a Real (audit 2026-09-22 C122). The Real-Real comparison used to be
+// absolute and the Integer-Real one relative, so Real(1e-11) equalled Real(0)
+// but not Integer(0), and Real(1e20) did not equal Real(1e20+16384), a
+// difference of one part in 10^16.
+func numbersEqual(a, b float64) bool {
 	if a == b {
-		return true
+		return true // also ±0, and equal infinities
 	}
-	return math.Abs(a-b) < floatEpsilon
+	if math.IsNaN(a) || math.IsNaN(b) {
+		return math.IsNaN(a) && math.IsNaN(b)
+	}
+	if math.IsInf(a, 0) || math.IsInf(b, 0) {
+		return false
+	}
+	// a-b can overflow to +Inf for values of opposite sign near MaxFloat64,
+	// which correctly compares unequal.
+	return math.Abs(a-b) <= max(numericAbsTolerance, numericRelTolerance*max(math.Abs(a), math.Abs(b)))
 }
 
-// intRealEqual compares an integer to a real with a relative tolerance, so
-// equality is neither spuriously granted near zero (an absolute epsilon makes
-// Integer(0) equal Real(1e-11)) nor withheld at large magnitudes where an
-// absolute 1e-10 is far below the rounding a serializer or float64 can preserve.
-func intRealEqual(i int64, r float64) bool {
-	fi := float64(i)
-	if fi == r {
-		return true
-	}
-	return math.Abs(fi-r) <= floatEpsilon*math.Max(math.Abs(fi), math.Abs(r))
-}
-
+// maxCompareDepth bounds recursion through nested arrays and dictionaries so a
+// cyclic object graph — which a caller can build, since a dictionary can hold
+// itself — cannot exhaust the goroutine stack, an unrecoverable fatal error.
+// Beyond the cap the objects are treated as not equal.
 const maxCompareDepth = 1000
 
-const floatEpsilon = 1e-10
+// numericRelTolerance and numericAbsTolerance are numbersEqual's tolerance:
+// relative to the larger magnitude, with an absolute floor near zero. The floor
+// sits below any value a PDF writer means (ISO 32000 readers keep about five
+// significant decimal digits), so Integer(0) and Real(1e-11) stay different
+// (audit 2026-07-26 C32), and above the noise of float arithmetic on values
+// of order one (0.1+0.2-0.3 is 5.6e-17).
+const (
+	numericRelTolerance = 1e-10
+	numericAbsTolerance = 1e-12
+)

@@ -99,7 +99,7 @@ func TestSecondSignatureFieldIsDistinct(t *testing.T) {
 		t.Fatalf("re-read once-signed: %v", err)
 	}
 	var second bytes.Buffer
-	if err := reread.WriteSignedIncremental(&second, onceSigned, cert, key); err != nil {
+	if err := reread.WriteSignedIncremental(&second, cert, key); err != nil {
 		t.Fatalf("second (incremental) signing: %v", err)
 	}
 	out := second.Bytes()
@@ -113,7 +113,7 @@ func TestSecondSignatureFieldIsDistinct(t *testing.T) {
 	}
 
 	// Both signatures are reported, under distinct names, in signing order.
-	res := twice.VerifySignatures(out)
+	res := verifySigs(t, twice, sign.VerifyOptions{})
 	if len(res) != 2 {
 		t.Fatalf("got %d signatures, want 2", len(res))
 	}
@@ -196,7 +196,7 @@ func TestSigningPreservesExistingForm(t *testing.T) {
 	}
 
 	// The signature itself must still be sound.
-	res := signed.VerifySignatures(out)
+	res := verifySigs(t, signed, sign.VerifyOptions{})
 	if len(res) != 1 || !res[0].Valid || !res[0].CoversWholeDocument {
 		t.Fatalf("signature did not verify: %+v", res)
 	}
@@ -217,7 +217,7 @@ func TestSignIncrementalPreservesExistingForm(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	if err := doc.WriteSignedIncremental(&buf, original, cert, key); err != nil {
+	if err := doc.WriteSignedIncremental(&buf, cert, key); err != nil {
 		t.Fatalf("WriteSignedIncremental: %v", err)
 	}
 	out := buf.Bytes()
@@ -234,7 +234,7 @@ func TestSignIncrementalPreservesExistingForm(t *testing.T) {
 	if len(names) != 2 || names[0] != "Applicant" || names[1] != "Signature1" {
 		t.Errorf("/AcroForm /Fields = %v, want the pre-existing Applicant field plus Signature1", names)
 	}
-	res := signed.VerifySignatures(out)
+	res := verifySigs(t, signed, sign.VerifyOptions{})
 	if len(res) != 1 || !res[0].Valid || !res[0].CoversWholeDocument {
 		t.Fatalf("incremental signature did not verify: %+v", res)
 	}
@@ -245,7 +245,7 @@ func TestSignIncrementalPreservesExistingForm(t *testing.T) {
 // produced such files before the form was preserved, and page-only widgets are
 // common) still occupies its name.
 func TestFreeSignatureFieldNameSkipsOrphanedField(t *testing.T) {
-	doc, _ := sigFieldTestDoc(10)
+	doc := sigFieldTestDoc(10)
 	orphan := &object.Dictionary{}
 	orphan.Set("FT", object.Name("Sig"))
 	orphan.Set("T", object.String{Value: []byte("Signature1")})

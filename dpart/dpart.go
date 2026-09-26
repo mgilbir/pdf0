@@ -58,7 +58,7 @@ func ValidateHierarchy(doc core.View, add func(rule, msg string, obj int)) {
 	}
 	rootDictNum := object.RefNum(rootRef)
 	if t, ok := doc.ResolveName(rootDict.Get("Type")); ok && t != "DPartRoot" {
-		add("14.12.4.1", fmt.Sprintf("DPartRoot /Type shall be /DPartRoot, got /%s", t), rootDictNum)
+		add("14.12.4.1", fmt.Sprintf("DPartRoot /Type shall be /DPartRoot, got %s", t), rootDictNum)
 	}
 
 	// Table 408: /DPartRootNode is required and is the root of the tree.
@@ -111,7 +111,7 @@ func ValidateHierarchy(doc core.View, add func(rule, msg string, obj int)) {
 			maxDepth = depth + 1
 		}
 		if t, ok := doc.ResolveName(node.Get("Type")); ok && t != "DPart" {
-			add("14.12.4.1", fmt.Sprintf("DPart /Type shall be /DPart, got /%s", t), num)
+			add("14.12.4.1", fmt.Sprintf("DPart /Type shall be /DPart, got %s", t), num)
 		}
 
 		// Table 409: /Parent is required. For the root node it references the
@@ -234,7 +234,7 @@ func ValidateHierarchy(doc core.View, add func(rule, msg string, obj int)) {
 				if !ok {
 					add("14.12.4.1", "DPartRoot /NodeNameList entries shall be names", rootDictNum)
 				} else if !isXMLNameToken(string(name)) {
-					add("14.12.4.1", fmt.Sprintf("DPartRoot /NodeNameList entry /%s is not a valid XML name token", name), rootDictNum)
+					add("14.12.4.1", fmt.Sprintf("DPartRoot /NodeNameList entry %s is not a valid XML name token", name), rootDictNum)
 				}
 			}
 		}
@@ -260,8 +260,8 @@ func validateDPM(doc core.View, dpm *object.Dictionary, objNum int, seen map[*ob
 		return
 	}
 	seen[dpm] = true
-	for i := range dpm.Keys {
-		validateDPMValue(doc, dpm.Values[i], objNum, seen, add)
+	for _, dval := range dpm.All() {
+		validateDPMValue(doc, dval, objNum, seen, add)
 	}
 }
 

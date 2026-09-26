@@ -33,7 +33,7 @@ func makeObjStm(t *testing.T, objects map[int]string, order []int, compress bool
 		dict.Set("Filter", object.Name("FlateDecode"))
 	}
 	dict.Set("Length", object.Integer(len(data)))
-	return &object.Stream{Dict: dict, Data: data}
+	return object.NewStream(&dict, data)
 }
 
 func TestParseObjStmIndex(t *testing.T) {
@@ -189,12 +189,23 @@ func TestReadObjStmXrefIndexMismatch(t *testing.T) {
 	}
 }
 
+// TestReadObjStmMissingContainer: an entry pointing into an object stream the
+// file does not have loses that object, not the whole read. The container is
+// recorded as broken — so validation can say so, and Write refuses rather than
+// emit a document missing the object — and loading carries on (audit
+// 2026-09-22 C102; this test asserted the old whole-read failure).
 func TestReadObjStmMissingContainer(t *testing.T) {
 	doc := &Document{Objects: map[int]*object.IndirectObject{}}
 	table := &XRefTable{Entries: map[int]XRefEntry{
 		5: {Compressed: true, StreamObjNum: 9, IndexInStream: 0},
 	}}
-	if err := doc.loadCompressedObjects(core.Canceler{}, table); err == nil {
-		t.Error("expected error on missing container")
+	if err := doc.loadCompressedObjects(core.Canceler{}, table); err != nil {
+		t.Fatalf("a missing container failed the load: %v", err)
+	}
+	if len(doc.brokenObjStms) != 1 || doc.brokenObjStms[0] != 9 {
+		t.Errorf("brokenObjStms = %v, want [9]", doc.brokenObjStms)
+	}
+	if _, ok := doc.Objects[5]; ok {
+		t.Error("object 5 materialised from a container that does not exist")
 	}
 }

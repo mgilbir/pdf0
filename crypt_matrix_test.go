@@ -46,7 +46,7 @@ func encMatrixDoc(usedXRefStream, withMetadata bool) *Document {
 	cs := &object.Dictionary{}
 	cs.Set("Length", object.Integer(len(content)))
 	cs.Set("Filter", object.Name("FlateDecode"))
-	d.Objects[4] = &object.IndirectObject{Number: 4, Value: &object.Stream{Dict: *cs, Data: content}}
+	d.Objects[4] = &object.IndirectObject{Number: 4, Value: object.NewStream(cs, content)}
 
 	// A dictionary carrying a string, to exercise string encryption.
 	info := &object.Dictionary{}
@@ -59,7 +59,7 @@ func encMatrixDoc(usedXRefStream, withMetadata bool) *Document {
 		ms.Set("Type", object.Name("Metadata"))
 		ms.Set("Subtype", object.Name("XML"))
 		ms.Set("Length", object.Integer(len(xmp)))
-		d.Objects[6] = &object.IndirectObject{Number: 6, Value: &object.Stream{Dict: *ms, Data: xmp}}
+		d.Objects[6] = &object.IndirectObject{Number: 6, Value: object.NewStream(ms, xmp)}
 		cat.Set("Metadata", object.IndirectRef{Number: 6})
 	}
 
@@ -111,7 +111,7 @@ func stripStreamLength(o object.Object) object.Object {
 	}
 	nd := s.Dict.Clone()
 	nd.Delete("Length")
-	return &object.Stream{Dict: *nd, Data: s.Data}
+	return object.NewStream(nd, s.Data)
 }
 
 // docsEqualModuloLength reports whether two documents hold the same objects once
@@ -156,7 +156,7 @@ func TestEncryptRoundTripMatrix(t *testing.T) {
 	for _, v := range variants {
 		t.Run(v.name, func(t *testing.T) {
 			doc := encMatrixDoc(v.xrefStream, v.metadata)
-			if err := doc.SetEncryption("", ""); err != nil {
+			if err := doc.SetEncryption("matrix-user", ""); err != nil {
 				t.Fatalf("SetEncryption: %v", err)
 			}
 			if v.mutate != nil {
@@ -170,12 +170,12 @@ func TestEncryptRoundTripMatrix(t *testing.T) {
 			}
 			out := buf.Bytes()
 
-			back, err := Read(bytes.NewReader(out), int64(len(out)))
+			back, err := ReadWithPassword(bytes.NewReader(out), int64(len(out)), "matrix-user")
 			if err != nil {
 				t.Fatalf("re-read: %v", err)
 			}
 			if back.security == nil {
-				t.Fatal("re-read did not decrypt with the empty password")
+				t.Fatalf("re-read did not decrypt with the user password: %v", back.LockReason())
 			}
 			if len(back.brokenObjStms) > 0 {
 				t.Fatalf("object stream(s) failed to decode on re-read: %v", back.brokenObjStms)

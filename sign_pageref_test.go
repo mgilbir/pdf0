@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"crypto/x509"
 	"fmt"
+	"github.com/mgilbir/pdf0/internal/hostile"
 	"github.com/mgilbir/pdf0/internal/signtest"
 	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/sign"
 	"testing"
+	"time"
 )
 
 // This file pins the page a signature or time-stamp widget is attached to, and
@@ -149,10 +152,10 @@ func TestWidgetPageAndPRefAgree(t *testing.T) {
 	}{
 		{"WriteSigned", func(d *Document, _ []byte, b *bytes.Buffer) error { return d.WriteSigned(b, cert, key) }},
 		{"WriteSignedIncremental", func(d *Document, raw []byte, b *bytes.Buffer) error {
-			return d.WriteSignedIncremental(b, raw, cert, key)
+			return d.WriteSignedIncremental(b, cert, key)
 		}},
 		{"WriteArchivalTimestamp", func(d *Document, raw []byte, b *bytes.Buffer) error {
-			return d.WriteArchivalTimestamp(b, raw, []*x509.Certificate{cert}, tsaCert, tsaKey)
+			return d.WriteArchivalTimestamp(b, ValidationData{Certs: []*x509.Certificate{cert}}, tsaCert, tsaKey)
 		}},
 	}
 	bases := []struct {
@@ -230,7 +233,7 @@ func TestSignDocumentWithNestedPageTree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-read: %v", err)
 	}
-	res := signed.VerifySignatures(out)
+	res := verifySigs(t, signed, sign.VerifyOptions{})
 	if len(res) != 1 || !res[0].Valid {
 		t.Fatalf("signature did not verify: %+v", res)
 	}
@@ -240,22 +243,24 @@ func TestSignDocumentWithNestedPageTree(t *testing.T) {
 // document: /Kids pointing back at an ancestor must not loop forever, and a tree
 // that holds no page at all must still report none.
 func TestFirstPageStopsOnACyclicPageTree(t *testing.T) {
-	d := &Document{Version: "2.0", Objects: map[int]*object.IndirectObject{}, Trailer: object.Dictionary{}}
-	cat := &object.Dictionary{}
-	cat.Set("Type", object.Name("Catalog"))
-	cat.Set("Pages", object.IndirectRef{Number: 2})
-	root := &object.Dictionary{}
-	root.Set("Type", object.Name("Pages"))
-	root.Set("Kids", object.Array{object.IndirectRef{Number: 3}})
-	inner := &object.Dictionary{}
-	inner.Set("Type", object.Name("Pages"))
-	inner.Set("Kids", object.Array{object.IndirectRef{Number: 2}}) // back up to the root
-	d.Objects[1] = &object.IndirectObject{Number: 1, Value: cat}
-	d.Objects[2] = &object.IndirectObject{Number: 2, Value: root}
-	d.Objects[3] = &object.IndirectObject{Number: 3, Value: inner}
-	d.Trailer.Set("Root", object.IndirectRef{Number: 1})
+	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
+		d := &Document{Version: "2.0", Objects: map[int]*object.IndirectObject{}, Trailer: object.Dictionary{}}
+		cat := &object.Dictionary{}
+		cat.Set("Type", object.Name("Catalog"))
+		cat.Set("Pages", object.IndirectRef{Number: 2})
+		root := &object.Dictionary{}
+		root.Set("Type", object.Name("Pages"))
+		root.Set("Kids", object.Array{object.IndirectRef{Number: 3}})
+		inner := &object.Dictionary{}
+		inner.Set("Type", object.Name("Pages"))
+		inner.Set("Kids", object.Array{object.IndirectRef{Number: 2}}) // back up to the root
+		d.Objects[1] = &object.IndirectObject{Number: 1, Value: cat}
+		d.Objects[2] = &object.IndirectObject{Number: 2, Value: root}
+		d.Objects[3] = &object.IndirectObject{Number: 3, Value: inner}
+		d.Trailer.Set("Root", object.IndirectRef{Number: 1})
 
-	if pg := firstPage(d, cat); pg != nil {
-		t.Errorf("firstPage on a cyclic, page-less tree = %v, want nil", pg)
-	}
+		if pg := firstPage(d, cat); pg != nil {
+			t.Errorf("firstPage on a cyclic, page-less tree = %v, want nil", pg)
+		}
+	})
 }

@@ -114,7 +114,7 @@ func TestLaidOutTextExtracts(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Compare with line breaks collapsed: wrapping is what put them there.
-	got := strings.Join(strings.Fields(rd.ExtractText()), " ")
+	got := strings.Join(strings.Fields(mustExtractText(t, rd)), " ")
 	if got != body {
 		t.Errorf("extracted %q,\n    want %q", got, body)
 	}

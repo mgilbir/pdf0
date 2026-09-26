@@ -34,10 +34,13 @@ func main() {
 		SetStrokeGray(0.2).SetLineWidth(3).SetLineCap(content.RoundCap).
 		MoveTo(72, 560).LineTo(272, 560).Stroke().
 		Restore()
+	// Colour is set before the path: between MoveTo and the painting operator
+	// only path operators are allowed, and the builder refuses anything else.
 	page.Save().
 		Translate(320, 600).
+		SetGray(0.85).
 		MoveTo(0, 0).CurveTo(40, 120, 120, 120, 160, 0).ClosePath().
-		SetGray(0.85).FillStroke().
+		FillStroke().
 		Restore()
 
 	if _, err := doc.AddPage(pdf.Page{Width: 612, Height: 792, Content: &page}); err != nil {
