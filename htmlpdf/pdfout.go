@@ -27,7 +27,6 @@ import (
 	"image"
 	"sort"
 
-	"github.com/mgilbir/forme/html"
 	"github.com/mgilbir/forme/layout"
 	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/shape"
@@ -245,21 +244,22 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 			if v.Sideways || v.Anticlockwise || v.Upright {
 				counts[RuleVerticalText]++
 			}
+		case layout.Link:
+			// A link is in the display list, and this backend does not yet
+			// write link annotations.
+			counts[RuleLinkDropped]++
 		case layout.FillRect, layout.DrawImage, layout.TileImage:
 		default:
 			counts[RuleUnknownOp]++
 		}
-	}
-	if c.Root != nil {
-		counts[RuleLinkDropped] = countLinks(c.Root.Box)
 	}
 
 	messages := map[layout.Rule]string{
 		RuleVerticalText: "%d run(s) of text are set down the page (a vertical writing-mode " +
 			"or text-orientation: upright), which this PDF backend cannot draw; they would " +
 			"be drawn across the page",
-		RuleLinkDropped: "the document has %d hyperlink(s), and the display list carries no " +
-			"links, so the PDF would show their text with nothing to follow",
+		RuleLinkDropped: "the document has %d hyperlink(s), and this backend does not write " +
+			"link annotations, so the PDF would show their text with nothing to follow",
 		RuleUnknownOp: "the display list has %d operation(s) of a kind this backend does not " +
 			"know, which a newer layout engine added; the page would be missing them",
 	}
@@ -289,35 +289,6 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 		})
 	}
 	return out, refused
-}
-
-// countLinks counts the <a href> elements that generated a box, which are the
-// links the page would have had: an element with display: none generates none
-// and is not one.
-//
-// The box tree is walked with a stack rather than by recursion, because its
-// depth is the document's nesting depth and a document is untrusted input.
-func countLinks(root *layout.Box) int {
-	if root == nil {
-		return 0
-	}
-	n := 0
-	seen := map[*html.Node]bool{}
-	stack := []*layout.Box{root}
-	for len(stack) > 0 {
-		b := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		if el := b.Element; el != nil && !seen[el] && el.Type == html.ElementNode && el.Name == "a" {
-			// One element can generate several boxes — an inline split
-			// around a block, a continuation — and is still one link.
-			seen[el] = true
-			if el.HasAttr("href") {
-				n++
-			}
-		}
-		stack = append(stack, b.Children...)
-	}
-	return n
 }
 
 // writePage turns a display list into a one-page document.
@@ -568,6 +539,10 @@ var drawnFields = map[string]map[string]string{
 		"Image": "embedded through images.Embed",
 		"Key":   "one image XObject per key",
 		"Clip":  "clipTo",
+	},
+	"Link": {
+		"Rects": "refused: RuleLinkDropped",
+		"Href":  "refused: RuleLinkDropped",
 	},
 	"TileImage": {
 		"Clip":  "the area painted",

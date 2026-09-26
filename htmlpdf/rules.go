@@ -18,9 +18,9 @@ const (
 	// wrong way up.
 	RuleVerticalText layout.Rule = "backend-vertical-text"
 
-	// RuleLinkDropped is a document with a hyperlink. The display list
-	// carries no links — a box's href is not a mark on the page — so the
-	// page would have the link's text and nothing to follow.
+	// RuleLinkDropped is a document with a hyperlink, which this backend does
+	// not yet write as a link annotation, so the page would have the link's
+	// text and nothing to follow.
 	RuleLinkDropped layout.Rule = "backend-link-dropped"
 
 	// RuleUnknownOp is a display-list operation this backend does not know,

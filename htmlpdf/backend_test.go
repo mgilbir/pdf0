@@ -304,8 +304,8 @@ func TestVerticalTextIsRefused(t *testing.T) {
 	}
 }
 
-// TestLinksAreNotDroppedSilently is C168: the display list carries no links,
-// so a document with one is refused unless the caller accepts losing it.
+// TestLinksAreNotDroppedSilently is C168: a link this backend does not write
+// refuses the document unless the caller accepts losing it.
 func TestLinksAreNotDroppedSilently(t *testing.T) {
 	in := Input{HTML: `<p>see <a href="https://example.com/">this</a></p>`}
 	_, err := Render(in, Options{})

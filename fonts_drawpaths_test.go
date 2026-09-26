@@ -83,6 +83,11 @@ func drawPathFaces() []faceCase {
 			// A CID-keyed CFF, where the code is the CID and not the glyph
 			// index. ｱ is the character whose CID (59158) and glyph index
 			// (15435) differ, so a path writing the wrong one is caught.
+			//
+			// The face has no U+2009 THIN SPACE, and draws it as its own
+			// space at a fifth of an em, as HarfBuzz does (forme 0ffa841;
+			// before it, .notdef). The glyph is then the space's and the
+			// text is the thin space's, which each path has to say.
 			name: "cid-keyed-cff",
 			load: func(t *testing.T) *fonts.Face {
 				f, err := fonts.Load(cidKeyedFace(t))
@@ -91,7 +96,7 @@ func drawPathFaces() []faceCase {
 				}
 				return f
 			},
-			texts:    []string{"ｱ日本", "日本語のテキスト"},
+			texts:    []string{"ｱ日本", "日本語のテキスト", "日本\u2009語"},
 			embedded: true,
 		},
 		{
