@@ -1363,26 +1363,81 @@ func TestACIDFontThatCannotNameItsCollectionIsRefused(t *testing.T) {
 			fonttest.CFFOptions{Glyphs: 4, CIDKeyed: true, NegativeSupplement: true}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			f, err := fonts.Load(fonttest.OTTO(fonttest.CFF(c.opts), fonttest.SFNTOptions{
+			data := fonttest.OTTO(fonttest.CFF(c.opts), fonttest.SFNTOptions{
 				Name:   "Broken",
 				Glyphs: glyphsFor(c.opts.Glyphs - 1),
-			}))
-			if err != nil {
-				t.Fatalf("loading: %v", err)
-			}
-			// Reading it is fine; nothing about shaping needs the collection.
-			if _, missing := f.Encode("A"); missing != 0 {
-				t.Errorf("%d characters missing from a face that covers them", missing)
-			}
+			})
+			// Loaded here, and adopted: a face handed over without its bytes
+			// is held to the same rule, and for the same reason. It is asked
+			// of the face, before subsetting, so the refusal names the
+			// collection rather than whatever the subsetter meets first.
+			for kind, load := range faceConstructors {
+				f, err := load(data)
+				if err != nil {
+					t.Fatalf("%s: loading: %v", kind, err)
+				}
+				// Reading it is fine; nothing about shaping needs the collection.
+				if _, missing := f.Encode("A"); missing != 0 {
+					t.Errorf("%s: %d characters missing from a face that covers them", kind, missing)
+				}
 
-			doc := mustPDFADoc(t, pdfa.PDFA2b)
-			if _, err := f.Embed(doc); err == nil {
-				t.Error("the font was embedded; its /CIDSystemInfo would claim a " +
-					"collection the program never named")
-			} else if !strings.Contains(err.Error(), "character collection") {
-				t.Errorf("refused for the wrong reason: %v", err)
+				doc := mustPDFADoc(t, pdfa.PDFA2b)
+				if _, err := f.Embed(doc); err == nil {
+					t.Errorf("%s: the font was embedded; its /CIDSystemInfo would claim a "+
+						"collection the program never named", kind)
+				} else if !strings.Contains(err.Error(), "character collection") {
+					t.Errorf("%s: refused for the wrong reason: %v", kind, err)
+				}
 			}
 		})
+	}
+}
+
+// faceConstructors are the two ways a composite face reaches Embed: read from
+// its bytes here, or built by forme and adopted, which hands over no bytes.
+var faceConstructors = map[string]func([]byte) (*fonts.Face, error){
+	"loaded": fonts.Load,
+	"adopted": func(data []byte) (*fonts.Face, error) {
+		f, err := shape.Load(data)
+		if err != nil {
+			return nil, err
+		}
+		return fonts.Adopt(f), nil
+	},
+}
+
+// TestACFFThatIsNotCIDKeyedIsEmbeddedByGlyphIndex is the other side of the
+// refusal: a CFF with no ROS has no collection, and that is not a font that
+// failed to name one. It is embedded as Adobe-Identity-0, its codes glyph
+// indices, loaded or adopted alike.
+func TestACFFThatIsNotCIDKeyedIsEmbeddedByGlyphIndex(t *testing.T) {
+	data := fonttest.OTTO(fonttest.CFF(fonttest.CFFOptions{Glyphs: 4}), fonttest.SFNTOptions{
+		Name: "Plain", Glyphs: glyphsFor(3),
+	})
+	for kind, load := range faceConstructors {
+		f, err := load(data)
+		if err != nil {
+			t.Fatalf("%s: loading: %v", kind, err)
+		}
+		if f.IsCIDKeyed() {
+			t.Fatalf("%s: the fixture is CID-keyed", kind)
+		}
+		gid, _ := f.GlyphID('B')
+		codes, _ := f.Encode("B")
+		if code := int(codes[0])<<8 | int(codes[1]); code != gid {
+			t.Errorf("%s: B is written as code %d; its glyph index is %d", kind, code, gid)
+		}
+		doc := mustPDFADoc(t, pdfa.PDFA2b)
+		ref, err := f.Embed(doc)
+		if err != nil {
+			t.Fatalf("%s: embedding: %v", kind, err)
+		}
+		info, _ := doc.Resolve(descendantOf(t, doc, ref).Get("CIDSystemInfo")).(*object.Dictionary)
+		reg, _ := doc.Resolve(info.Get("Registry")).(object.String)
+		ord, _ := doc.Resolve(info.Get("Ordering")).(object.String)
+		if string(reg.Value) != "Adobe" || string(ord.Value) != "Identity" {
+			t.Errorf("%s: written as %s-%s, want Adobe-Identity", kind, reg.Value, ord.Value)
+		}
 	}
 }
 
