@@ -2,7 +2,6 @@ package pdf0
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 	"strings"
 	"testing"
@@ -25,18 +24,7 @@ import (
 // how a font with any licence can be made without shipping one.
 func withFSType(t *testing.T, fsType uint16) []byte {
 	t.Helper()
-	data := append([]byte(nil), notosans.Regular()...)
-	n := int(binary.BigEndian.Uint16(data[4:]))
-	for i := 0; i < n; i++ {
-		rec := data[12+16*i:]
-		if string(rec[:4]) == "OS/2" {
-			off := binary.BigEndian.Uint32(rec[8:])
-			binary.BigEndian.PutUint16(data[off+8:], fsType)
-			return data
-		}
-	}
-	t.Fatal("the bundled font has no OS/2 table")
-	return nil
+	return withOS2FSType(t, notosans.Regular(), fsType)
 }
 
 // embedWith draws a word with the face, embeds it on a page of a PDF/A

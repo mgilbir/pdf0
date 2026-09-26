@@ -133,7 +133,7 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	// CID the embedded program has. It is mandatory for a subset at PDF/A-1,
 	// and whenever it is present its contents are checked against the
 	// program — see cidSetBits for what "has" means.
-	cidSetRef := doc.Add(flateStream(f.cidSetBits(kept, program)))
+	cidSetRef := doc.Add(flateStream(f.cidSetBits(kept)))
 
 	d := f.Descriptor()
 	descriptor := &object.Dictionary{}
@@ -554,15 +554,20 @@ func subsetTag(kept []int) string {
 //
 // ISO 19005-2 6.2.11.4.2 (and -1 6.3.5 before it) says the set "shall identify
 // all CIDs which are present in the font program, regardless of whether a CID
-// in the font is referenced or used by the PDF or not". For a font addressed by
-// glyph index those are the glyphs the subset kept with outlines, which is the
-// kept set. For a CID-keyed CFF they are every CID its charset lists — and
-// forme's subsetter (v0.3.0, and still at d45d580) keeps the whole charset,
-// giving the glyphs it dropped an empty charstring each rather than removing
-// them. So the set is the kept glyphs' CIDs together with the charset of the
-// program actually embedded, read back from it: listing only the kept ones
-// described a smaller font than the one in the file, which PDF/A-1b reports.
-func (f *Face) cidSetBits(kept []int, program []byte) []byte {
+// in the font is referenced or used by the PDF or not". Those are the glyphs
+// the program carries, each under the code GlyphCode gives it, and kept lists
+// exactly them. For a font addressed by glyph index the code is the index and
+// the program keeps the indices. For a CID-keyed CFF the code is the CID: a
+// subset holds only the kept glyphs, renumbered, with a charset giving each
+// the CID it had (forme 462f3b5), and a program embedded whole is every glyph,
+// which kept then lists. TestTheCIDSetIsTheEmbeddedProgramsCharset holds the
+// set to the charset of the program in the file.
+//
+// It used to add the embedded program's charset, read back out of it, because
+// forme's subsetter kept the whole charset and emptied the glyphs it dropped:
+// the set listed the kept glyphs and the program had seventeen thousand, and
+// PDF/A-1b reports a set that describes a smaller font than the one embedded.
+func (f *Face) cidSetBits(kept []int) []byte {
 	// One bit per CID, for the same reason /W is keyed by CID: the set says
 	// which characters of the collection the subset carries, and for a
 	// CID-keyed CFF those are not the glyph indices.
@@ -576,19 +581,6 @@ func (f *Face) cidSetBits(kept []int, program []byte) []byte {
 		cids = append(cids, cid)
 		if cid > highest {
 			highest = cid
-		}
-	}
-	if cff := font.SFNTTables(program)["CFF "]; cff != nil {
-		if p := font.ParseCFF(cff); p != nil && p.GIDToCID != nil {
-			for _, cid := range p.GIDToCID {
-				if cid < 0 || cid > 0xFFFF {
-					continue // not a CID a two-byte code can reach
-				}
-				cids = append(cids, cid)
-				if cid > highest {
-					highest = cid
-				}
-			}
 		}
 	}
 	bits := make([]byte, highest/8+1)
