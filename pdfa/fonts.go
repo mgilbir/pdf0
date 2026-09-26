@@ -3,7 +3,6 @@ package pdfa
 import (
 	"fmt"
 	"github.com/mgilbir/forme/font"
-	"github.com/mgilbir/pdf0/internal/checked"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 	"math"
@@ -1222,22 +1221,29 @@ func type3GlyphWidth(doc core.View, cp *object.Stream) (float64, bool) {
 	if data == nil {
 		return 0, false
 	}
-	var nums []float64
-	found := false
-	var w float64
+	// Each operand since the last operator, and whether it is a PDF number. A
+	// token the lexer calls a number but that is not one ("1e3", "1.2.3") is
+	// kept in its place, so that it cannot shift the operand after it into
+	// the width's position, and a width written that way is no width at all.
+	type operand struct {
+		v  float64
+		ok bool
+	}
+	var nums []operand
 	lx := core.NewContentLexer(doc.Cancel, data)
 	var t core.ContentTok
-	for !found && lx.Next(&t) {
+	for lx.Next(&t) {
 		switch t.Kind {
 		case core.ContentNumber:
-			nums = append(nums, parseNumberToken(t.Raw))
+			v, _, ok := t.ParseNumber()
+			nums = append(nums, operand{v, ok})
 		case core.ContentOperator:
 			switch string(t.Raw) {
 			case "d0", "d1":
 				if len(nums) >= 1 {
-					w = nums[0]
-					found = true
+					return nums[0].v, nums[0].ok
 				}
+				nums = nums[:0]
 			default:
 				nums = nums[:0]
 			}
@@ -1248,30 +1254,7 @@ func type3GlyphWidth(doc core.View, cp *object.Stream) (float64, bool) {
 			nums = nums[:0]
 		}
 	}
-	return w, found
-}
-
-// parseNumberToken parses a numeric content token.
-func parseNumberToken(b []byte) float64 {
-	s := string(b)
-	if strings.ContainsAny(s, ".eE") {
-		var f float64
-		font.ParseFloat(s, &f)
-		return f
-	}
-	neg := false
-	i := 0
-	if i < len(s) && (s[i] == '+' || s[i] == '-') {
-		neg = s[i] == '-'
-		i++
-	}
-	// Out-of-range integers saturate rather than wrap; the magnitude rules
-	// report them as out of range either way.
-	v, _, _ := checked.Decimal(s[i:])
-	if neg {
-		v = -v
-	}
-	return float64(v)
+	return 0, false
 }
 
 // --- subset CharSet / CIDSet completeness ---
