@@ -169,13 +169,13 @@ func (r Result) Intact() bool {
 	return r.Valid && r.ChangesAllowed
 }
 
-// VerifySignatures verifies every signature and document time-stamp in the
+// verifySignatures verifies every signature and document time-stamp in the
 // document against the file it was read from. Results are ordered by the
 // object number of the signature dictionary, which is stable across runs (the
 // objects are held in a map, whose iteration order is not) and meaningful: in a
 // document signed by successive incremental updates the later signature is the
 // later object.
-func VerifySignatures(d core.View, file core.SignedFile, opts VerifyOptions) []Result {
+func verifySignatures(d core.View, file core.SignedFile, opts VerifyOptions) []Result {
 	return verifyAll(d, file, opts)
 }
 
@@ -289,8 +289,8 @@ func verifyAll(d core.View, file core.SignedFile, opts VerifyOptions) []Result {
 		}
 	}
 
-	m := revocationMaterial{certs: DSSCerts(d)}
-	m.crls, m.ocsps = DSSRevocationMaterial(d)
+	m := revocationMaterial{certs: dssCerts(d)}
+	m.crls, m.ocsps = dssRevocationMaterial(d)
 	trustTimestamps(results, m, opts.tsaRoots(), now)
 	for i := range results {
 		r := &results[i]

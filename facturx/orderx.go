@@ -116,18 +116,12 @@ type OrderXResult struct {
 	OrderComplete     bool
 }
 
-// ValidateOrderX checks whether doc is a conforming Order-X order container.
-//
-// It is ValidateOrderXContext with a background context.
-func ValidateOrder(doc core.View) OrderXResult {
-	return ValidateOrderContext(context.Background(), doc)
-}
-
-// ValidateOrderXContext is ValidateOrderX with cancellation. Both halves of the
-// work honour ctx — the PDF/A-3 container validation and the order rules — and a
+// validateOrderContext checks whether doc is a conforming Order-X order
+// container, for pdf0.ValidateOrderXContext. Both halves of the work honour
+// ctx — the PDF/A-3 container validation and the order rules — and a
 // cancelled run reports a "limit" finding rather than an empty result, exactly
-// as ValidateFacturXContext does and for the same reasons.
-func ValidateOrderContext(ctx context.Context, doc core.View) (res OrderXResult) {
+// as validateContext does and for the same reasons.
+func validateOrderContext(ctx context.Context, doc core.View) (res OrderXResult) {
 	cancel := core.NewCanceler(ctx)
 	add := func(rule, msg string, obj int) {
 		res.Violations = append(res.Violations, OrderXViolation{Rule: rule, Message: msg, Object: obj})

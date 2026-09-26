@@ -188,7 +188,7 @@ func pdfaVersion(level Level) string {
 //
 // It is built through the XMP model, which escapes every value and refuses one
 // that cannot be XML at all — invalid UTF-8, a C0 control, U+FFFE — with an
-// error wrapping xmp.ErrInvalidText (audit C72). Such a title used to be passed
+// error wrapping pdf0.ErrInvalidMetadataText (audit C72). Such a title used to be passed
 // through (or its control characters silently dropped), which produced a packet
 // that was not well-formed and a document that failed its own level.
 func GenerateXMPMetadata(level Level, title, author string) ([]byte, error) {

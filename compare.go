@@ -8,12 +8,9 @@ import (
 // round-trip tests rest on. Two documents are equal when their object graphs
 // mean the same thing, not when their bytes match. The object comparison
 // itself, with its numeric tolerance, key-order independence and depth cap,
-// is object.Equal; IndirectRef values compare by object and generation number,
-// since Equal has no Document and deliberately never resolves a reference.
-
-// Equal reports whether two objects are deeply equal, comparing an Integer and
-// a Real that hold the same number as equal.
-func Equal(a, b object.Object) bool { return object.Equal(a, b) }
+// is object.Equal; IndirectRef values compare by object and generation
+// number, since object.Equal has no Document and deliberately never resolves a
+// reference.
 
 // DocumentEqual compares two Documents for semantic equality.
 func DocumentEqual(a, b *Document) bool {
@@ -34,7 +31,7 @@ func DocumentEqual(a, b *Document) bool {
 		if !ok {
 			return false
 		}
-		if !Equal(aObj, bObj) {
+		if !object.Equal(aObj, bObj) {
 			return false
 		}
 	}

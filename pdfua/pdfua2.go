@@ -4,7 +4,7 @@ package pdfua
 // standard succeeding PDF/UA-1. It holds no code: PDF/UA-2 shares most of
 // PDF/UA-1's requirements — a tagged logical structure, a default language, a
 // shown document title, Unicode-mapped text, correctly used artifacts and
-// headings — so ValidateView runs the same checks for both parts, with the
+// headings — so validateView runs the same checks for both parts, with the
 // part as a parameter. The root package's ValidatePDFUA2 selects part 2, which
 // makes the identification rule require pdfuaid:part 2, drops the UA-1 PDF
 // 1.x header rule, and adds the PDF 2.0 version rule.

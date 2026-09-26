@@ -38,7 +38,7 @@ func mustPDFADocWithInfo(tb testing.TB, level pdfa.Level, title, author string) 
 
 func mustSRGBProfile(tb testing.TB) []byte {
 	tb.Helper()
-	p, err := DefaultSRGBProfile()
+	p, err := pdfa.DefaultSRGBProfile()
 	if err != nil {
 		tb.Fatalf("the default sRGB profile: %v", err)
 	}

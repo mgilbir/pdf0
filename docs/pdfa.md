@@ -76,7 +76,7 @@ nondeterministic and undiffable.
 
 ## What is inside `pdfa.go`
 
-The `checks` slice in `ValidateView` dispatches **59** functions. Forty of
+The `checks` slice in `validateView` dispatches **59** functions. Forty of
 them are defined in `pdfa.go` itself; the other nineteen live in sibling files
 (see "Where the other rule files fit"). `pdfa.go` is organised in `// --- … ---`
 sections, roughly in the order below. Rule IDs vary by part, so the clause column
@@ -154,7 +154,7 @@ A `pdfa.Level` names one **target profile** (`pdfa/level.go`): the part of ISO
 (e or f). The levels are `PDFA1a`, `PDFA1b`, `PDFA2a`, `PDFA2b`, `PDFA2u`,
 `PDFA3a`, `PDFA3b`, `PDFA3u`, `PDFA4`, `PDFA4E` and `PDFA4F` (`pdfa.Levels()`).
 The zero value is `LevelDeclared`, which is not a profile: it asks for the level
-the document declares, resolved by `ResolveTarget` through `LevelFor` before
+the document declares, resolved by `resolveTarget` through `LevelFor` before
 anything runs. A document whose declaration cannot be read or names no level, and
 a `Level` that names no profile, get one finding under the `limit` rule and are
 not validated.
@@ -294,14 +294,14 @@ document used to embed a profile stamped with the moment it was generated.
 between runs. The sRGB profile carried its own creation timestamp, which
 embedding fixed. The file identifier is the other, and it is *meant* to vary —
 it exists to tell this file from every other — so it is offered rather than
-removed: set `PDFAOptions.FileID` and the bytes become a function of the
+removed: set `pdfa.SkeletonOptions.FileID` and the bytes become a function of the
 content alone. A digest of that content is the usual choice.
 
 ```go
-doc, err := pdf0.NewPDFADocumentWith(pdf0.PDFAOptions{
+doc, err := pdf0.NewPDFADocumentWith(pdfa.SkeletonOptions{
     Level:        pdfa.PDFA4,
     FileID:       contentDigest[:16],
-    OutputIntent: pdf0.PDFAOutputIntent{ICCProfile: myProfile, OutputConditionIdentifier: "FOGRA51"},
+    OutputIntent: pdfa.OutputIntentSpec{ICCProfile: myProfile, OutputConditionIdentifier: "FOGRA51"},
 })
 ```
 
@@ -318,7 +318,7 @@ Algorithm 2 specifies it for the standard security handler; that is the file
 format, not a choice.
 
 **Bringing your own profile.** `NewPDFADocumentWith` takes a
-`PDFAOutputIntent` — the profile bytes and the output-condition identifier that
+`pdfa.OutputIntentSpec` — the profile bytes and the output-condition identifier that
 names what they characterise — and embeds it with `/N` read from the profile's
 own header. Nothing of pdf0's colour management reaches the document. A profile
 that is not one, that disagrees with its own declared length, that is in a

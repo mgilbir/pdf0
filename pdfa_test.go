@@ -5,16 +5,17 @@ import (
 	"compress/zlib"
 	"errors"
 	"fmt"
-	"github.com/mgilbir/pdf0/internal/core"
-	"github.com/mgilbir/pdf0/internal/hostile"
-	"github.com/mgilbir/pdf0/object"
-	"github.com/mgilbir/pdf0/pdfa"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/hostile"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/pdfa"
 )
 
 type corpusFile struct {
@@ -953,7 +954,7 @@ func TestValidatePDFA_RoundTrip(t *testing.T) {
 
 func TestGenerateXMPMetadata(t *testing.T) {
 	t.Run("PDFA-4", func(t *testing.T) {
-		xmp, err := GenerateXMPMetadata(pdfa.PDFA4, "Test Title", "Test Author")
+		xmp, err := pdfa.GenerateXMPMetadata(pdfa.PDFA4, "Test Title", "Test Author")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -980,7 +981,7 @@ func TestGenerateXMPMetadata(t *testing.T) {
 	})
 
 	t.Run("PDFA-1b", func(t *testing.T) {
-		xmp, err := GenerateXMPMetadata(pdfa.PDFA1b, "", "")
+		xmp, err := pdfa.GenerateXMPMetadata(pdfa.PDFA1b, "", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -995,7 +996,7 @@ func TestGenerateXMPMetadata(t *testing.T) {
 	})
 
 	t.Run("XML escaping", func(t *testing.T) {
-		xmp, err := GenerateXMPMetadata(pdfa.PDFA4, "Title <with> & \"special\" chars", "")
+		xmp, err := pdfa.GenerateXMPMetadata(pdfa.PDFA4, "Title <with> & \"special\" chars", "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1905,7 +1906,7 @@ func TestNewPDFADocumentWithInfo(t *testing.T) {
 // never dropped, altered or written into a packet that does not parse.
 func TestXMPRefusesXMLIllegalText(t *testing.T) {
 	for _, bad := range []string{"a\x00b", "bell\x07", "bad\xffutf8", "a\uFFFEb", "a\uFFFFb"} {
-		if _, err := GenerateXMPMetadata(pdfa.PDFA1b, bad, ""); !errors.Is(err, ErrInvalidMetadataText) {
+		if _, err := pdfa.GenerateXMPMetadata(pdfa.PDFA1b, bad, ""); !errors.Is(err, ErrInvalidMetadataText) {
 			t.Errorf("GenerateXMPMetadata(title %q) = %v, want ErrInvalidMetadataText", bad, err)
 		}
 		if _, err := NewPDFADocumentWithInfo(pdfa.PDFA2b, "ok", bad); !errors.Is(err, ErrInvalidMetadataText) {
@@ -1920,7 +1921,7 @@ func TestXMPRefusesXMLIllegalText(t *testing.T) {
 		}
 	}
 	// Tab, LF and CR are legal, and the metacharacters are escaped.
-	x, err := GenerateXMPMetadata(pdfa.PDFA1b, "a\tb\nc <&>", "")
+	x, err := pdfa.GenerateXMPMetadata(pdfa.PDFA1b, "a\tb\nc <&>", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1931,16 +1932,16 @@ func TestXMPRefusesXMLIllegalText(t *testing.T) {
 
 // C22: Integer-Real equality uses the same epsilon as Real-Real.
 func TestEqualNumericEpsilonConsistency(t *testing.T) {
-	if !Equal(object.Real(1.0), object.Real(1.0+1e-12)) {
+	if !object.Equal(object.Real(1.0), object.Real(1.0+1e-12)) {
 		t.Error("Real-Real epsilon expected")
 	}
-	if !Equal(object.Integer(1), object.Real(1.0+1e-12)) {
+	if !object.Equal(object.Integer(1), object.Real(1.0+1e-12)) {
 		t.Error("Integer-Real must use the same epsilon as Real-Real")
 	}
-	if !Equal(object.Real(1.0+1e-12), object.Integer(1)) {
+	if !object.Equal(object.Real(1.0+1e-12), object.Integer(1)) {
 		t.Error("Real-Integer must use the same epsilon as Real-Real")
 	}
-	if Equal(object.Integer(1), object.Real(1.5)) {
+	if object.Equal(object.Integer(1), object.Real(1.5)) {
 		t.Error("distinct values must not be equal")
 	}
 }

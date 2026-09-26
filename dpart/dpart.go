@@ -39,7 +39,7 @@ func (v Violation) Error() string {
 // validateDPartHierarchy runs the ISO 32000-2 14.12 checks, reporting through
 // add. It is the body of ValidateDParts, split out so the panic boundary and
 // the result ordering live in one place.
-func ValidateHierarchy(doc core.View, add func(rule, msg string, obj int)) {
+func validateHierarchy(doc core.View, add func(rule, msg string, obj int)) {
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
 	if cat == nil {
 		return
@@ -305,17 +305,17 @@ func isXMLNameToken(s string) bool {
 	return true
 }
 
-// ValidateView runs the hierarchy checks over a view and returns the findings.
+// validateView runs the hierarchy checks over a view and returns the findings.
 // It exists for PDF/VT, which requires a conforming document-part hierarchy and
 // adopts these findings under its own prefix; the root package's ValidateDParts
 // adds the read-time guard trips on top.
-func ValidateView(v core.View) []Violation {
+func validateView(v core.View) []Violation {
 	var out []Violation
 	add := func(rule, msg string, obj int) {
 		out = append(out, Violation{Rule: rule, Message: msg, Object: obj})
 	}
 	if !v.Cancel.Stopped() {
-		finding.Guarded(add, func() { ValidateHierarchy(v, add) })
+		finding.Guarded(add, func() { validateHierarchy(v, add) })
 	}
 	finding.Sort(out)
 	return out

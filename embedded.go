@@ -5,7 +5,6 @@ import (
 
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
-	"github.com/mgilbir/pdf0/pdfa"
 )
 
 // The recursive embedded-PDF/A check. It lives here rather than with the rest
@@ -79,7 +78,7 @@ func (b *embeddedBudget) take(n int) bool {
 // is withheld rather than guessed. Under the defaults — every caller who
 // configures nothing, and the whole corpus — that condition is false and both
 // exits behave exactly as they always have.
-func embeddedPDFAChecker(budget *embeddedBudget) pdfa.EmbeddedChecker {
+func embeddedPDFAChecker(budget *embeddedBudget) embeddedPDFACheck {
 	return func(cancel core.Canceler, data []byte, lim core.Limits, depth int) (compliant, complete bool) {
 		if !budget.take(len(data)) {
 			return false, false

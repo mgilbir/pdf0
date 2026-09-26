@@ -13,14 +13,14 @@ import (
 // guards that tripped while the file was read.
 
 // ValidatePDFR checks a document against the PDF/R structural profile.
-func ValidatePDFR(d *Document) []pdfr.Violation {
-	return validatePDFR(core.Canceler{}, d)
+func ValidatePDFR(doc *Document) []pdfr.Violation {
+	return validatePDFR(core.Canceler{}, doc)
 }
 
 // ValidatePDFRContext is ValidatePDFR with cancellation; a cancelled run reports
 // itself under the rule "limit" (see cancel.go).
-func ValidatePDFRContext(ctx context.Context, d *Document) []pdfr.Violation {
-	return validatePDFR(core.NewCanceler(ctx), d)
+func ValidatePDFRContext(ctx context.Context, doc *Document) []pdfr.Violation {
+	return validatePDFR(core.NewCanceler(ctx), doc)
 }
 func validatePDFR(cancel core.Canceler, d *Document) []pdfr.Violation {
 	if d == nil {
@@ -33,7 +33,7 @@ func validatePDFR(cancel core.Canceler, d *Document) []pdfr.Violation {
 	//
 	// This is the boundary: the checks below read a view.
 	rd := beginRunCancel(d, cancel)
-	out := pdfr.ValidateView(rd.view())
+	out := pdfrValidateView(rd.view())
 
 	// Guard trips are reported under their own rule, not as conformance
 	// failures (see limits.go). Read-time trips live on the Document, so this

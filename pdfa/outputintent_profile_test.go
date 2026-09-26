@@ -26,7 +26,7 @@ func findingsWith(vs []Violation, sub string) []Violation {
 // space, so nothing is reported as one.
 func TestAnOutputIntentProfileIsNotAColourSpace(t *testing.T) {
 	v := mkPDFAViewT(t, PDFA2b)
-	errs := ValidateView(v, PDFA1b)
+	errs := validateView(v, PDFA1b)
 	if got := findingsWith(errs, "ICC profile version 4"); len(got) != 1 || got[0].Rule != "6.2.2" {
 		t.Errorf("the v4 output-intent profile at 1b: want one 6.2.2 finding, got %v", got)
 	}

@@ -3,7 +3,6 @@ package pdf0
 import (
 	"crypto/x509"
 	"fmt"
-	"time"
 
 	"github.com/mgilbir/pdf0/sign"
 )
@@ -14,16 +13,6 @@ import (
 // Document. Signature *production* stays in this package (sign.go,
 // doctimestamp.go): writing a signed file means laying out a whole new
 // document, which is the writer's job, not the verifier's.
-
-// CheckCertRevocation reports what the supplied CRLs and OCSP responses say
-// about cert at time at (pass time.Now() for a live check). issuer must be the
-// certificate that issued cert — the next certificate of a chain you have
-// verified — and only material that issuer authenticates is consulted. A
-// revocation from any source wins over a "good" from another; see
-// sign.CheckCertRevocation for the freshness rules.
-func CheckCertRevocation(cert, issuer *x509.Certificate, crls, ocsps [][]byte, at time.Time) sign.RevocationInfo {
-	return sign.CheckCertRevocation(cert, issuer, crls, ocsps, at)
-}
 
 // VerifySignatures verifies every signature and document time-stamp in the
 // document against the file it was read from (Document.Source): a signature
@@ -46,7 +35,7 @@ func (d *Document) VerifySignatures(opts sign.VerifyOptions) (res []sign.Result,
 			res, err = nil, fmt.Errorf("verifying signatures: recovered from panic: %v", r)
 		}
 	}()
-	return sign.VerifySignatures(d.view(), d.signedFile(d.canceler()), opts), nil
+	return signVerifySignatures(d.view(), d.signedFile(d.canceler()), opts), nil
 }
 
 // ValidatePAdES reports, for each approval signature, the PAdES baseline level
@@ -59,17 +48,17 @@ func (d *Document) ValidatePAdES(opts sign.VerifyOptions) (res []sign.PAdESResul
 			res, err = nil, fmt.Errorf("validating PAdES signatures: recovered from panic: %v", r)
 		}
 	}()
-	return sign.ValidatePAdES(d.view(), d.signedFile(d.canceler()), opts), nil
+	return signValidatePAdES(d.view(), d.signedFile(d.canceler()), opts), nil
 }
 
 // DSSRevocationMaterial returns the CRLs and OCSP responses the document's
 // Document Security Store carries.
 func (d *Document) DSSRevocationMaterial() (crls, ocsps [][]byte) {
-	return sign.DSSRevocationMaterial(d.view())
+	return signDSSRevocationMaterial(d.view())
 }
 
 // DSSCerts returns the certificates the document's Document Security Store
 // carries.
 func (d *Document) DSSCerts() []*x509.Certificate {
-	return sign.DSSCerts(d.view())
+	return signDSSCerts(d.view())
 }

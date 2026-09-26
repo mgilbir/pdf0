@@ -2,14 +2,16 @@ package pdf0
 
 import (
 	"bytes"
-	"github.com/mgilbir/pdf0/object"
 	"testing"
+
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/syntax"
 )
 
 func serializeObject(t *testing.T, obj object.Object) string {
 	t.Helper()
 	var buf bytes.Buffer
-	s := NewSerializer(&buf)
+	s := syntax.NewSerializer(&buf)
 	if err := s.WriteObject(obj); err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +180,7 @@ func TestSerializeStream(t *testing.T) {
 
 func TestSerializeOffset(t *testing.T) {
 	var buf bytes.Buffer
-	s := NewSerializer(&buf)
+	s := syntax.NewSerializer(&buf)
 
 	if s.Offset() != 0 {
 		t.Errorf("expected initial offset 0, got %d", s.Offset())
@@ -242,7 +244,7 @@ func roundTripObject(t *testing.T, input string) {
 	t.Helper()
 
 	// Parse
-	p1 := NewParser([]byte(input))
+	p1 := syntax.NewParser([]byte(input))
 	obj1, err := p1.ParseObject()
 	if err != nil {
 		t.Fatalf("parse %q: %v", input, err)
@@ -250,21 +252,21 @@ func roundTripObject(t *testing.T, input string) {
 
 	// Serialize
 	var buf bytes.Buffer
-	s := NewSerializer(&buf)
+	s := syntax.NewSerializer(&buf)
 	if err := s.WriteObject(obj1); err != nil {
 		t.Fatalf("serialize %q: %v", input, err)
 	}
 	serialized := buf.String()
 
 	// Re-parse
-	p2 := NewParser([]byte(serialized))
+	p2 := syntax.NewParser([]byte(serialized))
 	obj2, err := p2.ParseObject()
 	if err != nil {
 		t.Fatalf("re-parse %q (serialized as %q): %v", input, serialized, err)
 	}
 
 	// Compare
-	if !Equal(obj1, obj2) {
+	if !object.Equal(obj1, obj2) {
 		t.Errorf("round-trip failed for %q: serialized as %q, re-parsed differs", input, serialized)
 	}
 }

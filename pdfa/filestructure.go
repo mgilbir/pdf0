@@ -20,7 +20,7 @@ import (
 // document was read from and what Read learned about them — and nothing else:
 // not a caller's bytes, which need not be that file's (audit 2026-09-22 C69),
 // and not the object graph, which a caller may have edited since. Each is
-// dispatched on its own from ValidateView, so one that fails internally costs
+// dispatched on its own from validateView, so one that fails internally costs
 // only its own rule.
 
 // checkFileHeaderBytes validates the file header per ISO 19005 6.1.2,

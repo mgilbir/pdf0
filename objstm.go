@@ -74,7 +74,7 @@ func parseObjStmIndex(cancel core.Canceler, stream *object.Stream, lim core.Limi
 		return nil, nil, 0, fmt.Errorf("object stream /N %d does not fit in /First %d bytes", n, firstInt)
 	}
 
-	lexer := NewLexer(data[:firstInt])
+	lexer := syntax.NewLexer(data[:firstInt])
 	entries = make([]objStmEntry, 0, int(n))
 	for i := 0; i < int(n); i++ {
 		num, err := nextIntToken(lexer)
@@ -229,7 +229,7 @@ func (d *Document) closeObjStm(data []byte) {
 // charging the meter for what it builds. overBudget reports that the meter
 // ran out: the container must not be read further.
 func (d *Document) parseObjStmObject(data []byte, off int64) (obj object.Object, overBudget bool, err error) {
-	parser := NewParser(data)
+	parser := syntax.NewParser(data)
 	parser.Budget = d.objStmMeter()
 	parser.SetOffset(off)
 	obj, err = parser.ParseObject()

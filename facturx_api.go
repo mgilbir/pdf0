@@ -22,7 +22,7 @@ func facturxRun(ctx context.Context, doc *Document) core.View {
 	runDoc := *doc // dictcopy: a shallow per-run copy; it shares Objects and Trailer by design and the validators never write either
 	runDoc.valCache = newValidationCache(core.NewCanceler(ctx))
 	v := runDoc.view()
-	facturx.SetPDFAChecker(v, func(core.View) []pdfa.Violation {
+	facturxSetPDFAChecker(v, func(core.View) []pdfa.Violation {
 		// PDF/A-3b: what a Factur-X or Order-X container is required to be.
 		// A container declaring 3a or 3u satisfies it too — a 3b target
 		// accepts the letters above it — and is not held here to the rest of
@@ -50,7 +50,7 @@ func ValidateFacturXContext(ctx context.Context, doc *Document) facturx.Result {
 	if doc == nil {
 		return facturx.Result{Violations: []facturx.Violation{{Rule: finding.LimitRule, Message: nilDocumentMessage}}}
 	}
-	return facturx.ValidateContext(ctx, facturxRun(ctx, doc))
+	return facturxValidateContext(ctx, facturxRun(ctx, doc))
 }
 
 // ValidateOrderX validates an Order-X order container, the Order-X counterpart
@@ -64,7 +64,7 @@ func ValidateOrderXContext(ctx context.Context, doc *Document) facturx.OrderXRes
 	if doc == nil {
 		return facturx.OrderXResult{Violations: []facturx.OrderXViolation{{Rule: finding.LimitRule, Message: nilDocumentMessage}}}
 	}
-	return facturx.ValidateOrderContext(ctx, facturxRun(ctx, doc))
+	return facturxValidateOrderContext(ctx, facturxRun(ctx, doc))
 }
 
 // EmbedFacturX embeds the CII invoice XML into doc as the associated file a
@@ -76,9 +76,12 @@ func ValidateOrderXContext(ctx context.Context, doc *Document) facturx.OrderXRes
 // It edits the document rather than rebuilding any of it: other attachments,
 // other metadata and the PDF/A conformance letter are kept, and an invoice the
 // document already carries is replaced, so embedding twice leaves one invoice.
-// See facturx.Embed for what it refuses — empty or non-XML input among it. A
-// nil or Locked document is refused too, since the invoice would be written in
-// the clear under its /Encrypt.
+// It returns an error, and leaves doc unchanged, when invoiceXML is empty or
+// not well-formed XML (facturx.ErrNotXML), the profile is unknown, the title
+// cannot be written as XMP text, the document declares a PDF/A part other
+// than 3, or its existing metadata or name tree cannot be edited without
+// guessing. A nil or Locked document is refused too, since the invoice would
+// be written in the clear under its /Encrypt.
 func EmbedFacturX(doc *Document, invoiceXML []byte, profile formalis.Profile, title string) error {
 	if doc == nil {
 		return errNilDocument
@@ -86,12 +89,13 @@ func EmbedFacturX(doc *Document, invoiceXML []byte, profile formalis.Profile, ti
 	if doc.Locked() {
 		return errLockedTarget("embedding a Factur-X invoice")
 	}
-	return facturx.Embed(doc.view(), invoiceXML, profile, title)
+	return facturxEmbed(doc.view(), invoiceXML, profile, title)
 }
 
 // EmbedOrderX is EmbedFacturX for an Order-X order: the Cross Industry Order
 // XML is embedded as order-x.xml and identified in the Order-X XMP namespace.
-// docType is ORDER, ORDER_CHANGE or ORDER_RESPONSE.
+// docType is ORDER, ORDER_CHANGE or ORDER_RESPONSE; any other is refused, as
+// are the inputs EmbedFacturX refuses.
 func EmbedOrderX(doc *Document, orderXML []byte, profile facturx.OrderXProfile, docType, title string) error {
 	if doc == nil {
 		return errNilDocument
@@ -99,5 +103,5 @@ func EmbedOrderX(doc *Document, orderXML []byte, profile facturx.OrderXProfile, 
 	if doc.Locked() {
 		return errLockedTarget("embedding an Order-X order")
 	}
-	return facturx.EmbedOrder(doc.view(), orderXML, profile, docType, title)
+	return facturxEmbedOrder(doc.view(), orderXML, profile, docType, title)
 }

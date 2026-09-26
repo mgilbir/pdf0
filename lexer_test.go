@@ -1,12 +1,13 @@
 package pdf0
 
 import (
-	"github.com/mgilbir/pdf0/syntax"
 	"testing"
+
+	"github.com/mgilbir/pdf0/syntax"
 )
 
 func TestLexerWhitespaceAndComments(t *testing.T) {
-	l := NewLexer([]byte("  \t\n\r  % this is a comment\n  true"))
+	l := syntax.NewLexer([]byte("  \t\n\r  % this is a comment\n  true"))
 	tok, err := l.NextToken()
 	if err != nil {
 		t.Fatal(err)
@@ -25,7 +26,7 @@ func TestLexerBoolean(t *testing.T) {
 		{"false", "false"},
 	}
 	for _, tt := range tests {
-		l := NewLexer([]byte(tt.input))
+		l := syntax.NewLexer([]byte(tt.input))
 		tok, err := l.NextToken()
 		if err != nil {
 			t.Errorf("input %q: %v", tt.input, err)
@@ -48,7 +49,7 @@ func TestLexerInteger(t *testing.T) {
 		{"0", "0"},
 	}
 	for _, tt := range tests {
-		l := NewLexer([]byte(tt.input))
+		l := syntax.NewLexer([]byte(tt.input))
 		tok, err := l.NextToken()
 		if err != nil {
 			t.Errorf("input %q: %v", tt.input, err)
@@ -72,7 +73,7 @@ func TestLexerReal(t *testing.T) {
 		{"34.", "34."},
 	}
 	for _, tt := range tests {
-		l := NewLexer([]byte(tt.input))
+		l := syntax.NewLexer([]byte(tt.input))
 		tok, err := l.NextToken()
 		if err != nil {
 			t.Errorf("input %q: %v", tt.input, err)
@@ -108,7 +109,7 @@ func TestLexerLiteralString(t *testing.T) {
 		{"(line1\r\nline2)", "line1\nline2"}, // \r\n → \n
 	}
 	for _, tt := range tests {
-		l := NewLexer([]byte(tt.input))
+		l := syntax.NewLexer([]byte(tt.input))
 		tok, err := l.NextToken()
 		if err != nil {
 			t.Errorf("input %q: %v", tt.input, err)
@@ -123,7 +124,7 @@ func TestLexerLiteralString(t *testing.T) {
 func TestLexerLineContinuation(t *testing.T) {
 	// Backslash followed by newline is a line continuation (ignored)
 	input := "(hello\\\nworld)"
-	l := NewLexer([]byte(input))
+	l := syntax.NewLexer([]byte(input))
 	tok, err := l.NextToken()
 	if err != nil {
 		t.Fatal(err)
@@ -134,7 +135,7 @@ func TestLexerLineContinuation(t *testing.T) {
 
 	// Backslash followed by \r\n
 	input2 := "(hello\\\r\nworld)"
-	l2 := NewLexer([]byte(input2))
+	l2 := syntax.NewLexer([]byte(input2))
 	tok2, err := l2.NextToken()
 	if err != nil {
 		t.Fatal(err)
@@ -156,7 +157,7 @@ func TestLexerHexString(t *testing.T) {
 		{"<901FA>", []byte{0x90, 0x1F, 0xA0}}, // odd digits
 	}
 	for _, tt := range tests {
-		l := NewLexer([]byte(tt.input))
+		l := syntax.NewLexer([]byte(tt.input))
 		tok, err := l.NextToken()
 		if err != nil {
 			t.Errorf("input %q: %v", tt.input, err)
@@ -189,7 +190,7 @@ func TestLexerName(t *testing.T) {
 		{"/The_Key_of_F#23_Minor", "The_Key_of_F#_Minor"},
 	}
 	for _, tt := range tests {
-		l := NewLexer([]byte(tt.input))
+		l := syntax.NewLexer([]byte(tt.input))
 		tok, err := l.NextToken()
 		if err != nil {
 			t.Errorf("input %q: %v", tt.input, err)
@@ -203,7 +204,7 @@ func TestLexerName(t *testing.T) {
 
 func TestLexerDelimiters(t *testing.T) {
 	input := "[ ] << >>"
-	l := NewLexer([]byte(input))
+	l := syntax.NewLexer([]byte(input))
 
 	expected := []syntax.TokenType{syntax.TokenArrayStart, syntax.TokenArrayEnd, syntax.TokenDictStart, syntax.TokenDictEnd, syntax.TokenEOF}
 	for _, want := range expected {
@@ -233,7 +234,7 @@ func TestLexerKeywords(t *testing.T) {
 		{"startxref", syntax.TokenStartXref},
 	}
 	for _, tt := range tests {
-		l := NewLexer([]byte(tt.input))
+		l := syntax.NewLexer([]byte(tt.input))
 		tok, err := l.NextToken()
 		if err != nil {
 			t.Errorf("input %q: %v", tt.input, err)
@@ -247,7 +248,7 @@ func TestLexerKeywords(t *testing.T) {
 
 func TestLexerMultipleTokens(t *testing.T) {
 	input := "/Type /Catalog /Pages 3 0 R"
-	l := NewLexer([]byte(input))
+	l := syntax.NewLexer([]byte(input))
 
 	expected := []struct {
 		typ syntax.TokenType
@@ -279,7 +280,7 @@ func TestLexerMultipleTokens(t *testing.T) {
 func TestLexerDictStartVsHexString(t *testing.T) {
 	// << should be DictStart, <48> should be hex string
 	input := "<< /Key <48> >>"
-	l := NewLexer([]byte(input))
+	l := syntax.NewLexer([]byte(input))
 
 	tok, err := l.NextToken()
 	if err != nil {
@@ -316,7 +317,7 @@ func TestLexerDictStartVsHexString(t *testing.T) {
 
 func TestLexerOffset(t *testing.T) {
 	input := "  123  456"
-	l := NewLexer([]byte(input))
+	l := syntax.NewLexer([]byte(input))
 
 	tok, err := l.NextToken()
 	if err != nil {
@@ -337,7 +338,7 @@ func TestLexerOffset(t *testing.T) {
 
 func TestLexerSetPosition(t *testing.T) {
 	input := "true false null"
-	l := NewLexer([]byte(input))
+	l := syntax.NewLexer([]byte(input))
 
 	// Seek to "false"
 	l.SetPosition(5)
@@ -351,7 +352,7 @@ func TestLexerSetPosition(t *testing.T) {
 }
 
 func TestLexerEmptyInput(t *testing.T) {
-	l := NewLexer([]byte{})
+	l := syntax.NewLexer([]byte{})
 	tok, err := l.NextToken()
 	if err != nil {
 		t.Fatal(err)
@@ -364,7 +365,7 @@ func TestLexerEmptyInput(t *testing.T) {
 func TestLexerNameAtDelimiter(t *testing.T) {
 	// Name followed immediately by delimiter
 	input := "/Type/Catalog"
-	l := NewLexer([]byte(input))
+	l := syntax.NewLexer([]byte(input))
 
 	tok, err := l.NextToken()
 	if err != nil {

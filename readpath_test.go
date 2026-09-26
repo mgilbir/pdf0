@@ -2,19 +2,21 @@ package pdf0
 
 import (
 	"bytes"
-	"github.com/mgilbir/pdf0/object"
 	"strings"
 	"testing"
+
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/syntax"
 )
 
 // C10: overflowing object numbers must error, not silently clamp.
 func TestOverflowingObjectNumberRejected(t *testing.T) {
-	p := NewParser([]byte("99999999999999999999999999 0 R"))
+	p := syntax.NewParser([]byte("99999999999999999999999999 0 R"))
 	if _, err := p.ParseObject(); err == nil {
 		t.Error("expected error for overflowing object number in reference")
 	}
 
-	p = NewParser([]byte("99999999999999999999999999 0 obj\n42\nendobj"))
+	p = syntax.NewParser([]byte("99999999999999999999999999 0 obj\n42\nendobj"))
 	if _, err := p.ParseIndirectObject(); err == nil {
 		t.Error("expected error for overflowing object number in definition")
 	}
@@ -25,21 +27,21 @@ func TestOverflowingObjectNumberRejected(t *testing.T) {
 // reaches the malformed token rather than failing the valid integer before
 // it; inside an array the array still fails.
 func TestLexerErrorAfterIntegerPropagates(t *testing.T) {
-	p := NewParser([]byte("5 <zz>"))
+	p := syntax.NewParser([]byte("5 <zz>"))
 	if obj, err := p.ParseObject(); err != nil || obj != object.Integer(5) {
 		t.Fatalf("first object = %v, %v; want the integer 5", obj, err)
 	}
 	if _, err := p.ParseObject(); err == nil || !strings.Contains(err.Error(), "invalid hex") {
 		t.Errorf("second object: err = %v; the invalid-hex error must surface", err)
 	}
-	if _, err := NewParser([]byte("[5 <zz>]")).ParseObject(); err == nil {
+	if _, err := syntax.NewParser([]byte("[5 <zz>]")).ParseObject(); err == nil {
 		t.Error("expected invalid-hex error to fail the array")
 	}
 }
 
 // C17: "1.2.3" is one malformed number, not two reals.
 func TestMalformedNumberMultipleDots(t *testing.T) {
-	p := NewParser([]byte("[1.2.3]"))
+	p := syntax.NewParser([]byte("[1.2.3]"))
 	if _, err := p.ParseObject(); err == nil {
 		t.Error("expected error for number with multiple dots")
 	}
@@ -47,12 +49,12 @@ func TestMalformedNumberMultipleDots(t *testing.T) {
 
 // C25: NUL smuggled into a name via #00 must be rejected.
 func TestNameWithNULRejected(t *testing.T) {
-	l := NewLexer([]byte("/A#00B"))
+	l := syntax.NewLexer([]byte("/A#00B"))
 	if _, err := l.NextToken(); err == nil {
 		t.Error("expected error for #00 in name")
 	}
 	// Other escapes still work.
-	l = NewLexer([]byte("/A#20B"))
+	l = syntax.NewLexer([]byte("/A#20B"))
 	tok, err := l.NextToken()
 	if err != nil {
 		t.Fatal(err)
@@ -79,7 +81,7 @@ func TestShortReadRejected(t *testing.T) {
 	if _, err := Read(shortReader{data: data[:len(data)/2]}, int64(len(data))); err == nil {
 		t.Error("expected error for short read in Read")
 	}
-	if _, err := NewLexerFromReaderAt(shortReader{data: []byte("abc")}, 10); err == nil {
+	if _, err := syntax.NewLexerFromReaderAt(shortReader{data: []byte("abc")}, 10); err == nil {
 		t.Error("expected error for short read in NewLexerFromReaderAt")
 	}
 }
@@ -98,7 +100,7 @@ func TestStreamEndstreamInBinaryData(t *testing.T) {
 	// No /Length: the body contains a raw (non-delimited) "endstream"
 	// before the real, whitespace-delimited one.
 	src := "<< >>\nstream\nABendstreamCD\nendstream"
-	p := NewParser([]byte(src))
+	p := syntax.NewParser([]byte(src))
 	obj, err := p.ParseObject()
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +145,7 @@ func TestEncryptedDocumentDetectedAndNotWritten(t *testing.T) {
 
 // C26: duplicate dictionary keys keep the last occurrence.
 func TestDuplicateDictKeysLastWins(t *testing.T) {
-	p := NewParser([]byte("<< /A 1 /A 2 >>"))
+	p := syntax.NewParser([]byte("<< /A 1 /A 2 >>"))
 	obj, err := p.ParseObject()
 	if err != nil {
 		t.Fatal(err)

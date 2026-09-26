@@ -299,7 +299,7 @@ func TestLevelDeclaredTakesTheTargetFromTheDocument(t *testing.T) {
 		{attr("4", "F"), PDFA4F},
 		{[]byte(validXMP(`<pdfaid:part xmlns:pdfaid="` + ns + `">1</pdfaid:part><pdfaid:conformance xmlns:pdfaid="` + ns + `">B</pdfaid:conformance>`)), PDFA1b},
 	} {
-		got, refused := ResolveTarget(docWithXMP(tc.packet), LevelDeclared)
+		got, refused := resolveTarget(docWithXMP(tc.packet), LevelDeclared)
 		if refused != nil || got != tc.want {
 			t.Errorf("declared %s: got %v %v, want %v", tc.packet, got, refused, tc.want)
 		}
@@ -313,7 +313,7 @@ func TestLevelDeclaredTakesTheTargetFromTheDocument(t *testing.T) {
 		"part in a comment": []byte(validXMP(`<!-- <pdfaid:part xmlns:pdfaid="` + ns + `">2</pdfaid:part> -->`)),
 		"no pdfaid":         []byte(validXMP(``)),
 	} {
-		_, refused := ResolveTarget(docWithXMP(packet), LevelDeclared)
+		_, refused := resolveTarget(docWithXMP(packet), LevelDeclared)
 		if len(refused) != 1 || !finding.IsCheckerFinding(refused[0]) {
 			t.Errorf("%s: want one checker finding, got %v", name, refused)
 		}

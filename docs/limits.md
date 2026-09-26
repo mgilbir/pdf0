@@ -119,7 +119,7 @@ granularity; `cancel.go` carries the design record.
 | All PDF/A, PDF/UA, PDF/UA-2, PDF/X, PDF/VT, PDF/R and DPart checks (each installs or joins a run). | The lexer and parser (`maxTokenGap`, `maxParseDepth`): they take bytes, not a `*Document`, and threading state through them for a guard that already surfaces as a parse error would be ceremony, not reach. |
 | Read-time object-stream budget trips, via `Document.readLimits`. | `ExtractImages` / `ExtractText`: they return no finding channel. Image decode failures, budget refusals (`image-pixels`) and recovered panics surface per image in `ExtractedImage.Note`; a page whose text is left out — the content budget ran out, or a recovered panic — is a `*PageTextError` in `ExtractText`'s error, never missing text alone. |
 | Font-program guards, forwarded from the parsed program. | `Write` / `WriteIncremental`: these return errors, which is the loud class already. |
-| Nested embedded-PDF/A validation (6.9), as `embedded-pdfa`. | `Equal` / `DocumentEqual`: they return a `bool`, so there is nowhere to say "too deep to tell". `maxCompareDepth` is *silently wrong by construction* (see the parsing table) and stays that way; no validator rule compares structures that deep. |
+| Nested embedded-PDF/A validation (6.9), as `embedded-pdfa`. | `object.Equal` / `DocumentEqual`: they return a `bool`, so there is nowhere to say "too deep to tell". `maxCompareDepth` is *silently wrong by construction* (see the parsing table) and stays that way; no validator rule compares structures that deep. |
 | Cancellation of any validation run, derived in `runLimitTrips`. | `ReadContext` / `WriteContext`: loud, an error wrapping `ctx.Err()`. `ExtractTextContext` / `ExtractImagesContext`: partial result plus that error. |
 | `ValidateFacturXContext` / `ValidateOrderXContext`, on **both** sides of the module seam — see below. | The `Is*` detection predicates in `formalis`: they return a `bool`, which has no room to say "the run stopped", so a context there could only lie. They are bounded by that module's own limits instead. |
 
@@ -232,7 +232,7 @@ The type-4 budget is in this list because of who calls it, not where it lives.
 The type-4 (PostScript calculator) work budget — `WithMaxPostScriptSteps`, the
 eleventh configurable limit — bounds `psExec`, and `evalFunction` is reached only
 from `images/imagecolor.go`'s tint-transform rendering. The PDF/A tint-transform rule
-compares function *objects* (`Equal`), it never evaluates one, so a trip costs
+compares function *objects* (`object.Equal`), it never evaluates one, so a trip costs
 pixel fidelity and no finding. This is why the budget reports no trip: there is
 no rule to decline.
 

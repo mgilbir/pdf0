@@ -61,7 +61,7 @@ func walkXRefIndependently(data []byte) (*xrefWalk, error) {
 		if off < 0 || off >= int64(len(data)) {
 			return nil, nil, 0, fmt.Errorf("offset %d outside file", off)
 		}
-		p := NewParser(data)
+		p := syntax.NewParser(data)
 		p.Lexer().SetPosition(off)
 		iobj, err := p.ParseIndirectObject()
 		if err != nil {
@@ -95,7 +95,7 @@ func walkXRefIndependently(data []byte) (*xrefWalk, error) {
 			if ti < 0 {
 				return nil, fmt.Errorf("no trailer")
 			}
-			p := NewParser(data)
+			p := syntax.NewParser(data)
 			p.Lexer().SetPosition(pos + int64(ti) + 7)
 			o, err := p.ParseObject()
 			if err != nil {
@@ -249,7 +249,7 @@ func isStructuralAt(data []byte, e XRefEntry) bool {
 	if e.Compressed || e.Offset < 0 || e.Offset >= int64(len(data)) {
 		return false
 	}
-	p := NewParser(data)
+	p := syntax.NewParser(data)
 	p.Lexer().SetPosition(e.Offset)
 	iobj, err := p.ParseIndirectObject()
 	if err != nil {
@@ -459,7 +459,7 @@ func compareUnchanged(rel string, orig, updated *Document, changed map[int]bool,
 			continue
 		}
 		u := updated.Objects[num]
-		if u == nil || !Equal(iobj.Value, u.Value) {
+		if u == nil || !object.Equal(iobj.Value, u.Value) {
 			bad = append(bad, num)
 		}
 	}
@@ -477,7 +477,7 @@ func changedBySigning(orig, updated *Document) map[int]bool {
 	out := map[int]bool{}
 	for num, iobj := range orig.Objects {
 		u := updated.Objects[num]
-		if u == nil || Equal(iobj.Value, u.Value) {
+		if u == nil || object.Equal(iobj.Value, u.Value) {
 			continue
 		}
 		d, ok := u.Value.(*object.Dictionary)

@@ -236,7 +236,7 @@ func LevelFor(part, conformance string) (Level, bool) {
 	return LevelDeclared, false
 }
 
-// ResolveTarget turns the level a caller asked for into the profile a run
+// resolveTarget turns the level a caller asked for into the profile a run
 // checks against, or into the one finding that says there is none.
 //
 // LevelDeclared becomes the level the document's own pdfaid identification
@@ -249,7 +249,7 @@ func LevelFor(part, conformance string) (Level, bool) {
 // integer converted to Level — is refused the same way, rather than running
 // the part-agnostic subset of the rules and reporting it as a PDF/A result
 // (audit 2026-09-22 C139).
-func ResolveTarget(doc core.View, level Level) (Level, []Violation) {
+func resolveTarget(doc core.View, level Level) (Level, []Violation) {
 	if level == LevelDeclared {
 		id := readPDFAIdentification(doc)
 		var why string

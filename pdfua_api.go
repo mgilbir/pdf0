@@ -48,7 +48,7 @@ func validatePDFUA(cancel core.Canceler, doc *Document, part string) []pdfua.Vio
 	//
 	// This is the boundary: everything below reads the document through a view.
 	rd := beginRunCancel(doc, cancel)
-	v := pdfua.ValidateView(rd.view(), part)
+	v := pdfuaValidateView(rd.view(), part)
 
 	// Resource guards that tripped during the run (or while the file was read)
 	// are reported under the "limit" clause, so a caller can tell "a check could
@@ -61,14 +61,14 @@ func validatePDFUA(cancel core.Canceler, doc *Document, part string) []pdfua.Vio
 
 // ValidatePDFUA2 checks a document against PDF/UA-2. Findings reuse the pdfua.Violation
 // type; clause identifiers follow ISO 14289-2.
-func ValidatePDFUA2(d *Document) []pdfua.Violation {
-	return validatePDFUA2(core.Canceler{}, d)
+func ValidatePDFUA2(doc *Document) []pdfua.Violation {
+	return validatePDFUA2(core.Canceler{}, doc)
 }
 
 // ValidatePDFUA2Context is ValidatePDFUA2 with cancellation; see
 // ValidatePDFUAContext for how a cancelled run reports itself.
-func ValidatePDFUA2Context(ctx context.Context, d *Document) []pdfua.Violation {
-	return validatePDFUA2(core.NewCanceler(ctx), d)
+func ValidatePDFUA2Context(ctx context.Context, doc *Document) []pdfua.Violation {
+	return validatePDFUA2(core.NewCanceler(ctx), doc)
 }
 func validatePDFUA2(cancel core.Canceler, d *Document) []pdfua.Violation {
 	if d == nil {

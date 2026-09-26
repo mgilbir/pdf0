@@ -33,7 +33,7 @@ func TestByteRulesStayInsideTheFile(t *testing.T) {
 	for _, level := range []Level{PDFA1b, PDFA2b, PDFA4} {
 		doc := mkPDFAViewT(t, level)
 		doc.File = func() *core.FileRecord { return f }
-		vs := ValidateView(doc, level)
+		vs := validateView(doc, level)
 		for _, v := range vs {
 			if v.Rule == finding.InternalRule {
 				t.Errorf("%s: a byte rule failed internally on an out-of-range record: %v", level, v)

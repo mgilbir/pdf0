@@ -38,9 +38,9 @@ func syntheticProfile(space string, major byte, size int) []byte {
 
 func TestACallersOwnProfileIsTheOneEmbedded(t *testing.T) {
 	mine := syntheticProfile("CMYK", 2, 300)
-	doc, err := NewPDFADocumentWith(PDFAOptions{
+	doc, err := NewPDFADocumentWith(pdfa.SkeletonOptions{
 		Level: pdfa.PDFA4,
-		OutputIntent: PDFAOutputIntent{
+		OutputIntent: pdfa.OutputIntentSpec{
 			ICCProfile:                mine,
 			OutputConditionIdentifier: "FOGRA51",
 		},
@@ -122,43 +122,43 @@ func TestTheDefaultIsStillPdf0sProfile(t *testing.T) {
 func TestAProfileThatCannotBeUsedIsRefusedRatherThanEmbedded(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		opts PDFAOptions
+		opts pdfa.SkeletonOptions
 		want string
 	}{
 		{
 			"too short to be a profile",
-			PDFAOptions{Level: pdfa.PDFA4, OutputIntent: PDFAOutputIntent{
+			pdfa.SkeletonOptions{Level: pdfa.PDFA4, OutputIntent: pdfa.OutputIntentSpec{
 				ICCProfile: []byte("not a profile"), OutputConditionIdentifier: "x"}},
 			"shorter than the 128-byte header",
 		},
 		{
 			"header disagrees with its own length",
-			PDFAOptions{Level: pdfa.PDFA4, OutputIntent: PDFAOutputIntent{
+			pdfa.SkeletonOptions{Level: pdfa.PDFA4, OutputIntent: pdfa.OutputIntentSpec{
 				ICCProfile:                func() []byte { p := syntheticProfile("RGB ", 2, 200); return p[:180] }(),
 				OutputConditionIdentifier: "x"}},
 			"the header declares",
 		},
 		{
 			"a colour space an output intent may not use",
-			PDFAOptions{Level: pdfa.PDFA4, OutputIntent: PDFAOutputIntent{
+			pdfa.SkeletonOptions{Level: pdfa.PDFA4, OutputIntent: pdfa.OutputIntentSpec{
 				ICCProfile: syntheticProfile("Lab ", 2, 200), OutputConditionIdentifier: "x"}},
 			"not one of",
 		},
 		{
 			"ICC v4 at a level based on PDF 1.4",
-			PDFAOptions{Level: pdfa.PDFA1b, OutputIntent: PDFAOutputIntent{
+			pdfa.SkeletonOptions{Level: pdfa.PDFA1b, OutputIntent: pdfa.OutputIntentSpec{
 				ICCProfile: syntheticProfile("RGB ", 4, 200), OutputConditionIdentifier: "x"}},
 			"permits only ICC v2",
 		},
 		{
 			"a profile with nothing naming it",
-			PDFAOptions{Level: pdfa.PDFA4, OutputIntent: PDFAOutputIntent{
+			pdfa.SkeletonOptions{Level: pdfa.PDFA4, OutputIntent: pdfa.OutputIntentSpec{
 				ICCProfile: syntheticProfile("RGB ", 2, 200)}},
 			"no OutputConditionIdentifier",
 		},
 		{
 			"a name with no profile to name",
-			PDFAOptions{Level: pdfa.PDFA4, OutputIntent: PDFAOutputIntent{
+			pdfa.SkeletonOptions{Level: pdfa.PDFA4, OutputIntent: pdfa.OutputIntentSpec{
 				OutputConditionIdentifier: "FOGRA51"}},
 			"no ICCProfile",
 		},
@@ -179,13 +179,13 @@ func TestAProfileThatCannotBeUsedIsRefusedRatherThanEmbedded(t *testing.T) {
 
 	// The not-a-profile cases are one sentinel, so a caller can tell "these
 	// bytes are not an ICC profile" from "this profile will not do here".
-	_, err := NewPDFADocumentWith(PDFAOptions{Level: pdfa.PDFA4,
-		OutputIntent: PDFAOutputIntent{ICCProfile: []byte("short"), OutputConditionIdentifier: "x"}})
+	_, err := NewPDFADocumentWith(pdfa.SkeletonOptions{Level: pdfa.PDFA4,
+		OutputIntent: pdfa.OutputIntentSpec{ICCProfile: []byte("short"), OutputConditionIdentifier: "x"}})
 	if !errors.Is(err, pdfa.ErrNotAProfile) {
 		t.Errorf("short bytes gave %v, which does not match ErrNotAProfile", err)
 	}
-	_, err = NewPDFADocumentWith(PDFAOptions{Level: pdfa.PDFA1b,
-		OutputIntent: PDFAOutputIntent{ICCProfile: syntheticProfile("RGB ", 4, 200),
+	_, err = NewPDFADocumentWith(pdfa.SkeletonOptions{Level: pdfa.PDFA1b,
+		OutputIntent: pdfa.OutputIntentSpec{ICCProfile: syntheticProfile("RGB ", 4, 200),
 			OutputConditionIdentifier: "x"}})
 	if errors.Is(err, pdfa.ErrNotAProfile) {
 		t.Error("a valid profile refused for its ICC version matched ErrNotAProfile")
@@ -202,7 +202,7 @@ func TestICCComponentsReadsTheHeader(t *testing.T) {
 		}
 	}
 	// And pdf0's own embedded profile, through the public door.
-	p, err := DefaultSRGBProfile()
+	p, err := pdfa.DefaultSRGBProfile()
 	if err != nil {
 		t.Fatal(err)
 	}

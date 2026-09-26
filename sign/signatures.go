@@ -158,7 +158,7 @@ func signatureFieldNames(d core.View, sigs []signatureEntry) map[int]string {
 		if _, done := names[target]; done {
 			continue
 		}
-		names[target] = QualifiedFieldName(d, fd)
+		names[target] = qualifiedFieldName(d, fd)
 	}
 	return names
 }
@@ -180,7 +180,7 @@ func collectFieldNames(d core.View, node object.Object, prefix string, seen map[
 	if fd == nil {
 		return
 	}
-	name := JoinFieldName(prefix, FieldPartialName(d, fd))
+	name := JoinFieldName(prefix, fieldPartialName(d, fd))
 	if v := fd.Get("V"); v != nil {
 		if target := refObjNum(d, v); want[target] {
 			if _, done := names[target]; !done {
@@ -194,9 +194,9 @@ func collectFieldNames(d core.View, node object.Object, prefix string, seen map[
 	}
 }
 
-// QualifiedFieldName builds a field's fully qualified name from its own /T and
+// qualifiedFieldName builds a field's fully qualified name from its own /T and
 // those of its ancestors, following /Parent upwards.
-func QualifiedFieldName(d core.View, field *object.Dictionary) string {
+func qualifiedFieldName(d core.View, field *object.Dictionary) string {
 	var parts []string
 	seen := map[*object.Dictionary]bool{}
 	for node, depth := field, 0; node != nil && depth <= MaxFieldTreeDepth; depth++ {
@@ -204,7 +204,7 @@ func QualifiedFieldName(d core.View, field *object.Dictionary) string {
 			break // cyclic /Parent chain
 		}
 		seen[node] = true
-		if part := FieldPartialName(d, node); part != "" {
+		if part := fieldPartialName(d, node); part != "" {
 			parts = append(parts, part)
 		}
 		node = d.ResolveDict(node.Get("Parent"))
@@ -216,9 +216,9 @@ func QualifiedFieldName(d core.View, field *object.Dictionary) string {
 	return strings.Join(parts, ".")
 }
 
-// FieldPartialName returns a field's /T decoded to UTF-8 (it is a PDF text
+// fieldPartialName returns a field's /T decoded to UTF-8 (it is a PDF text
 // string, so possibly UTF-16), or "" when it has none.
-func FieldPartialName(d core.View, field *object.Dictionary) string {
+func fieldPartialName(d core.View, field *object.Dictionary) string {
 	t, ok := d.Resolve(field.Get("T")).(object.String)
 	if !ok {
 		return ""

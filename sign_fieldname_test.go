@@ -62,7 +62,7 @@ func allFieldNames(t *testing.T, d *Document) []string {
 		if !ok || (fd.Get("FT") == nil && fd.Get("V") == nil) {
 			continue
 		}
-		if n := sign.QualifiedFieldName(d.view(), fd); n != "" {
+		if n := signQualifiedFieldName(d.view(), fd); n != "" {
 			names = append(names, n)
 		}
 	}

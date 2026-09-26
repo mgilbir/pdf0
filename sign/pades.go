@@ -74,13 +74,13 @@ type PAdESResult struct {
 	Issues []string
 }
 
-// ValidatePAdES assesses every approval signature in the document for PAdES
+// validatePAdES assesses every approval signature in the document for PAdES
 // baseline conformance (ETSI EN 319 142-1), against the file the document was
 // read from. Document time-stamps are long-term material rather than approval
 // signatures, and are assessed as part of the signatures they archive. Results
 // are ordered by the object number of the signature dictionary, the same
 // deterministic order VerifySignatures uses.
-func ValidatePAdES(d core.View, file core.SignedFile, opts VerifyOptions) []PAdESResult {
+func validatePAdES(d core.View, file core.SignedFile, opts VerifyOptions) []PAdESResult {
 	all := verifyAll(d, file, opts)
 	hasDSS := false
 	if cat := d.Catalog(); cat != nil {

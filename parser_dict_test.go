@@ -2,10 +2,12 @@ package pdf0
 
 import (
 	"fmt"
-	"github.com/mgilbir/pdf0/object"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/syntax"
 )
 
 // TestParseDictLargeDedup verifies that the parser resolves duplicate keys
@@ -34,7 +36,7 @@ func TestParseDictLargeDedup(t *testing.T) {
 	}
 	b.WriteString(" >>")
 
-	obj, err := NewParser([]byte(b.String())).ParseObject()
+	obj, err := syntax.NewParser([]byte(b.String())).ParseObject()
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}

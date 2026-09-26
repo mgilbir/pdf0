@@ -3,10 +3,12 @@ package pdf0
 import (
 	"bytes"
 	"fmt"
-	"github.com/mgilbir/pdf0/internal/hostile"
-	"github.com/mgilbir/pdf0/object"
 	"testing"
 	"time"
+
+	"github.com/mgilbir/pdf0/internal/hostile"
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/syntax"
 )
 
 // buildIndirectLengthStreamsPDF assembles a PDF whose stream objects each
@@ -119,14 +121,14 @@ func TestParseIndirectLengthNoOverread(t *testing.T) {
 func TestIntegerObjectValue(t *testing.T) {
 	ok := func(src string, want int64) {
 		t.Helper()
-		v, got := NewParser([]byte(src)).IntegerObjectValue()
+		v, got := syntax.NewParser([]byte(src)).IntegerObjectValue()
 		if !got || v != want {
 			t.Errorf("integerObjectValue(%q) = (%d, %v), want (%d, true)", src, v, got, want)
 		}
 	}
 	bad := func(src string) {
 		t.Helper()
-		if v, got := NewParser([]byte(src)).IntegerObjectValue(); got {
+		if v, got := syntax.NewParser([]byte(src)).IntegerObjectValue(); got {
 			t.Errorf("integerObjectValue(%q) = (%d, true), want false", src, v)
 		}
 	}

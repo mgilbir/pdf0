@@ -57,7 +57,7 @@ func validateDParts(cancel core.Canceler, doc *Document) []dpart.Violation {
 	// bounded by the page and DPart counts alone: each leaf's range is walked,
 	// so it is leaves × pages (C42), which the per-run work meter is to bound.
 	if !v.view().Cancel.Stopped() {
-		finding.Guarded(add, func() { dpart.ValidateHierarchy(v.view(), add) })
+		finding.Guarded(add, func() { dpartValidateHierarchy(v.view(), add) })
 	}
 
 	// The walk visits map-ordered structures, so the output order is otherwise

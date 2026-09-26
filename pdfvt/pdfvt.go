@@ -2,7 +2,6 @@ package pdfvt
 
 import (
 	"fmt"
-	"github.com/mgilbir/pdf0/dpart"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
 	"github.com/mgilbir/pdf0/internal/xmp"
@@ -50,7 +49,7 @@ func (v Violation) Error() string {
 	return fmt.Sprintf("PDF/VT-%s %s: %s", part, v.Rule, v.Message)
 }
 
-// ValidateView runs the PDF/VT checks for a part, "1" or "2", over a view.
+// validateView runs the PDF/VT checks for a part, "1" or "2", over a view.
 //
 // The part decides three things: the pdfvtid:GTS_PDFVTVersion the file must
 // declare ("PDF/VT-1" or "PDF/VT-2"); the PDF/X base, PDF/X-4 for PDF/VT-1
@@ -59,7 +58,7 @@ func (v Violation) Error() string {
 // PDF/X-5 validator: the PDF/X-5 base is the PDF/X-4 rules with the
 // reference-XObject prohibition lifted, which is what PDF/X-5 permits, and
 // its external-reference rules are not asserted.
-func ValidateView(doc core.View, part string) []Violation {
+func validateView(doc core.View, part string) []Violation {
 	var out []Violation
 	add := func(rule, msg string, obj int) {
 		out = append(out, Violation{Rule: rule, Message: msg, Object: obj, Part: part})
@@ -91,7 +90,7 @@ func ValidateView(doc core.View, part string) []Violation {
 	// prohibition (a PDF/X-4-only rule that PDF/X-5 lifts) is dropped, keyed
 	// on the finding's Check, not its words.
 	run(func() {
-		for _, v := range pdfx.ValidateView(doc, pdfx.PDFX4) {
+		for _, v := range pdfxValidateView(doc, pdfx.PDFX4) {
 			if allowRefXObjects && v.Check == pdfx.CheckRefXObject {
 				continue
 			}
@@ -135,7 +134,7 @@ func ValidateView(doc core.View, part string) []Violation {
 		if cat == nil || cat.Get("DPartRoot") == nil {
 			add("dpart", "PDF/VT requires a document part hierarchy (catalog /DPartRoot)", 0)
 		}
-		for _, v := range dpart.ValidateView(doc) {
+		for _, v := range dpartValidateView(doc) {
 			if v.Rule == finding.LimitRule {
 				continue // reported once by the flush below
 			}

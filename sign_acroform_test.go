@@ -65,7 +65,7 @@ func formFields(t *testing.T, d *Document) []string {
 		if fd == nil {
 			t.Fatalf("/Fields entry %v does not resolve to a dictionary", f)
 		}
-		names = append(names, sign.FieldPartialName(d.view(), fd))
+		names = append(names, signFieldPartialName(d.view(), fd))
 	}
 	return names
 }

@@ -71,7 +71,7 @@ func TestVerifySignatures(t *testing.T) {
 		1: {Number: 1, Value: sig},
 	}})
 
-	results := VerifySignatures(doc, bytesFile(raw), VerifyOptions{})
+	results := verifySignatures(doc, bytesFile(raw), VerifyOptions{})
 	if len(results) != 1 {
 		t.Fatalf("got %d results, want 1", len(results))
 	}
@@ -89,7 +89,7 @@ func TestVerifySignatures(t *testing.T) {
 	// Modifying a signed byte invalidates the signature.
 	tampered := append([]byte(nil), raw...)
 	tampered[0] ^= 0xFF
-	if res := VerifySignatures(doc, bytesFile(tampered), VerifyOptions{}); res[0].Valid {
+	if res := verifySignatures(doc, bytesFile(tampered), VerifyOptions{}); res[0].Valid {
 		t.Error("modified document still verified")
 	}
 }

@@ -36,7 +36,7 @@ const orderXFileName = "order-x.xml"
 // and cannot be checked as one.
 var ErrNotXML = errors.New("facturx: the document to embed is empty or not well-formed XML")
 
-// Embed embeds the CII invoice XML into doc as the associated file
+// embedInvoice embeds the CII invoice XML into doc as the associated file
 // factur-x.xml and writes the Factur-X metadata for the given profile. doc must
 // be a PDF/A-3 document (for example from NewPDFADocument(PDFA3b)), or one that
 // declares no PDF/A part at all, which then declares 3b; the result is a
@@ -47,24 +47,24 @@ var ErrNotXML = errors.New("facturx: the document to embed is empty or not well-
 // (factur-x.xml, zugferd-invoice.xml, xrechnung.xml, in any case), in /AF or
 // the EmbeddedFiles name tree — is replaced, not added to: a container carries
 // exactly one invoice, and embedding again is how an invoice is updated. That
-// makes Embed idempotent: embedding the same invoice twice leaves the document
-// as embedding it once did. Every other attachment is kept.
+// makes embedInvoice idempotent: embedding the same invoice twice leaves the
+// document as embedding it once did. Every other attachment is kept.
 //
 // It returns an error, and leaves doc unchanged, when invoiceXML is empty or
 // not well-formed XML (ErrNotXML), the profile is unknown, the title cannot be
 // written as XMP text, the document declares a PDF/A part other than 3, or its
 // existing metadata or name tree cannot be edited without guessing.
-func Embed(doc core.View, invoiceXML []byte, profile formalis.Profile, title string) error {
+func embedInvoice(doc core.View, invoiceXML []byte, profile formalis.Profile, title string) error {
 	if _, ok := formalis.ProfileFor(string(profile)); !ok {
 		return fmt.Errorf("unknown Factur-X profile %q", profile)
 	}
 	return embed(doc, invoiceFamily, invoiceXML, facturxFileName, "INVOICE", string(profile), "Factur-X XML invoice", title)
 }
 
-// EmbedOrder is Embed for Order-X: it embeds the Cross Industry Order XML as
+// embedOrder is embedInvoice for Order-X: it embeds the Cross Industry Order XML as
 // order-x.xml and writes the Order-X metadata, in the Order-X namespace.
 // docType is ORDER, ORDER_CHANGE or ORDER_RESPONSE.
-func EmbedOrder(doc core.View, orderXML []byte, profile OrderXProfile, docType, title string) error {
+func embedOrder(doc core.View, orderXML []byte, profile OrderXProfile, docType, title string) error {
 	if _, ok := orderXProfileFor(string(profile)); !ok {
 		return fmt.Errorf("unknown Order-X profile %q", profile)
 	}

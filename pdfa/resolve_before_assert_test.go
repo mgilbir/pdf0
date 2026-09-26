@@ -209,7 +209,7 @@ func TestRuleInputsAreResolvedBeforeTheyAreRead(t *testing.T) {
 				}
 				tc.build(v, wrap)
 				var out []string
-				for _, e := range ValidateView(v, tc.level) {
+				for _, e := range validateView(v, tc.level) {
 					out = append(out, e.Rule+" "+e.Message)
 				}
 				sort.Strings(out)

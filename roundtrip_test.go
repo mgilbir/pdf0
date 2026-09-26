@@ -2,11 +2,12 @@ package pdf0
 
 import (
 	"bytes"
-	"github.com/mgilbir/pdf0/internal/testfiles"
-	"github.com/mgilbir/pdf0/object"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/mgilbir/pdf0/internal/testfiles"
+	"github.com/mgilbir/pdf0/object"
 )
 
 func TestRoundTripReferencePDFs(t *testing.T) {
@@ -64,7 +65,7 @@ func testRoundTripFile(t *testing.T, path string) {
 				t.Errorf("  object %d: missing in round-tripped document", num)
 				continue
 			}
-			if !Equal(obj1, obj2) {
+			if !object.Equal(obj1, obj2) {
 				t.Errorf("  object %d: differs", num)
 			}
 		}

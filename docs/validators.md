@@ -76,6 +76,42 @@ Both have lapsed, so both columns say yes.
 Signature and PAdES assessment are `*Document` methods with their own result
 types; see [signing.md](signing.md).
 
+### One shape
+
+Every conformance validator has the same shape, and `internal/lint` holds it
+(`TestValidatorsHaveOneShape`, `TestEveryFindingTypeIsAViolation`):
+
+- **A free function of the root package**, `ValidateX(doc *Document, …)`. What
+  follows `doc` is what the standard itself varies by — a PDF/A or PDF/X level —
+  and nothing else. The document parameter is `doc` in every one.
+- **A `…Context` twin**, `ValidateXContext(ctx context.Context, doc *Document, …)`,
+  with the same parameters after `ctx` and the same result.
+- **Findings of the standard's own type**, returned as a slice, or inside a
+  result struct when the validator has more than findings to return (the
+  invoice containers return the invoice XML and its rule coverage too). Every
+  finding type satisfies `pdf0.Violation`, so findings combine across standards
+  and `IsCheckerFinding` classifies all of them. It reads `RuleID()`, which
+  returns the `Rule` field on every finding type except `pdfua.Violation`, whose
+  field is named for what ISO 14289 calls it, `Clause`.
+- **No raw bytes.** A rule about the file's bytes reads the file the document
+  was read from (`Document.Source`), never a parameter that could name another
+  file.
+- **A nil document is one `limit` finding**, never a panic (see above).
+
+Why standards are free functions and signatures are methods: a conformance
+validator answers "does this document conform to standard S?", and several of
+them are asked of one document; the standard is the subject, so the function is
+named for it and takes the document, and a nil document still has a finding type
+to be reported in. Signature verification (`Document.VerifySignatures`,
+`Document.ValidatePAdES`, `Document.DSSCerts`) answers questions about material
+the document carries, and it returns `(results, error)`: its results are not
+findings, and a run that could not finish — an internal failure on a hostile
+file — has no finding type to become, so it is an error.
+
+The functions the validators are built from take the internal `core.View` and
+are not exported; see
+[architecture.md](architecture.md#crossing-the-boundary-internalbridge).
+
 ```mermaid
 flowchart TD
     Doc[("*Document")]
@@ -179,7 +215,7 @@ the corpus ratchet, not the API — see [CONTRIBUTING](../CONTRIBUTING.md#the-co
 
 ## How PDF/A validation runs
 
-`ValidatePDFA` (`pdfa_api.go`, dispatching to `pdfa.ValidateView`) runs a fixed
+`ValidatePDFA` (`pdfa_api.go`, dispatching to `pdfa`'s `validateView` through `internal/bridge`) runs a fixed
 list of 59 check functions, then the byte-level file-structure checks over the
 file the document was read from. Each check runs
 behind a `recover()` boundary so a bug or an adversarial structure in one check
@@ -190,7 +226,7 @@ concurrently on the same document.
 ```mermaid
 flowchart TD
     A[ValidatePDFA doc, level] --> B[shallow-copy doc,<br/>install per-run cache]
-    B --> T{"ResolveTarget: a profile?<br/>LevelDeclared → LevelFor(the document's pdfaid)"}
+    B --> T{"resolveTarget: a profile?<br/>LevelDeclared → LevelFor(the document's pdfaid)"}
     T -->|no| R["one 'limit' finding:<br/>not validated"]
     T -->|yes| C[for each check, with the target unflattened]
     C --> D[runCheck: recover panic -> 'internal' violation]
@@ -232,7 +268,7 @@ embedded-PDF/A rule share). A document whose declaration cannot be read or names
 no level — and a `Level` that names no profile at all, such as `pdfa.Level(99)` —
 gets exactly one finding under the `limit` rule (`IsCheckerFinding` reports it)
 and is not validated. The builders (`NewPDFADocument`, `NewPDFADocumentWith`,
-`GenerateXMPMetadata`) refuse both with an error.
+`pdfa.GenerateXMPMetadata`) refuse both with an error.
 
 **Level A** (1a/2a/3a) and **Level U** (2u/3u) are Level B plus more. Level U
 adds the Unicode character-map requirement: every font used for rendering has a
@@ -257,13 +293,13 @@ corpus is the oracle for rule semantics
 
 ## Where the rules live
 
-All PDF/A checks are dispatched from the `checks` slice and `byteChecks` in `ValidateView`.
+All PDF/A checks are dispatched from the `checks` slice and `byteChecks` in `validateView`.
 They are grouped across files by concern:
 
 | File | Rules |
 |------|-------|
 | `pdfa.go` | Dispatch + most rules (font embedding, colour, metadata, annotations, output intents, transparency) |
-| `level.go` | The target profile: levels, `LevelFor`, `ResolveTarget`, the conformance hierarchy |
+| `level.go` | The target profile: levels, `LevelFor`, `resolveTarget`, the conformance hierarchy |
 | `pdfa_levela.go` / `pdfa_levela_fonts.go` | Level A: tagged structure, artifacts, structure types, language, ActualText; Level A and U: Unicode character maps |
 | `final_rules.go` | Catalog prohibitions, trigger events, halftones, inherited XObjects |
 | `content_operators.go` | Content-stream operator whitelist, named resources |
