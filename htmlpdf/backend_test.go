@@ -274,10 +274,11 @@ func TestFullyTransparentMarksPaintNothing(t *testing.T) {
 }
 
 // TestUprightTextIsRefused is C114: a run set upright down the page is not
-// drawn where it would not fit. Layout measures it at an em per character;
-// the standard faces have no vertical metrics, and their glyphs advance by
-// the line's height, which is more. Upright runs in a face whose vertical
-// advances are an em, and sideways runs, are drawn; see vertical_test.go.
+// drawn where it would not fit. The standard faces state no vertical
+// metrics, so layout measures an upright run in them at an em per character,
+// and their glyphs advance by the line's height, which is more. Upright runs
+// in a face that states vertical metrics, and sideways runs, are drawn; see
+// vertical_test.go.
 func TestUprightTextIsRefused(t *testing.T) {
 	for _, css := range []string{
 		`html { writing-mode: vertical-rl; text-orientation: upright }`,
@@ -453,8 +454,8 @@ func TestTheTilingPatternIsCompressed(t *testing.T) {
 
 // TestEachVerticalFlagIsJudgedOnItsOwn: the check reads the flags as they
 // are, not as layout happens to combine them today. A turn either way is
-// drawn, and so is an upright run down a clockwise line (whether its face's
-// metrics fit is TestUprightTextIsRefused's); a combination that is not one
+// drawn, and so is an upright run down a clockwise line (whether its face
+// states vertical metrics is TestUprightTextIsRefused's); a combination that is not one
 // (Anticlockwise or Upright without Sideways, Upright with Anticlockwise) is
 // refused.
 func TestEachVerticalFlagIsJudgedOnItsOwn(t *testing.T) {
@@ -472,7 +473,7 @@ func TestEachVerticalFlagIsJudgedOnItsOwn(t *testing.T) {
 		{"Anticlockwise+Upright", layout.DrawText{Anticlockwise: true, Upright: true}, true},
 		{"all three", layout.DrawText{Sideways: true, Anticlockwise: true, Upright: true}, true},
 	} {
-		findings, refused, _ := checkDrawable(layout.Composed{Ops: []layout.Op{tc.op}}, nil)
+		findings, refused := checkDrawable(layout.Composed{Ops: []layout.Op{tc.op}}, nil)
 		if refused != tc.refused || hasRule(findings, RuleVerticalText, layout.Error) != tc.refused {
 			t.Errorf("%s: refused=%v with %v; want refused=%v", tc.name, refused, findings, tc.refused)
 		}

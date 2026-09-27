@@ -606,17 +606,26 @@ func (f *Face) draw(b *content.Builder, glyphs []Glyph, text string, size float6
 // they stand: the whole run is one /ActualText saying the text, and the
 // per-glyph plan decides only the ToUnicode CMap.
 //
-// It is for DrawUpright. An upright run's glyphs are one below the other,
-// each placed by a displacement along the line and a rise across it, and a
-// reader that rebuilds text from positions takes a glyph moved right by more
-// than a small gap — a mark hung over its base, a narrow letter centred in
-// the column — for the start of a word, and a glyph below another for a new
-// line. The /ActualText is the run's text in the order it was written.
+// It is for DrawUpright. Where an upright run's glyphs stand is not where a
+// reader rebuilding text from positions looks for its words. In a horizontal
+// font each glyph is placed by a displacement along the line and a rise
+// across it: a glyph moved right by more than a small gap — a mark hung over
+// its base, a narrow letter centred in the column — reads as the start of a
+// word, and a glyph below another as a new line. In a vertical form the
+// reader knows the line runs down, and still reads a letter-spaced column,
+// or a glyph centred in an em longer than its own advance, as words, and a
+// move across the line as a new one. The /ActualText is the run's text in
+// the order it was written, and the glyphs are written by the form's own
+// emitter.
 func (f *Face) drawWhole(b *content.Builder, glyphs []Glyph, text string, size float64) {
+	emit := f.drawPlanned
+	if f.IsVertical() {
+		emit = f.drawPlannedVertical
+	}
 	segs := f.plan(glyphs, text)
 	actual := visible(text)
 	if actual == "" {
-		f.drawPlanned(b, glyphs, segs, size)
+		emit(b, glyphs, segs, size)
 		return
 	}
 	// Not nested inside another: the one says it all, and a reader that
@@ -625,7 +634,7 @@ func (f *Face) drawWhole(b *content.Builder, glyphs []Glyph, text string, size f
 		segs[i].marked = false
 	}
 	b.BeginActualText(actual)
-	f.drawPlanned(b, glyphs, segs, size)
+	emit(b, glyphs, segs, size)
 	b.EndMarked()
 }
 

@@ -30,14 +30,19 @@ import (
 
 // faceEmbedding is one face as this document has embedded it.
 type faceEmbedding struct {
-	// ref is the font dictionary every page naming the face refers to. It
-	// never changes once written.
-	ref object.IndirectRef
+	// ref is the font dictionary every page naming the face refers to, and
+	// vref the vertical font (fonts.Face.Vertical) every page naming its
+	// vertical form refers to. Each is the zero reference until a page names
+	// that form, and never changes once written.
+	ref, vref object.IndirectRef
 	// nums are the object numbers the embedding wrote, in the order it wrote
 	// them; a rewrite reuses them in the same order.
 	nums []int
 	// revision is the face's EmbedRevision when the embedding was written.
 	revision int
+	// forms are the fonts the embedding wrote: every form of the face a page
+	// has named.
+	forms fonts.Forms
 }
 
 // embedFaces returns, for each named face, the font dictionary the document
@@ -61,25 +66,54 @@ func (d *Document) embedFaces(faces map[object.Name]*fonts.Face) (map[object.Nam
 	stage := d.stageAdds()
 	refs := make(map[object.Name]object.IndirectRef, len(faces))
 	var rewrites []rewrite
-	pending := map[*fonts.Face]object.IndirectRef{} // faces named twice in one call
+	// The two forms of one face are one embedding, keyed by the face they
+	// belong to, which writes every form any page has named: the forms named
+	// before, and the ones this page names.
+	named := map[*fonts.Face]fonts.Forms{}
+	for _, f := range faces {
+		forms := named[f.Horizontal()]
+		if f.IsVertical() {
+			forms.Vertical = true
+		} else {
+			forms.Horizontal = true
+		}
+		named[f.Horizontal()] = forms
+	}
+	// formOf is the font dictionary a name is written with: the vertical one
+	// for a vertical form.
+	formOf := func(face *fonts.Face, e fonts.Embedded) object.IndirectRef {
+		if face.IsVertical() {
+			return e.Vertical
+		}
+		return e.Horizontal
+	}
+	pending := map[*fonts.Face]fonts.Embedded{} // faces already settled in this call
 	for _, name := range sortedNames(faces) {
-		face := faces[name]
-		if ref, ok := pending[face]; ok {
-			refs[name] = ref
+		face := faces[name].Horizontal()
+		if e, ok := pending[face]; ok {
+			refs[name] = formOf(faces[name], e)
 			continue
 		}
 		prev, have := d.faces[face]
 		if have {
-			// An embedding whose font dictionary is no longer in the document
-			// — a caller edited Objects directly — is written afresh.
-			if _, ok := d.Objects[prev.ref.Number]; !ok {
-				have = false
+			// An embedding whose font dictionaries are no longer in the
+			// document — a caller edited Objects directly — is written afresh.
+			for _, ref := range []object.IndirectRef{prev.ref, prev.vref} {
+				if _, ok := d.Objects[ref.Number]; ref.Number != 0 && !ok {
+					have = false
+				}
 			}
 		}
+		want := named[face]
+		if have {
+			want.Horizontal = want.Horizontal || prev.forms.Horizontal
+			want.Vertical = want.Vertical || prev.forms.Vertical
+		}
 		rev := face.EmbedRevision()
-		if have && prev.revision == rev {
-			refs[name] = prev.ref
-			pending[face] = prev.ref
+		if have && prev.revision == rev && prev.forms == want {
+			e := fonts.Embedded{Horizontal: prev.ref, Vertical: prev.vref}
+			refs[name] = formOf(faces[name], e)
+			pending[face] = e
 			continue
 		}
 		first := len(stage.objs)
@@ -87,32 +121,49 @@ func (d *Document) embedFaces(faces map[object.Name]*fonts.Face) (map[object.Nam
 		if have {
 			stage.reuse = append([]int(nil), prev.nums...)
 		}
-		top, err := embedFace(face, stage)
+		e, err := embedFace(face, stage, want)
 		stage.reuse = nil
 		if err != nil {
 			stage.abort()
 			return nil, fmt.Errorf("embedding the face named %s: %w", name, err)
 		}
 		written := stage.objs[first:]
-		if have && top != prev.ref {
-			// The rewrite wrote a different number of objects than the first
-			// embedding, so the font dictionary did not land on the number the
-			// pages name. Swap the two numbers throughout what was written.
-			swapRefs(written, top.Number, prev.ref.Number)
-			top = prev.ref
+		// A rewrite that wrote a different number of objects than the
+		// embedding before it — a form added, which is written in its place
+		// among the others — does not land each font dictionary on the number
+		// the pages already name. Each such number is swapped back
+		// throughout what was written.
+		keep := func(got *object.IndirectRef, was object.IndirectRef) {
+			if was.Number == 0 || *got == was {
+				return
+			}
+			a, b := got.Number, was.Number
+			swapRefs(written, a, b)
+			for _, r := range []*object.IndirectRef{&e.Horizontal, &e.Vertical} {
+				switch r.Number {
+				case a:
+					r.Number = b
+				case b:
+					r.Number = a
+				}
+			}
+		}
+		if have {
+			keep(&e.Horizontal, prev.ref)
+			keep(&e.Vertical, prev.vref)
 		}
 		nums := make([]int, len(written))
 		for i, o := range written {
 			nums[i] = o.Number
 		}
-		entry := faceEmbedding{ref: top, nums: nums, revision: rev}
+		entry := faceEmbedding{ref: e.Horizontal, vref: e.Vertical, nums: nums, revision: rev, forms: want}
 		var old []int
 		if have {
 			old = prev.nums
 		}
 		rewrites = append(rewrites, rewrite{face: face, entry: entry, old: old})
-		refs[name] = top
-		pending[face] = top
+		refs[name] = formOf(faces[name], e)
+		pending[face] = e
 	}
 	stage.commit()
 	if d.faces == nil {
@@ -134,10 +185,13 @@ func (d *Document) embedFaces(faces map[object.Name]*fonts.Face) (map[object.Nam
 	return refs, nil
 }
 
-// embedFace is Face.Embed, as embedFaces calls it. It is a variable only so a
-// test can make a rewrite write a different number of objects than the
-// embedding it replaces, which no face does today and embedFaces handles.
-var embedFace = func(f *fonts.Face, a fonts.Allocator) (object.IndirectRef, error) { return f.Embed(a) }
+// embedFace is Face.EmbedForms, as embedFaces calls it. It is a variable only
+// so a test can make a rewrite write a different number of objects than the
+// embedding it replaces anywhere among them, which a face does only by gaining
+// a form and embedFaces handles in general.
+var embedFace = func(f *fonts.Face, a fonts.Allocator, forms fonts.Forms) (fonts.Embedded, error) {
+	return f.EmbedForms(a, forms)
+}
 
 // swapRefs exchanges object numbers a and b in every reference the objects
 // hold, and in the objects' own numbers. The objects are freshly written by

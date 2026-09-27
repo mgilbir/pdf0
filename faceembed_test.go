@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mgilbir/forme/shape"
+
 	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/fonts"
 	"github.com/mgilbir/pdf0/object"
@@ -341,26 +343,90 @@ func TestSwapRefs(t *testing.T) {
 	}
 }
 
+// TestARewriteOfADifferentSizeKeepsTheVerticalFontNumber is the same for a
+// face with a vertical form: its Identity-V font is written last, so a
+// rewrite that writes one object more first moves it too, and it has to come
+// back to the number the pages naming the vertical form hold.
+func TestARewriteOfADifferentSizeKeepsTheVerticalFontNumber(t *testing.T) {
+	calls := 0
+	defer func(orig func(*fonts.Face, fonts.Allocator, fonts.Forms) (fonts.Embedded, error)) { embedFace = orig }(embedFace)
+	orig := embedFace
+	embedFace = func(f *fonts.Face, a fonts.Allocator, forms fonts.Forms) (fonts.Embedded, error) {
+		calls++
+		if calls != 2 {
+			return orig(f, a, forms)
+		}
+		extra := a.Add(object.Integer(1))
+		rec := &recordingAllocator{Allocator: a, values: map[int]object.Object{}}
+		top, err := orig(f, rec, forms)
+		if err == nil {
+			rec.values[top.Vertical.Number].(*object.Dictionary).Set("PieceInfoForTest", extra)
+		}
+		return top, err
+	}
+	face, err := fonts.NotoSans()
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := face.Vertical()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := mustPDFADoc(t, pdfa.PDFA2b)
+	upright := func(text string) object.IndirectRef {
+		t.Helper()
+		var b content.Builder
+		glyphs, _ := v.ShapeGlyphsInContext(text, "", "", shape.Features{Vertical: true})
+		b.BeginText().SetFont("V0", 12).SetTextMatrix(1, 0, 0, 1, 10, 180)
+		v.DrawUpright(&b, text, glyphs, 12)
+		b.EndText()
+		page, err := d.AddPage(Page{Width: 300, Height: 200, Content: &b, Faces: map[object.Name]*fonts.Face{"V0": v}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return page
+	}
+	fontRef := func(page object.IndirectRef) object.Object {
+		return d.ResolveDict(d.ResolveDict(d.ResolveDict(page).Get("Resources")).Get("Font")).Get("V0")
+	}
+	want := fontRef(upright("one"))
+	for i, text := range []string{"two", "THREE"} {
+		page := upright(text)
+		if got := fontRef(page); got != want {
+			t.Errorf("page %d names %v, the first page %v", i+2, got, want)
+		}
+		if f := d.ResolveDict(want); f == nil || f.Get("Encoding") != object.Name("Identity-V") {
+			t.Fatalf("after rewrite %d the vertical font number %v holds %v", i+1, want, f)
+		}
+		if o := orphans(d); len(o) != 0 {
+			t.Errorf("after rewrite %d, objects %v are in the document and nothing refers to them", i+1, o)
+		}
+	}
+	if calls != 3 {
+		t.Fatalf("embedded %d times, want 3", calls)
+	}
+}
+
 // TestARewriteOfADifferentSizeKeepsTheFontNumber drives the path no face takes
 // today: a rewrite that writes one object more than the embedding before it,
 // then one fewer. The font dictionary the pages name keeps its number, nothing
 // is left dangling, and the numbers only the larger embedding used are gone.
 func TestARewriteOfADifferentSizeKeepsTheFontNumber(t *testing.T) {
 	calls := 0
-	defer func(orig func(*fonts.Face, fonts.Allocator) (object.IndirectRef, error)) { embedFace = orig }(embedFace)
+	defer func(orig func(*fonts.Face, fonts.Allocator, fonts.Forms) (fonts.Embedded, error)) { embedFace = orig }(embedFace)
 	orig := embedFace
-	embedFace = func(f *fonts.Face, a fonts.Allocator) (object.IndirectRef, error) {
+	embedFace = func(f *fonts.Face, a fonts.Allocator, forms fonts.Forms) (fonts.Embedded, error) {
 		calls++
 		if calls != 2 {
-			return orig(f, a)
+			return orig(f, a, forms)
 		}
 		// One object more, written first, and named by the font dictionary
 		// so that it belongs to the embedding.
 		extra := a.Add(object.Integer(1))
 		rec := &recordingAllocator{Allocator: a, values: map[int]object.Object{}}
-		top, err := orig(f, rec)
+		top, err := orig(f, rec, forms)
 		if err == nil {
-			rec.values[top.Number].(*object.Dictionary).Set("PieceInfoForTest", extra)
+			rec.values[top.Horizontal.Number].(*object.Dictionary).Set("PieceInfoForTest", extra)
 		}
 		return top, err
 	}

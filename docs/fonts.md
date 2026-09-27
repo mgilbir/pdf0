@@ -50,14 +50,29 @@ cmap reaches from two characters extracts as the one the CMap names it by.
 
 `DrawUpright` draws a run shaped with `shape.Features.Vertical`: the pen moves
 down by each glyph's vertical advance and each glyph is hung from its vertical
-origin (the font's `vmtx` and `VORG`, as forme reads them), placed explicitly
-with a displacement and a rise in the face's ordinary, horizontal font. A
-vertical CIDFont (`Identity-V` with `/W2`, ISO 32000-2 9.7.4.3) would state
-each glyph's vertical advance and origin as the font's own metrics, and forme
-reports them only for a glyph as shaped, where positioning may have changed
-them; placed explicitly, nothing is claimed about the font. The run is one
-`/ActualText`, since a reader rebuilding text from positions sees a column of
-one-glyph lines.
+origin (the font's `vmtx` and `VORG`, as forme reads them). How it is written
+depends on the form of the face it is called on:
+
+- **The vertical form** (`Face.Vertical`), which a composite face has, is the
+  standard way: a Type 0 font with `Identity-V` encoding (writing mode 1, ISO
+  32000-2 9.7.4.3) over the same CIDFont as the face's `Identity-H` font. The
+  CIDFont's `/W2` and `/DW2` state each kept glyph's own vertical advance and
+  position vector, from forme's `shape.Face.GlyphVerticalMetrics`, as `/W`
+  states its own width from `GlyphAdvance`. What shaping changed — a mark's
+  advance taken away, `vkrn`, `vpal`, an offset — is written as displacements
+  against those metrics: TJ numbers down the line, and a `Td` across it. A
+  reader knows the text is vertical; poppler's `pdftotext` reads the column.
+- **Any other face** is written in its horizontal font, which is all a simple
+  or standard face has: each glyph placed explicitly, with a displacement and
+  a rise.
+
+Either way the run is one `/ActualText`, since where upright glyphs stand — a
+letter-spaced column, a glyph centred in an em longer than its advance, a mark
+moved across the line — is not where a reader rebuilding text from positions
+looks for words. `Face.EmbedForms` writes the forms a document names over one
+descendant: one program, one descriptor, one ToUnicode CMap. `Page.Faces`
+takes either form under its own name and asks for every form its pages have
+named; `/W2` is written only when the vertical font is.
 
 Embedding honours the font's licence (OS/2 `fsType`): Restricted License
 embedding is refused with `fonts.ErrRestrictedLicense`, bitmap-only with

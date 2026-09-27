@@ -20,8 +20,9 @@ import (
 // comes back out of the file.
 //
 // The fonts package has six public ways to turn a string into content-stream
-// bytes — Encode, Shape, ShapeWith, Draw, DrawShaped and DrawUpright — and htmlpdf is a
-// sixth (it has its own test, over the same faces, in htmlpdf). They grew
+// bytes — Encode, Shape, ShapeWith, Draw, DrawShaped and DrawUpright, the
+// last in either form of a face (see fonts.Face.Vertical) — and htmlpdf is
+// one more (it has its own test, over the same faces, in htmlpdf). They grew
 // apart: two of them wrote the glyph index where a CID-keyed CFF font is
 // addressed by CID, one wrote two-byte codes into a one-byte font, and none of
 // them told the ToUnicode CMap which text a shaped glyph was drawn for. Each
@@ -37,19 +38,23 @@ import (
 type drawPath struct {
 	name string
 	draw func(t *testing.T, face *fonts.Face, b *content.Builder, s string, size float64)
+	// vertical is a path drawn in the face's vertical form, which is the
+	// font the page names. A face that has none (a simple or standard one)
+	// has no such path.
+	vertical bool
 }
 
 var drawPaths = []drawPath{
 	{"Encode", func(t *testing.T, face *fonts.Face, b *content.Builder, s string, size float64) {
 		codes, _ := face.Encode(s)
 		b.ShowText(codes)
-	}},
+	}, false},
 	{"Shape", func(t *testing.T, face *fonts.Face, b *content.Builder, s string, size float64) {
 		spans, _ := face.Shape(s)
 		if len(spans) > 0 {
 			b.ShowTextAdjusted(spans...)
 		}
-	}},
+	}, false},
 	{"ShapeWith", func(t *testing.T, face *fonts.Face, b *content.Builder, s string, size float64) {
 		// Small capitals: a substitution whose glyphs no cmap entry reaches,
 		// so the only way their text survives is through what was drawn.
@@ -57,20 +62,44 @@ var drawPaths = []drawPath{
 		if len(spans) > 0 {
 			b.ShowTextAdjusted(spans...)
 		}
-	}},
+	}, false},
 	{"Draw", func(t *testing.T, face *fonts.Face, b *content.Builder, s string, size float64) {
 		glyphs, _ := face.ShapeGlyphs(s)
 		face.Draw(b, s, glyphs, size)
-	}},
+	}, false},
 	{"DrawShaped", func(t *testing.T, face *fonts.Face, b *content.Builder, s string, size float64) {
 		face.DrawShaped(b, s, size)
-	}},
+	}, false},
 	{"DrawUpright", func(t *testing.T, face *fonts.Face, b *content.Builder, s string, size float64) {
 		// Set upright down the page: shaped with the vertical rules and
-		// metrics, each glyph hung from its vertical origin.
+		// metrics, each glyph hung from its vertical origin, placed one by
+		// one in the horizontal font.
 		glyphs, _ := face.ShapeGlyphsInContext(s, "", "", shape.Features{Vertical: true})
 		face.DrawUpright(b, s, glyphs, size)
-	}},
+	}, false},
+	{"DrawUprightVertical", func(t *testing.T, face *fonts.Face, b *content.Builder, s string, size float64) {
+		// The same in the vertical form: Identity-V, with /W2.
+		glyphs, _ := face.ShapeGlyphsInContext(s, "", "", shape.Features{Vertical: true})
+		face.DrawUpright(b, s, glyphs, size)
+	}, true},
+}
+
+// formFor is the face a path draws with and the page names: the face itself,
+// or its vertical form for a vertical path, and false where the face has no
+// vertical form.
+func formFor(t *testing.T, face *fonts.Face, path drawPath) (*fonts.Face, bool) {
+	t.Helper()
+	if !path.vertical {
+		return face, true
+	}
+	v, err := face.Vertical()
+	if err != nil {
+		if !face.IsSimple() && !face.IsStandard() {
+			t.Fatalf("a composite face has no vertical form: %v", err)
+		}
+		return nil, false
+	}
+	return v, true
 }
 
 // faceCase is one kind of face, with the text that exercises it.
@@ -224,9 +253,18 @@ func TestEveryDrawingPathRoundTripsInEveryFaceKind(t *testing.T) {
 						// asked to draw, and that decides the subset and the
 						// ToUnicode CMap. The clone shares the parse, which for
 						// the CJK face is most of the cost.
-						back, _ := drawnDocument(t, base.Clone(), path, text, pdfa.PDFA4, fc.embedded)
+						face, ok := formFor(t, base.Clone(), path)
+						if !ok {
+							continue // a simple or standard face is written horizontally
+						}
+						back, _ := drawnDocument(t, face, path, text, pdfa.PDFA4, fc.embedded)
 						if got := strings.TrimSpace(mustExtractText(t, back)); got != text {
 							t.Errorf("%q extracted as %q", text, got)
+						}
+						res := back.ResolveDict(back.PageList()[0].Get("Resources"))
+						font := back.ResolveDict(back.ResolveDict(res.Get("Font")).Get("F1"))
+						if enc := font.Get("Encoding"); path.vertical != (enc == object.Name("Identity-V")) {
+							t.Errorf("%q: the page's font has /Encoding %v", text, enc)
 						}
 					}
 				})
@@ -250,7 +288,11 @@ func TestEveryDrawingPathValidatesAtEveryLevel(t *testing.T) {
 				t.Run(path.name, func(t *testing.T) {
 					for _, level := range levels {
 						text := strings.Join(fc.texts, " ")
-						back, _ := drawnDocument(t, base.Clone(), path, text, level, true)
+						face, ok := formFor(t, base.Clone(), path)
+						if !ok {
+							continue // a simple or standard face is written horizontally
+						}
+						back, _ := drawnDocument(t, face, path, text, level, true)
 						for _, v := range ValidatePDFA(back, level) {
 							t.Errorf("%s, %q: %s", level, text, v.Error())
 						}

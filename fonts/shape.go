@@ -140,31 +140,38 @@ func (f *Face) DrawShaped(b *content.Builder, s string, size float64) int {
 // where the font puts its baseline), and moved from there by its XOffset and
 // YOffset, as the font's positioning decided. So its horizontal origin is
 // drawn at the pen plus (XOffset-VOriginX, YOffset-VOriginY), in thousandths
-// of an em at size. For a CJK face the pen is the top centre of each
-// glyph's ideographic em box.
+// of an em at size. For a CJK face the pen is the top centre of each glyph's
+// ideographic em box. The text matrix must not be turned: the glyphs stand as
+// they do in the font.
 //
-// The font is the face's ordinary one, written horizontally, and every
-// glyph is placed explicitly, with a displacement along the line and a rise
-// across it. PDF's other way to set vertical text, a CIDFont with /WMode 1
-// (Identity-V) and a /W2 array, states each glyph's vertical advance and
-// origin as the font's own metrics, as /W states its width. forme reports
-// those only for glyphs as shaped, where positioning may have changed them
-// (a mark's advance is cancelled; 'vkrn' or 'vpal', when a document asks for
-// them, move the pen), and not for the glyph itself; see shape.Glyph. Written
-// into /W2, a shaped value would misstate the font. Placed explicitly, each
-// glyph is exactly where shaping put it, with nothing claimed about the font
-// at all, and the page shows and extracts the same.
+// How it is written depends on the form of the face, which must be the font
+// the builder has selected, at this size:
+//
+//   - A vertical form (see Vertical) is the standard way: an Identity-V font,
+//     whose /W2 states each glyph's own vertical advance and origin, so each
+//     code moves the pen down by the glyph's advance and hangs it from its
+//     origin, and only where shaping moved a glyph from those — a mark's
+//     advance taken away, 'vkrn', 'vpal', an offset — is a displacement
+//     written: a TJ number down the line, a move of the line across it. A
+//     reader knows the text is vertical.
+//   - Any other face is written in its horizontal font, which is the only
+//     font a simple or standard face has: every glyph placed explicitly,
+//     with a displacement along the line and a rise across it. The page
+//     shows the same glyphs in the same places; a reader sees horizontal
+//     text arranged in a column.
 //
 // text is the string the glyphs were shaped from, as for Draw, and it is what
 // a reader extracting the page gets back, in the order it was written: the
-// run is one /ActualText, because a reader rebuilding text from where the
-// glyphs stand sees a column of one-glyph lines, and a mark hung to the right
-// of the column's centre as the start of a word. The ToUnicode CMap says what
-// each glyph means, as for every other path. The
-// builder must already be inside a text object with this face's font
-// selected at this size, and its text matrix must not be turned: the glyphs
-// stand as they do in the font.
+// run is one /ActualText, because where the glyphs stand is not where a
+// reader rebuilding the text from positions looks for word breaks — a
+// letter-spaced column, a glyph centred in a wider em, a mark moved across
+// the line. The ToUnicode CMap says what each glyph means, as for every other
+// path.
 func (f *Face) DrawUpright(b *content.Builder, text string, glyphs []Glyph, size float64) {
+	if f.IsVertical() {
+		f.drawWhole(b, glyphs, text, size)
+		return
+	}
 	placed := make([]Glyph, len(glyphs))
 	pen := 0.0
 	for i, g := range glyphs {

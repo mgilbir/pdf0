@@ -33,8 +33,14 @@ type Face struct {
 	// rec is what each glyph was drawn for, which is what the ToUnicode CMap
 	// says it means. See textRecord in draw.go. It belongs to this wrapper
 	// rather than to the shaping face: a Clone draws a different document, and
-	// what one document's glyphs meant is no fact about another's.
+	// what one document's glyphs meant is no fact about another's. A face and
+	// its vertical form share one.
 	rec *textRecord
+
+	// vertical is this face's vertical form, once Vertical has made it, and
+	// horizontal is the face a vertical form belongs to. Exactly one of the two
+	// forms has horizontal set. See vertical.go.
+	vertical, horizontal *Face
 }
 
 // Adopt wraps a shaping face so it can be drawn and embedded.
@@ -151,10 +157,18 @@ func NotoSansLicense() string { return notosans.License() }
 // Parsing is the expensive part and its result never changes; what must not be
 // shared is the used set, since that decides what each document embeds. So a
 // second document takes a clone rather than a second parse.
+//
+// A vertical form's clone is the vertical form of a clone of its face.
 func (f *Face) Clone() *Face {
+	if f.horizontal != nil {
+		c := f.horizontal.Clone()
+		v, _ := c.Vertical() // a vertical form's face is composite
+		return v
+	}
 	c := *f
 	c.Face = f.Face.Clone()
 	c.rec = nil
+	c.vertical = nil
 	return &c
 }
 

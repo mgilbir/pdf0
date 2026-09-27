@@ -18,6 +18,7 @@ import (
 	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/fonts"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
 )
 
 // Text set down the page.
@@ -196,90 +197,77 @@ func TestSidewaysTextIsTurned(t *testing.T) {
 	}
 }
 
-// shownGlyph is a code a content stream shows, and where: the horizontal
-// origin of its glyph, in the coordinates the text matrix maps into.
-type shownGlyph struct {
-	code int
-	at   [2]float64
+// uprightOps is the upright runs of a composed page, which the fixtures
+// expect every run to be.
+func uprightOps(t *testing.T, c layout.Composed) []layout.DrawText {
+	t.Helper()
+	var runs []layout.DrawText
+	for _, op := range c.Ops {
+		if d, ok := op.(layout.DrawText); ok && d.Text != "" {
+			if !d.Upright || !d.Sideways || d.Anticlockwise {
+				t.Fatalf("forme set %q as Sideways=%v Anticlockwise=%v Upright=%v; the "+
+					"fixture expects upright runs", d.Text, d.Sideways, d.Anticlockwise, d.Upright)
+			}
+			runs = append(runs, d)
+		}
+	}
+	if len(runs) == 0 {
+		t.Fatal("forme drew no text")
+	}
+	return runs
 }
 
-// shownGlyphs follows a content stream's text state — Tm, Tf, Ts, the
-// strings of Tj and TJ and TJ's displacements — and returns each two-byte
-// code shown, with where its origin is (ISO 32000-2 9.4.4: the glyph is drawn
-// at the text matrix applied to the pen's advance along the line and the
-// rise). width is a code's width in thousandths of an em. Tc, Tw and Tz are
-// not written by this backend and are not followed.
-func shownGlyphs(t *testing.T, stream []byte, width func(code int) float64) []shownGlyph {
+// readPage is the placed glyphs of a written page and where each run left the
+// pen, read from the file by the reader's model in glyphreader_test.go. A
+// standard font's widths, which the file does not carry, are the face's.
+func readPage(t *testing.T, doc *pdf0.Document, standard *shape.Face) ([]placedGlyph, [][2]float64) {
 	t.Helper()
-	var (
-		out      []shownGlyph
-		operands []core.ContentToken
-		tm       [6]float64
-		tx, rise float64
-		size     float64
-		inArray  bool
-	)
-	show := func(codes []byte) {
-		for j := 0; j+1 < len(codes); j += 2 {
-			code := int(codes[j])<<8 | int(codes[j+1])
-			out = append(out, shownGlyph{code, [2]float64{
-				tm[0]*tx + tm[2]*rise + tm[4],
-				tm[1]*tx + tm[3]*rise + tm[5],
-			}})
-			tx += width(code) * size / 1000
+	models := fontModels(t, doc, doc.PageList()[0], func(font string, code int) float64 {
+		if standard == nil {
+			t.Fatalf("font %s is a simple font and the test has no face for its widths", font)
 		}
+		w, _ := standard.Advance(rune(code)) // ASCII, which WinAnsi agrees with
+		return w
+	})
+	return placedGlyphs(t, contentOf(t, doc), models)
+}
+
+// pdftotextOf is poppler's pdftotext's reading of a document, with the white
+// space it lays the page out with taken away, or the test is skipped where
+// there is no pdftotext.
+func pdftotextOf(t *testing.T, doc *pdf0.Document) string {
+	t.Helper()
+	bin, err := exec.LookPath("pdftotext")
+	if err != nil {
+		t.Skip("no pdftotext on this machine; poppler's reading is not checked")
 	}
-	for tk := range core.TokenizeContent(core.Canceler{}, stream) {
-		switch tk.Kind {
-		case core.KindArrayStart:
-			inArray = true
-			continue
-		case core.KindArrayEnd:
-			inArray = false
-			continue
-		case core.KindString:
-			if inArray {
-				show(tk.Str)
-				continue
-			}
-		case core.KindNumber:
-			if inArray {
-				tx -= tk.Number() * size / 1000
-				continue
-			}
-		case core.KindOp:
-			n := len(operands)
-			switch {
-			case tk.Op == "Tm" && n >= 6:
-				for i, o := range operands[n-6:] {
-					tm[i] = o.Number()
-				}
-				tx = 0
-			case tk.Op == "Tf" && n >= 1:
-				size = operands[n-1].Number()
-			case tk.Op == "Ts" && n >= 1:
-				rise = operands[n-1].Number()
-			case tk.Op == "Tj" && n >= 1:
-				show(operands[n-1].Str)
-			case tk.Op == "Td" || tk.Op == "TD" || tk.Op == "T*" || tk.Op == "'" || tk.Op == "\"":
-				t.Fatalf("the stream moves the line with %s, which this reader does not follow", tk.Op)
-			}
-			operands = operands[:0]
-			continue
-		}
-		operands = append(operands, tk)
+	var buf bytes.Buffer
+	if err := doc.Write(&buf); err != nil {
+		t.Fatal(err)
 	}
-	return out
+	path := filepath.Join(t.TempDir(), "page.pdf")
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(bin, path, "-").CombinedOutput()
+	if err != nil {
+		t.Fatalf("pdftotext: %v\n%s", err, out)
+	}
+	return strings.Join(strings.Fields(string(out)), "")
 }
 
 // TestUprightTextIsDrawnByItsVerticalMetrics: CJK text in a vertical writing
-// mode stands upright, one character below the other. Each glyph is drawn
-// where forme's vertical metrics hang it — the pen moving down by each
-// glyph's vertical advance, the glyph hung from its vertical origin and moved
-// by its offsets — which for Noto Sans JP puts every glyph centred on the
-// line and inside the em box layout measured its character at. The text
-// extracts in the order it was written, the fonts pass the PDF/A font rules,
-// and Ghostscript finds the ink in that column.
+// mode stands upright, one character below the other, written in the face's
+// vertical form: an Identity-V font whose /W2 states each glyph's own
+// vertical metrics. Read back from the file by a reader's model of the font
+// dictionaries and the text operators, each glyph is where forme's shaping
+// hangs it — the pen moving down by each glyph's vertical advance, the glyph
+// hung from its vertical origin and moved by its offsets — which for Noto
+// Sans JP puts every glyph centred on the line and inside the em box layout
+// measured its character at, and each run ends where layout starts the next.
+// The text extracts in the order it was written, through pdf0 and poppler,
+// the fonts pass the PDF/A font rules, and Ghostscript finds the ink in that
+// column.
 func TestUprightTextIsDrawnByItsVerticalMetrics(t *testing.T) {
 	set := cjkSet(t)
 	for _, tc := range []struct {
@@ -293,26 +281,17 @@ func TestUprightTextIsDrawnByItsVerticalMetrics(t *testing.T) {
 		// the spacing falls between them.
 		{"upright-latin", "ABC",
 			`html { writing-mode: vertical-rl; text-orientation: upright } p { margin: 0; letter-spacing: 4px }`, 4},
+		// 'vpal' sets the kana and the punctuation on their own advances
+		// down the line, so the pen moves by less than /W2 says, and the
+		// difference is written as displacements.
+		{"vpal", "テスト、です。",
+			`html { writing-mode: vertical-rl } p { margin: 0; font-feature-settings: "vpal" 1 }`, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			text := tc.text
 			in := Input{HTML: `<p>` + text + `</p>`, CSS: []Stylesheet{{Source: tc.css}}, Fonts: set}
 			c := layout.Compose(in, Options{})
-			// Layout sets each upright character as its own run, in its own
-			// em box: an em per character (CSS Writing Modes 4.4).
-			var runs []layout.DrawText
-			for _, op := range c.Ops {
-				if d, ok := op.(layout.DrawText); ok && d.Text != "" {
-					if !d.Upright || !d.Sideways || d.Anticlockwise {
-						t.Fatalf("forme set %q as Sideways=%v Anticlockwise=%v Upright=%v; the "+
-							"fixture expects upright runs", d.Text, d.Sideways, d.Anticlockwise, d.Upright)
-					}
-					runs = append(runs, d)
-				}
-			}
-			if len(runs) == 0 {
-				t.Fatal("forme drew no text")
-			}
+			runs := uprightOps(t, c)
 
 			doc, raw := roundTrip(t, in, Options{})
 			if got := strings.TrimSpace(mustExtractText(t, doc)); got != text {
@@ -322,11 +301,13 @@ func TestUprightTextIsDrawnByItsVerticalMetrics(t *testing.T) {
 				t.Error(f)
 			}
 
-			shown := shownGlyphs(t, contentOf(t, doc), func(code int) float64 {
-				return set.face.GlyphAdvance(glyphOfCode(t, set, code))
-			})
-			k := 0 // the next shown glyph
-			for _, run := range runs {
+			placed, ends := readPage(t, doc, nil)
+			if len(ends) != len(runs) {
+				t.Fatalf("the page draws %d runs; layout placed %d", len(ends), len(runs))
+			}
+			k := 0 // the next placed glyph
+			vpalMoved := false
+			for r, run := range runs {
 				// Where forme hangs each glyph, worked out here from its
 				// shaping of the run.
 				v := run
@@ -337,13 +318,19 @@ func TestUprightTextIsDrawnByItsVerticalMetrics(t *testing.T) {
 				pen := 0.0
 				unit := 0 // the character, along the run, the glyph belongs to
 				for j, g := range glyphs {
-					if k >= len(shown) {
-						t.Fatalf("the page shows %d glyphs; forme shaped more", len(shown))
+					if k >= len(placed) {
+						t.Fatalf("the page shows %d glyphs; forme shaped more", len(placed))
 					}
-					got := shown[k]
+					got := placed[k]
 					k++
+					if !got.vertical {
+						t.Errorf("%q is shown in %s, which is not a vertical font", run.Text, got.font)
+					}
 					if want := set.face.GlyphCode(g.GID); got.code != want {
 						t.Errorf("%q: code %d, want %d", run.Text, got.code, want)
+					}
+					if adv, _, _ := set.face.GlyphVerticalMetrics(g.GID); g.YAdvance != adv {
+						vpalMoved = true
 					}
 					// The text matrix is [1 0 0 -1 At]: up the glyph is up
 					// the page.
@@ -352,16 +339,18 @@ func TestUprightTextIsDrawnByItsVerticalMetrics(t *testing.T) {
 						run.At.Y.Px() - (pen+g.YOffset-g.VOriginY)*s,
 					}
 					if math.Abs(got.at[0]-want[0]) > 1e-3 || math.Abs(got.at[1]-want[1]) > 1e-3 {
-						t.Errorf("%q is drawn at %v; forme hangs it at %v", run.Text, got.at, want)
+						t.Errorf("%q glyph %d is drawn at %v; forme hangs it at %v", run.Text, j, got.at, want)
 					}
 					pen += g.YAdvance
 
-					// The model layout placed the run by: each character's
-					// em box follows the last and its spacing, and is centred
-					// across the line.
-					top := run.At.Y.Px() + float64(unit)*(size+tc.spacing)
-					if y := got.at[1]; !(y > top && y < top+size) {
-						t.Errorf("%q's baseline is at %v, outside its em box [%v, %v]", run.Text, y, top, top+size)
+					if tc.name != "vpal" {
+						// The model layout placed the run by: each
+						// character's em box follows the last and its
+						// spacing, and is centred across the line.
+						top := run.At.Y.Px() + float64(unit)*(size+tc.spacing)
+						if y := got.at[1]; !(y > top && y < top+size) {
+							t.Errorf("%q's baseline is at %v, outside its em box [%v, %v]", run.Text, y, top, top+size)
+						}
 					}
 					// Within half a font unit: the origin is half the
 					// advance halved as a whole number of units, as HarfBuzz
@@ -376,9 +365,26 @@ func TestUprightTextIsDrawnByItsVerticalMetrics(t *testing.T) {
 						unit++
 					}
 				}
+				// The pen ends where layout starts the next run on the
+				// line, to within one of layout's units (1/64 px), which
+				// is how finely it placed that run.
+				if r+1 < len(runs) && runs[r+1].At.X == run.At.X {
+					next := runs[r+1].At
+					if math.Abs(ends[r][0]-next.X.Px()) > 1e-6 || math.Abs(ends[r][1]-next.Y.Px()) > 1.0/64 {
+						t.Errorf("%q leaves the pen at %v; layout starts %q at %v",
+							run.Text, ends[r], runs[r+1].Text, [2]float64{next.X.Px(), next.Y.Px()})
+					}
+				}
 			}
-			if k != len(shown) {
-				t.Errorf("the page shows %d glyphs; forme shaped %d", len(shown), k)
+			if k != len(placed) {
+				t.Errorf("the page shows %d glyphs; forme shaped %d", len(placed), k)
+			}
+			if tc.name == "vpal" && !vpalMoved {
+				t.Error("'vpal' moved no glyph's advance; the case tests nothing")
+			}
+
+			if got := pdftotextOf(t, doc); got != text {
+				t.Errorf("pdftotext reads %q, want %q", got, text)
 			}
 
 			// The ink, from a renderer: a column one em wide, centred on the
@@ -402,52 +408,85 @@ func TestUprightTextIsDrawnByItsVerticalMetrics(t *testing.T) {
 	}
 }
 
-// glyphOfCode is the glyph a face's code addresses: for a CID-keyed face the
-// glyph whose CID it is.
-func glyphOfCode(t *testing.T, set oneFace, code int) int {
-	t.Helper()
-	for g := 0; g < set.face.NumGlyphs(); g++ {
-		if set.face.GlyphCode(g) == code {
-			return g
-		}
-	}
-	t.Fatalf("no glyph has the code %d", code)
-	return 0
-}
-
 // TestDrawUprightHangsEachGlyphBelowTheLast holds fonts.Face.DrawUpright to
 // forme's metrics over runs of several glyphs, as a caller of the fonts
-// package draws them (layout sets each CJK character as its own run): the pen
-// moves down by each glyph's vertical advance, and each glyph is hung from its
-// vertical origin at the pen. A combining mark rides on the glyph before it.
+// package draws them (layout sets each CJK character as its own run), in
+// both of the face's forms: the vertical one, and the horizontal one, which
+// places each glyph explicitly. The pen moves down by each glyph's vertical
+// advance and each glyph is hung from its vertical origin at the pen. The
+// cases carry what the vertical form writes displacements for: a combining
+// mark that rides on the glyph before it, a mark placed across the line
+// (a Hebrew point on a character the face lacks, which forme places by the
+// ink of the missing glyph, half an em to the right), and 'vpal', which
+// moves the pen by less than the glyphs' own advances. The glyphs are read
+// back from the written file.
 func TestDrawUprightHangsEachGlyphBelowTheLast(t *testing.T) {
 	set := cjkSet(t)
-	face := fonts.Adopt(set.face)
-	for _, text := range []string{"日本語のテキスト", "がき"} {
-		glyphs, _ := set.face.ShapeGlyphsInContext(text, "", "", shape.Features{Vertical: true})
-		const size, x0, y0 = 20.0, 100.0, 50.0
-		var b content.Builder
-		b.BeginText().SetFont("F1", size)
-		b.SetTextMatrix(1, 0, 0, -1, x0, y0)
-		face.DrawUpright(&b, text, glyphs, size)
-		b.EndText()
-		stream, err := b.Bytes()
-		if err != nil {
-			t.Fatal(err)
-		}
-		shown := shownGlyphs(t, stream, func(code int) float64 {
-			return set.face.GlyphAdvance(glyphOfCode(t, set, code))
-		})
-		if len(shown) != len(glyphs) {
-			t.Fatalf("%q: %d glyphs shown, %d shaped", text, len(shown), len(glyphs))
-		}
-		s, pen := size/1000, 0.0
-		for i, g := range glyphs {
-			want := [2]float64{x0 + (g.XOffset-g.VOriginX)*s, y0 - (pen+g.YOffset-g.VOriginY)*s}
-			if math.Abs(shown[i].at[0]-want[0]) > 1e-3 || math.Abs(shown[i].at[1]-want[1]) > 1e-3 {
-				t.Errorf("%q glyph %d is drawn at %v; forme hangs it at %v", text, i, shown[i].at, want)
+	for _, vertical := range []bool{true, false} {
+		for _, tc := range []struct {
+			text string
+			tags string
+		}{
+			{"日本語のテキスト", ""},
+			{"がき", ""},
+			{"か\u3099き", ""},
+			{"日\u05D0\u05B7", ""},
+			{"テスト、です。", "vpal"},
+		} {
+			face := fonts.Adopt(set.face.Clone())
+			draw := face
+			if vertical {
+				v, err := face.Vertical()
+				if err != nil {
+					t.Fatal(err)
+				}
+				draw = v
 			}
-			pen += g.YAdvance
+			glyphs, _ := face.ShapeGlyphsInContext(tc.text, "", "", shape.Features{Vertical: true, Tags: tc.tags})
+			const size, x0, y0 = 20.0, 100.0, 150.0
+			var b content.Builder
+			b.BeginText().SetFont("F1", size)
+			b.SetTextMatrix(1, 0, 0, 1, x0, y0)
+			draw.DrawUpright(&b, tc.text, glyphs, size)
+			b.EndText()
+			doc := pdf0.NewDocument()
+			if _, err := doc.AddPage(pdf0.Page{Width: 200, Height: 200, Content: &b,
+				Faces: map[object.Name]*fonts.Face{"F1": draw}}); err != nil {
+				t.Fatal(err)
+			}
+			var buf bytes.Buffer
+			if err := doc.Write(&buf); err != nil {
+				t.Fatal(err)
+			}
+			back, err := pdf0.Read(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			placed, ends := readPage(t, back, nil)
+			if len(placed) != len(glyphs) {
+				t.Fatalf("%q: %d glyphs shown, %d shaped", tc.text, len(placed), len(glyphs))
+			}
+			s, pen := size/1000, 0.0
+			for i, g := range glyphs {
+				if placed[i].vertical != vertical {
+					t.Errorf("%q glyph %d: in a vertical font %v, want %v", tc.text, i, placed[i].vertical, vertical)
+				}
+				want := [2]float64{x0 + (g.XOffset-g.VOriginX)*s, y0 + (pen+g.YOffset-g.VOriginY)*s}
+				if math.Abs(placed[i].at[0]-want[0]) > 1e-3 || math.Abs(placed[i].at[1]-want[1]) > 1e-3 {
+					t.Errorf("vertical=%v %q glyph %d is drawn at %v; forme hangs it at %v", vertical, tc.text, i, placed[i].at, want)
+				}
+				pen += g.YAdvance
+			}
+			if vertical {
+				// The run leaves the pen where shaping ends it, on the line
+				// it began: a caller drawing on from here is on its line.
+				if want := [2]float64{x0, y0 + pen*s}; math.Abs(ends[0][0]-want[0]) > 1e-3 || math.Abs(ends[0][1]-want[1]) > 1e-3 {
+					t.Errorf("%q leaves the pen at %v; shaping ends it at %v", tc.text, ends[0], want)
+				}
+			}
+			if got := strings.TrimSpace(mustExtractText(t, back)); got != tc.text {
+				t.Errorf("vertical=%v %q extracts as %q", vertical, tc.text, got)
+			}
 		}
 	}
 }

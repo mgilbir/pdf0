@@ -25,7 +25,6 @@ package htmlpdf
 import (
 	"fmt"
 	"image"
-	"math"
 	"net/url"
 	"sort"
 	"strings"
@@ -215,7 +214,7 @@ func Render(in layout.Input, opts layout.Options) (Result, error) {
 	// before anything is written: a page that would say something else is
 	// refused the way the engine refuses one, unless the caller's policy says
 	// the loss is acceptable.
-	backend, refused, upright := checkDrawable(composed, in.Policy)
+	backend, refused := checkDrawable(composed, in.Policy)
 	out.Findings = append(out.Findings, backend...)
 	if composed.Refused || refused {
 		return out, &RefusedError{
@@ -224,7 +223,7 @@ func Render(in layout.Input, opts layout.Options) (Result, error) {
 		}
 	}
 
-	doc, err := writePage(composed.Ops, composed.Page, composed.Scale, upright)
+	doc, err := writePage(composed.Ops, composed.Page, composed.Scale)
 	if err != nil {
 		return out, err
 	}
@@ -239,30 +238,24 @@ func Render(in layout.Input, opts layout.Options) (Result, error) {
 //
 // One finding per rule, however many operations raised it: a vertical page is
 // one fact about the document, and a line per run would bury it.
-//
-// It also shapes each upright run, which is how it knows whether the run can
-// be drawn where layout placed it, and returns the glyphs for writePage, so
-// that a run is shaped once.
-func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, bool, uprightRuns) {
+func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, bool) {
 	counts := map[layout.Rule]int{}
-	upright := uprightRuns{}
 	// The first link that cannot be written, and why: the links a document
 	// cannot carry are usually all one kind — every relative reference in it
 	// — and the first says which.
 	var firstLink string
-	for i, op := range c.Ops {
+	for _, op := range c.Ops {
 		switch v := op.(type) {
 		case layout.DrawText:
 			if !drawableTurn(v) {
 				counts[RuleVerticalText]++
 				continue
 			}
-			if v.Upright && v.Face != nil && v.Text != "" {
-				glyphs, fits := uprightGlyphs(v)
-				upright[i] = glyphs
-				if !fits {
-					counts[RuleVerticalText]++
-				}
+			if v.Upright && v.Face != nil && v.Text != "" && !v.Face.StatesVerticalMetrics() {
+				// Layout measures such a run at an em a character (CSS
+				// Writing Modes 4.4), and its glyphs advance by the line's
+				// height.
+				counts[RuleVerticalText]++
 			}
 		case layout.Link:
 			if _, err := linkTarget(v.Href); err != nil {
@@ -279,9 +272,9 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 
 	messages := map[layout.Rule]string{
 		RuleVerticalText: "%d run(s) of text set down the page cannot be drawn where layout " +
-			"placed them: set upright in a face whose vertical advances are not the em per " +
-			"character layout measured the run at (layout does not read a face's vertical " +
-			"metrics), or turned in a way layout does not turn text",
+			"placed them: set upright in a face that states no vertical metrics, which layout " +
+			"measures at an em a character and whose glyphs advance by the line's height, or " +
+			"turned in a way layout does not turn text",
 		RuleLinkDropped: "%d hyperlink(s) cannot be written as PDF links, so the page would " +
 			"show their text with nothing to follow; the first: " + firstLink,
 		RuleUnknownOp: "the display list has %d operation(s) of a kind this backend does not " +
@@ -312,7 +305,7 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 			Source:  layout.Source{HTMLOffset: -1, CSSOffset: -1},
 		})
 	}
-	return out, refused, upright
+	return out, refused
 }
 
 // textMatrix is the linear part of a run's text matrix: where the text
@@ -367,50 +360,19 @@ func drawableTurn(v layout.DrawText) bool {
 	return true
 }
 
-// uprightRuns are the glyphs of each upright run, by its index in the display
-// list: shaped once, by checkDrawable, and drawn by writePage.
-type uprightRuns map[int][]shape.Glyph
-
-// uprightGlyphs shapes a run set upright: with the vertical rules and metrics
-// (shape.Features.Vertical, which layout leaves to the backend to ask for),
-// the run's context either side, and its letter-spacing. fits is whether the
-// run so drawn is the length layout gave it; see uprightFits.
+// uprightGlyphs shapes a run set upright, as layout measured it: with the
+// vertical rules and metrics (shape.Features.Vertical, which layout leaves to
+// the backend to ask for), the run's context either side, and its
+// letter-spacing down the run.
 //
 // Each glyph comes back with its vertical advance and the point it is hung
-// from, which are the font's vmtx and VORG (or what HarfBuzz falls back to
-// where it states none) as positioning left them; fonts.Face.DrawUpright
-// places each glyph by them.
-func uprightGlyphs(v layout.DrawText) (glyphs []shape.Glyph, fits bool) {
+// from, which in a face that states vertical metrics (its vmtx, see
+// shape.Face.StatesVerticalMetrics) are what layout measured the run by.
+// checkDrawable refuses an upright run in a face that states none.
+func uprightGlyphs(v layout.DrawText) []shape.Glyph {
 	v.Features.Vertical = true
-	glyphs, _ = layout.ShapedGlyphs(v)
-	fits = uprightFits(v, glyphs)
-	return withLetterSpacing(glyphs, layout.ShapedText(v), v), fits
-}
-
-// uprightFits reports whether an upright run, drawn by its face's vertical
-// metrics, is the length layout measured it at and placed the next run after.
-//
-// Layout measures an upright run at an em per character (CSS Writing Modes
-// 4.4's synthesis, which forme applies to every face, stating vertical
-// metrics or not) and does not yet read the face's own. A face whose vertical
-// advance is an em for every glyph of the run — every CJK face's ideographs,
-// kana and fullwidth forms, and whatever else its vmtx gives an em — is drawn
-// exactly where layout put it. One whose advances differ — a face with no
-// vmtx, whose glyphs advance by its line height, or a proportional one — would
-// draw the run longer or shorter than the space it was given, over its
-// neighbour or short of it; that is refused rather than drawn. The glyphs are
-// the ones shaped, before letter-spacing, which layout and the drawing add
-// alike.
-func uprightFits(v layout.DrawText, glyphs []shape.Glyph) bool {
-	size := v.Size.Px()
-	drawn := 0.0
-	for _, g := range glyphs {
-		drawn -= g.YAdvance * size / 1000
-	}
-	measured := size * float64(paragraph.UprightUnits(v.Text))
-	// A layout length is a whole number of 1/64 px, and the metrics are
-	// thousandths of an em: agreement within one layout unit is exact.
-	return math.Abs(drawn-measured) <= 1.0/64
+	glyphs, _ := layout.ShapedGlyphs(v)
+	return withLetterSpacing(glyphs, layout.ShapedText(v), v)
 }
 
 // linkTarget is the URI a display-list link is written with, or why it
@@ -465,7 +427,7 @@ func (m pageTransform) rect(r layout.Rect) [4]float64 {
 // Every field of every operation is either drawn here or refused by
 // checkDrawable before this runs; drawnFields in this file lists which, and a
 // test holds that list against the operations layout declares.
-func writePage(ops []layout.Op, page layout.PageSize, scale float64, upright uprightRuns) (*pdf0.Document, error) {
+func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Document, error) {
 	doc := pdf0.NewDocument()
 	b := &content.Builder{}
 
@@ -491,6 +453,9 @@ func writePage(ops []layout.Op, page layout.PageSize, scale float64, upright upr
 	// glyphs the other used, which is what makes the subset come out right.
 	faces := map[object.Name]*fonts.Face{}
 	names := map[*shape.Face]object.Name{}
+	// The vertical forms, for upright runs: the same wrapper's, so that the
+	// two forms are one embedding. See fonts.Face.Vertical.
+	vnames := map[*shape.Face]object.Name{}
 	xobjects := map[object.Name]object.Object{}
 	patterns := map[object.Name]object.Object{}
 	alphas := newAlphaStates()
@@ -518,7 +483,7 @@ func writePage(ops []layout.Op, page layout.PageSize, scale float64, upright upr
 		return name, nil
 	}
 
-	for i, op := range ops {
+	for _, op := range ops {
 		switch v := op.(type) {
 		case layout.FillRect:
 			// Overhang is about the page-overflow guard in layout and says
@@ -546,6 +511,22 @@ func writePage(ops []layout.Op, page layout.PageSize, scale float64, upright upr
 				faces[name] = fonts.Adopt(v.Face)
 			}
 			face := faces[name]
+			if v.Upright {
+				// Written in the face's vertical form, an Identity-V font
+				// whose /W2 states each glyph's vertical metrics, where the
+				// face has one. A standard face has none (and states no
+				// vertical metrics, so checkDrawable refuses its upright
+				// runs).
+				if vf, err := face.Vertical(); err == nil {
+					vname, ok := vnames[v.Face]
+					if !ok {
+						vname = object.Name(fmt.Sprintf("V%d", len(vnames)+1))
+						vnames[v.Face] = vname
+						faces[vname] = vf
+					}
+					name, face = vname, vf
+				}
+			}
 			b.Save()
 			clipTo(b, v.Clip)
 			alphas.use(b, v.Color.A)
@@ -569,10 +550,10 @@ func writePage(ops []layout.Op, page layout.PageSize, scale float64, upright upr
 			// placed (a ligature measured as two letters, a kern turned back on,
 			// an Arabic word in isolated forms).
 			text := layout.ShapedText(v)
-			if glyphs, ok := upright[i]; ok {
+			if v.Upright {
 				// Upright: each glyph hung from its vertical origin, one
 				// below the other. See uprightGlyphs.
-				face.DrawUpright(b, text, glyphs, v.Size.Px())
+				face.DrawUpright(b, text, uprightGlyphs(v), v.Size.Px())
 			} else {
 				glyphs, _ := layout.ShapedGlyphs(v)
 				glyphs = withLetterSpacing(glyphs, text, v)
@@ -710,7 +691,7 @@ var drawnFields = map[string]map[string]string{
 		"RTL":           "through layout.ShapedText and layout.ShapedGlyphs",
 		"Sideways":      "the text matrix turned a quarter clockwise: textMatrix",
 		"Anticlockwise": "the text matrix turned a quarter anticlockwise: textMatrix",
-		"Upright":       "shaped with the vertical metrics and each glyph hung from its vertical origin: uprightGlyphs, fonts.Face.DrawUpright; refused where they do not fit layout's em per character: RuleVerticalText",
+		"Upright":       "shaped with the vertical metrics and drawn in the face's vertical form, each glyph hung from its vertical origin: uprightGlyphs, fonts.Face.DrawUpright; refused in a face that states no vertical metrics, and without Sideways or with Anticlockwise: RuleVerticalText",
 		"Face":          "the font, adopted and embedded",
 		"Size":          "the font size",
 		"Color":         "the fill colour; alpha through an ExtGState, and invisible text at zero",

@@ -60,23 +60,85 @@ var errEmbedBeforeUse = errors.New(
 // ErrRestrictedLicense or ErrBitmapEmbeddingOnly, and one that forbids
 // subsetting is embedded whole, without a subset tag. Every stream is
 // Flate-compressed.
+//
+// A vertical form (see Vertical) embeds as its Identity-V font. A caller
+// naming both forms of a face uses EmbedForms, which writes them over one
+// descendant: Embed on each writes the font twice.
 func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
+	e, err := f.EmbedForms(doc, Forms{Horizontal: !f.IsVertical(), Vertical: f.IsVertical()})
+	if err != nil {
+		return object.IndirectRef{}, err
+	}
+	if f.IsVertical() {
+		return e.Vertical, nil
+	}
+	return e.Horizontal, nil
+}
+
+// Forms says which of a face's fonts EmbedForms writes.
+type Forms struct {
+	// Horizontal is the face's own font: Identity-H for a composite face.
+	Horizontal bool
+	// Vertical is the Identity-V font of its vertical form (see Vertical),
+	// which only a composite face has.
+	Vertical bool
+}
+
+// Embedded is what EmbedForms writes: the font dictionary for each form it
+// was asked for, and the zero reference for the other.
+type Embedded struct {
+	// Horizontal is the face's font dictionary: the Identity-H Type 0 font
+	// for a composite face, the simple or standard font otherwise.
+	Horizontal object.IndirectRef
+	// Vertical is the Identity-V Type 0 font over the same descendant,
+	// written after every other object of the embedding.
+	Vertical object.IndirectRef
+}
+
+// errNoForm is EmbedForms asked for no font at all.
+var errNoForm = errors.New("fonts: EmbedForms was asked for neither form of the face")
+
+// EmbedForms writes the face into doc as Embed does, as the fonts forms asks
+// for: its horizontal font, the Identity-V font of its vertical form, or both
+// over one descendant — one program, one descriptor, one /W, one ToUnicode
+// CMap, and /DW2 and /W2 when the vertical font is written. Called on a
+// vertical form it embeds the face the form belongs to.
+//
+// A simple or standard face has no vertical form, and asking for one is an
+// error.
+func (f *Face) EmbedForms(doc Allocator, forms Forms) (Embedded, error) {
+	f = f.Horizontal()
+	if !forms.Horizontal && !forms.Vertical {
+		return Embedded{}, errNoForm
+	}
+	if forms.Vertical && !f.composite() {
+		return Embedded{}, errNoVerticalForm
+	}
 	if f.IsStandard() {
 		// A standard face embeds nothing: the reader has it, and naming it is
 		// the whole mechanism.
-		return f.embedStandard(doc)
+		ref, err := f.embedStandard(doc)
+		return Embedded{Horizontal: ref}, err
 	}
 	if f.IsSimple() {
 		if len(f.Used()) == 0 {
-			return object.IndirectRef{}, errEmbedBeforeUse
+			return Embedded{}, errEmbedBeforeUse
 		}
-		return f.embedSimple(doc)
+		ref, err := f.embedSimple(doc)
+		return Embedded{Horizontal: ref}, err
 	}
+	return f.embedComposite(doc, forms)
+}
+
+// embedComposite writes a composite face: the program, /CIDSet, the
+// descriptor, the CIDFont, the ToUnicode CMap, and the Identity-H and
+// Identity-V Type 0 fonts forms asks for, in that order.
+func (f *Face) embedComposite(doc Allocator, forms Forms) (Embedded, error) {
 	if f.NumGlyphs() == 0 {
-		return object.IndirectRef{}, errNoGlyphs
+		return Embedded{}, errNoGlyphs
 	}
 	if len(f.Used()) == 0 {
-		return object.IndirectRef{}, errEmbedBeforeUse
+		return Embedded{}, errEmbedBeforeUse
 	}
 	// §9.7.4.2: the collection the descendant's CIDs are numbered in, which
 	// must be compatible with the glyph source's own.
@@ -94,12 +156,12 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	// into first.
 	registry, ordering, supplement, err := f.collection()
 	if err != nil {
-		return object.IndirectRef{}, err
+		return Embedded{}, err
 	}
 
 	program, kept, subset, err := f.programToEmbed()
 	if err != nil {
-		return object.IndirectRef{}, err
+		return Embedded{}, err
 	}
 	baseFont := f.baseFontName(kept, subset)
 
@@ -170,6 +232,16 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	if w := f.widthsArray(advances, defaultWidth, kept); len(w) > 0 {
 		cidFont.Set("W", w)
 	}
+	if forms.Vertical {
+		// The vertical metrics, for the Identity-V font over this CIDFont.
+		// A horizontal font ignores them (9.7.4.3), and an embedding with
+		// no vertical font does not write them.
+		dw2, w2 := f.verticalMetrics(advances, kept)
+		cidFont.Set("DW2", dw2)
+		if len(w2) > 0 {
+			cidFont.Set("W2", w2)
+		}
+	}
 	// Identity: a CID is a glyph index, which is what Identity-H encoding
 	// already made the character codes. The key belongs to CIDFontType2 only —
 	// for a CFF descendant the mapping is the font program's own business
@@ -188,7 +260,23 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	fd.Set("Encoding", object.Name("Identity-H"))
 	fd.Set("DescendantFonts", object.Array{cidFontRef})
 	fd.Set("ToUnicode", toUnicodeRef)
-	return doc.Add(fd), nil
+	var out Embedded
+	if forms.Horizontal {
+		out.Horizontal = doc.Add(fd)
+	}
+	if forms.Vertical {
+		// The same font written down the page. Identity-V is Identity-H's
+		// codes in writing mode 1, so everything but the encoding is shared.
+		vd := &object.Dictionary{}
+		vd.Set("Type", object.Name("Font"))
+		vd.Set("Subtype", object.Name("Type0"))
+		vd.Set("BaseFont", baseFont)
+		vd.Set("Encoding", object.Name("Identity-V"))
+		vd.Set("DescendantFonts", object.Array{cidFontRef})
+		vd.Set("ToUnicode", toUnicodeRef)
+		out.Vertical = doc.Add(vd)
+	}
+	return out, nil
 }
 
 // EmbedRevision is a number that changes whenever what Embed would write for
@@ -201,7 +289,12 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 // revision r covers every use of the face exactly while EmbedRevision is still
 // r. Everything else Embed reads — the program, the metrics, the licence — is
 // fixed when the face is loaded.
+//
+// A face and its vertical form have one revision: they share what was drawn.
+// Which of the two fonts an embedding wrote is the caller's to track (see
+// EmbedForms).
 func (f *Face) EmbedRevision() int {
+	f = f.Horizontal()
 	n := len(f.Used())
 	if f.rec != nil {
 		n += len(f.rec.byGID)
