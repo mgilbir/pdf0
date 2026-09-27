@@ -335,7 +335,12 @@ func (d *Document) extractContentText(run *textRun, res *object.Dictionary, cont
 				case core.KindString:
 					show(el.Str)
 				case core.KindNumber:
-					if el.Number() < -100 { // wide negative adjustment ≈ a space
+					// A wide gap reads as a space. The number is subtracted
+					// from the coordinate the font writes along (ISO 32000-2
+					// 9.4.3): across the page a gap is a negative number,
+					// and down it, where the pen moves to lower y, a
+					// positive one.
+					if gap := el.Number(); (cur.vertical && gap > 100) || (!cur.vertical && gap < -100) {
 						out.WriteByte(' ')
 					}
 				}
@@ -405,6 +410,9 @@ type fontText struct {
 	// to four bytes by its CMap's codespace. A simple font's codes are bytes.
 	composite bool
 	codes     core.FontCodes
+	// vertical is a Type 0 font whose CMap writes down the page (WMode 1),
+	// for which a TJ number moves the pen along y.
+	vertical bool
 }
 
 // fontMapsFrom resolves a resource dictionary's /Font entries to their ToUnicode maps.
@@ -426,6 +434,7 @@ func (d *Document) fontMapsFrom(res *object.Dictionary) map[string]fontText {
 		ft := fontText{toUnicode: toUnicode}
 		if st, _ := d.view().ResolveName(f.Get("Subtype")); st == "Type0" {
 			ft.composite = true
+			ft.vertical = core.FontWMode(d.view(), f) == 1
 			var ok bool
 			if ft.codes, ok = core.LoadFontCodes(d.view(), f); !ok {
 				ft.codes = core.TwoByteFontCodes()
