@@ -151,7 +151,7 @@ document with the finding, for a caller who can live with the loss:
 | rule | what the display list says | why it is refused |
 |---|---|---|
 | `backend-vertical-text` (`RuleVerticalText`) | a run turned in a way forme does not turn text: `Anticlockwise` or `Upright` without `Sideways`, or `Upright` with `Anticlockwise` | no writing mode produces it (CSS Writing Modes 5.1: `sideways-lr` turns every character, so nothing on it is upright), and the backend does not guess what it means. Every run forme sets down the page — turned either way, or upright in any face — is drawn |
-| `backend-link-dropped` (`RuleLinkDropped`) | a link whose target a PDF link cannot carry: a reference relative to the HTML document (`other.html`, `/a/b`), a fragment (`#section`), or a URI [`pdf0.LinkURI`](../annotation.go) refuses | the HTML document's address is not given to the backend, and a PDF reader resolves a relative URI against the PDF's own; the display list does not say where a fragment's target is; so the page would have the link's text and nothing to follow |
+| `backend-link-dropped` (`RuleLinkDropped`) | a link whose target a PDF link cannot carry: a reference left relative to the HTML document (`other.html`, `/a/b`, with no `<base href>` or under one that is a path), a fragment with no such base (`#section`), or a URI [`pdf0.LinkURI`](../annotation.go) refuses | the HTML document's address is not given to the backend, and a PDF reader resolves a relative URI against the PDF's own; the display list does not say where a fragment's target is; so the page would have the link's text and nothing to follow |
 | `backend-unknown-op` (`RuleUnknownOp`) | an operation a newer forme added | part of the page would be undrawn |
 
 Every field of every display-list operation is either drawn or refused, and
@@ -202,7 +202,15 @@ What is drawn:
   the middle of every line between. An href forme will not make a link of
   (`javascript:`, `data:`, `file:` and every scheme but http, https and
   mailto) is reported by forme as `link-refused`, at warning severity, and the
-  words are drawn without a link.
+  words are drawn without a link. A relative href is resolved by forme against
+  the document's `<base href>` where that is an http or https URL (HTML
+  §4.2.3, RFC 3986 §5.2) — `<base href="https://example.com/docs/">` makes
+  `intro.html` `https://example.com/docs/intro.html` and `#terms`
+  `https://example.com/docs/#terms` — and is written as that URL. One that
+  stays relative, and a fragment with no such base, is refused (below):
+  forme is not told the document's own address, and does not say where on
+  the page a fragment's target is, so there is no in-document destination
+  to write.
 - **Translucency.** A colour's alpha — including the `opacity` layout folds
   into it — is an ExtGState with `/ca` and `/CA`, and a page that uses one is a
   transparency group. A fill at alpha zero is left out; text at alpha zero is

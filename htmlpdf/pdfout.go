@@ -439,14 +439,18 @@ func emBoxes(glyphs []shape.Glyph, text string) []shape.Glyph {
 //
 // forme makes a Link only of an http, https or mailto URL or of a reference
 // with no scheme, and reports every other href itself (layout.RuleLinkRefused).
-// The first kind goes through pdf0.LinkURI, the rule every link annotation
-// goes through: an allowlist of schemes, the URL standard's normalisation,
-// and 7-bit percent-encoding. The second cannot be written correctly. A
-// relative reference is relative to the HTML document, whose address this
-// backend is never given, and a PDF reader resolves a relative /URI against
-// the PDF's own location (ISO 32000-2 12.6.4.8), which is another place. A
-// fragment names an element of the HTML document, and the display list does
-// not say where on the page that element is.
+// A relative href is resolved by forme where the document has a <base href>
+// with an http or https URL (HTML 4.2.3, RFC 3986 5.2), fragments included, so
+// it arrives as a URL. The URLs go through pdf0.LinkURI, the rule every link
+// annotation goes through: an allowlist of schemes, the URL standard's
+// normalisation, and 7-bit percent-encoding. A reference that arrives with no
+// scheme cannot be written correctly. It is relative to the HTML document,
+// whose address this backend is never given (forme's Input has none, and a
+// base that is a path leaves it relative), and a PDF reader resolves a
+// relative /URI against the PDF's own location (ISO 32000-2 12.6.4.8), which
+// is another place. A fragment names an element of the HTML document, and the
+// display list does not say where on the page that element is, so there is no
+// destination to write.
 func linkTarget(href string) (string, error) {
 	if u, err := url.Parse(href); err == nil && u.Scheme == "" {
 		if strings.HasPrefix(href, "#") {
@@ -454,7 +458,8 @@ func linkTarget(href string) (string, error) {
 				"list does not say where on the page its target is", href)
 		}
 		return "", fmt.Errorf("%q is relative to the HTML document, whose address this "+
-			"backend is not given; a PDF reader would resolve it against the PDF's own", href)
+			"backend is not given (a <base href> with an http or https URL resolves it); "+
+			"a PDF reader would resolve it against the PDF's own", href)
 	}
 	return pdf0.LinkURI(href)
 }

@@ -25,9 +25,10 @@ const (
 	// RuleLinkDropped is a hyperlink this backend cannot write as a link
 	// annotation, so the page would have the link's text and nothing to
 	// follow: a reference relative to the HTML document, whose address this
-	// backend is not given; a fragment, whose target the display list does
-	// not place; or a URI pdf0's link builder refuses (see pdf0.LinkURI).
-	// Every other link is written.
+	// backend is not given (forme resolves one against a <base href> with an
+	// http or https URL, and that one is written); a fragment with no such
+	// base, whose target the display list does not place; or a URI pdf0's
+	// link builder refuses (see pdf0.LinkURI). Every other link is written.
 	RuleLinkDropped layout.Rule = "backend-link-dropped"
 
 	// RuleUnknownOp is a display-list operation this backend does not know,

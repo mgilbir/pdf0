@@ -278,3 +278,46 @@ func TestALinkFormeRefusesIsNotAPDFLink(t *testing.T) {
 		}
 	}
 }
+
+// TestALinkTheDocumentsBaseResolvesIsWritten: a <base href> with an http or
+// https URL makes every relative href an absolute URL (HTML 4.2.3), and
+// forme resolves each against it (RFC 3986 5.2) before the Link reaches the
+// backend, which writes it. A fragment becomes the base document's fragment,
+// which is where HTML sends it: under a base, "#terms" leaves the page. A
+// base that is a path leaves a reference relative to the document, which is
+// still refused, as is a fragment with no base.
+func TestALinkTheDocumentsBaseResolvesIsWritten(t *testing.T) {
+	const base = `<base href="https://example.com/docs/guide/">`
+	for _, tc := range []struct{ href, want string }{
+		{"intro.html", "https://example.com/docs/guide/intro.html"},
+		{"../up.html", "https://example.com/docs/up.html"},
+		{"/root.html", "https://example.com/root.html"},
+		{"#terms", "https://example.com/docs/guide/#terms"},
+		{"?q=1", "https://example.com/docs/guide/?q=1"},
+		{"https://other.example/x", "https://other.example/x"},
+	} {
+		in := Input{HTML: base + `<p>go <a href="` + tc.href + `">there</a></p>`}
+		doc, _ := roundTrip(t, in, Options{})
+		got := pageLinks(t, doc)
+		sameLinks(t, got, expectedLinks(t, in, Options{}))
+		if len(got) != 1 || got[0].uri != tc.want {
+			t.Errorf("%q under %s: the page's links are %v; want one to %s", tc.href, base, got, tc.want)
+		}
+	}
+	for _, tc := range []struct{ html, why string }{
+		{`<base href="assets/"><p><a href="intro.html">x</a></p>`, "relative to the HTML document"},
+		{`<p><a href="#terms">x</a></p>`, "a fragment of the HTML document"},
+	} {
+		_, err := Render(Input{HTML: tc.html}, Options{})
+		var refused *RefusedError
+		if !errors.As(err, &refused) || !hasRule(refused.Findings, RuleLinkDropped, layout.Error) {
+			t.Errorf("%s: rendered with err %v; want a %s refusal", tc.html, err, RuleLinkDropped)
+			continue
+		}
+		for _, f := range refused.Findings {
+			if f.Rule == RuleLinkDropped && !strings.Contains(f.Message, tc.why) {
+				t.Errorf("%s: the finding says %q; want it to say the link is %s", tc.html, f.Message, tc.why)
+			}
+		}
+	}
+}
