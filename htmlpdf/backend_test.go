@@ -273,41 +273,31 @@ func TestFullyTransparentMarksPaintNothing(t *testing.T) {
 	}
 }
 
-// TestUprightTextIsRefused is C114: a run set upright down the page is not
-// drawn where it would not fit. The standard faces state no vertical
-// metrics, so layout measures an upright run in them at an em per character,
-// and their glyphs advance by the line's height, which is more. Upright runs
-// in a face that states vertical metrics, and sideways runs, are drawn; see
-// vertical_test.go.
-func TestUprightTextIsRefused(t *testing.T) {
+// TestUprightTextIsDrawnInTheDefaultFace is C114's last case: a run set
+// upright in the standard faces, which state no vertical metrics, was
+// refused, because layout measured it at an em a character and the glyphs
+// advanced by the line's height. It is drawn on em boxes now, as layout
+// measures it; TestUprightTextInAFaceWithoutVerticalMetricsIsSetOnEmBoxes
+// holds where each glyph goes.
+func TestUprightTextIsDrawnInTheDefaultFace(t *testing.T) {
 	for _, css := range []string{
 		`html { writing-mode: vertical-rl; text-orientation: upright }`,
 		`html { writing-mode: vertical-lr; text-orientation: upright }`,
 	} {
-		_, err := Render(Input{
+		out, err := Render(Input{
 			HTML: `<p>vertical text</p>`,
 			CSS:  []Stylesheet{{Source: css}},
 		}, Options{})
-		var refused *RefusedError
-		if !errors.As(err, &refused) {
-			t.Errorf("%s: rendered with err %v; want a refusal", css, err)
+		if err != nil {
+			t.Errorf("%s: %v", css, err)
 			continue
 		}
-		if !hasRule(refused.Findings, RuleVerticalText, layout.Error) {
-			t.Errorf("%s: refused without a %s finding: %v", css, RuleVerticalText, refused.Findings)
+		if hasRule(out.Findings, RuleVerticalText, layout.Warn) || hasRule(out.Findings, RuleVerticalText, layout.Error) {
+			t.Errorf("%s: reported %s: %v", css, RuleVerticalText, out.Findings)
 		}
-	}
-	// A caller may accept it, knowing what they get.
-	out, err := Render(Input{
-		HTML:   `<p>vertical text</p>`,
-		CSS:    []Stylesheet{{Source: `html { writing-mode: vertical-rl; text-orientation: upright }`}},
-		Policy: layout.Policy{RuleVerticalText: layout.Warn},
-	}, Options{})
-	if err != nil {
-		t.Fatalf("with the rule lowered to a warning: %v", err)
-	}
-	if !hasRule(out.Findings, RuleVerticalText, layout.Warn) {
-		t.Errorf("the lowered rule was not reported: %v", out.Findings)
+		if got := strings.Join(strings.Fields(mustExtractText(t, reread(t, out.Document))), " "); got != "vertical text" {
+			t.Errorf("%s: extracted %q", css, got)
+		}
 	}
 }
 
@@ -454,10 +444,10 @@ func TestTheTilingPatternIsCompressed(t *testing.T) {
 
 // TestEachVerticalFlagIsJudgedOnItsOwn: the check reads the flags as they
 // are, not as layout happens to combine them today. A turn either way is
-// drawn, and so is an upright run down a clockwise line (whether its face
-// states vertical metrics is TestUprightTextIsRefused's); a combination that is not one
-// (Anticlockwise or Upright without Sideways, Upright with Anticlockwise) is
-// refused.
+// drawn, and so is an upright run down a clockwise line; a combination that
+// is not one (Anticlockwise or Upright without Sideways, Upright with
+// Anticlockwise) is refused, and a caller who lowers the rule gets the page
+// with the finding at the severity it chose.
 func TestEachVerticalFlagIsJudgedOnItsOwn(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -476,6 +466,11 @@ func TestEachVerticalFlagIsJudgedOnItsOwn(t *testing.T) {
 		findings, refused := checkDrawable(layout.Composed{Ops: []layout.Op{tc.op}}, nil)
 		if refused != tc.refused || hasRule(findings, RuleVerticalText, layout.Error) != tc.refused {
 			t.Errorf("%s: refused=%v with %v; want refused=%v", tc.name, refused, findings, tc.refused)
+		}
+		lowered, refused := checkDrawable(layout.Composed{Ops: []layout.Op{tc.op}},
+			layout.Policy{RuleVerticalText: layout.Warn})
+		if refused || hasRule(lowered, RuleVerticalText, layout.Warn) != tc.refused {
+			t.Errorf("%s lowered to Warn: refused=%v with %v", tc.name, refused, lowered)
 		}
 	}
 }

@@ -2,6 +2,7 @@ package htmlpdf
 
 import (
 	"bytes"
+	"fmt"
 	"math"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/mgilbir/forme/layout"
+	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 	pdf0 "github.com/mgilbir/pdf0"
@@ -403,6 +405,150 @@ func TestUprightTextIsDrawnByItsVerticalMetrics(t *testing.T) {
 			}
 			if h := box[3] - box[1]; h < length-2*em {
 				t.Errorf("the ink runs %.1f down the page; %d characters of %.1f take %.1f", h, int(n), em, length)
+			}
+		})
+	}
+}
+
+// TestUprightTextInAFaceWithoutVerticalMetricsIsSetOnEmBoxes: Noto Sans and
+// the standard faces state no vertical metrics. Layout measures an upright
+// run in them at an em a character, CSS Writing Modes 4.4's synthesis, and
+// the backend draws them by it: each character's glyphs are centred in their
+// em box, as a cluster, and the run is as long as layout made it. Noto Sans
+// is composite and is written in its vertical form; a standard face has
+// none, and its glyphs are placed one by one in the horizontal font.
+func TestUprightTextInAFaceWithoutVerticalMetricsIsSetOnEmBoxes(t *testing.T) {
+	helvetica, err := shape.Standard("Helvetica")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name     string
+		fonts    layout.FontSet
+		face     *shape.Face
+		text     string
+		spacing  float64
+		vertical bool // written in a vertical font
+	}{
+		{"noto-sans", notoSansSet(t), notoSansSet(t).face, "ABC", 0, true},
+		{"noto-sans-spaced", notoSansSet(t), notoSansSet(t).face, "Wiq̇", 3, true},
+		{"standard", nil, helvetica, "ABC", 0, false},
+		{"standard-spaced", nil, helvetica, "Wiq", 3, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.face.StatesVerticalMetrics() {
+				t.Fatalf("%s states vertical metrics; the case is for a face that states none", tc.name)
+			}
+			css := `html { writing-mode: vertical-rl; text-orientation: upright } p { margin: 0 }`
+			if tc.spacing != 0 {
+				css += fmt.Sprintf(` p { letter-spacing: %gpx }`, tc.spacing)
+			}
+			in := Input{HTML: `<p>` + tc.text + `</p>`, CSS: []Stylesheet{{Source: css}}, Fonts: tc.fonts}
+			c := layout.Compose(in, Options{})
+			runs := uprightOps(t, c)
+			if len(runs) != 1 {
+				t.Fatalf("layout set %d runs; the case expects one", len(runs))
+			}
+			run := runs[0]
+
+			doc, raw := roundTrip(t, in, Options{})
+			if got := strings.TrimSpace(mustExtractText(t, doc)); got != tc.text {
+				t.Errorf("extracted %q, want %q", got, tc.text)
+			}
+			if tc.fonts != nil {
+				for _, f := range fontFindings(doc, raw) {
+					t.Error(f)
+				}
+			}
+			if run.Face.StatesVerticalMetrics() {
+				t.Fatalf("%s states vertical metrics; the case is for a face that states none", run.Face.Name())
+			}
+			var std *shape.Face
+			if !tc.vertical {
+				std = run.Face
+			}
+			placed, ends := readPage(t, doc, std)
+
+			// The em box model, from layout's side: the k-th character's
+			// box is an em down the line from the last, after its
+			// spacing. A character's glyphs — its cluster, and a mark
+			// shaping left in a cluster of its own after it — keep their
+			// places relative to each other as shaped, and the middle of
+			// the cell shaping gave them is the middle of the character's
+			// boxes.
+			v := run
+			v.Features.Vertical = true
+			glyphs, _ := layout.ShapedGlyphs(v)
+			size := run.Size.Px()
+			s := size / 1000
+			if len(placed) != len(glyphs) {
+				t.Fatalf("the page shows %d glyphs; forme shaped %d", len(placed), len(glyphs))
+			}
+			unitsOf := func(i int) int { // the characters glyph i's cluster holds
+				end := len(tc.text)
+				for _, g := range glyphs {
+					if g.Cluster > glyphs[i].Cluster && g.Cluster < end {
+						end = g.Cluster
+					}
+				}
+				return paragraph.UprightUnits(tc.text[glyphs[i].Cluster:end])
+			}
+			before := 0 // characters before this one
+			for lo := 0; lo < len(glyphs); {
+				hi := lo + 1
+				for hi < len(glyphs) && (glyphs[hi].Cluster == glyphs[lo].Cluster || unitsOf(hi) == 0) {
+					hi++
+				}
+				chars := unitsOf(lo)
+				cell := 0.0
+				for _, g := range glyphs[lo:hi] {
+					cell -= g.YAdvance
+				}
+				top := run.At.Y.Px() + float64(before)*(size+tc.spacing) + float64(chars)*size/2 - cell*s/2
+				p := 0.0
+				for j := lo; j < hi; j++ {
+					g := glyphs[j]
+					want := [2]float64{
+						run.At.X.Px() + (g.XOffset-g.VOriginX)*s,
+						top + (p+g.YOffset-g.VOriginY)*s*-1,
+					}
+					got := placed[j]
+					if got.vertical != tc.vertical {
+						t.Errorf("glyph %d is in a vertical font: %v; want %v", j, got.vertical, tc.vertical)
+					}
+					if math.Abs(got.at[0]-want[0]) > 1e-3 || math.Abs(got.at[1]-want[1]) > 1e-3 {
+						t.Errorf("glyph %d of %q is drawn at %v; its em box puts it at %v", j, tc.text, got.at, want)
+					}
+					p += g.YAdvance
+				}
+				before += chars
+				lo = hi
+			}
+			// The run is as long as layout made it: an em a character and
+			// the spacing after each.
+			n := float64(paragraph.UprightUnits(tc.text))
+			length := n*size + n*tc.spacing
+			// A vertical font moves the pen down the run; the horizontal
+			// one places each glyph from the run's origin and leaves it
+			// there.
+			if tc.vertical && (math.Abs(ends[0][1]-(run.At.Y.Px()+length)) > 1e-6 || math.Abs(ends[0][0]-run.At.X.Px()) > 1e-6) {
+				t.Errorf("the run leaves the pen at %v; layout measured it %v long from %v",
+					ends[0], length, [2]float64{run.At.X.Px(), run.At.Y.Px()})
+			}
+
+			if got := pdftotextOf(t, doc); got != tc.text {
+				t.Errorf("pdftotext reads %q, want %q", got, tc.text)
+			}
+			// The ink: inside the one-em column centred on the line, and
+			// inside the run's length.
+			ps := pageSpaceOf(c)
+			at := ps.point(run.At.X.Px(), run.At.Y.Px())
+			em := size * ps.k
+			box := inkBox(t, doc)
+			const slack = 1.0
+			if box[0] < at[0]-em/2-slack || box[2] > at[0]+em/2+slack ||
+				box[3] > at[1]+slack || box[1] < at[1]-length*ps.k-slack {
+				t.Errorf("the ink %v is not in the column %.1f wide centred on %v and %.1f long", box, em, at, length*ps.k)
 			}
 		})
 	}

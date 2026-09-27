@@ -150,7 +150,7 @@ document with the finding, for a caller who can live with the loss:
 
 | rule | what the display list says | why it is refused |
 |---|---|---|
-| `backend-vertical-text` (`RuleVerticalText`) | a run set upright down the page in a face that states no vertical metrics — the standard faces, and any face without `vmtx` — or a combination of turns forme does not make | layout measures an upright run in such a face at an em per character (CSS Writing Modes 4.4), and its glyphs advance by the line's height, so the run would be drawn longer or shorter than the space it was given |
+| `backend-vertical-text` (`RuleVerticalText`) | a run turned in a way forme does not turn text: `Anticlockwise` or `Upright` without `Sideways`, or `Upright` with `Anticlockwise` | no writing mode produces it (CSS Writing Modes 5.1: `sideways-lr` turns every character, so nothing on it is upright), and the backend does not guess what it means. Every run forme sets down the page — turned either way, or upright in any face — is drawn |
 | `backend-link-dropped` (`RuleLinkDropped`) | a link whose target a PDF link cannot carry: a reference relative to the HTML document (`other.html`, `/a/b`), a fragment (`#section`), or a URI [`pdf0.LinkURI`](../annotation.go) refuses | the HTML document's address is not given to the backend, and a PDF reader resolves a relative URI against the PDF's own; the display list does not say where a fragment's target is; so the page would have the link's text and nothing to follow |
 | `backend-unknown-op` (`RuleUnknownOp`) | an operation a newer forme added | part of the page would be undrawn |
 
@@ -183,10 +183,13 @@ What is drawn:
   face's `vmtx` and `VORG`) and drawn by `fonts.Face.DrawUpright` in the
   face's vertical form, an `Identity-V` font whose `/W2` states each glyph's
   own vertical metrics, each glyph hung from its vertical origin at the pen
-  layout gave it. It is drawn where the face states vertical metrics, which
-  layout measured the run by; a face that states none (the standard faces,
-  Noto Sans) is refused by `RuleVerticalText`. See
-  [fonts.md](fonts.md#setting-text-and-getting-it-back).
+  layout gave it. A face that states vertical metrics is drawn by them, as
+  layout measured it. One that states none (Noto Sans, the standard faces) is
+  measured by layout at an em a character, CSS Writing Modes 4.4's synthesis,
+  and drawn on those em boxes: each character's glyphs, as shaping placed
+  them relative to each other, centred in its box. A standard face has no
+  vertical font, and its glyphs are placed one by one in the horizontal one.
+  See [fonts.md](fonts.md#setting-text-and-getting-it-back).
 - **Links.** Each `<a href>` forme lays out is a `Link` in the display list,
   with one area per fragment of the `<a>`: a line of an inline link, the box of
   a block one, an image or inline-block inside one. Each area is a link
