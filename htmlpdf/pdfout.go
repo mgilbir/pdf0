@@ -24,7 +24,6 @@ package htmlpdf
 
 import (
 	"fmt"
-	"image"
 	"net/url"
 	"sort"
 	"strings"
@@ -34,8 +33,6 @@ import (
 	"github.com/mgilbir/forme/shape"
 	pdf0 "github.com/mgilbir/pdf0"
 	"github.com/mgilbir/pdf0/content"
-	"github.com/mgilbir/pdf0/fonts"
-	"github.com/mgilbir/pdf0/images"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 )
@@ -240,38 +237,39 @@ func Render(in layout.Input, opts layout.Options) (Result, error) {
 // one fact about the document, and a line per run would bury it.
 func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, bool) {
 	counts := map[layout.Rule]int{}
-	// The first link that cannot be written, and why: the links a document
-	// cannot carry are usually all one kind — every relative reference in it
-	// — and the first says which.
-	var firstLink, firstUndrawable string
-	undrawable := func(why string) {
-		if counts[RuleUndrawable] == 0 {
-			firstUndrawable = why
+	// The first instance of each rule, and why: the links a document cannot
+	// carry are usually all one kind — every relative reference in it — and
+	// the first says which, as the first undrawable operation does.
+	first := map[layout.Rule]string{}
+	note := func(rule layout.Rule, why string) {
+		if counts[rule] == 0 {
+			first[rule] = why
 		}
-		counts[RuleUndrawable]++
+		counts[rule]++
 	}
-	for _, op := range c.Ops {
-		switch v := op.(type) {
-		case layout.DrawText:
-			if !drawableTurn(v) {
-				counts[RuleVerticalText]++
+	var visit func(ops []layout.Op)
+	visit = func(ops []layout.Op) {
+		for _, op := range ops {
+			if why := undrawable(op); why != "" {
+				note(RuleUndrawable, why)
 			}
-			if v.WidthScale != 0 {
-				undrawable(fmt.Sprintf("a run of text squeezed to %g of its width (DrawText.WidthScale), "+
-					"which this backend does not yet write", v.WidthScale))
-			}
-		case layout.Link:
-			if _, err := linkTarget(v.Href); err != nil {
-				if counts[RuleLinkDropped] == 0 {
-					firstLink = err.Error()
+			switch v := op.(type) {
+			case layout.DrawText:
+				if !drawableTurn(v) {
+					note(RuleVerticalText, "")
 				}
-				counts[RuleLinkDropped]++
+			case layout.Link:
+				if _, err := linkTarget(v.Href); err != nil {
+					note(RuleLinkDropped, err.Error())
+				}
+			case layout.FillRect, layout.DrawImage, layout.TileImage:
+			default:
+				note(RuleUnknownOp, "")
 			}
-		case layout.FillRect, layout.DrawImage, layout.TileImage:
-		default:
-			counts[RuleUnknownOp]++
 		}
 	}
+	visit(c.Ops)
+	firstLink, firstUndrawable := first[RuleLinkDropped], first[RuleUndrawable]
 
 	messages := map[layout.Rule]string{
 		RuleVerticalText: "%d run(s) of text are turned in a way layout does not turn " +
@@ -310,6 +308,21 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 		})
 	}
 	return out, refused
+}
+
+// undrawable is why this backend cannot write an operation it knows as the
+// display list states it, or "" when it can. checkDrawable reports what it
+// says under RuleUndrawable, and the writer leaves out what it refused, so the
+// two cannot disagree about which operations are drawn.
+func undrawable(op layout.Op) string {
+	switch v := op.(type) {
+	case layout.DrawText:
+		if v.WidthScale != 0 {
+			return fmt.Sprintf("a run of text squeezed to %g of its width (DrawText.WidthScale), "+
+				"which this backend does not yet write", v.WidthScale)
+		}
+	}
+	return ""
 }
 
 // textMatrix is the linear part of a run's text matrix: where the text
@@ -437,263 +450,6 @@ func (m pageTransform) rect(r layout.Rect) [4]float64 {
 	}
 }
 
-// writePage turns a display list into a one-page document.
-//
-// The document is made before the content stream rather than after, which is
-// the one ordering constraint here: an image has to be written into the file as
-// an object before the drawing can name it, and an object cannot be added to a
-// document that does not exist yet. Fonts are the other way round — a face is
-// subsetted to the glyphs it was asked to set, so it can only be embedded once
-// the drawing is finished — which is why AddPage takes the faces and this
-// passes the images.
-//
-// Every field of every operation is either drawn here or refused by
-// checkDrawable before this runs; drawnFields in this file lists which, and a
-// test holds that list against the operations layout declares.
-func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Document, error) {
-	doc := pdf0.NewDocument()
-	b := &content.Builder{}
-
-	// The one transform. Reading it right to left: layout.layout units become points,
-	// the y axis is inverted, the whole thing is scaled to fit, and the result
-	// is placed inside the page's margin.
-	//
-	// A matrix [a b c d e f] maps (x, y) to (ax + cy + e, bx + dy + f). With
-	// a = k and d = -k the x axis keeps its direction and the y axis reverses,
-	// which is exactly the difference between the two coordinate systems.
-	const pxToPt = 72.0 / 96.0
-	k := pxToPt * scale
-	tx := page.Margin.Left.Pt()
-	ty := page.Height.Pt() - page.Margin.Top.Pt()
-	b.Save()
-	b.Concat(k, 0, 0, -k, tx, ty)
-	toPage := pageTransform{k: k, tx: tx, ty: ty}
-	var links []pdf0.Link
-
-	// Keyed by the shaping face, which is what the display list carries, and
-	// held as the embedding wrapper, which is what writing the document needs.
-	// Adopt does not copy: the two are the same font, and each records the
-	// glyphs the other used, which is what makes the subset come out right.
-	faces := map[object.Name]*fonts.Face{}
-	names := map[*shape.Face]object.Name{}
-	// The vertical forms, for upright runs: the same wrapper's, so that the
-	// two forms are one embedding. See fonts.Face.Vertical.
-	vnames := map[*shape.Face]object.Name{}
-	xobjects := map[object.Name]object.Object{}
-	patterns := map[object.Name]object.Object{}
-	alphas := newAlphaStates()
-	// Keyed by the source bytes rather than by the decoded image, so a logo
-	// drawn on every row of a table is one image XObject in the file.
-	imageNames := map[string]object.Name{}
-	// embed puts a picture in the file once and returns the name the drawing
-	// refers to it by.
-	embed := func(img image.Image, key string) (object.Name, error) {
-		if name, ok := imageNames[key]; ok {
-			return name, nil
-		}
-		// images.Embed is the module's own encoder, and using it rather than
-		// writing a second one is what keeps the two directions checking each
-		// other: whatever it writes, the extraction side of that package reads
-		// back, and the pixels have to survive the trip. It also brings its own
-		// pixel cap.
-		ref, err := images.Embed(doc, img)
-		if err != nil {
-			return "", fmt.Errorf("embedding an image: %w", err)
-		}
-		name := object.Name(fmt.Sprintf("Im%d", len(imageNames)+1))
-		imageNames[key] = name
-		xobjects[name] = ref
-		return name, nil
-	}
-
-	for _, op := range ops {
-		switch v := op.(type) {
-		case layout.FillRect:
-			// Overhang is about the page-overflow guard in layout and says
-			// nothing about how the rectangle is painted.
-			if v.Rect.Empty() || !(v.Color.A > 0) {
-				continue // no area, or no ink: nothing is painted
-			}
-			b.Save()
-			alphas.use(b, v.Color.A)
-			b.SetRGB(v.Color.R/255, v.Color.G/255, v.Color.B/255)
-			// The rectangle is given in layout.layout units and the transform above
-			// converts them, so the numbers written here are the layout.layout's own.
-			b.Rect(v.Rect.X.Px(), v.Rect.Y.Px(), v.Rect.W.Px(), v.Rect.H.Px())
-			b.Fill()
-			b.Restore()
-
-		case layout.DrawText:
-			if v.Face == nil || v.Text == "" {
-				continue
-			}
-			if v.WidthScale != 0 {
-				continue // checkDrawable reported it, and the policy let the page through without it
-			}
-			name, ok := names[v.Face]
-			if !ok {
-				name = object.Name(fmt.Sprintf("F%d", len(names)+1))
-				names[v.Face] = name
-				faces[name] = fonts.Adopt(v.Face)
-			}
-			face := faces[name]
-			if v.Upright {
-				// Written in the face's vertical form, an Identity-V font
-				// whose /W2 states each glyph's vertical metrics, where the
-				// face has one. A standard face has none, and DrawUpright
-				// places its glyphs one by one in the horizontal font.
-				if vf, err := face.Vertical(); err == nil {
-					vname, ok := vnames[v.Face]
-					if !ok {
-						vname = object.Name(fmt.Sprintf("V%d", len(vnames)+1))
-						vnames[v.Face] = vname
-						faces[vname] = vf
-					}
-					name, face = vname, vf
-				}
-			}
-			b.Save()
-			clipTo(b, v.Clip)
-			alphas.use(b, v.Color.A)
-			b.SetRGB(v.Color.R/255, v.Color.G/255, v.Color.B/255)
-			b.BeginText()
-			b.SetFont(name, v.Size.Px())
-			if !(v.Color.A > 0) {
-				// Transparent text is not painted and is still text: CSS
-				// "color: transparent" leaves it selectable, and so does this.
-				b.SetTextRenderMode(content.InvisibleText)
-			}
-			// The text matrix puts the run's own axes — along the line, and up
-			// the glyph — onto the page, in the flipped system the transform
-			// above set up. See textMatrix.
-			a, bb, c, d := textMatrix(v)
-			b.SetTextMatrix(a, bb, c, d, v.At.X.Px(), v.At.Y.Px())
-			// The glyphs layout measured, shaped with the run's direction, its
-			// context either side and the features the document turned off —
-			// layout.ShapedGlyphs is the pairing of all of them, and a backend
-			// that reshapes the text alone draws a different run from the one
-			// placed (a ligature measured as two letters, a kern turned back on,
-			// an Arabic word in isolated forms).
-			text := layout.ShapedText(v)
-			if v.Upright {
-				// Upright: each glyph hung from its vertical origin, one
-				// below the other. See uprightGlyphs.
-				face.DrawUpright(b, v.Text, uprightGlyphs(v), v.Size.Px())
-			} else {
-				glyphs, _ := layout.ShapedGlyphs(v)
-				glyphs = withLetterSpacing(glyphs, text, v)
-				face.Draw(b, text, glyphs, v.Size.Px())
-			}
-			b.EndText()
-			b.Restore()
-
-		case layout.DrawImage:
-			if v.Image == nil || v.Rect.Empty() {
-				continue
-			}
-			name, err := embed(v.Image, v.Key)
-			if err != nil {
-				return nil, err
-			}
-			b.Save()
-			clipTo(b, v.Clip)
-			// An image XObject is painted into the unit square, so the matrix
-			// *is* the placement. The negative vertical scale is not a flip: in
-			// these coordinates y increases downwards, so the image's own
-			// bottom edge — the one at v=0 — belongs at the rectangle's largest
-			// y. Getting the sign wrong here draws the picture upside down
-			// above the box rather than the right way up inside it.
-			b.Concat(v.Rect.W.Px(), 0, 0, -v.Rect.H.Px(),
-				v.Rect.X.Px(), v.Rect.Bottom().Px())
-			b.Draw(name)
-			b.Restore()
-
-		case layout.TileImage:
-			if v.Image == nil || v.Clip.Empty() || v.Tile.Empty() {
-				continue
-			}
-			name, err := embed(v.Image, v.Key)
-			if err != nil {
-				return nil, err
-			}
-			cols, rows := v.Tiles()
-			if cols <= 0 || rows <= 0 {
-				continue
-			}
-			b.Save()
-			b.Rect(v.Clip.X.Px(), v.Clip.Y.Px(), v.Clip.W.Px(), v.Clip.H.Px())
-			b.Clip()
-			b.EndPath()
-			if cols == 1 && rows == 1 {
-				// One tile, which is what "no-repeat" produces and what most
-				// backgrounds are. A pattern for it would be a dictionary, a
-				// stream and a resource to say what two operators already say.
-				b.Concat(v.Tile.W.Px(), 0, 0, -v.Tile.H.Px(),
-					v.Tile.X.Px(), v.Tile.Bottom().Px())
-				b.Draw(name)
-			} else {
-				// A real tiling, drawn as PDF's own: one pattern object with a
-				// step, painted over the clip in a single fill. The alternative
-				// — a Do per tile — would put the tile count into the file, and
-				// the tile count is the number this engine refuses to let a
-				// stylesheet choose.
-				pname := object.Name(fmt.Sprintf("Pt%d", len(patterns)+1))
-				pattern, err := tilingPattern(doc, name, xobjects[name], v, k, tx, ty)
-				if err != nil {
-					return nil, err
-				}
-				patterns[pname] = pattern
-				b.SetColorSpace("Pattern")
-				b.SetPattern(pname)
-				b.Rect(v.Clip.X.Px(), v.Clip.Y.Px(), v.Clip.W.Px(), v.Clip.H.Px())
-				b.Fill()
-			}
-			b.Restore()
-
-		case layout.Link:
-			if _, err := linkTarget(v.Href); err != nil {
-				continue // checkDrawable reported it, and the policy let the page through without it
-			}
-			// One annotation per area, in the order forme painted them, so
-			// that where areas overlap the later — the inner of two nested
-			// links — is on top, as forme's Link says a backend should make
-			// it. Not one annotation with /QuadPoints: a reader that does
-			// not read them (PDF 1.6, and optional) activates the /Rect,
-			// which for a link broken across lines is a box over the middle
-			// of every line between. The href goes to the builder as the
-			// document wrote it; the builder normalises and encodes it.
-			for _, r := range v.Rects {
-				if r.Empty() {
-					continue // forme drops these; nothing could activate one
-				}
-				links = append(links, pdf0.Link{Rect: toPage.rect(r), URI: v.Href})
-			}
-
-		default:
-			// checkDrawable refused this document or the caller's policy let
-			// it through knowing the operation is not drawn.
-		}
-	}
-	b.Restore()
-
-	if _, err := doc.AddPage(pdf0.Page{
-		Width:      page.Width.Pt(),
-		Height:     page.Height.Pt(),
-		Content:    b,
-		Links:      links,
-		Faces:      faces,
-		XObjects:   xobjects,
-		Patterns:   patterns,
-		ExtGStates: alphas.states,
-		// A translucent mark composites against whatever is behind it, and
-		// without a page group what that is is left to the reader.
-		Group: len(alphas.states) > 0,
-	}); err != nil {
-		return nil, err
-	}
-	return doc, nil
-}
-
 // drawnFields says, for every display-list operation, what this backend does
 // with each of its fields: draws it, or refuses the document over it.
 //
@@ -775,6 +531,9 @@ func unknownOpFields(fields ...string) map[string]string {
 type alphaStates struct {
 	states map[object.Name]object.Object
 	byA    map[float64]object.Name
+	// onUse is told each time a translucent state is selected, so that the
+	// page knows it needs a transparency group.
+	onUse func()
 }
 
 func newAlphaStates() *alphaStates {
@@ -803,6 +562,9 @@ func (a *alphaStates) use(b *content.Builder, alpha float64) {
 		gs.Set("CA", object.Real(alpha))
 		a.byA[alpha] = name
 		a.states[name] = gs
+	}
+	if a.onUse != nil {
+		a.onUse()
 	}
 	b.SetExtGState(name)
 }
@@ -892,7 +654,8 @@ func clipTo(b *content.Builder, c layout.Clip) {
 	b.EndPath()
 }
 
-// tilingPattern builds the PDF pattern that draws one background tiling.
+// tilingPattern builds the PDF pattern that draws one background tiling of a
+// picture.
 //
 // # Why a pattern rather than a Do per tile
 //
@@ -904,21 +667,7 @@ func clipTo(b *content.Builder, c layout.Clip) {
 // XStep and YStep say how far apart the cells are and the reader repeats them
 // across whatever is filled, which is precisely the value the display list
 // carries.
-//
-// # The matrix, which is the part that is easy to get wrong
-//
-// A pattern's /Matrix maps pattern space to the *default* coordinate space of
-// the page — not to the space in force where the pattern is painted (ISO 32000-2
-// 8.7.3.1). So the page transform this content stream set up with a "cm" does
-// not apply to it, and has to be repeated here. That is what k, tx and ty are:
-// the same numbers, so that pattern space is the layout.layout's own coordinate system,
-// y downwards, and the cell below can be written in exactly the units every
-// rectangle in the display list is in.
-//
-// Getting this wrong does not produce a blank page. It produces a background
-// tiled at three quarters of the right size, in the wrong place, which looks like
-// a layout.layout bug anywhere except here.
-func tilingPattern(doc *pdf0.Document, name object.Name, ref object.Object, v layout.TileImage, k, tx, ty float64) (object.Object, error) {
+func tilingPattern(doc *pdf0.Document, name object.Name, ref object.Object, v layout.TileImage, base [6]float64) (object.Object, error) {
 	cell := &content.Builder{}
 	cell.Save()
 	// The same placement layout.DrawImage uses, in the same coordinates: an image
@@ -929,10 +678,6 @@ func tilingPattern(doc *pdf0.Document, name object.Name, ref object.Object, v la
 		v.Tile.X.Px(), v.Tile.Bottom().Px())
 	cell.Draw(name)
 	cell.Restore()
-	drawn, err := cell.Bytes()
-	if err != nil {
-		return nil, fmt.Errorf("building a background tile: %w", err)
-	}
 
 	// A pattern carries its own resources: the cell is a content stream of its
 	// own, so the page's /XObject is not in scope for it.
@@ -940,7 +685,31 @@ func tilingPattern(doc *pdf0.Document, name object.Name, ref object.Object, v la
 	xobjects.Set(name, ref)
 	res := &object.Dictionary{}
 	res.Set("XObject", xobjects)
+	return tiling(doc, cell, res, v.Tile, v.StepX.Px(), v.StepY.Px(), base)
+}
 
+// tiling writes a coloured tiling pattern whose cell is the tile, drawn by
+// cell with the resources res, repeated every stepX and stepY.
+//
+// # The matrix, which is the part that is easy to get wrong
+//
+// A pattern's /Matrix maps pattern space to the *default* coordinate space of
+// the content stream that paints with it — the page's, or a form's — not to the
+// space in force where the pattern is painted (ISO 32000-2 8.7.3.1). So the page
+// transform the page's content stream set up with a "cm" does not apply to it,
+// and has to be repeated: base is that transform, so that pattern space is
+// layout's own coordinate system, y downwards, and the cell can be written in
+// exactly the units every rectangle in the display list is in. Inside a form,
+// whose own space is already layout's (see canvas), base is the identity.
+//
+// Getting this wrong does not produce a blank page. It produces a background
+// tiled at three quarters of the right size, in the wrong place, which looks like
+// a layout bug anywhere except here.
+func tiling(doc *pdf0.Document, cell *content.Builder, res *object.Dictionary, tile layout.Rect, stepX, stepY float64, base [6]float64) (object.Object, error) {
+	drawn, err := cell.Bytes()
+	if err != nil {
+		return nil, fmt.Errorf("building a background tile: %w", err)
+	}
 	// Flate-compressed like every other stream this module writes.
 	compressed := core.FlateEncode(drawn)
 	stream := object.NewStream(nil, compressed)
@@ -956,16 +725,17 @@ func tilingPattern(doc *pdf0.Document, name object.Name, ref object.Object, v la
 	// showing seams at some zoom levels.
 	stream.Dict.Set("TilingType", object.Integer(2))
 	stream.Dict.Set("BBox", object.Array{
-		numberOf(v.Tile.X.Px()), numberOf(v.Tile.Y.Px()),
-		numberOf(v.Tile.Right().Px()), numberOf(v.Tile.Bottom().Px()),
+		numberOf(tile.X.Px()), numberOf(tile.Y.Px()),
+		numberOf(tile.Right().Px()), numberOf(tile.Bottom().Px()),
 	})
-	stream.Dict.Set("XStep", numberOf(v.StepX.Px()))
-	stream.Dict.Set("YStep", numberOf(v.StepY.Px()))
+	stream.Dict.Set("XStep", numberOf(stepX))
+	stream.Dict.Set("YStep", numberOf(stepY))
 	stream.Dict.Set("Resources", res)
-	stream.Dict.Set("Matrix", object.Array{
-		numberOf(k), object.Integer(0), object.Integer(0), numberOf(-k),
-		numberOf(tx), numberOf(ty),
-	})
+	m := make(object.Array, 6)
+	for i, v := range base {
+		m[i] = numberOf(v)
+	}
+	stream.Dict.Set("Matrix", m)
 	stream.Dict.Set("Length", object.Integer(len(compressed)))
 	// Indirect, because a stream cannot be a direct object in a dictionary.
 	return doc.Add(stream), nil
