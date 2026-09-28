@@ -260,6 +260,15 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 				if !drawableTurn(v) {
 					note(RuleVerticalText, "")
 				}
+			case layout.DrawTextShadow:
+				if !drawableTurn(v.Run) {
+					note(RuleVerticalText, "")
+				}
+			case layout.DrawEmphasisMark:
+				if !drawableTurn(v.Mark) {
+					note(RuleVerticalText, "")
+				}
+			case layout.DrawGlyphs:
 			case layout.Link:
 				if _, err := linkTarget(v.Href); err != nil {
 					note(RuleLinkDropped, err.Error())
@@ -339,6 +348,27 @@ func undrawable(op layout.Op) string {
 		return why
 	case layout.FilterGroup:
 		return filterUndrawable(v)
+	case layout.DrawTextShadow:
+		if v.StdDev > 0 {
+			return fmt.Sprintf("a text shadow blurred by a standard deviation of %gpx, which PDF has no "+
+				"operation for", v.StdDev.Px())
+		}
+		return squeezeUndrawable(v.Run)
+	case layout.DrawEmphasisMark:
+		return squeezeUndrawable(v.Mark)
+	case layout.DrawGlyphs:
+		if v.Face == nil {
+			return ""
+		}
+		if v.Face.IsSimple() || v.Face.IsStandard() {
+			return fmt.Sprintf("glyphs drawn by index in %s, whose codes are characters and not glyph indices",
+				v.Face.Name())
+		}
+		for _, g := range v.Glyphs {
+			if g.GID < 0 || g.GID >= v.Face.NumGlyphs() {
+				return fmt.Sprintf("glyph %d of %s, which has %d", g.GID, v.Face.Name(), v.Face.NumGlyphs())
+			}
+		}
 	}
 	return ""
 }
@@ -550,8 +580,6 @@ var drawnFields = map[string]map[string]string{
 		"Image": "embedded through images.Embed",
 		"Key":   "one image XObject per key",
 	},
-	// The operations forme 0.4.0 added, which this backend does not draw
-	// yet: each is refused whole, as an operation it does not know is.
 	"FillGradient": {
 		"Clip":     "the area painted, a clip",
 		"Tile":     "the first tile: the gradient clipped to it, or a tiling pattern's cell",
@@ -575,19 +603,22 @@ var drawnFields = map[string]map[string]string{
 		"Ops":     "drawn into a form XObject, an isolated transparency group",
 		"Clip":    "clipTo, around the filtered result",
 	},
-	"DrawTextShadow":   unknownOpFields("Run", "StdDev"),
-	"DrawEmphasisMark": unknownOpFields("Mark"),
-	"DrawGlyphs":       unknownOpFields("At", "Text", "Glyphs", "Face", "Size", "Color", "Clip"),
-}
-
-// unknownOpFields accounts for every field of an operation this backend
-// refuses whole.
-func unknownOpFields(fields ...string) map[string]string {
-	out := make(map[string]string, len(fields))
-	for _, f := range fields {
-		out[f] = "the operation is not drawn: RuleUnknownOp"
-	}
-	return out
+	"DrawTextShadow": {
+		"Run":    "drawn as a DrawText is, every field of it as DrawText's list says, as an artifact inside an empty /ActualText: canvas.notText",
+		"StdDev": "a sharp shadow at zero; a blurred one is refused: undrawable",
+	},
+	"DrawEmphasisMark": {
+		"Mark": "drawn as a DrawText is, every field of it as DrawText's list says, as an artifact inside an empty /ActualText: canvas.notText",
+	},
+	"DrawGlyphs": {
+		"At":     "the origin of the text matrix",
+		"Text":   "the one /ActualText the glyphs stand for, and what their ToUnicode entries are written from; an artifact when empty",
+		"Glyphs": "drawn through fonts.Face.DrawReplaced, each at its offsets and advance; refused past the face's glyphs",
+		"Face":   "the font, adopted and embedded; refused for a simple or standard face, whose codes are characters",
+		"Size":   "the font size",
+		"Color":  "the fill colour; alpha through an ExtGState, and invisible at zero",
+		"Clip":   "clipTo",
+	},
 }
 
 // alphaStates is the ExtGStates a page's translucent marks select, one per

@@ -327,6 +327,24 @@ func (c *canvas) drawOp(op layout.Op) error {
 	case layout.FillGradient:
 		return c.fillGradient(v)
 
+	case layout.DrawTextShadow:
+		if undrawable(v) != "" || !drawableTurn(v.Run) {
+			return nil // checkDrawable reported it, and the policy let the page through without it
+		}
+		c.notText(v.Run)
+
+	case layout.DrawEmphasisMark:
+		if undrawable(v) != "" || !drawableTurn(v.Mark) {
+			return nil // checkDrawable reported it, and the policy let the page through without it
+		}
+		c.notText(v.Mark)
+
+	case layout.DrawGlyphs:
+		if undrawable(v) != "" {
+			return nil // checkDrawable reported it, and the policy let the page through without it
+		}
+		c.glyphs(v)
+
 	case layout.FilterGroup:
 		if undrawable(v) != "" {
 			return nil // checkDrawable reported it, and the policy let the page through without it
@@ -363,12 +381,32 @@ func (c *canvas) drawOp(op layout.Op) error {
 	return nil
 }
 
-// text draws a run of text.
-func (c *canvas) text(v layout.DrawText) {
+// text draws a run of text: the document's text, which extracts as the run's
+// own.
+func (c *canvas) text(v layout.DrawText) { c.run(v, false) }
+
+// notText draws glyphs laid out as a run and not the document's text: a text
+// shadow, an emphasis mark. They are an artifact (ISO 32000-2 14.8.2.2), ink
+// that repeats or decorates the text, and are drawn inside an /ActualText
+// that says nothing (14.9.4), so a reader extracting the page does not read
+// the shadowed words twice or a dot for every character. Their ToUnicode
+// entries are the glyphs' own, as the run's are.
+func (c *canvas) notText(v layout.DrawText) {
+	if v.Face == nil || v.Text == "" {
+		return
+	}
+	c.run(v, true)
+}
+
+// run draws a run of glyphs laid out as text, as the document's text or not.
+func (c *canvas) run(v layout.DrawText, artifact bool) {
 	b := c.b
 	name, face := c.face(v.Face, v.Upright)
 	b.Save()
 	clipTo(b, v.Clip)
+	if artifact {
+		b.BeginMarked("Artifact")
+	}
 	c.alphas.use(b, v.Color.A)
 	b.SetRGB(v.Color.R/255, v.Color.G/255, v.Color.B/255)
 	b.BeginText()
@@ -397,16 +435,65 @@ func (c *canvas) text(v layout.DrawText) {
 	// that reshapes the text alone draws a different run from the one
 	// placed (a ligature measured as two letters, a kern turned back on,
 	// an Arabic word in isolated forms).
-	if v.Upright {
+	switch {
+	case v.Upright && artifact:
+		face.DrawUprightReplaced(b, v.Text, uprightGlyphs(v), v.Size.Px(), "")
+	case v.Upright:
 		// Upright: each glyph hung from its vertical origin, one
 		// below the other. See uprightGlyphs.
 		face.DrawUpright(b, v.Text, uprightGlyphs(v), v.Size.Px())
-	} else {
+	default:
 		text := layout.ShapedText(v)
 		glyphs, _ := layout.ShapedGlyphs(v)
 		glyphs = withLetterSpacing(glyphs, text, v)
-		face.Draw(b, text, glyphs, v.Size.Px())
+		if artifact {
+			face.DrawReplaced(b, text, glyphs, v.Size.Px(), "")
+		} else {
+			face.Draw(b, text, glyphs, v.Size.Px())
+		}
 	}
 	b.EndText()
+	if artifact {
+		b.EndMarked()
+	}
+	b.Restore()
+}
+
+// glyphs draws glyphs by their indices, each where the display list placed it:
+// what a formula draws where the glyph it needs stands for no character (a
+// stretched operator's size variant, or the pieces of its assembly).
+//
+// They are written through the face's one glyph-code path, as every glyph is,
+// and stand in the page's text for DrawGlyphs.Text once, however many pieces
+// draw it: one /ActualText saying it (ISO 32000-2 14.9.4). A piece no
+// character maps to has its ToUnicode entry from that text too — the character
+// it is a piece of — so a reader that does not honour /ActualText reads the
+// character once per piece, and one that does reads it once. Glyphs that stand
+// for no text (Text is empty: a formula's drop shadow) are an artifact, and
+// say nothing.
+func (c *canvas) glyphs(v layout.DrawGlyphs) {
+	if v.Face == nil || len(v.Glyphs) == 0 {
+		return
+	}
+	b := c.b
+	name, face := c.face(v.Face, false)
+	b.Save()
+	clipTo(b, v.Clip)
+	if v.Text == "" {
+		b.BeginMarked("Artifact")
+	}
+	c.alphas.use(b, v.Color.A)
+	b.SetRGB(v.Color.R/255, v.Color.G/255, v.Color.B/255)
+	b.BeginText()
+	b.SetFont(name, v.Size.Px())
+	if !(v.Color.A > 0) {
+		b.SetTextRenderMode(content.InvisibleText)
+	}
+	b.SetTextMatrix(1, 0, 0, -1, v.At.X.Px(), v.At.Y.Px())
+	face.DrawReplaced(b, v.Text, v.Glyphs, v.Size.Px(), v.Text)
+	b.EndText()
+	if v.Text == "" {
+		b.EndMarked()
+	}
 	b.Restore()
 }

@@ -236,6 +236,23 @@ What is drawn:
   colour-matrix functions forme could not fold (over a picture, or marks that
   overlap) are refused: PDF has no convolution, and no combination of its
   blend modes and transfer functions is a colour matrix.
+- **Text shadows and emphasis marks.** A sharp `text-shadow` is the run's
+  glyphs moved by the offset in the shadow's colour, under the run, and a
+  `text-emphasis` mark is its character drawn where forme puts it. Neither is
+  the document's text: each is marked as an artifact (ISO 32000-2 14.8.2.2)
+  and drawn inside an `/ActualText` that says nothing (14.9.4), so the page
+  extracts as its words once, with no mark among them. A blurred text shadow is
+  refused: PDF has no blur.
+- **MathML's stretched operators.** A stretched operator is a size variant of
+  its glyph or an assembly of pieces from the font's MATH table — glyphs no
+  character maps to, drawn by index (`DrawGlyphs`) through the same glyph-code
+  path as all text, each at the offsets forme placed it. The pieces stand for
+  the operator's character once, in one `/ActualText`; each piece's ToUnicode
+  entry is the character it is a piece of. forme does not record such a glyph
+  as used and has no way to be told of one, so a face that draws one is
+  embedded whole (see [fonts.md](fonts.md#setting-text-and-getting-it-back)).
+  A simple or standard face, whose codes are characters, cannot draw a glyph
+  by index, and is refused.
 - **Squeezed text.** A `text-combine-upright` composition wider than its em,
   which forme squeezes to fit (`DrawText.WidthScale`, CSS Writing Modes
   9.1.3), is written with PDF's horizontal scaling, `Tz` at a hundred times the
