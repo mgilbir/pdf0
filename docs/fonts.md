@@ -483,6 +483,40 @@ untouched. For a loaded face the collection is known before subsetting, so a
 font that cannot be embedded says so for the reason that matters rather than
 reporting whatever the subsetter met first.
 
+## Variable fonts and CFF2
+
+A variable face is embedded as the instance it draws. forme hands a backend
+the instance itself (`shape.LoadInstance`, which htmlpdf receives from layout
+for bold text in a variable face): a static face with its own program, name,
+advances and metrics at that point of the design space. `fonts.Adopt` embeds
+it like any other face — its subset, `/W` from its advances and `/CIDSet` from
+the glyphs the subset kept — so nothing of the default master reaches the
+document. A variable face that was loaded rather than instanced (`fonts.Load`,
+`fonts.NotoSans`) is its default master, and that is what it draws and what is
+embedded; forme's subsetter drops the variation tables either way.
+
+A CFF2 font is read as the CFF it draws (forme 6f4fa65) and embedded as that:
+a `CIDFontType0` whose `/FontFile3` is `/OpenType`, an sfnt with a CID-keyed
+`CFF ` table in `Adobe-Identity-0` and no `CFF2`, which PDF has no font file
+type for. Its instances are cut the same way.
+
+`TestAnInstanceIsEmbeddedAsItIsDrawn` holds both to an oracle outside the two
+modules: `testdata/fontinstance/oracle.txt`, what HarfBuzz and fontTools'
+instancer say each glyph advances and inks at two locations of Noto Sans and
+of forme's CFF2 fixture. The document is written at every PDF/A level and read
+back: `/W`, the embedded program's own advance and outline box, `/CIDSet` and
+the validator. The drawing-path matrix has a variable instance and both CFF2
+faces as rows.
+
+One reader does not draw these programs: Poppler (24.02) shows nothing, or the
+wrong glyph, for an OpenType-wrapped CID-keyed CFF whose CIDs are not its glyph
+indices, which is every CID-keyed subset this package writes and so every CFF2
+font. It passes the CID to FreeType, which addresses an sfnt-wrapped font by
+glyph index. Ghostscript draws them, and Poppler draws the same program
+embedded bare as `/CIDFontType0C`. The wrapper is kept because `hmtx` in it is
+what makes the widths authoritative (see [CID-keyed CFF](#cid-keyed-cff)), and
+the fonts it applies to predate CFF2.
+
 ## CMaps
 
 A Type 0 font's `/Encoding` says how the bytes in a content stream become CIDs,

@@ -147,7 +147,11 @@ A few data sets are the exception and *are* committed: `testdata/xmp-rng/`
 (ISO 16684 RelaxNG schemas, MIT, used by `TestXMPTablesMatchRNG`), the
 spec-example JSON, and `testdata/shaping/corpus.txt` — 12,475 strings over
 which `Shape`, `Draw` and `MeasureShaped` have to agree with each other, which
-is a self-consistency check and needs no oracle beside it.
+is a self-consistency check and needs no oracle beside it — and
+`testdata/fontinstance/oracle.txt`, what HarfBuzz and fontTools say two
+variable fonts' instances advance and ink (forme's bundled Noto Sans and its
+CFF2 fixture, both in the forme module), which `TestAnInstanceIsEmbeddedAsItIsDrawn`
+holds the embedded font to. `oracle.py` beside it regenerates it.
 
 Two oracle sets belong to other modules now and are fetched by their own
 Makefiles; pdf0 has no targets for either. The EN 16931 / CIUS data

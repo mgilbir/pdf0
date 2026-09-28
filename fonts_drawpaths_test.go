@@ -156,6 +156,52 @@ func drawPathFaces() []faceCase {
 			embedded: true,
 		},
 		{
+			// A variable font's instance, as forme hands a backend one for
+			// bold text: a static face of its own, with glyf outlines
+			// instanced at weight 700 and a program of its own.
+			name: "variable-instance",
+			load: func(t *testing.T) *fonts.Face {
+				f, err := shape.LoadInstance(formeFile(t, instanceFonts["notosans"]), map[string]float64{"wght": 700})
+				if err != nil {
+					t.Fatalf("instancing: %v", err)
+				}
+				return fonts.Adopt(f)
+			},
+			texts:    []string{"office", "affluent", "नमस्ते"},
+			embedded: true,
+		},
+		{
+			// CFF2 outlines, read at the default instance and embedded as
+			// the CFF they draw (forme 6f4fa65), and the same font cut at
+			// the end of both its axes. The glyphs are forme's CFF2 fixture:
+			// blends in charstrings and subroutines, hints, sixty and a
+			// hundred stems, flex, a second Font DICT, and two glyphs that
+			// draw nothing.
+			name: "cff2",
+			load: func(t *testing.T) *fonts.Face {
+				f, err := fonts.Load(formeFile(t, instanceFonts["cff2blend"]))
+				if err != nil {
+					t.Fatalf("loading: %v", err)
+				}
+				return f
+			},
+			texts:    []string{"abcdefghijkl"},
+			embedded: true,
+		},
+		{
+			name: "cff2-instance",
+			load: func(t *testing.T) *fonts.Face {
+				f, err := shape.LoadInstance(formeFile(t, instanceFonts["cff2blend"]),
+					map[string]float64{"wght": 16384, "XOPQ": 16384})
+				if err != nil {
+					t.Fatalf("instancing: %v", err)
+				}
+				return fonts.Adopt(f)
+			},
+			texts:    []string{"abcdefghijkl"},
+			embedded: true,
+		},
+		{
 			// A simple face: one byte per character, WinAnsi.
 			name: "simple",
 			load: func(t *testing.T) *fonts.Face {
