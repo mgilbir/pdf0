@@ -327,6 +327,12 @@ func (c *canvas) drawOp(op layout.Op) error {
 	case layout.FillGradient:
 		return c.fillGradient(v)
 
+	case layout.FilterGroup:
+		if undrawable(v) != "" {
+			return nil // checkDrawable reported it, and the policy let the page through without it
+		}
+		return c.filterGroup(v)
+
 	case layout.Link:
 		if _, err := linkTarget(v.Href); err != nil || c.curved > 0 {
 			return nil // checkDrawable reported it, and the policy let the page through without it

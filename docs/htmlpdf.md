@@ -226,6 +226,16 @@ What is drawn:
   or with alphas that differ, with bands of wrong colour across the tile (it
   subdivides the tile into patches it takes to be smooth); Poppler draws them
   as written.
+- **Filters.** forme folds into the marks every filter it can apply to them
+  exactly and leaves a `FilterGroup` for the rest. `opacity()` is drawn as a
+  form XObject that is an isolated transparency group, painted at `/ca` (ISO
+  32000-2 11.4, 11.6.4.4), so overlapping marks composite before they fade. A
+  `drop-shadow()` with no blur is the group's alpha moved by the offset — an
+  alpha soft mask (11.6.5.2) — flooded with the shadow's colour under the
+  group. A chain is a group per step. `blur()`, a blurred drop shadow and the
+  colour-matrix functions forme could not fold (over a picture, or marks that
+  overlap) are refused: PDF has no convolution, and no combination of its
+  blend modes and transfer functions is a colour matrix.
 - **Squeezed text.** A `text-combine-upright` composition wider than its em,
   which forme squeezes to fit (`DrawText.WidthScale`, CSS Writing Modes
   9.1.3), is written with PDF's horizontal scaling, `Tz` at a hundred times the

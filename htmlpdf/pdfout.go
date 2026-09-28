@@ -272,6 +272,8 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 				}
 			case layout.ClipPath:
 				visit(v.Ops, true)
+			case layout.FilterGroup:
+				visit(v.Ops, curved)
 			case layout.FillRect, layout.DrawImage, layout.TileImage, layout.FillPath, layout.FillGradient:
 			default:
 				note(RuleUnknownOp, "")
@@ -335,6 +337,8 @@ func undrawable(op layout.Op) string {
 	case layout.FillGradient:
 		_, why, _ := planGradient(v)
 		return why
+	case layout.FilterGroup:
+		return filterUndrawable(v)
 	}
 	return ""
 }
@@ -566,7 +570,11 @@ var drawnFields = map[string]map[string]string{
 		"Path": "the clip, by the even-odd rule (W* n), around a Save and Restore: pathTo; refused as FillPath's is",
 		"Ops":  "drawn inside the clip; a link among them is refused, since its rectangle cannot follow the curve",
 	},
-	"FilterGroup":      unknownOpFields("Filters", "Ops", "Clip"),
+	"FilterGroup": {
+		"Filters": "each a transparency group over the step before: opacity at /ca, a sharp drop shadow as a fill through an alpha soft mask of the group at the offset, under it; a blur, a blurred drop shadow and a colour matrix are refused: filterUndrawable",
+		"Ops":     "drawn into a form XObject, an isolated transparency group",
+		"Clip":    "clipTo, around the filtered result",
+	},
 	"DrawTextShadow":   unknownOpFields("Run", "StdDev"),
 	"DrawEmphasisMark": unknownOpFields("Mark"),
 	"DrawGlyphs":       unknownOpFields("At", "Text", "Glyphs", "Face", "Size", "Color", "Clip"),

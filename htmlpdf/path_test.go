@@ -236,4 +236,20 @@ func TestAPathThatCannotBeWrittenIsRefused(t *testing.T) {
 		!strings.Contains(findings[0].Message, "link inside a clip") {
 		t.Errorf("a link inside a curved clip: refused %v, findings %+v", refused, findings)
 	}
+	// Under a policy that lets the page through, the writer leaves the link
+	// out, directly inside the clip and inside a group inside it.
+	link := layout.Link{Rects: []layout.Rect{{W: u(5), H: u(5)}}, Href: "https://example.com/"}
+	for _, inner := range []layout.Op{link, layout.FilterGroup{
+		Filters: []layout.FilterFunction{{Kind: layout.FilterOpacity, Amount: 0.5}},
+		Ops:     []layout.Op{layout.FillRect{Rect: layout.Rect{W: u(5), H: u(5)}, Color: style.RGBA{A: 1}}, link},
+	}} {
+		clip := layout.ClipPath{Path: composed.Ops[0].(layout.ClipPath).Path, Ops: []layout.Op{inner}}
+		doc, err := writePage([]layout.Op{clip}, layout.PageSizePt(100, 100), 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if annots := doc.PageList()[0].Get("Annots"); annots != nil {
+			t.Errorf("a link inside a curved clip (in a %T) is written: %v", inner, annots)
+		}
+	}
 }
