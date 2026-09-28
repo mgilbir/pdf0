@@ -202,6 +202,30 @@ What is drawn:
   whole turn, or with angles that are not numbers, is refused, and so is a link
   inside a curved clip, since its annotation's rectangle cannot follow the
   curve; forme makes neither.
+- **Gradients.** Linear, radial and conic gradients, repeating or not, in a
+  background tiled or not, are shadings (ISO 32000-2 8.7.4.5): axial (type 2)
+  along the gradient line, radial (type 3) about the centre under a matrix
+  that makes CSS's ellipse of PDF's circles, and function-based (type 1) for a
+  conic gradient, whose PostScript calculator function (type 4) takes the
+  angle with `atan`. The colour is exactly forme's
+  `layout.Gradient.ColorAtOffset`: the line the tile reaches is cut at every
+  stop and every period into pieces joined by a stitching function (type 3),
+  each piece an exponential function (type 2) whose `/N` is the transition
+  hint's exponent, or a type 4 function where two stops' alphas differ and the
+  blend has to be premultiplied (CSS Color 4 13.4). A gradient CSS
+  interpolates in another colour space arrives from forme restated as sRGB
+  stops, within 0.4/255, and is drawn as those. The alpha is `/ca` where every
+  stop has the same one, and otherwise a luminosity soft mask of the same
+  shading over the alphas, in a DeviceGray group so that no colour management
+  touches it. A gradient that would take more than 65,536 pieces (4,096 for a
+  conic one, each a branch of a program a reader runs per pixel) is refused.
+  Ghostscript 10.02 cannot render some of what this writes and ISO 32000-2
+  allows, so the file works around it: a type 1 shading states its `/Matrix`,
+  has one function per colour component, and every number in a type 4 program
+  is at most 15 characters. It still paints a conic gradient with a hard stop,
+  or with alphas that differ, with bands of wrong colour across the tile (it
+  subdivides the tile into patches it takes to be smooth); Poppler draws them
+  as written.
 - **Squeezed text.** A `text-combine-upright` composition wider than its em,
   which forme squeezes to fit (`DrawText.WidthScale`, CSS Writing Modes
   9.1.3), is written with PDF's horizontal scaling, `Tz` at a hundred times the

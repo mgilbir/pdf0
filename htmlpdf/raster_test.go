@@ -42,11 +42,25 @@ type rendering struct {
 
 // at is the colour a renderer drew at a point in layout's coordinates.
 func (r rendering) at(x, y float64) color.RGBA {
-	p := r.ps.point(x, y)
-	px := int(math.Floor(p[0] * r.dpi / 72))
-	py := int(math.Floor((r.height - p[1]) * r.dpi / 72))
+	px, py := r.pixel(x, y)
 	c := color.RGBAModel.Convert(r.img.At(px, py)).(color.RGBA)
 	return c
+}
+
+// pixel is the device pixel a point of layout's coordinates falls in.
+func (r rendering) pixel(x, y float64) (int, int) {
+	p := r.ps.point(x, y)
+	return int(math.Floor(p[0] * r.dpi / 72)), int(math.Floor((r.height - p[1]) * r.dpi / 72))
+}
+
+// centre is the middle of the device pixel a point of layout's coordinates
+// falls in, in layout's coordinates: where a renderer evaluates a smooth
+// colour for the whole pixel.
+func (r rendering) centre(x, y float64) (float64, float64) {
+	px, py := r.pixel(x, y)
+	dx := (float64(px) + 0.5) * 72 / r.dpi
+	dy := r.height - (float64(py)+0.5)*72/r.dpi
+	return (dx - r.ps.tx) / r.ps.k, (r.ps.ty - dy) / r.ps.k
 }
 
 // renderings renders a document with every renderer on this machine: gs and
@@ -67,7 +81,7 @@ func renderings(t *testing.T, doc *pdf0.Document, c layout.Composed, dpi float64
 	res := fmt.Sprint(dpi)
 	if gs, err := exec.LookPath("gs"); err == nil {
 		ppm := filepath.Join(dir, "gs.ppm")
-		if b, err := exec.Command(gs, "-q", "-dNOPAUSE", "-dBATCH", "-dSAFER", "-sDEVICE=ppmraw",
+		if b, err := exec.Command(gs, "-q", "-dNOPAUSE", "-dBATCH", "-dSAFER", "-sDEVICE=ppmraw", "-dMaxBitmap=2147483647",
 			"-dTextAlphaBits=1", "-dGraphicsAlphaBits=1", "-r"+res, "-sOutputFile="+ppm, path).CombinedOutput(); err != nil {
 			t.Fatalf("gs: %v\n%s", err, b)
 		}
@@ -75,7 +89,9 @@ func renderings(t *testing.T, doc *pdf0.Document, c layout.Composed, dpi float64
 	}
 	if pp, err := exec.LookPath("pdftoppm"); err == nil {
 		prefix := filepath.Join(dir, "pp")
-		if b, err := exec.Command(pp, "-r", res, "-aa", "no", "-aaVector", "no", "-singlefile", path, prefix).CombinedOutput(); err != nil {
+		// Vector anti-aliasing stays on: with it off, Poppler 24.02 paints a
+		// shading (sh) at full opacity whatever its alpha.
+		if b, err := exec.Command(pp, "-r", res, "-aa", "no", "-singlefile", path, prefix).CombinedOutput(); err != nil {
 			t.Fatalf("pdftoppm: %v\n%s", err, b)
 		}
 		out = append(out, rendering{"pdftoppm", readPPM(t, prefix+".ppm"), dpi, height, pageSpaceOf(c)})

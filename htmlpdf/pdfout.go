@@ -272,7 +272,7 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 				}
 			case layout.ClipPath:
 				visit(v.Ops, true)
-			case layout.FillRect, layout.DrawImage, layout.TileImage, layout.FillPath:
+			case layout.FillRect, layout.DrawImage, layout.TileImage, layout.FillPath, layout.FillGradient:
 			default:
 				note(RuleUnknownOp, "")
 			}
@@ -332,6 +332,9 @@ func undrawable(op layout.Op) string {
 		return pathUndrawable(v.Path)
 	case layout.ClipPath:
 		return pathUndrawable(v.Path)
+	case layout.FillGradient:
+		_, why, _ := planGradient(v)
+		return why
 	}
 	return ""
 }
@@ -545,7 +548,14 @@ var drawnFields = map[string]map[string]string{
 	},
 	// The operations forme 0.4.0 added, which this backend does not draw
 	// yet: each is refused whole, as an operation it does not know is.
-	"FillGradient": unknownOpFields("Clip", "Tile", "StepX", "StepY", "Gradient", "Overhang"),
+	"FillGradient": {
+		"Clip":     "the area painted, a clip",
+		"Tile":     "the first tile: the gradient clipped to it, or a tiling pattern's cell",
+		"StepX":    "the pattern's /XStep",
+		"StepY":    "the pattern's /YStep",
+		"Gradient": "an axial (linear), radial (radial, under a matrix for the ellipse) or function-based (conic) shading; its colour a stitching function of type 2 pieces, type 4 where premultiplied alpha needs it, and its alpha a constant /ca or a luminosity soft mask: gradient.go; refused past maxGradientPieces or maxConicPieces, or when not a number: planGradient",
+		"Overhang": "read by layout's page-overflow guard; it says nothing about painting",
+	},
 	"FillPath": {
 		"Path":     "the path, arcs as cubic Béziers of at most 45°, filled by the even-odd rule (f*): pathTo; refused for an arc that is no number or sweeps past a turn: pathUndrawable",
 		"Color":    "the fill colour; alpha through an ExtGState, and nothing painted at zero",

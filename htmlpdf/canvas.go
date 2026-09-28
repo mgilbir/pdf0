@@ -99,6 +99,9 @@ type pageWriter struct {
 	// transparent is any stream of the page selecting transparency: an
 	// alpha, a soft mask or a transparency group.
 	transparent bool
+	// functions are the gradient functions written so far, one object per
+	// distinct piece of a gradient line (see shadingWriter).
+	functions map[string]object.IndirectRef
 }
 
 // canvas is one content stream being drawn: the page's, or a form XObject's,
@@ -320,6 +323,9 @@ func (c *canvas) drawOp(op layout.Op) error {
 			return nil // checkDrawable reported it, and the policy let the page through without it
 		}
 		return c.clipPath(v)
+
+	case layout.FillGradient:
+		return c.fillGradient(v)
 
 	case layout.Link:
 		if _, err := linkTarget(v.Href); err != nil || c.curved > 0 {
