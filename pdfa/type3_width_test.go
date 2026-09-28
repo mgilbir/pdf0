@@ -14,9 +14,16 @@ import (
 // CharProc starts "advance 0 d0".
 func type3WidthDoc(t *testing.T, fm object.Array, width, advance float64) core.View {
 	t.Helper()
+	return type3WidthDocSpelled(t, fm, width, fmt.Sprintf("%g", advance))
+}
+
+// type3WidthDocSpelled is type3WidthDoc with the d0 advance given as the
+// token the CharProc spells it with.
+func type3WidthDocSpelled(t *testing.T, fm object.Array, width float64, advance string) core.View {
+	t.Helper()
 	doc := mkPDFAViewT(t, PDFA2b)
 	page := addTestPage(doc)
-	cp := []byte(fmt.Sprintf("%g 0 d0 0 0 m 10 0 l 0 10 l f", advance))
+	cp := []byte(advance + " 0 d0 0 0 m 10 0 l 0 10 l f")
 	doc.Objects[30] = &object.IndirectObject{Number: 30, Value: object.NewStream(&object.Dictionary{}, cp)}
 	font := object.NewDictionary(
 		object.Entry{Key: "Type", Value: object.Name("Font")},
@@ -92,6 +99,37 @@ func TestType3WidthsAreComparedInGlyphSpace(t *testing.T) {
 			}
 			if !c.wantInconsisent && len(got) != 0 {
 				t.Errorf("want no Type 3 width finding, got %v", got)
+			}
+		})
+	}
+}
+
+// TestType3AdvanceIsReadAsAPDFNumber: the d0 advance is a PDF number (ISO
+// 32000-2 7.3.3), and every spelling of one is read as written. A token that
+// is not one ("6e2", with an exponent PDF numbers do not have) is no advance,
+// and the width check declines rather than comparing a value nobody wrote: the
+// CFF real reader it used to go through read "6e2" as 62, and reported a font
+// whose /Widths said 600 as inconsistent.
+func TestType3AdvanceIsReadAsAPDFNumber(t *testing.T) {
+	fm := object.Array{object.Real(0.001), object.Integer(0), object.Integer(0), object.Real(0.001), object.Integer(0), object.Integer(0)}
+	for _, c := range []struct {
+		advance          string
+		width            float64
+		wantInconsistent bool
+	}{
+		{"+600", 600, false},
+		{"600.", 600, false},
+		{"-.5", -0.5, false},
+		{"+700", 600, true},
+		{"700.", 600, true},
+		{"6e2", 600, false},
+		{"6e2", 62, false},
+		{"600.0.0", 600, false},
+	} {
+		t.Run(c.advance+"/"+fmt.Sprint(c.width), func(t *testing.T) {
+			got := type3WidthFindings(validateView(type3WidthDocSpelled(t, fm, c.width, c.advance), PDFA2b))
+			if c.wantInconsistent != (len(got) == 1) || len(got) > 1 {
+				t.Errorf("advance %q, /Widths %v: findings %v, want inconsistent=%v", c.advance, c.width, got, c.wantInconsistent)
 			}
 		})
 	}

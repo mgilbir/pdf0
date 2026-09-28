@@ -77,8 +77,10 @@ func (f *Face) ShapeWith(s string, features ...string) (spans []content.TextSpan
 // It is the embedded face's Encode, with the text recorded: a composite face's
 // ToUnicode CMap is written from what each glyph was drawn for, and a caller
 // using this has told the face exactly that. A character the face lacks is
-// .notdef in a composite face, the space in a standard one and left out of a
-// simple one, and the count of them is the second result.
+// drawn as its canonical decomposition where the face has every part of it (é
+// as e and U+0301), as shaping and Measure treat it. Otherwise it is .notdef
+// in a composite face and the space in a simple or standard one, which keeps
+// its place in the text, and the count of those is the second result.
 //
 // Bare codes cannot carry an /ActualText, which is the one thing this cannot
 // say that Draw can: a glyph the font's cmap reaches from two characters — 日
@@ -126,4 +128,63 @@ func (f *Face) DrawShaped(b *content.Builder, s string, size float64) int {
 	glyphs, missing := f.ShapeGlyphs(s)
 	f.draw(b, glyphs, s, size)
 	return missing
+}
+
+// DrawUpright writes glyphs set upright down the page — a run shaped with
+// shape.Features.Vertical — placing each one where shaping hung it.
+//
+// The pen starts at the origin of the current text matrix and moves down it:
+// each glyph's YAdvance, which is negative, is how far. A glyph is hung from
+// its vertical origin (VOriginX, VOriginY, measured from its horizontal
+// origin: half its width across, and from the top of its em box down to
+// where the font puts its baseline), and moved from there by its XOffset and
+// YOffset, as the font's positioning decided. So its horizontal origin is
+// drawn at the pen plus (XOffset-VOriginX, YOffset-VOriginY), in thousandths
+// of an em at size. For a CJK face the pen is the top centre of each glyph's
+// ideographic em box. The text matrix must not be turned: the glyphs stand as
+// they do in the font.
+//
+// How it is written depends on the form of the face, which must be the font
+// the builder has selected, at this size:
+//
+//   - A vertical form (see Vertical) is the standard way: an Identity-V font,
+//     whose /W2 states each glyph's own vertical advance and origin, so each
+//     code moves the pen down by the glyph's advance and hangs it from its
+//     origin, and only where shaping moved a glyph from those — a mark's
+//     advance taken away, 'vkrn', 'vpal', an offset — is a displacement
+//     written: a TJ number down the line, a move of the line across it. A
+//     reader knows the text is vertical.
+//   - Any other face is written in its horizontal font, which is the only
+//     font a simple or standard face has: every glyph placed explicitly,
+//     with a displacement along the line and a rise across it. The page
+//     shows the same glyphs in the same places; a reader sees horizontal
+//     text arranged in a column.
+//
+// text is the string the glyphs were shaped from, as for Draw, and it is what
+// a reader extracting the page gets back, in the order it was written: the
+// run is one /ActualText, because where the glyphs stand is not where a
+// reader rebuilding the text from positions looks for word breaks — a
+// letter-spaced column, a glyph centred in a wider em, a mark moved across
+// the line. The ToUnicode CMap says what each glyph means, as for every other
+// path.
+func (f *Face) DrawUpright(b *content.Builder, text string, glyphs []Glyph, size float64) {
+	if f.IsVertical() {
+		f.drawWhole(b, glyphs, text, size)
+		return
+	}
+	placed := make([]Glyph, len(glyphs))
+	pen := 0.0
+	for i, g := range glyphs {
+		p := g
+		// The pen does not move along the line: each glyph is placed from
+		// the run's origin by its offsets, and draw takes back the width the
+		// text operator advances by.
+		p.XAdvance = 0
+		p.XOffset = g.XOffset - g.VOriginX
+		p.YOffset = pen + g.YOffset - g.VOriginY
+		p.YAdvance, p.VOriginX, p.VOriginY = 0, 0, 0
+		placed[i] = p
+		pen += g.YAdvance
+	}
+	f.drawWhole(b, placed, text, size)
 }

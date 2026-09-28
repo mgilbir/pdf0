@@ -2,12 +2,13 @@ package pdf0
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 	"strings"
 	"testing"
 
+	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/forme/fonts/notosans"
+	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/fonts"
@@ -25,18 +26,7 @@ import (
 // how a font with any licence can be made without shipping one.
 func withFSType(t *testing.T, fsType uint16) []byte {
 	t.Helper()
-	data := append([]byte(nil), notosans.Regular()...)
-	n := int(binary.BigEndian.Uint16(data[4:]))
-	for i := 0; i < n; i++ {
-		rec := data[12+16*i:]
-		if string(rec[:4]) == "OS/2" {
-			off := binary.BigEndian.Uint32(rec[8:])
-			binary.BigEndian.PutUint16(data[off+8:], fsType)
-			return data
-		}
-	}
-	t.Fatal("the bundled font has no OS/2 table")
-	return nil
+	return withOS2FSType(t, notosans.Regular(), fsType)
 }
 
 // embedWith draws a word with the face, embeds it on a page of a PDF/A
@@ -78,7 +68,7 @@ func TestARestrictedLicenceFontIsNotEmbedded(t *testing.T) {
 				"composite": fonts.Load,
 				"simple":    fonts.LoadSimple,
 				// A face that arrived without its bytes is held to its licence
-				// by the subset, which carries the OS/2 table through.
+				// too: forme read the bits when it loaded the program.
 				"adopted": func(data []byte) (*fonts.Face, error) {
 					f, err := shape.Load(data)
 					if err != nil {
@@ -116,53 +106,78 @@ func TestPermissiveLicencesEmbed(t *testing.T) {
 
 // TestANoSubsettingFontIsEmbeddedWhole: fsType 0x0100 permits embedding only
 // the whole font. The program in the file is the one loaded, byte for byte,
-// named without a subset tag, and the document still validates.
+// named without a subset tag, and the document still validates. That holds
+// for a face handed to Adopt, whose program forme kept, and for one loaded
+// from a WOFF, whose program is the sfnt the container held: a font file
+// stream carries an sfnt, and the container would be a font no reader can
+// read.
 func TestANoSubsettingFontIsEmbeddedWhole(t *testing.T) {
-	for kind, load := range map[string]func([]byte) (*fonts.Face, error){
-		"composite": fonts.Load,
-		"simple":    fonts.LoadSimple,
+	original := withFSType(t, 0x0104)
+	woff := woffOf(original)
+	unwrapped, err := font.DecodeWOFF(woff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adopt := func(load func([]byte) (*shape.Face, error)) func([]byte) (*fonts.Face, error) {
+		return func(data []byte) (*fonts.Face, error) {
+			f, err := load(data)
+			if err != nil {
+				return nil, err
+			}
+			return fonts.Adopt(f), nil
+		}
+	}
+	for _, tc := range []struct {
+		kind       string
+		load       func([]byte) (*fonts.Face, error)
+		data, want []byte
+	}{
+		{"composite", fonts.Load, original, original},
+		{"simple", fonts.LoadSimple, original, original},
+		{"adopted", adopt(shape.Load), original, original},
+		{"adopted-simple", adopt(shape.LoadSimple), original, original},
+		{"woff", fonts.Load, woff, unwrapped},
 	} {
 		for _, level := range []pdfa.Level{pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA3b, pdfa.PDFA4} {
-			original := withFSType(t, 0x0104)
-			face, err := load(original)
+			face, err := tc.load(tc.data)
 			if err != nil {
 				t.Fatal(err)
 			}
 			back, _, err := embedWith(t, face, level)
 			if err != nil {
-				t.Fatalf("%s %s: %v", kind, level, err)
+				t.Fatalf("%s %s: %v", tc.kind, level, err)
 			}
 			fd := fontDescriptorOf(t, back)
 			key := "FontFile2"
 			st, ok := back.Resolve(fd.Get(object.Name(key))).(*object.Stream)
 			if !ok {
-				t.Fatalf("%s: no /%s", kind, key)
+				t.Fatalf("%s: no /%s", tc.kind, key)
 			}
 			program, err := back.StreamData(st)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !bytes.Equal(program, original) {
+			if !bytes.Equal(program, tc.want) {
 				t.Errorf("%s %s: the embedded program is %d bytes, not the %d-byte font loaded",
-					kind, level, len(program), len(original))
+					tc.kind, level, len(program), len(tc.want))
 			}
 			if name, _ := back.Resolve(fd.Get("FontName")).(object.Name); strings.Contains(string(name), "+") {
-				t.Errorf("%s: a whole font was named as a subset: %s", kind, name)
+				t.Errorf("%s: a whole font was named as a subset: %s", tc.kind, name)
 			}
 			for _, v := range ValidatePDFA(back, level) {
-				t.Errorf("%s %s: %s", kind, level, v.Error())
+				t.Errorf("%s %s: %s", tc.kind, level, v.Error())
 			}
 		}
 	}
-	// A face from Adopt has no program to embed whole, and says so.
-	f, err := shape.Load(withFSType(t, 0x0100))
-	if err != nil {
-		t.Fatal(err)
+}
+
+// woffOf wraps an sfnt's tables in a WOFF container, uncompressed.
+func woffOf(sfnt []byte) []byte {
+	var tables []fonttest.WOFFTable
+	for tag, body := range font.SFNTTables(sfnt) {
+		tables = append(tables, fonttest.WOFFTable{Tag: tag, Data: body})
 	}
-	if _, _, err := embedWith(t, fonts.Adopt(f), pdfa.PDFA2b); err == nil ||
-		!strings.Contains(err.Error(), "forbids subsetting") {
-		t.Errorf("an adopted no-subsetting face embedded, or failed for another reason: %v", err)
-	}
+	return fonttest.WOFF(fonttest.WOFFOptions{Tables: tables})
 }
 
 // fontDescriptorOf finds the one font descriptor in a document.

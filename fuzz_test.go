@@ -210,35 +210,6 @@ func FuzzRoundTrip(f *testing.F) {
 	})
 }
 
-// --- TrueType cmap ---
-//
-// FuzzRead reaches font.ParseCmapSubtable only through a valid-enough PDF carrying a
-// valid-enough embedded sfnt carrying a cmap table, which no random mutation is
-// going to assemble. The two targets below hand the parser its bytes directly:
-// one the subtable, one the whole font, so that subtable *selection* — the
-// (3,10) > (3,1) > (0,x) ranking, which reads attacker-supplied platform and
-// encoding ids and offsets — is fuzzed as well as subtable parsing.
-//
-// Neither target asserts a wall-clock bound. A time limit inside a fuzz target
-// is a flake: workers run in parallel on a loaded machine, seed replay runs
-// under -race, and the threshold that never fires spuriously is so high it no
-// longer distinguishes "slow" from "hung". What the budgets actually promise is
-// bounded *work*, and the deterministic proxy for that is the size of the map
-// they hand back, which is asserted below; a genuine hang still surfaces, as the
-// test binary's own -timeout. The fixed-input timing assertions stay where they
-// can be made reliably, in TestCmapFormat4Budget and TestCmapFormat12Budget.
-
-// checkCmapInvariants asserts everything font.ParseCmapSubtable promises about a map
-// it returns, whatever the subtable claimed:
-//
-//   - a returned map is never empty (nil means "unreadable, or maps nothing";
-//     an empty non-nil map would tell font.TrueTypeGID the font maps no character at
-//     all, i.e. that every code is .notdef);
-//   - it never exceeds the work budget, so a table claiming four billion groups
-//     cannot turn into an unbounded allocation;
-//   - every key is a Unicode code point and every value is a real glyph index —
-//     never 0, which means unmapped and must not be recorded as a mapping.
-
 // fuzzLimits bound what one fuzz input may cost, so that the fuzz body cannot
 // run unbounded.
 //

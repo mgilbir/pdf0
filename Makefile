@@ -55,7 +55,7 @@ test:
 # local hunt runs longer, and under a memory cap like any hostile-input run
 # (docs/testing.md#fuzzing). TestFuzzTargetsAllRun fails if a fuzz target
 # exists that this list leaves out.
-FUZZ_TARGETS := FuzzRead FuzzRoundTrip FuzzWriteSurface
+FUZZ_TARGETS := FuzzRead FuzzRoundTrip FuzzWriteSurface FuzzTrueTypeGlyph
 FUZZTIME ?= 10m
 
 fuzz:

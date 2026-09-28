@@ -12,15 +12,23 @@ import "github.com/mgilbir/forme/layout"
 // to Ignore — so that a caller who can live with the loss says so rather than
 // finding it later.
 const (
-	// RuleVerticalText is a run set down the page: writing-mode vertical-rl,
-	// vertical-lr, sideways-rl or sideways-lr, or text-orientation upright.
-	// Its glyphs would be drawn across the page, in the wrong place and the
-	// wrong way up.
+	// RuleVerticalText is a run set down the page whose turn is not one forme
+	// makes: Anticlockwise or Upright without Sideways, or Upright with
+	// Anticlockwise (CSS Writing Modes 5.1: sideways-lr turns every
+	// character, so nothing on it stands upright). The backend does not guess
+	// what such a run means. Every turn forme does make is drawn: a run turned
+	// sideways, by turning the text matrix, and a run set upright, in the
+	// face's vertical form by its vertical metrics, or on em boxes where the
+	// face states none, as layout measured it.
 	RuleVerticalText layout.Rule = "backend-vertical-text"
 
-	// RuleLinkDropped is a document with a hyperlink. The display list
-	// carries no links — a box's href is not a mark on the page — so the
-	// page would have the link's text and nothing to follow.
+	// RuleLinkDropped is a hyperlink this backend cannot write as a link
+	// annotation, so the page would have the link's text and nothing to
+	// follow: a reference relative to the HTML document, whose address this
+	// backend is not given (forme resolves one against a <base href> with an
+	// http or https URL, and that one is written); a fragment with no such
+	// base, whose target the display list does not place; or a URI pdf0's
+	// link builder refuses (see pdf0.LinkURI). Every other link is written.
 	RuleLinkDropped layout.Rule = "backend-link-dropped"
 
 	// RuleUnknownOp is a display-list operation this backend does not know,

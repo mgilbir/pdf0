@@ -74,7 +74,7 @@ func budgetBustingCmap() []byte {
 }
 
 // TestCmapWorkBudgetDoesNotCondemnGlyphs is the false positive itself: with the
-// budget tripped, font.TrueTypeGID's "a non-nil cmap is authoritative" contract turns
+// budget tripped, simplefont.TrueTypeGlyph's "a non-nil cmap is authoritative" contract turns
 // every unread mapping into glyph 0, so a conformant font is reported as not
 // defining a glyph it does define, and as referencing .notdef.
 //

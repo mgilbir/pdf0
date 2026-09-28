@@ -154,7 +154,7 @@ func (l Link) annotation() (*object.Dictionary, error) {
 	a.Set("Border", object.Array{object.Integer(0), object.Integer(0), object.Integer(0)})
 
 	if l.URI != "" {
-		uri, err := linkURI(l.URI)
+		uri, err := LinkURI(l.URI)
 		if err != nil {
 			return nil, err
 		}
@@ -187,7 +187,12 @@ var linkURISchemes = map[string]bool{
 	"http": true, "https": true, "ftp": true, "mailto": true, "tel": true,
 }
 
-// linkURI returns the URI a link writes for uri, or why it cannot be one.
+// LinkURI returns the URI a Link writes for uri, or why it cannot be one.
+//
+// It is the rule AddPage applies to Link.URI, exported so that a caller
+// turning links from another format into Links — htmlpdf, from a display
+// list's hyperlinks — can ask first, and refuse or report a link the page
+// would not carry rather than fail the page.
 //
 // The scheme is read the way a browser's URL parser reads it (the WHATWG URL
 // Standard, "basic URL parser"), which strips leading and trailing C0 controls
@@ -208,7 +213,7 @@ var linkURISchemes = map[string]bool{
 // UTF-8 bytes written raw are read by each viewer in its own encoding. An
 // existing percent-escape is kept as it is. A non-ASCII host is percent-encoded
 // too, which a browser decodes and converts to its IDNA form.
-func linkURI(uri string) (string, error) {
+func LinkURI(uri string) (string, error) {
 	isC0OrSpace := func(r rune) bool { return r <= 0x20 }
 	uri = strings.TrimFunc(uri, isC0OrSpace)
 	for i := 0; i < len(uri); i++ {

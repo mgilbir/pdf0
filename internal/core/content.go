@@ -3,9 +3,9 @@ package core
 import (
 	"iter"
 	"math"
-	"strconv"
 
 	"github.com/mgilbir/pdf0/internal/checked"
+	"github.com/mgilbir/pdf0/syntax"
 )
 
 // The content-stream tokenizer. It is a document service rather than a
@@ -35,8 +35,10 @@ type ContentToken struct {
 // because most consumers never look at a Number: the PDF/UA content pass reads
 // only operators, names and strings, yet numbers are the most common token in a
 // content stream, so parsing every one eagerly was pure waste.
+//
+// A token that is not a PDF number (syntax.ParseNumber) is 0.
 func (t ContentToken) Number() float64 {
-	f, _ := strconv.ParseFloat(string(t.Raw), 64)
+	f, _, _ := syntax.ParseNumber(t.Raw)
 	return f
 }
 

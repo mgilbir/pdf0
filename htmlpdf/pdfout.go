@@ -25,9 +25,10 @@ package htmlpdf
 import (
 	"fmt"
 	"image"
+	"net/url"
 	"sort"
+	"strings"
 
-	"github.com/mgilbir/forme/html"
 	"github.com/mgilbir/forme/layout"
 	"github.com/mgilbir/forme/paragraph"
 	"github.com/mgilbir/forme/shape"
@@ -239,27 +240,35 @@ func Render(in layout.Input, opts layout.Options) (Result, error) {
 // one fact about the document, and a line per run would bury it.
 func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, bool) {
 	counts := map[layout.Rule]int{}
+	// The first link that cannot be written, and why: the links a document
+	// cannot carry are usually all one kind — every relative reference in it
+	// — and the first says which.
+	var firstLink string
 	for _, op := range c.Ops {
 		switch v := op.(type) {
 		case layout.DrawText:
-			if v.Sideways || v.Anticlockwise || v.Upright {
+			if !drawableTurn(v) {
 				counts[RuleVerticalText]++
+			}
+		case layout.Link:
+			if _, err := linkTarget(v.Href); err != nil {
+				if counts[RuleLinkDropped] == 0 {
+					firstLink = err.Error()
+				}
+				counts[RuleLinkDropped]++
 			}
 		case layout.FillRect, layout.DrawImage, layout.TileImage:
 		default:
 			counts[RuleUnknownOp]++
 		}
 	}
-	if c.Root != nil {
-		counts[RuleLinkDropped] = countLinks(c.Root.Box)
-	}
 
 	messages := map[layout.Rule]string{
-		RuleVerticalText: "%d run(s) of text are set down the page (a vertical writing-mode " +
-			"or text-orientation: upright), which this PDF backend cannot draw; they would " +
-			"be drawn across the page",
-		RuleLinkDropped: "the document has %d hyperlink(s), and the display list carries no " +
-			"links, so the PDF would show their text with nothing to follow",
+		RuleVerticalText: "%d run(s) of text are turned in a way layout does not turn " +
+			"text (Anticlockwise or Upright without Sideways, or Upright with " +
+			"Anticlockwise), which this backend does not guess the meaning of",
+		RuleLinkDropped: "%d hyperlink(s) cannot be written as PDF links, so the page would " +
+			"show their text with nothing to follow; the first: " + firstLink,
 		RuleUnknownOp: "the display list has %d operation(s) of a kind this backend does not " +
 			"know, which a newer layout engine added; the page would be missing them",
 	}
@@ -291,33 +300,182 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 	return out, refused
 }
 
-// countLinks counts the <a href> elements that generated a box, which are the
-// links the page would have had: an element with display: none generates none
-// and is not one.
+// textMatrix is the linear part of a run's text matrix: where the text
+// space's x axis (the advance) and y axis (up the glyph) point in the
+// layout's coordinates, in which y grows down the page.
 //
-// The box tree is walked with a stack rather than by recursion, because its
-// depth is the document's nesting depth and a document is untrusted input.
-func countLinks(root *layout.Box) int {
-	if root == nil {
-		return 0
+// A run across the page advances along +x with its glyphs' up along -y; the
+// matrix [1 0 0 -1] undoes the page transform's inversion locally, which
+// leaves the glyphs upright while the position still comes from the flipped
+// system.
+//
+// A sideways run is the same run turned a quarter, which is all "sideways"
+// means (DrawText.Sideways, CSS Writing Modes 5.1): each glyph is its
+// horizontal self, the advance and the marks' offsets are the horizontal
+// ones, and the only change is the direction the text space points. Turned
+// clockwise, as vertical-rl, vertical-lr and sideways-rl set it, the advance
+// goes down the page (+y) and a glyph's up points right (+x): [0 1 1 0].
+// Turned anticlockwise, as sideways-lr sets it, the advance goes up the page
+// (-y) and up points left (-x): [0 -1 -1 0]. Both are forme's placeRun, which
+// is how layout placed the run's ink and decorations. Everything the drawing
+// writes in text space — the TJ displacements, a mark's rise — turns with it.
+//
+// An upright run is not a turned horizontal run: its glyphs stand as they do
+// in the font, and uprightGlyphs says where each goes.
+func textMatrix(v layout.DrawText) (a, b, c, d float64) {
+	switch {
+	case v.Upright:
+		// The glyphs stand as they do in the font, whichever way the line
+		// runs: DrawUpright moves the pen down the page itself.
+		return 1, 0, 0, -1
+	case v.Sideways && v.Anticlockwise:
+		return 0, -1, -1, 0
+	case v.Sideways:
+		return 0, 1, 1, 0
 	}
-	n := 0
-	seen := map[*html.Node]bool{}
-	stack := []*layout.Box{root}
-	for len(stack) > 0 {
-		b := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		if el := b.Element; el != nil && !seen[el] && el.Type == html.ElementNode && el.Name == "a" {
-			// One element can generate several boxes — an inline split
-			// around a block, a continuation — and is still one link.
-			seen[el] = true
-			if el.HasAttr("href") {
-				n++
-			}
+	return 1, 0, 0, -1
+}
+
+// drawableTurn reports whether a run's turn is one this backend draws: across
+// the page, turned a quarter either way with its glyphs turned too, or set
+// upright down a line turned clockwise. A combination forme does not make —
+// Anticlockwise or Upright without Sideways, or Upright with Anticlockwise,
+// which CSS Writing Modes 5.1 rules out, since sideways-lr turns every
+// character — is not.
+func drawableTurn(v layout.DrawText) bool {
+	switch {
+	case v.Anticlockwise && !v.Sideways:
+		return false
+	case v.Upright && (!v.Sideways || v.Anticlockwise):
+		return false
+	}
+	return true
+}
+
+// uprightGlyphs shapes a run set upright, as layout measured it: with the
+// vertical rules and metrics (shape.Features.Vertical, which layout leaves to
+// the backend to ask for), the run's context either side, and its
+// letter-spacing down the run.
+//
+// Each glyph comes back with its vertical advance and the point it is hung
+// from. Where the face states vertical metrics (its vmtx, see
+// shape.Face.StatesVerticalMetrics) those are what layout measured the run by,
+// and they are drawn as shaped. Where it states none, layout measured an em a
+// character, which is CSS Writing Modes 4.4's synthesis and not shaping's
+// (the height of the face's line, HarfBuzz's), and DrawText.Upright says a
+// backend has to draw by the em: emBoxes moves the glyphs onto it.
+func uprightGlyphs(v layout.DrawText) []shape.Glyph {
+	v.Features.Vertical = true
+	glyphs, _ := layout.ShapedGlyphs(v)
+	text := layout.ShapedText(v)
+	if !v.Face.StatesVerticalMetrics() {
+		glyphs = emBoxes(glyphs, text)
+	}
+	return withLetterSpacing(glyphs, text, v)
+}
+
+// emBoxes sets glyphs shaped upright in a face that states no vertical
+// metrics on the em boxes CSS Writing Modes 4.4 synthesizes for them: each
+// typographic character an em down the line (paragraph.UprightUnits, which
+// is how layout counted the run), and a mark, which is none, nothing.
+//
+// It moves glyphs a character at a time: a shaping cluster, together with
+// the clusters after it that hold no character of their own (a mark shaping
+// left in a cluster apart from its base). That is what shaping placed
+// together: a mark is positioned against its base by offsets measured in the
+// shaped advances, and moving the base alone would move it off. So each such
+// group keeps its glyphs where shaping put them relative to each other and is
+// moved whole: its advance becomes the em boxes of its characters, and it is
+// centred in them, the middle of the cell shaping gave it (the line's height,
+// for such a face) on the middle of theirs. Across the line nothing changes:
+// shaping hangs each glyph by half its advance, which centres it on the line,
+// as layout's one-em-wide column is.
+func emBoxes(glyphs []shape.Glyph, text string) []shape.Glyph {
+	out := append([]shape.Glyph(nil), glyphs...)
+	// Each cluster's text, from its offset to the next cluster's.
+	starts := make([]int, 0, len(out))
+	seen := map[int]bool{}
+	for _, g := range out {
+		if !seen[g.Cluster] {
+			seen[g.Cluster] = true
+			starts = append(starts, g.Cluster)
 		}
-		stack = append(stack, b.Children...)
 	}
-	return n
+	sort.Ints(starts)
+	chars := make(map[int]int, len(starts))
+	for i, c := range starts {
+		end := len(text)
+		if i+1 < len(starts) {
+			end = starts[i+1]
+		}
+		if c >= 0 && c <= end && end <= len(text) {
+			chars[c] = paragraph.UprightUnits(text[c:end])
+		}
+	}
+	for lo := 0; lo < len(out); {
+		// The group: this cluster, and the clusters after it with no
+		// character of their own.
+		units := chars[out[lo].Cluster]
+		hi := lo + 1
+		for hi < len(out) && (out[hi].Cluster == out[hi-1].Cluster || chars[out[hi].Cluster] == 0) {
+			hi++
+		}
+		shaped := 0.0 // the group's length down the line as shaped, positive
+		for _, g := range out[lo:hi] {
+			shaped -= g.YAdvance
+		}
+		delta := shaped - 1000*float64(units)
+		for j := lo; j < hi; j++ {
+			out[j].YOffset += delta / 2
+		}
+		out[hi-1].YAdvance += delta
+		lo = hi
+	}
+	return out
+}
+
+// linkTarget is the URI a display-list link is written with, or why it
+// cannot be one.
+//
+// forme makes a Link only of an http, https or mailto URL or of a reference
+// with no scheme, and reports every other href itself (layout.RuleLinkRefused).
+// A relative href is resolved by forme where the document has a <base href>
+// with an http or https URL (HTML 4.2.3, RFC 3986 5.2), fragments included, so
+// it arrives as a URL. The URLs go through pdf0.LinkURI, the rule every link
+// annotation goes through: an allowlist of schemes, the URL standard's
+// normalisation, and 7-bit percent-encoding. A reference that arrives with no
+// scheme cannot be written correctly. It is relative to the HTML document,
+// whose address this backend is never given (forme's Input has none, and a
+// base that is a path leaves it relative), and a PDF reader resolves a
+// relative /URI against the PDF's own location (ISO 32000-2 12.6.4.8), which
+// is another place. A fragment names an element of the HTML document, and the
+// display list does not say where on the page that element is, so there is no
+// destination to write.
+func linkTarget(href string) (string, error) {
+	if u, err := url.Parse(href); err == nil && u.Scheme == "" {
+		if strings.HasPrefix(href, "#") {
+			return "", fmt.Errorf("%q is a fragment of the HTML document, and the display "+
+				"list does not say where on the page its target is", href)
+		}
+		return "", fmt.Errorf("%q is relative to the HTML document, whose address this "+
+			"backend is not given (a <base href> with an http or https URL resolves it); "+
+			"a PDF reader would resolve it against the PDF's own", href)
+	}
+	return pdf0.LinkURI(href)
+}
+
+// pageTransform is the one transform of writePage, as a function: layout
+// units, y down, to page space in points, y up. A link annotation's /Rect is
+// in the page's default coordinates and is not drawn through the content
+// stream's "cm", so it is put through the same numbers here.
+type pageTransform struct{ k, tx, ty float64 }
+
+// rect is a layout rectangle in page space, as [xMin yMin xMax yMax].
+func (m pageTransform) rect(r layout.Rect) [4]float64 {
+	return [4]float64{
+		m.tx + m.k*r.X.Px(), m.ty - m.k*r.Bottom().Px(),
+		m.tx + m.k*r.Right().Px(), m.ty - m.k*r.Y.Px(),
+	}
 }
 
 // writePage turns a display list into a one-page document.
@@ -350,6 +508,8 @@ func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Docu
 	ty := page.Height.Pt() - page.Margin.Top.Pt()
 	b.Save()
 	b.Concat(k, 0, 0, -k, tx, ty)
+	toPage := pageTransform{k: k, tx: tx, ty: ty}
+	var links []pdf0.Link
 
 	// Keyed by the shaping face, which is what the display list carries, and
 	// held as the embedding wrapper, which is what writing the document needs.
@@ -357,6 +517,9 @@ func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Docu
 	// glyphs the other used, which is what makes the subset come out right.
 	faces := map[object.Name]*fonts.Face{}
 	names := map[*shape.Face]object.Name{}
+	// The vertical forms, for upright runs: the same wrapper's, so that the
+	// two forms are one embedding. See fonts.Face.Vertical.
+	vnames := map[*shape.Face]object.Name{}
 	xobjects := map[object.Name]object.Object{}
 	patterns := map[object.Name]object.Object{}
 	alphas := newAlphaStates()
@@ -412,6 +575,21 @@ func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Docu
 				faces[name] = fonts.Adopt(v.Face)
 			}
 			face := faces[name]
+			if v.Upright {
+				// Written in the face's vertical form, an Identity-V font
+				// whose /W2 states each glyph's vertical metrics, where the
+				// face has one. A standard face has none, and DrawUpright
+				// places its glyphs one by one in the horizontal font.
+				if vf, err := face.Vertical(); err == nil {
+					vname, ok := vnames[v.Face]
+					if !ok {
+						vname = object.Name(fmt.Sprintf("V%d", len(vnames)+1))
+						vnames[v.Face] = vname
+						faces[vname] = vf
+					}
+					name, face = vname, vf
+				}
+			}
 			b.Save()
 			clipTo(b, v.Clip)
 			alphas.use(b, v.Color.A)
@@ -423,11 +601,11 @@ func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Docu
 				// "color: transparent" leaves it selectable, and so does this.
 				b.SetTextRenderMode(content.InvisibleText)
 			}
-			// The y axis is inverted by the transform, so text drawn through it
-			// would be mirrored. The text matrix undoes that inversion locally,
-			// which leaves the glyphs upright while the position still comes
-			// from the flipped system.
-			b.SetTextMatrix(1, 0, 0, -1, v.At.X.Px(), v.At.Y.Px())
+			// The text matrix puts the run's own axes — along the line, and up
+			// the glyph — onto the page, in the flipped system the transform
+			// above set up. See textMatrix.
+			a, bb, c, d := textMatrix(v)
+			b.SetTextMatrix(a, bb, c, d, v.At.X.Px(), v.At.Y.Px())
 			// The glyphs layout measured, shaped with the run's direction, its
 			// context either side and the features the document turned off —
 			// layout.ShapedGlyphs is the pairing of all of them, and a backend
@@ -435,9 +613,15 @@ func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Docu
 			// placed (a ligature measured as two letters, a kern turned back on,
 			// an Arabic word in isolated forms).
 			text := layout.ShapedText(v)
-			glyphs, _ := layout.ShapedGlyphs(v)
-			glyphs = withLetterSpacing(glyphs, text, v)
-			face.Draw(b, text, glyphs, v.Size.Px())
+			if v.Upright {
+				// Upright: each glyph hung from its vertical origin, one
+				// below the other. See uprightGlyphs.
+				face.DrawUpright(b, text, uprightGlyphs(v), v.Size.Px())
+			} else {
+				glyphs, _ := layout.ShapedGlyphs(v)
+				glyphs = withLetterSpacing(glyphs, text, v)
+				face.Draw(b, text, glyphs, v.Size.Px())
+			}
 			b.EndText()
 			b.Restore()
 
@@ -504,6 +688,25 @@ func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Docu
 			}
 			b.Restore()
 
+		case layout.Link:
+			if _, err := linkTarget(v.Href); err != nil {
+				continue // checkDrawable reported it, and the policy let the page through without it
+			}
+			// One annotation per area, in the order forme painted them, so
+			// that where areas overlap the later — the inner of two nested
+			// links — is on top, as forme's Link says a backend should make
+			// it. Not one annotation with /QuadPoints: a reader that does
+			// not read them (PDF 1.6, and optional) activates the /Rect,
+			// which for a link broken across lines is a box over the middle
+			// of every line between. The href goes to the builder as the
+			// document wrote it; the builder normalises and encodes it.
+			for _, r := range v.Rects {
+				if r.Empty() {
+					continue // forme drops these; nothing could activate one
+				}
+				links = append(links, pdf0.Link{Rect: toPage.rect(r), URI: v.Href})
+			}
+
 		default:
 			// checkDrawable refused this document or the caller's policy let
 			// it through knowing the operation is not drawn.
@@ -515,6 +718,7 @@ func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Docu
 		Width:      page.Width.Pt(),
 		Height:     page.Height.Pt(),
 		Content:    b,
+		Links:      links,
 		Faces:      faces,
 		XObjects:   xobjects,
 		Patterns:   patterns,
@@ -548,9 +752,9 @@ var drawnFields = map[string]map[string]string{
 		"At":            "the origin of the text matrix",
 		"Text":          "what the glyphs were shaped from and what the page extracts as",
 		"RTL":           "through layout.ShapedText and layout.ShapedGlyphs",
-		"Sideways":      "refused: RuleVerticalText",
-		"Anticlockwise": "refused: RuleVerticalText",
-		"Upright":       "refused: RuleVerticalText",
+		"Sideways":      "the text matrix turned a quarter clockwise: textMatrix",
+		"Anticlockwise": "the text matrix turned a quarter anticlockwise: textMatrix",
+		"Upright":       "shaped with the vertical metrics, on em boxes where the face states none (emBoxes), and drawn in the face's vertical form, each glyph hung from its vertical origin: uprightGlyphs, fonts.Face.DrawUpright; refused without Sideways or with Anticlockwise: RuleVerticalText",
 		"Face":          "the font, adopted and embedded",
 		"Size":          "the font size",
 		"Color":         "the fill colour; alpha through an ExtGState, and invisible text at zero",
@@ -559,7 +763,7 @@ var drawnFields = map[string]map[string]string{
 		"MergePre":      "through layout.ShapedGlyphs",
 		"MergePost":     "through layout.ShapedGlyphs",
 		"ContextKerns":  "through layout.ShapedGlyphs",
-		"Features":      "through layout.ShapedGlyphs",
+		"Features":      "through layout.ShapedGlyphs, with Vertical set for an upright run",
 		"CharSpacing":   "added after each typographic character unit: withLetterSpacing",
 		"Clip":          "clipTo",
 	},
@@ -568,6 +772,11 @@ var drawnFields = map[string]map[string]string{
 		"Image": "embedded through images.Embed",
 		"Key":   "one image XObject per key",
 		"Clip":  "clipTo",
+	},
+	"Link": {
+		"Rects": "one link annotation per area, through the page transform",
+		"Href": "the annotation's URI action, through pdf0.LinkURI; a relative reference, " +
+			"a fragment or a URI the builder refuses is refused: RuleLinkDropped",
 	},
 	"TileImage": {
 		"Clip":  "the area painted",
@@ -628,7 +837,9 @@ func (a *alphaStates) use(b *content.Builder, alpha float64) {
 // ligatures narrower on the page than layout said it was.
 //
 // The spacing is in the run's units and a glyph's advance in thousandths of
-// its em, so it is scaled by the size the run is set at.
+// its em, so it is scaled by the size the run is set at. It goes along the
+// run's advance: across for a run across the page or turned sideways, down
+// for an upright one.
 func withLetterSpacing(glyphs []shape.Glyph, text string, v layout.DrawText) []shape.Glyph {
 	if v.CharSpacing == 0 || len(glyphs) == 0 || !(v.Size.Px() > 0) {
 		return glyphs
@@ -666,7 +877,12 @@ func withLetterSpacing(glyphs []shape.Glyph, text string, v layout.DrawText) []s
 				units++
 			}
 		}
-		out[i].XAdvance += perUnit * float64(units)
+		if v.Upright {
+			// Down the page, which a vertical advance states as negative.
+			out[i].YAdvance -= perUnit * float64(units)
+		} else {
+			out[i].XAdvance += perUnit * float64(units)
+		}
 	}
 	return out
 }

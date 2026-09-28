@@ -442,25 +442,3 @@ func TestType1CharStringsEndTerminator(t *testing.T) {
 		t.Errorf("trailing PostScript after the closing end token leaked into the glyph list: %v", fp)
 	}
 }
-
-// TestType1CharStringsEnd covers the terminator predicate directly, including
-// the ND-less shape and the boundary cases a substring test gets wrong.
-func TestType1CharStringsEnd(t *testing.T) {
-	cases := []struct {
-		in   string
-		want bool
-	}{
-		{" ND\nend\nend\nmark currentfile closefile\n", true},
-		{" |-\n end ", true},
-		{"\nend\n", true},              // no ND token
-		{" ND\n/endash 45 RD ", false}, // the next entry is a glyph named endash
-		{" ND\n/enfilledcircbullet 9 RD", false},
-		{" ND\n", false},       // data ran out
-		{" ND\nendobj", false}, // a longer token that merely starts with end
-	}
-	for _, c := range cases {
-		if got := font.Type1CharStringsEnd([]byte(c.in)); got != c.want {
-			t.Errorf("font.Type1CharStringsEnd(%q) = %v, want %v", c.in, got, c.want)
-		}
-	}
-}

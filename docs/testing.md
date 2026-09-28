@@ -112,7 +112,7 @@ through) and from the tests themselves:
 | Factur-X corpus | `testdata/facturx` | — | `make facturx` | `TestCorpusFacturXSetDocumentInfoKeepsFindings`, `TestCorpusXMPRoundTrip`, `TestValidateFacturXCorpus`, `TestValidateFacturXInvoiceCorpus`, `TestValidateFacturXMutations`, `TestWorkMeterHeadroom` |
 | CCITT samples | `testdata/ccitt` | — | `make ccitt` | `TestCCITTRealFiles` |
 | JBIG2 samples | `testdata/jbig2` | — | `make jbig2` | `TestJBIG2EdgeCases`, `TestJBIG2GenericCrossCheck`, `TestJBIG2Halftone`, `TestJBIG2Huffman`, `TestJBIG2Refinement`, `TestJBIG2SymbolText` |
-| Noto Sans CJK face | `testdata/notocjk` | — | `make notocjk` | `TestACJKDocumentIsWrittenAndReadsBack`, `TestAnAdoptedCIDFaceIsKeyedCorrectly`, `TestCIDKeyedSetIsKeyedByCID`, `TestCIDKeyedWidthsAreKeyedByCID`, `TestEveryDrawingPathRoundTripsInEveryFaceKind`, `TestEveryDrawingPathValidatesAtEveryLevel`, `fonts: TestAGlyphDrawnForTwoTextsCarriesBoth`, `fonts: TestEncodeAgreesWithFormesEncode`, `fonts: TestEveryPathWritesTheCodeTheFontIsAddressedBy`, `fonts: TestToUnicodeCoversOnlyTheGlyphsDrawn`, `htmlpdf: TestRenderInEveryFaceKindRoundTrips` |
+| Noto Sans CJK face | `testdata/notocjk` | — | `make notocjk` | `TestACJKDocumentIsWrittenAndReadsBack`, `TestAFaceNeverSetUprightWritesNoVerticalFont`, `TestAFontRemovedFromTheDocumentIsWrittenAfresh`, `TestAFormAddedLaterKeepsTheFontNumbers`, `TestAnAdoptedCIDFaceIsKeyedCorrectly`, `TestBothFormsOfAFaceAreOneFont`, `TestCIDKeyedSetIsKeyedByCID`, `TestCIDKeyedWidthsAreKeyedByCID`, `TestEveryDrawingPathRoundTripsInEveryFaceKind`, `TestEveryDrawingPathValidatesAtEveryLevel`, `TestTheCIDSetIsTheEmbeddedProgramsCharset`, `TestTheVerticalMetricsAreTheGlyphsOwn`, `fonts: TestAGlyphDrawnForTwoTextsCarriesBoth`, `fonts: TestEncodeAgreesWithFormesEncode`, `fonts: TestEveryPathWritesTheCodeTheFontIsAddressedBy`, `fonts: TestToUnicodeCoversOnlyTheGlyphsDrawn`, `htmlpdf: TestDrawUprightHangsEachGlyphBelowTheLast`, `htmlpdf: TestLetterSpacingGoesDownAnUprightRun`, `htmlpdf: TestRenderInEveryFaceKindRoundTrips`, `htmlpdf: TestUprightTextIsDrawnByItsVerticalMetrics` |
 | Cal Poly PDF/VT-1 suite | `testdata/pdfvt` | — | by hand | `TestCorpusContentStateMemoSound`, `TestValidateDPartsCalPolySuite`, `TestValidatePDFVTCalPolySuite`, `TestValidatePDFXCalPolySuite`, `TestWorkMeterHeadroom` |
 | PDFUA-Reference-Files | `spec/pdfua/reference-files` | — | by hand | `TestUAReferenceFilesNoFalsePositives` |
 | Order-X examples | `spec/order-x/Order-X100_EN/05-ORDER-X EXAMPLES` | — | by hand | `TestValidateOrderXCorpus` |
@@ -225,6 +225,11 @@ request.
 - **`FuzzWriteSurface`** (`fuzz_write_test.go`) — builds a document from the
   fuzzer's bytes through the content builder and the page API, and asserts that
   what it manages to write, it can read back.
+
+- **`FuzzTrueTypeGlyph`** (`fuzz_truetype_test.go`) — reads the fuzzer's bytes
+  as an sfnt with forme's parser and asks `simplefont.TrueTypeGlyph` (ISO
+  32000-2 9.6.6.4) for a spread of codes and names, symbolic and not: an
+  answer must be a glyph the font has, and ignorance must be glyph 0.
 
 The TrueType `cmap` fuzzers went to `github.com/mgilbir/forme` with the font
 program parser they fuzz (`FuzzCmapSubtable` and `FuzzSFNTCmap`, in forme's

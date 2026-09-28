@@ -122,3 +122,58 @@ func (f FontCodes) Unicode(c Code) ([]rune, bool) {
 	}
 	return nil, false
 }
+
+// FontWMode is a Type 0 font's writing mode: 1 when its CMap sets glyphs
+// down the page, 0 otherwise (ISO 32000-2 9.7.4.3 and 9.7.5).
+//
+// A predefined CMap says it in its name, which ends "-V" (or is "V") for the
+// vertical half of each pair, Identity-V among them. An embedded CMap says it
+// in its stream dictionary's /WMode, and failing that in its program's
+// "/WMode n def", and failing both inherits the mode of the CMap it builds on
+// (/UseCMap, or usecmap in the program). A font that is not Type 0, or whose
+// /Encoding says none of this, is horizontal: 0 is the default everywhere the
+// mode can be stated.
+func FontWMode(doc View, fontDict *object.Dictionary) int {
+	switch e := doc.Resolve(fontDict.Get("Encoding")).(type) {
+	case object.Name:
+		return predefinedWMode(string(e))
+	case *object.Stream:
+		if m, ok := doc.Resolve(e.Dict.Get("WMode")).(object.Integer); ok {
+			return wmodeOf(int(m))
+		}
+		data, r := doc.Content(e)
+		if r == ReasonOK {
+			if m, ok := CMapWMode(doc.Cancel, data); ok {
+				return wmodeOf(m)
+			}
+		}
+		if parent, ok := doc.ResolveName(e.Dict.Get("UseCMap")); ok {
+			return predefinedWMode(string(parent))
+		}
+		if r == ReasonOK {
+			if parent, ok := CMapUseCMap(doc.Cancel, data); ok {
+				return predefinedWMode(parent)
+			}
+		}
+	}
+	return 0
+}
+
+// predefinedWMode is the writing mode a predefined CMap's name states: the
+// vertical member of each H/V pair ends in "-V", and "V" is the vertical
+// JIS X 0208 CMap. A name that is not a predefined CMap states nothing.
+func predefinedWMode(name string) int {
+	if _, ok := predefinedCodespaces[name]; ok && (name == "V" || strings.HasSuffix(name, "-V")) {
+		return 1
+	}
+	return 0
+}
+
+// wmodeOf reads a stated writing mode: 1 is vertical and every other value is
+// the default, horizontal, which is the only other mode there is.
+func wmodeOf(m int) int {
+	if m == 1 {
+		return 1
+	}
+	return 0
+}

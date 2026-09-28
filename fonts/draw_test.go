@@ -402,3 +402,53 @@ func TestPlanMarksWhatTheMappingCannotSay(t *testing.T) {
 		t.Errorf("clusters past the end of the text were trusted: %+v", segs)
 	}
 }
+
+// TestASimpleFaceRecordsTheGlyphsItDraws: drawn through any path, a simple
+// face records for its subset the glyphs its characters are drawn with, and
+// not the one-byte codes that name them. forme v0.3.0's by-code shaping path
+// recorded the codes ("A" as glyph 65), so a page drawn through the glyph
+// path embedded a subset without its letters, and this package re-recorded
+// the right glyphs itself after every draw. forme records them now (forme
+// c35b944), and this is what removing that workaround rests on: over the
+// 12,475-string shaping corpus, re-recording added nothing to what forme
+// recorded.
+func TestASimpleFaceRecordsTheGlyphsItDraws(t *testing.T) {
+	const text = "AV office"
+	for name, draw := range map[string]func(*Face){
+		"Encode":      func(f *Face) { f.Encode(text) },
+		"Shape":       func(f *Face) { f.Shape(text) },
+		"ShapeWith":   func(f *Face) { f.ShapeWith(text, "smcp") },
+		"ShapeGlyphs": func(f *Face) { f.ShapeGlyphs(text) },
+		"DrawShaped": func(f *Face) {
+			var b content.Builder
+			b.BeginText().SetFont("F1", 12)
+			f.DrawShaped(&b, text, 12)
+			b.EndText()
+		},
+	} {
+		face, err := NotoSansSimple()
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmap := face.Cmap()
+		want := map[int]bool{}
+		for _, r := range text {
+			want[cmap[r]] = true
+		}
+		draw(face)
+		got := map[int]bool{}
+		for _, g := range face.Face.Used() {
+			got[g] = true
+		}
+		for g := range want {
+			if !got[g] {
+				t.Errorf("%s: the glyph %d a character of %q is drawn with is not recorded (recorded %v)", name, g, text, face.Face.Used())
+			}
+		}
+		for g := range got {
+			if !want[g] && g != 0 {
+				t.Errorf("%s: glyph %d is recorded, and no character of %q is drawn with it (recorded %v)", name, g, text, face.Face.Used())
+			}
+		}
+	}
+}

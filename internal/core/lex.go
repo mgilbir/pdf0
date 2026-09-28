@@ -135,13 +135,22 @@ func hexBody(raw []byte) []byte {
 	return b
 }
 
-// Number parses a number token; a malformed one is 0.
+// Number parses a number token; one that is not a PDF number is 0. A rule
+// that must tell the two apart reads ParseNumber.
 func (t *ContentTok) Number() float64 {
-	f, err := strconv.ParseFloat(string(t.Raw), 64)
-	if err != nil {
-		return 0
-	}
+	f, _, _ := t.ParseNumber()
 	return f
+}
+
+// ParseNumber reads the token as a PDF number (syntax.ParseNumber). The lexer
+// calls every run that begins with a digit, a sign or a period a ContentNumber,
+// so "1e3", "1.2.3", "-Inf" and a lone "-" are ContentNumber tokens too; they
+// are not numbers, and ok says so.
+func (t *ContentTok) ParseNumber() (v float64, isInt, ok bool) {
+	if t.Kind != ContentNumber {
+		return 0, false, false
+	}
+	return syntax.ParseNumber(t.Raw)
 }
 
 // Int parses a number token as an integer, reporting false when it is not

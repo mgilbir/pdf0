@@ -9,13 +9,14 @@ import (
 	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/pdf0/content"
+	"github.com/mgilbir/pdf0/simplefont"
 )
 
 // From positioned glyphs to content-stream bytes, and from drawn glyphs back to
 // the text they were drawn for.
 //
 // Every public way of putting text on a page — Encode, Shape, ShapeWith, Draw,
-// DrawShaped — comes through here, and that is the point of the file. They used
+// DrawShaped, DrawUpright — comes through here, and that is the point of the file. They used
 // to be four loops, each writing its own bytes: two wrote the glyph index where
 // a CID-keyed CFF font is addressed by CID, one wrote two-byte codes into a
 // one-byte font, and none of them told the ToUnicode CMap what a shaped glyph
@@ -83,7 +84,7 @@ func winAnsiRune(code int) (rune, bool) {
 	if code < 0 || code > 0xFF {
 		return 0, false
 	}
-	name, ok := font.WinAnsiEncodingNames[byte(code)]
+	name, ok := simplefont.WinAnsiEncoding.GlyphName(byte(code))
 	if !ok {
 		return 0, false
 	}
@@ -549,30 +550,6 @@ func indexOf(sorted []int, x int) int {
 	return lo
 }
 
-// markDrawn makes sure the subset keeps the glyphs a simple face's codes name.
-//
-// For a composite face the shaping call that produced the glyphs already
-// recorded them. For a simple face it recorded the wrong numbers: forme's
-// one-code-per-character path marks the *code* as a used glyph index (forme
-// v0.3.0, shape.shapeByCode), so a page drawn through the glyph path in a
-// simple face embedded a subset without its letters in it. Encoding the
-// characters the codes name records the right glyphs through forme's own public
-// path. A standard face embeds no program and needs nothing.
-func (f *Face) markDrawn(glyphs []Glyph) {
-	if !f.IsSimple() {
-		return
-	}
-	var b strings.Builder
-	for _, g := range glyphs {
-		if r, ok := winAnsiRune(g.GID); ok {
-			b.WriteRune(r)
-		}
-	}
-	if b.Len() > 0 {
-		f.Face.Encode(b.String())
-	}
-}
-
 // spans writes planned glyphs as the spans ShowTextAdjusted takes.
 //
 // Two displacements per glyph, at most, and usually none: an offset displaces
@@ -582,7 +559,6 @@ func (f *Face) markDrawn(glyphs []Glyph) {
 // two are emitted as one number where they meet, because a displacement is
 // three bytes of content stream and a page has thousands of them.
 func (f *Face) spans(glyphs []Glyph, text string) []content.TextSpan {
-	f.markDrawn(glyphs)
 	var (
 		out []content.TextSpan
 		run []byte
@@ -623,7 +599,48 @@ func (f *Face) spans(glyphs []Glyph, text string) []content.TextSpan {
 // draw writes planned glyphs as text operators, with a rise for an offset
 // across the line, which spans cannot express.
 func (f *Face) draw(b *content.Builder, glyphs []Glyph, text string, size float64) {
-	f.markDrawn(glyphs)
+	f.drawPlanned(b, glyphs, f.plan(glyphs, text), size)
+}
+
+// drawWhole is draw for a run whose glyphs a reader cannot read in the order
+// they stand: the whole run is one /ActualText saying the text, and the
+// per-glyph plan decides only the ToUnicode CMap.
+//
+// It is for DrawUpright. Where an upright run's glyphs stand is not where a
+// reader rebuilding text from positions looks for its words. In a horizontal
+// font each glyph is placed by a displacement along the line and a rise
+// across it: a glyph moved right by more than a small gap — a mark hung over
+// its base, a narrow letter centred in the column — reads as the start of a
+// word, and a glyph below another as a new line. In a vertical form the
+// reader knows the line runs down, and still reads a letter-spaced column,
+// or a glyph centred in an em longer than its own advance, as words, and a
+// move across the line as a new one. The /ActualText is the run's text in
+// the order it was written, and the glyphs are written by the form's own
+// emitter.
+func (f *Face) drawWhole(b *content.Builder, glyphs []Glyph, text string, size float64) {
+	emit := f.drawPlanned
+	if f.IsVertical() {
+		emit = f.drawPlannedVertical
+	}
+	segs := f.plan(glyphs, text)
+	actual := visible(text)
+	if actual == "" {
+		emit(b, glyphs, segs, size)
+		return
+	}
+	// Not nested inside another: the one says it all, and a reader that
+	// keeps a single /ActualText at a time would lose the outer to an inner.
+	for i := range segs {
+		segs[i].marked = false
+	}
+	b.BeginActualText(actual)
+	emit(b, glyphs, segs, size)
+	b.EndMarked()
+}
+
+// drawPlanned writes glyphs as text operators, stretch by stretch as a plan
+// divided them.
+func (f *Face) drawPlanned(b *content.Builder, glyphs []Glyph, segs []segment, size float64) {
 	var (
 		run  []byte
 		rise float64
@@ -642,7 +659,7 @@ func (f *Face) draw(b *content.Builder, glyphs []Glyph, text string, size float6
 		// TJ subtracts its number, so moving the pen forward is negative.
 		b.ShowTextAdjusted(content.TextSpan{Adjust: -d})
 	}
-	for _, seg := range f.plan(glyphs, text) {
+	for _, seg := range segs {
 		if seg.marked {
 			flush()
 			b.BeginActualText(seg.actual)
@@ -672,31 +689,60 @@ func (f *Face) draw(b *content.Builder, glyphs []Glyph, text string, size float6
 	}
 }
 
-// glyphsOf is what Encode draws for a string: one glyph per character, in the
-// order written, with no shaping. It is forme's Encode rule restated as glyphs
-// so that the codes go through appendCode like every other path's; the test
-// TestEncodeAgreesWithFormesEncode holds the two to the same bytes.
+// glyphsOf is what Encode draws for a string: in the order written, with no
+// shaping, one glyph per character — or one per part, for a character the face
+// draws as its canonical decomposition. The codes then go through appendCode
+// like every other path's; TestEncodeAgreesWithFormesEncode holds the result
+// to forme's Encode byte for byte.
 //
-// Characters nothing is drawn for are skipped. A character the face lacks is
-// .notdef in a composite face, the space in a standard one, and nothing at all
-// in a simple one — which has no code that could mean it.
+// A character the face has is its own glyph. For one it lacks, forme's Encode
+// decides, asked about that character alone: it draws the character's
+// canonical decomposition where the face has every part of it, and otherwise
+// the substitute — .notdef in a composite face, the space in a simple or
+// standard one. That rule (forme's drawnAs and missingByCode) is not forme's
+// API, and restating it here is what let the two drift: forme began drawing
+// decompositions, and setting a simple face's missing character as a space
+// rather than leaving it out, while this still did neither. Asking forme per
+// character keeps the cluster each part came from, which forme's whole-string
+// answer does not carry and the ToUnicode CMap needs. Characters nothing is
+// drawn for are skipped, as forme skips them.
 func (f *Face) glyphsOf(s string) []Glyph {
 	glyphs := make([]Glyph, 0, len(s))
+	var byCode map[int]int // code -> glyph, for a CID-keyed face; built on first need
 	for i, r := range s {
 		if shape.DrawsNothing(r) {
 			continue
 		}
-		gid, ok := f.GlyphID(r)
-		switch {
-		case ok:
-		case f.IsSimple():
+		if gid, ok := f.GlyphID(r); ok {
+			glyphs = append(glyphs, Glyph{GID: gid, Cluster: i})
 			continue
-		case f.IsStandard():
-			gid = ' '
-		default:
-			gid = 0
 		}
-		glyphs = append(glyphs, Glyph{GID: gid, Cluster: i})
+		codes, _ := f.Face.Encode(string(r))
+		if !f.composite() {
+			for _, c := range codes {
+				glyphs = append(glyphs, Glyph{GID: int(c), Cluster: i})
+			}
+			continue
+		}
+		for k := 0; k+1 < len(codes); k += 2 {
+			code := int(codes[k])<<8 | int(codes[k+1])
+			gid := code
+			// A face addressed by glyph index writes the index. A CID-keyed
+			// one writes the CID, and the glyph with that CID is found by
+			// inverting GlyphCode: a CFF charset gives each glyph its own
+			// CID, so an index whose CID is the code is the only one.
+			if f.GlyphCode(code) != code {
+				if byCode == nil {
+					n := f.NumGlyphs()
+					byCode = make(map[int]int, n)
+					for g := 0; g < n; g++ {
+						byCode[f.GlyphCode(g)] = g
+					}
+				}
+				gid = byCode[code] // absent: glyph 0, .notdef, as forme wrote
+			}
+			glyphs = append(glyphs, Glyph{GID: gid, Cluster: i})
+		}
 	}
 	return glyphs
 }

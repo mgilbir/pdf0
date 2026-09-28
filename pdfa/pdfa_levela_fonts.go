@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/simplefont"
 )
 
 // This file implements the Unicode-mapping requirement of Level A and Level U
@@ -100,7 +100,7 @@ func toUnicodeExempt(doc core.View, fontDict *object.Dictionary, u *core.FontTex
 	}
 	named := func(names map[string]bool) bool {
 		for n := range names {
-			if !font.StandardLatinName(n) && !font.SymbolSetNames[n] {
+			if !simplefont.IsStandardLatin(n) && !simplefont.IsSymbolSet(n) {
 				return false
 			}
 		}
@@ -215,8 +215,8 @@ func type1BuiltinEncoding(prog []byte) (map[byte]string, bool) {
 		return nil, false
 	}
 	if string(fields[0]) == "StandardEncoding" {
-		out := make(map[byte]string, len(font.StandardEncodingNames))
-		for c, n := range font.StandardEncodingNames {
+		out := make(map[byte]string, simplefont.StandardEncoding.Len())
+		for c, n := range simplefont.StandardEncoding.Codes() {
 			out[c] = n
 		}
 		return out, true

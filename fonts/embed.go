@@ -9,6 +9,7 @@ import (
 	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/simplefont"
 )
 
 // Embedding a face as the PDF object graph a reader needs: a Type0 font, its
@@ -59,23 +60,85 @@ var errEmbedBeforeUse = errors.New(
 // ErrRestrictedLicense or ErrBitmapEmbeddingOnly, and one that forbids
 // subsetting is embedded whole, without a subset tag. Every stream is
 // Flate-compressed.
+//
+// A vertical form (see Vertical) embeds as its Identity-V font. A caller
+// naming both forms of a face uses EmbedForms, which writes them over one
+// descendant: Embed on each writes the font twice.
 func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
+	e, err := f.EmbedForms(doc, Forms{Horizontal: !f.IsVertical(), Vertical: f.IsVertical()})
+	if err != nil {
+		return object.IndirectRef{}, err
+	}
+	if f.IsVertical() {
+		return e.Vertical, nil
+	}
+	return e.Horizontal, nil
+}
+
+// Forms says which of a face's fonts EmbedForms writes.
+type Forms struct {
+	// Horizontal is the face's own font: Identity-H for a composite face.
+	Horizontal bool
+	// Vertical is the Identity-V font of its vertical form (see Vertical),
+	// which only a composite face has.
+	Vertical bool
+}
+
+// Embedded is what EmbedForms writes: the font dictionary for each form it
+// was asked for, and the zero reference for the other.
+type Embedded struct {
+	// Horizontal is the face's font dictionary: the Identity-H Type 0 font
+	// for a composite face, the simple or standard font otherwise.
+	Horizontal object.IndirectRef
+	// Vertical is the Identity-V Type 0 font over the same descendant,
+	// written after every other object of the embedding.
+	Vertical object.IndirectRef
+}
+
+// errNoForm is EmbedForms asked for no font at all.
+var errNoForm = errors.New("fonts: EmbedForms was asked for neither form of the face")
+
+// EmbedForms writes the face into doc as Embed does, as the fonts forms asks
+// for: its horizontal font, the Identity-V font of its vertical form, or both
+// over one descendant — one program, one descriptor, one /W, one ToUnicode
+// CMap, and /DW2 and /W2 when the vertical font is written. Called on a
+// vertical form it embeds the face the form belongs to.
+//
+// A simple or standard face has no vertical form, and asking for one is an
+// error.
+func (f *Face) EmbedForms(doc Allocator, forms Forms) (Embedded, error) {
+	f = f.Horizontal()
+	if !forms.Horizontal && !forms.Vertical {
+		return Embedded{}, errNoForm
+	}
+	if forms.Vertical && !f.composite() {
+		return Embedded{}, errNoVerticalForm
+	}
 	if f.IsStandard() {
 		// A standard face embeds nothing: the reader has it, and naming it is
 		// the whole mechanism.
-		return f.embedStandard(doc)
+		ref, err := f.embedStandard(doc)
+		return Embedded{Horizontal: ref}, err
 	}
 	if f.IsSimple() {
 		if len(f.Used()) == 0 {
-			return object.IndirectRef{}, errEmbedBeforeUse
+			return Embedded{}, errEmbedBeforeUse
 		}
-		return f.embedSimple(doc)
+		ref, err := f.embedSimple(doc)
+		return Embedded{Horizontal: ref}, err
 	}
+	return f.embedComposite(doc, forms)
+}
+
+// embedComposite writes a composite face: the program, /CIDSet, the
+// descriptor, the CIDFont, the ToUnicode CMap, and the Identity-H and
+// Identity-V Type 0 fonts forms asks for, in that order.
+func (f *Face) embedComposite(doc Allocator, forms Forms) (Embedded, error) {
 	if f.NumGlyphs() == 0 {
-		return object.IndirectRef{}, errNoGlyphs
+		return Embedded{}, errNoGlyphs
 	}
 	if len(f.Used()) == 0 {
-		return object.IndirectRef{}, errEmbedBeforeUse
+		return Embedded{}, errEmbedBeforeUse
 	}
 	// §9.7.4.2: the collection the descendant's CIDs are numbered in, which
 	// must be compatible with the glyph source's own.
@@ -93,22 +156,12 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	// into first.
 	registry, ordering, supplement, err := f.collection()
 	if err != nil {
-		return object.IndirectRef{}, err
+		return Embedded{}, err
 	}
 
 	program, kept, subset, err := f.programToEmbed()
 	if err != nil {
-		return object.IndirectRef{}, err
-	}
-	// The same question again, of the program this time, for a face that
-	// arrived through Adopt and so was never read from bytes here. See
-	// collection.
-	if !f.cidKeyed {
-		if r, o, sup, ok := collectionOfProgram(program); ok {
-			registry, ordering, supplement = r, o, sup
-		} else if programIsCIDKeyed(program) {
-			return object.IndirectRef{}, errNoCollection
-		}
+		return Embedded{}, err
 	}
 	baseFont := f.baseFontName(kept, subset)
 
@@ -132,7 +185,7 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	// CID the embedded program has. It is mandatory for a subset at PDF/A-1,
 	// and whenever it is present its contents are checked against the
 	// program — see cidSetBits for what "has" means.
-	cidSetRef := doc.Add(flateStream(f.cidSetBits(kept, program)))
+	cidSetRef := doc.Add(flateStream(f.cidSetBits(kept)))
 
 	d := f.Descriptor()
 	descriptor := &object.Dictionary{}
@@ -179,6 +232,16 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	if w := f.widthsArray(advances, defaultWidth, kept); len(w) > 0 {
 		cidFont.Set("W", w)
 	}
+	if forms.Vertical {
+		// The vertical metrics, for the Identity-V font over this CIDFont.
+		// A horizontal font ignores them (9.7.4.3), and an embedding with
+		// no vertical font does not write them.
+		dw2, w2 := f.verticalMetrics(advances, kept)
+		cidFont.Set("DW2", dw2)
+		if len(w2) > 0 {
+			cidFont.Set("W2", w2)
+		}
+	}
 	// Identity: a CID is a glyph index, which is what Identity-H encoding
 	// already made the character codes. The key belongs to CIDFontType2 only —
 	// for a CFF descendant the mapping is the font program's own business
@@ -197,7 +260,23 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	fd.Set("Encoding", object.Name("Identity-H"))
 	fd.Set("DescendantFonts", object.Array{cidFontRef})
 	fd.Set("ToUnicode", toUnicodeRef)
-	return doc.Add(fd), nil
+	var out Embedded
+	if forms.Horizontal {
+		out.Horizontal = doc.Add(fd)
+	}
+	if forms.Vertical {
+		// The same font written down the page. Identity-V is Identity-H's
+		// codes in writing mode 1, so everything but the encoding is shared.
+		vd := &object.Dictionary{}
+		vd.Set("Type", object.Name("Font"))
+		vd.Set("Subtype", object.Name("Type0"))
+		vd.Set("BaseFont", baseFont)
+		vd.Set("Encoding", object.Name("Identity-V"))
+		vd.Set("DescendantFonts", object.Array{cidFontRef})
+		vd.Set("ToUnicode", toUnicodeRef)
+		out.Vertical = doc.Add(vd)
+	}
+	return out, nil
 }
 
 // EmbedRevision is a number that changes whenever what Embed would write for
@@ -210,7 +289,12 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 // revision r covers every use of the face exactly while EmbedRevision is still
 // r. Everything else Embed reads — the program, the metrics, the licence — is
 // fixed when the face is loaded.
+//
+// A face and its vertical form have one revision: they share what was drawn.
+// Which of the two fonts an embedding wrote is the caller's to track (see
+// EmbedForms).
 func (f *Face) EmbedRevision() int {
+	f = f.Horizontal()
 	n := len(f.Used())
 	if f.rec != nil {
 		n += len(f.rec.byGID)
@@ -347,12 +431,14 @@ func (f *Face) bboxArray(d Descriptor) object.Array {
 // not state it — that is a specific claim about a numbering, and it is wrong
 // for precisely the fonts this distinguishes.
 //
-// Asked before the font is subsetted, because for a face read here it is a fact
-// already known, and a font that cannot be embedded should say so for the
-// reason that matters rather than reporting whatever the subsetter met first.
-// A face from Adopt is not known, and Embed asks the subset again afterwards.
+// Both answers are the face's own, from the parse its loading did, whoever
+// loaded it: IsCIDKeyed says whether the codes are CIDs, and
+// CharacterCollection names the collection they are CIDs in. A face from
+// Adopt is answered exactly as a loaded one. This used to parse the program
+// again, the face's at Load and the subset's for a face from Adopt, to learn
+// whether it was CID-keyed, which forme knew and did not say (forme #760).
 func (f *Face) collection() (registry, ordering string, supplement int, err error) {
-	if !f.cidKeyed {
+	if !f.IsCIDKeyed() {
 		return "Adobe", "Identity", 0, nil
 	}
 	r, o, sup, ok := f.CharacterCollection()
@@ -360,37 +446,6 @@ func (f *Face) collection() (registry, ordering string, supplement int, err erro
 		return "", "", 0, errNoCollection
 	}
 	return r, o, sup, nil
-}
-
-// collectionOfProgram reads the collection out of an sfnt's CFF table.
-//
-// It exists for the face this package did not load. Adopt is handed a shaping
-// face and never the bytes, so nothing was parsed for it — but the subset *is*
-// bytes, and it carries the ROS and the charset through untouched, so the
-// question can be asked of it instead. That is how an adopted CID-keyed face
-// gets the collection it is numbered in rather than the default.
-func collectionOfProgram(program []byte) (registry, ordering string, supplement int, ok bool) {
-	cff := font.SFNTTables(program)["CFF "]
-	if cff == nil {
-		return "", "", 0, false
-	}
-	p := font.ParseCFF(cff)
-	if p == nil || p.GIDToCID == nil || p.Registry == "" || p.Ordering == "" {
-		return "", "", 0, false
-	}
-	return p.Registry, p.Ordering, p.Supplement, true
-}
-
-// programIsCIDKeyed reports whether an sfnt's CFF numbers its glyphs by CID,
-// which decides whether a missing collection is a refusal or a font that simply
-// has none to state.
-func programIsCIDKeyed(program []byte) bool {
-	cff := font.SFNTTables(program)["CFF "]
-	if cff == nil {
-		return false
-	}
-	p := font.ParseCFF(cff)
-	return p != nil && p.GIDToCID != nil
 }
 
 // errNoCollection is a CID-keyed face that cannot say which collection its CIDs
@@ -489,7 +544,7 @@ func (f *Face) simpleWidths() (first, last int, widths object.Array) {
 	advances := f.GlyphAdvances()
 	widths = make(object.Array, 0, last-first+1)
 	for code := first; code <= last; code++ {
-		name := font.WinAnsiEncodingNames[byte(code)]
+		name, _ := simplefont.WinAnsiEncoding.GlyphName(byte(code))
 		w := 0.0
 		if r, ok := font.GlyphNameToRune(name, byte(code)); ok {
 			if gid, mapped := cmap[r]; mapped && gid < len(advances) {
@@ -512,7 +567,7 @@ func (f *Face) simpleToUnicode(first, last int) []byte {
 	cmap := f.Cmap()
 	entries := make([]toUnicodeEntry, 0, last-first+1)
 	for code := first; code <= last; code++ {
-		name := font.WinAnsiEncodingNames[byte(code)]
+		name, _ := simplefont.WinAnsiEncoding.GlyphName(byte(code))
 		r, ok := font.GlyphNameToRune(name, byte(code))
 		if !ok || forbiddenInToUnicode(r) {
 			continue
@@ -553,15 +608,20 @@ func subsetTag(kept []int) string {
 //
 // ISO 19005-2 6.2.11.4.2 (and -1 6.3.5 before it) says the set "shall identify
 // all CIDs which are present in the font program, regardless of whether a CID
-// in the font is referenced or used by the PDF or not". For a font addressed by
-// glyph index those are the glyphs the subset kept with outlines, which is the
-// kept set. For a CID-keyed CFF they are every CID its charset lists — and
-// forme's subsetter (v0.3.0) keeps the whole charset, giving the glyphs it
-// dropped an empty charstring each rather than removing them. So the set is
-// the kept glyphs' CIDs together with the charset of the program actually
-// embedded, read back from it: listing only the kept ones described a smaller
-// font than the one in the file, which PDF/A-1b reports.
-func (f *Face) cidSetBits(kept []int, program []byte) []byte {
+// in the font is referenced or used by the PDF or not". Those are the glyphs
+// the program carries, each under the code GlyphCode gives it, and kept lists
+// exactly them. For a font addressed by glyph index the code is the index and
+// the program keeps the indices. For a CID-keyed CFF the code is the CID: a
+// subset holds only the kept glyphs, renumbered, with a charset giving each
+// the CID it had (forme 462f3b5), and a program embedded whole is every glyph,
+// which kept then lists. TestTheCIDSetIsTheEmbeddedProgramsCharset holds the
+// set to the charset of the program in the file.
+//
+// It used to add the embedded program's charset, read back out of it, because
+// forme's subsetter kept the whole charset and emptied the glyphs it dropped:
+// the set listed the kept glyphs and the program had seventeen thousand, and
+// PDF/A-1b reports a set that describes a smaller font than the one embedded.
+func (f *Face) cidSetBits(kept []int) []byte {
 	// One bit per CID, for the same reason /W is keyed by CID: the set says
 	// which characters of the collection the subset carries, and for a
 	// CID-keyed CFF those are not the glyph indices.
@@ -575,19 +635,6 @@ func (f *Face) cidSetBits(kept []int, program []byte) []byte {
 		cids = append(cids, cid)
 		if cid > highest {
 			highest = cid
-		}
-	}
-	if cff := font.SFNTTables(program)["CFF "]; cff != nil {
-		if p := font.ParseCFF(cff); p != nil && p.GIDToCID != nil {
-			for _, cid := range p.GIDToCID {
-				if cid < 0 || cid > 0xFFFF {
-					continue // not a CID a two-byte code can reach
-				}
-				cids = append(cids, cid)
-				if cid > highest {
-					highest = cid
-				}
-			}
 		}
 	}
 	bits := make([]byte, highest/8+1)

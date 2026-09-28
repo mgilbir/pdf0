@@ -12,7 +12,7 @@ func TestContentStreamNumberLimits(t *testing.T) {
 	lim2b := implLimits{rule: "6.1.13", stringLen: 32767, realLimit: 3.403e38}
 	check := func(lim implLimits, tok string) bool {
 		got := false
-		checkContentNumberLimit(tok, lim, 0, func(string, int) { got = true })
+		checkContentNumberLimit([]byte(tok), lim, 0, func(string, int) { got = true })
 		return got
 	}
 	if !check(lim1b, "60000.1") {
@@ -37,6 +37,21 @@ func TestContentStreamNumberLimits(t *testing.T) {
 	// convert overflowing integers to reals) and is flagged.
 	if !check(lim2b, strings.Repeat("9", 40)) {
 		t.Error("astronomically large integer must be flagged as out of range")
+	}
+	// Every PDF spelling of a number is judged by its value.
+	if !check(lim1b, "+32768.") || !check(lim1b, "-32768.5") || check(lim1b, "-.5") || check(lim1b, "+2147483647") {
+		t.Error("a signed or point-ended real, or a signed integer, was misjudged")
+	}
+	if !check(lim2b, "-2147483649") || check(lim2b, "-2147483648") {
+		t.Error("the integer limit is [-2^31, 2^31-1]")
+	}
+	// A token that is not a PDF number (ISO 32000-2 7.3.3 has no exponent and
+	// one period at most) has no magnitude to judge. The CFF real reader this
+	// used to go through read "1E40" as 10^40 and "1e40" as 140.
+	for _, tok := range []string{"1E40", "1e40", "1.2.3", "-Inf"} {
+		if check(lim1b, tok) {
+			t.Errorf("%q is not a PDF number, and was judged against the real limit", tok)
+		}
 	}
 }
 

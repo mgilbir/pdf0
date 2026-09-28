@@ -150,8 +150,8 @@ document with the finding, for a caller who can live with the loss:
 
 | rule | what the display list says | why it is refused |
 |---|---|---|
-| `backend-vertical-text` (`RuleVerticalText`) | a run set down the page: `writing-mode` `vertical-rl`, `vertical-lr`, `sideways-rl`, `sideways-lr`, or `text-orientation: upright` | the glyphs would be drawn across the page, in the wrong place and the wrong way up |
-| `backend-link-dropped` (`RuleLinkDropped`) | an `<a href>` | the display list carries no links, so the page would have the link's text and nothing to follow |
+| `backend-vertical-text` (`RuleVerticalText`) | a run turned in a way forme does not turn text: `Anticlockwise` or `Upright` without `Sideways`, or `Upright` with `Anticlockwise` | no writing mode produces it (CSS Writing Modes 5.1: `sideways-lr` turns every character, so nothing on it is upright), and the backend does not guess what it means. Every run forme sets down the page — turned either way, or upright in any face — is drawn |
+| `backend-link-dropped` (`RuleLinkDropped`) | a link whose target a PDF link cannot carry: a reference left relative to the HTML document (`other.html`, `/a/b`, with no `<base href>` or under one that is a path), a fragment with no such base (`#section`), or a URI [`pdf0.LinkURI`](../annotation.go) refuses | the HTML document's address is not given to the backend, and a PDF reader resolves a relative URI against the PDF's own; the display list does not say where a fragment's target is; so the page would have the link's text and nothing to follow |
 | `backend-unknown-op` (`RuleUnknownOp`) | an operation a newer forme added | part of the page would be undrawn |
 
 Every field of every display-list operation is either drawn or refused, and
@@ -171,6 +171,46 @@ What is drawn:
   each typographic character unit, not after each glyph. Every run extracts as
   the text it was set from — a ligature as its letters, a right-to-left word in
   reading order; see [fonts.md](fonts.md#setting-text-and-getting-it-back).
+- **Sideways text.** A run a vertical writing mode lays along the line —
+  Latin in `vertical-rl` or `vertical-lr`, everything in `sideways-rl` and
+  `sideways-lr` — is a horizontal run turned a quarter, and is drawn as one:
+  the same glyphs and displacements, with the text matrix turned clockwise
+  (`[0 1 1 0]` in layout's coordinates) or, for `sideways-lr`, anticlockwise
+  (`[0 -1 -1 0]`), at the pen position layout gave the run.
+- **Upright text.** A character a vertical writing mode stands upright — CJK
+  by default, anything under `text-orientation: upright` — is shaped with the
+  vertical rules and metrics (`shape.Features.Vertical`: `vert`, and the
+  face's `vmtx` and `VORG`) and drawn by `fonts.Face.DrawUpright` in the
+  face's vertical form, an `Identity-V` font whose `/W2` states each glyph's
+  own vertical metrics, each glyph hung from its vertical origin at the pen
+  layout gave it. A face that states vertical metrics is drawn by them, as
+  layout measured it. One that states none (Noto Sans, the standard faces) is
+  measured by layout at an em a character, CSS Writing Modes 4.4's synthesis,
+  and drawn on those em boxes: each character's glyphs, as shaping placed
+  them relative to each other, centred in its box. A standard face has no
+  vertical font, and its glyphs are placed one by one in the horizontal one.
+  See [fonts.md](fonts.md#setting-text-and-getting-it-back).
+- **Links.** Each `<a href>` forme lays out is a `Link` in the display list,
+  with one area per fragment of the `<a>`: a line of an inline link, the box of
+  a block one, an image or inline-block inside one. Each area is a link
+  annotation with a URI action, placed through the same transform as the
+  drawing, and written by pdf0's own builder (`Page.Links`), so the URI is
+  checked against its scheme allowlist, normalised and percent-encoded to
+  7-bit ASCII as ISO 32000-2 12.6.4.8 requires. A link broken across lines is
+  one annotation per line rather than one with `/QuadPoints`, because a reader
+  that does not honour `/QuadPoints` activates the whole `/Rect`, which covers
+  the middle of every line between. An href forme will not make a link of
+  (`javascript:`, `data:`, `file:` and every scheme but http, https and
+  mailto) is reported by forme as `link-refused`, at warning severity, and the
+  words are drawn without a link. A relative href is resolved by forme against
+  the document's `<base href>` where that is an http or https URL (HTML
+  §4.2.3, RFC 3986 §5.2) — `<base href="https://example.com/docs/">` makes
+  `intro.html` `https://example.com/docs/intro.html` and `#terms`
+  `https://example.com/docs/#terms` — and is written as that URL. One that
+  stays relative, and a fragment with no such base, is refused (below):
+  forme is not told the document's own address, and does not say where on
+  the page a fragment's target is, so there is no in-document destination
+  to write.
 - **Translucency.** A colour's alpha — including the `opacity` layout folds
   into it — is an ExtGState with `/ca` and `/CA`, and a page that uses one is a
   transparency group. A fill at alpha zero is left out; text at alpha zero is

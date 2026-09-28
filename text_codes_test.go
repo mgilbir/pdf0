@@ -27,6 +27,12 @@ func toUnicodeCMap(codespace string, bfchar ...string) string {
 // enc — a name, or "stream" for the embedded CMap cmap at object 8 — and whose
 // ToUnicode, when toUnicode is not empty, is object 7.
 func type0Page(content, enc, cmap, toUnicode string) []byte {
+	return type0PageWMode(content, enc, cmap, toUnicode, "")
+}
+
+// type0PageWMode is type0Page with more entries in the embedded CMap's
+// dictionary ("/WMode 1", say), written as they are given.
+func type0PageWMode(content, enc, cmap, toUnicode, cmapEntries string) []byte {
 	font := "<</Type/Font/Subtype/Type0/BaseFont/X/DescendantFonts[6 0 R]"
 	if enc == "stream" {
 		font += "/Encoding 8 0 R"
@@ -43,7 +49,8 @@ func type0Page(content, enc, cmap, toUnicode string) []byte {
 		rawObj{dict: "<<>>", stream: []byte(toUnicode)},
 	)
 	if enc == "stream" {
-		objs = append(objs, rawObj{dict: "<</Type/CMap/CMapName/X/CIDSystemInfo<</Registry(Adobe)/Ordering(Japan1)/Supplement 2>>>>", stream: []byte(cmap)})
+		cmapDict := "<</Type/CMap/CMapName/X"
+		objs = append(objs, rawObj{dict: cmapDict + cmapEntries + "/CIDSystemInfo<</Registry(Adobe)/Ordering(Japan1)/Supplement 2>>>>", stream: []byte(cmap)})
 	}
 	return buildRawPDF(objs)
 }
@@ -120,5 +127,48 @@ func TestLevelAPrivateUseScanCutsType0CodesByTheCMap(t *testing.T) {
 	}
 	if !found {
 		t.Error("the Private Use character behind a one-byte Shift-JIS code was not found")
+	}
+}
+
+// A vertical font's TJ numbers move the pen down the line, not across it
+// (ISO 32000-2 9.4.3: the number is subtracted from the vertical coordinate
+// in vertical writing), so a gap between two glyphs is a positive number
+// there and a negative one across. The extractor read every font as
+// horizontal: a vertical run spaced out by a positive adjustment came back
+// run together, and one pulled together by a negative adjustment — which a
+// run set to its layout's advances is, wherever the font's vertical advance
+// is longer than the one laid out — came back with a space in every gap.
+func TestExtractTextReadsAVerticalFontsGapsDownTheLine(t *testing.T) {
+	toUnicode := toUnicodeCMap("<0000> <FFFF>", "<0041> <0061>", "<0042> <0062>")
+	vertical := "/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n" +
+		"/WMode 1 def\n1 begincodespacerange <0000> <FFFF> endcodespacerange\n" +
+		"1 begincidrange <0000> <FFFF> 0 endcidrange\nendcmap\n"
+	horizontal := strings.Replace(vertical, "/WMode 1 def\n", "", 1)
+	usesV := "/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n" +
+		"/Identity-V usecmap\nendcmap\n"
+	for _, c := range []struct {
+		name, enc, cmap, cmapEntries string
+		vertical                     bool
+	}{
+		{"Identity-H", "Identity-H", "", "", false},
+		{"Identity-V", "Identity-V", "", "", true},
+		{"embedded CMap setting /WMode 1", "stream", vertical, "", true},
+		{"embedded CMap with /WMode 1 in its dictionary", "stream", horizontal, "/WMode 1", true},
+		{"embedded CMap whose dictionary builds on Identity-V", "stream", horizontal, "/UseCMap/Identity-V", true},
+		{"embedded CMap setting nothing", "stream", horizontal, "", false},
+		{"embedded CMap built on Identity-V", "stream", usesV, "", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			cmap := c.cmap
+			pdf := type0PageWMode("BT /F1 12 Tf [<0041> 300 <0042>] TJ [<0041> -300 <0042>] TJ ET",
+				c.enc, cmap, toUnicode, c.cmapEntries)
+			want := "ab" + "a b" // across: the positive number pulls in, the negative spaces out
+			if c.vertical {
+				want = "a b" + "ab"
+			}
+			if got := extractTextOf(t, pdf); got != want {
+				t.Errorf("ExtractText = %q, want %q", got, want)
+			}
+		})
 	}
 }

@@ -363,15 +363,9 @@ func (p *Parser) toInteger(tok Token) (object.Object, error) {
 // infinity is not a PDF number and could not be written back — and one below
 // its precision rounds toward zero, as strconv does (audit C117).
 func (p *Parser) toReal(tok Token) (object.Object, error) {
-	val, err := strconv.ParseFloat(string(tok.Value), 64)
-	if err != nil && !errors.Is(err, strconv.ErrRange) {
-		return nil, fmt.Errorf("invalid real %q at offset %d: %w", tok.Value, tok.Offset, err)
-	}
-	switch {
-	case math.IsInf(val, 1):
-		val = math.MaxFloat64
-	case math.IsInf(val, -1):
-		val = -math.MaxFloat64
+	val, _, ok := ParseNumber(tok.Value)
+	if !ok {
+		return nil, fmt.Errorf("invalid real %q at offset %d", tok.Value, tok.Offset)
 	}
 	return object.Real(val), nil
 }

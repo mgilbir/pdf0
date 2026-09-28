@@ -31,7 +31,7 @@ There are only three honest things to do with an incomplete result.
 | **Silently wrong** | The truncated result is then used *as if complete*. | **False positives** — the library accuses a conformant file. |
 
 The third class is the dangerous one, and it is not hypothetical. Audit C46: a
-format-4 cmap segment starting at code 0 was dropped, and because `font.TrueTypeGID`
+format-4 cmap segment starting at code 0 was dropped, and because `simplefont.TrueTypeGlyph`
 treats a non-nil cmap as authoritative, every affected code resolved to "glyph
 0" — firing *"does not define a glyph referenced for rendering"* and *"references
 the .notdef glyph"* on a font that was fine. The empty-map defect found by
@@ -49,7 +49,7 @@ When a guard truncates a structure, one of three things must happen, in order of
 preference:
 
 1. the structure is made self-describing (partial), and the consumer declines
-   the dependent check — the `font.ParseCmapSubtable` nil-vs-empty contract is this
+   the dependent check — forme's cmap subtable reader's nil-vs-empty contract is this
    idea, and `font.Program.CmapPartial` / `parseCIDWidths`' second result extend
    it;
 2. the consumer skips the dependent check because the input is known-partial;
@@ -246,11 +246,11 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 
 | Guard | File | Class before | Consumer / finding at risk | Now |
 | --- | --- | --- | --- | --- |
-| cmap work budget (`WithMaxCmapWork`) | forme's `font/fontprog.go` | **Silently wrong** | `font.TrueTypeGID` → `simpleGlyphExists` / `isNotdefGlyph`: *"embedded TrueType font does not define a glyph referenced for rendering (code N)"*, *"text showing operator references the .notdef glyph"* | Fixed. `font.Program.CmapPartial`; the glyph and .notdef rules decline for that font; trip reported as `cmap-work` (one budget, charged by both expanding subtable formats — see [fonts.md](fonts.md#why-formats-4-and-12-share-one-budget)). |
+| cmap work budget (`WithMaxCmapWork`) | forme's `font/fontprog.go` | **Silently wrong** | `simplefont.TrueTypeGlyph` → `simpleGlyphExists` / `isNotdefGlyph`: *"embedded TrueType font does not define a glyph referenced for rendering (code N)"*, *"text showing operator references the .notdef glyph"* | Fixed. `font.Program.CmapPartial`; the glyph and .notdef rules decline for that font; trip reported as `cmap-work` (one budget, charged by both expanding subtable formats — see [fonts.md](fonts.md#why-formats-4-and-12-share-one-budget)). |
 | CID `/W` range span (was WithMaxCIDRangeSpan) | `pdfa/fonts.go` | **Silently wrong** | `checkCIDFontConsistency`: a dropped `/W` range falls back to `/DW` (default 1000) and is compared against the program's real advance → *"width information for glyphs used for rendering is inconsistent"* | Gone. `/W` is no longer expanded: its entries are resolved once into disjoint CID segments (`core.ResolveSpans`) and looked up per CID shown, so a range of any width is read whole and nothing is dropped (audit 2026-09-22 C10: the span limit bounded one range, and 2,000 of them ran out of memory). |
 | predefined CJK CMap (`predefined-cmap`) | `internal/core/cmap.go`, `pdfa/fonts.go`, `pdfua/pdfua.go` | **Silently skipped** | `checkCIDFontConsistency`, `checkFontSubsetCompleteness`, `checkUANotdefCID`: a font whose `/Encoding` names `UniJIS-UCS2-H` and the rest has no code-to-CID mapping here, so glyph coverage, `.notdef`, `/W` consistency and `/CIDSet` completeness cannot run. | Fixed. `core.LoadCMap`, the producer, answers `ReasonUnsupported` and reports the skip as `predefined-cmap`, once per font whichever check asked (it used to be noted by each consumer, once per check). It is not a budget — nothing can be raised to make it run, which is why its message reads *data not carried* rather than *resource limit reached*. The data itself is [#269](https://github.com/mgilbir/pdf0/issues/269). An embedded CMap that builds on another (`usecmap`, `/UseCMap`) is read, with its base: a base that is itself embedded is read in full, and one whose data is not carried is opaque, so the codes left to it decode as unknown and the skip is reported when a check first meets one — not for a CMap that defines every code the page shows (audit 2026-09-22 C75). |
 | font program, CIDSet, ToUnicode over a limit | `internal/core/fontuse.go`, `pdfa/fonts.go`, `pdfua/pdfua.go` | Was **silently wrong** | A program or CIDSet over `WithMaxContentStreamBytes` came back as the same nil as a damaged one: *"embedded %s font program is damaged and could not be parsed"*, *"CIDFont subset FontDescriptor contains an empty CIDSet stream"*, *"FontDescriptor CIDSet does not list all CIDs used for rendering"* (audit 2026-09-22 C47). | Fixed. `core.LoadFontProgram`, `core.DecodeCIDSet` and the ToUnicode parsers return a `core.Reason`; only `ReasonMalformed` is damage or emptiness, a declined reason declines the check, and the producer reports the trip as `content-stream-size` (or whichever bound stopped it). |
-| `font.ParseCmapSubtable` nil-on-unreadable | forme's `font/fontprog.go` | Silently lossy (deliberate) | The subtable is ignored rather than read as "maps nothing". | Unchanged; this is the contract the fix above extends. |
+| forme's cmap subtable reader nil-on-unreadable | forme's `font/fontprog.go` | Silently lossy (deliberate) | The subtable is ignored rather than read as "maps nothing". | Unchanged; this is the contract the fix above extends. |
 | ToUnicode / CMap range and entry bounds (a range over 65,536 codes, more than 65,536 mappings) | `internal/core/cmap.go`, `internal/core/cmapparse.go` | Silently lossy | Missing `toUni[cid]` *suppresses* the empty-outline rule (fail-open). | Unchanged. The section scanners are gone: every CMap program is read as a token stream (audit 2026-09-22 C75, C76, C78). The mappings are no longer expanded into maps: a ToUnicode CMap's entries and a CID CMap's ranges are resolved once into disjoint segments and looked up by binary search (C52, C53), charged to the work meter. |
 | `maxTextFormDepth` | `text.go` | Silently lossy | `ExtractText` only — **no validator consumes it**. | Unchanged. |
 | text extraction work (the run's work meter, `WithMaxWork`) | `text.go` | Unbounded before a form was extracted each time it is drawn (audit 2026-09-22 C87) | `ExtractText` only. Every content stream tokenized — each page's, and each form's each time it is drawn, with a floor for entering a stream — is charged to the run's work meter, which a fan-out of forms drawing forms would otherwise make exponential. It was charged against the decoded-content budget before extraction ran under a run. | **Loud**: the page and every one after it are left out and reported as `*PageTextError`, whose message names `work`. |
@@ -353,7 +353,7 @@ Arlington `5` on 1071 conformant files, `2896` files parsed with 0 failures.
 - **forme's `font/fontprog.go`'s Type 1 CharStrings loop broke on
   `strings.Contains(name, "end")`** after a *successful* glyph parse, truncating
   the glyph list at the first font defining `endash` (or
-  `enfilledcircbullet`, or `endescender`). **Fixed:** `font.Type1CharStringsEnd`
+  `enfilledcircbullet`, or `endescender`). **Fixed:** the reader
   detects what actually closes the dictionary — the standalone `end` token after
   the entry's `ND`/`|-` (Type 1 Font Format 10.3) — read from the byte stream,
   not from a glyph name.

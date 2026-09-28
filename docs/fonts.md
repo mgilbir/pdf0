@@ -24,9 +24,10 @@ getting it back](#setting-text-and-getting-it-back) below is about that half.
 
 ## Setting text and getting it back
 
-`fonts.Face` has five ways to put a string on a page — `Encode`, `Shape`,
-`ShapeWith`, `Draw` and `DrawShaped` — and `htmlpdf.Render` draws through
-`Draw`. All of them go through one path in `fonts/draw.go`:
+`fonts.Face` has six ways to put a string on a page — `Encode`, `Shape`,
+`ShapeWith`, `Draw`, `DrawShaped` and `DrawUpright` — and `htmlpdf.Render`
+draws through `Draw`, and `DrawUpright` for text set upright down the page.
+All of them go through one path in `fonts/draw.go`:
 
 - **One function writes a code** (`appendCode`): `GlyphCode`'s two bytes for a
   composite face — the glyph index, or the CID for a CID-keyed CFF — and the
@@ -47,6 +48,32 @@ getting it back](#setting-text-and-getting-it-back) below is about that half.
 `Encode` returns bare codes, which cannot carry an `/ActualText`: a glyph the
 cmap reaches from two characters extracts as the one the CMap names it by.
 
+`DrawUpright` draws a run shaped with `shape.Features.Vertical`: the pen moves
+down by each glyph's vertical advance and each glyph is hung from its vertical
+origin (the font's `vmtx` and `VORG`, as forme reads them). How it is written
+depends on the form of the face it is called on:
+
+- **The vertical form** (`Face.Vertical`), which a composite face has, is the
+  standard way: a Type 0 font with `Identity-V` encoding (writing mode 1, ISO
+  32000-2 9.7.4.3) over the same CIDFont as the face's `Identity-H` font. The
+  CIDFont's `/W2` and `/DW2` state each kept glyph's own vertical advance and
+  position vector, from forme's `shape.Face.GlyphVerticalMetrics`, as `/W`
+  states its own width from `GlyphAdvance`. What shaping changed — a mark's
+  advance taken away, `vkrn`, `vpal`, an offset — is written as displacements
+  against those metrics: TJ numbers down the line, and a `Td` across it. A
+  reader knows the text is vertical; poppler's `pdftotext` reads the column.
+- **Any other face** is written in its horizontal font, which is all a simple
+  or standard face has: each glyph placed explicitly, with a displacement and
+  a rise.
+
+Either way the run is one `/ActualText`, since where upright glyphs stand — a
+letter-spaced column, a glyph centred in an em longer than its advance, a mark
+moved across the line — is not where a reader rebuilding text from positions
+looks for words. `Face.EmbedForms` writes the forms a document names over one
+descendant: one program, one descriptor, one ToUnicode CMap. `Page.Faces`
+takes either form under its own name and asks for every form its pages have
+named; `/W2` is written only when the vertical font is.
+
 Embedding honours the font's licence (OS/2 `fsType`): Restricted License
 embedding is refused with `fonts.ErrRestrictedLicense`, bitmap-only with
 `fonts.ErrBitmapEmbeddingOnly`, and a font that forbids subsetting is embedded
@@ -66,7 +93,7 @@ the descendant CIDFont's — everything downstream follows from that pair.
 | Font | Program stream | Declared widths | Code → glyph in pdf0 | Subset set |
 |------|----------------|-----------------|----------------------|------------|
 | `Type1` / `MMType1` | `/FontFile` (Type 1) or `/FontFile3` `/Type1C` (CFF) | `/Widths` + `/FirstChar`, else descriptor `/MissingWidth` | code → glyph *name* via the encoding, name → charstring (`font.Program.GlyphNames`, `font.Program.WidthByName`) | `/CharSet` |
-| `TrueType` | `/FontFile2` (sfnt) or `/FontFile3` `/OpenType` | same as Type 1 | code → GID through the program's `cmap` subtables (`font.TrueTypeGID`) | — |
+| `TrueType` | `/FontFile2` (sfnt) or `/FontFile3` `/OpenType` | same as Type 1 | code → GID through the program's `cmap` subtables (`simplefont.TrueTypeGlyph`, ISO 32000-2 9.6.6.4) | — |
 | `Type0` → `CIDFontType0` | descendant's `/FontFile3` (CID-keyed CFF) or `/OpenType` | `/W` array + `/DW` (default 1000) | code (cut by the CMap) → CID → CFF charset entry (`font.Program.CIDGIDs`, `font.Program.WidthByCID`) | `/CIDSet` |
 | `Type0` → `CIDFontType2` | descendant's `/FontFile2` | `/W` + `/DW` | code (cut by the CMap) → CID → GID via `/CIDToGIDMap` → `glyf` entry | `/CIDSet` |
 | `Type3` | none — `/CharProcs` content streams | `/Widths` in glyph space, scaled by `/FontMatrix` | code → glyph name → CharProc, width from the `d0`/`d1` operand | — |
@@ -177,12 +204,13 @@ terms of the Windows subtables. An unreadable higher-ranked subtable never
 displaces a readable lower-ranked one — nor does one that is well formed but
 maps nothing.
 
-**Subtable formats.** `font.ParseCmapSubtable` reads every format whose codes
-are Unicode code points; its documentation lists them and says why format 2
+**Subtable formats.** forme's subtable reader (behind `font.ParseSFNT`) reads
+every format whose codes are Unicode code points; its documentation lists them
+and says why format 2
 (legacy CJK encodings, never at a Unicode platform/encoding pair) and format 14
 (variation sequences, a different function altogether) are not among them. An
 unparseable subtable — or one that parses cleanly and maps nothing — yields
-`nil`, never an empty map: `font.TrueTypeGID` treats a non-nil `cmap` as
+`nil`, never an empty map: `simplefont.TrueTypeGlyph` treats a non-nil `cmap` as
 authoritative, so an empty one would read as "every code is `.notdef`" instead
 of "unknown". forme's own `FuzzCmapSubtable` pins that invariant.
 
@@ -211,8 +239,8 @@ Type 1 program fills `font.Program.GlyphNames` and `font.Program.WidthByName`.
 Widths come from the charstrings — the optional leading width operand of a
 Type 2 charstring, read through the glyph's own Private DICT and its
 subroutines, or `hsbw`/`sbw` in Type 1. The Type 1 reader stops at the
-standalone `end` token that closes the CharStrings dictionary
-(`font.Type1CharStringsEnd`, Type 1 Font Format 10.3), never at a glyph *name*
+standalone `end` token that closes the CharStrings dictionary (Type 1 Font
+Format 10.3), never at a glyph *name*
 containing "end": `endash` and `endescender` are ordinary glyphs, and breaking
 on the name once truncated the glyph list, so every glyph after it read as
 missing from a font that defines it (`TestType1CharStringsEndTerminator`).
@@ -522,8 +550,8 @@ same budget as any other.
   the dictionary level only, because the mapping is data this module does not
   carry; the skip is reported. Identity and *embedded* CMaps are decoded (see
   [CMaps](#cmaps)).
-- **cmap formats 2 and 14 are not parsed** — see `font.ParseCmapSubtable` for
-  why. Format 14 in particular means variation sequences are invisible.
+- **cmap formats 2 and 14 are not parsed** — see forme's subtable reader
+  (`parseCmapSubtable` in its `font/fontprog.go`) for why. Format 14 in particular means variation sequences are invisible.
   Format 12's groups are read as written: they are required to be sorted and
   non-overlapping, and neither is enforced — an overlap resolves to the last
   group.

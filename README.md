@@ -255,7 +255,9 @@ inspects a finding imports the package that owns it. Underneath the root:
 
 - **Regular packages** for pieces that carry public API — `object` (the value
   types), `syntax` (lexer, parser, serializer), `content` (the content-stream
-  builder), `fonts`, `htmlpdf`, `images`, `sign`, `facturx`, and one per
+  builder), `fonts`, `simplefont` (ISO 32000's simple-font rules: the
+  standard encodings, the Latin and Symbol sets, TrueType code-to-glyph),
+  `htmlpdf`, `images`, `sign`, `facturx`, and one per
   validator (`pdfa`, `pdfua`, `pdfx`, `pdfvt`, `pdfr`, `dpart`). Each type is
   declared in exactly one place and named from there: a dictionary is
   `object.Dictionary`, a PDF/UA finding is `pdfua.Violation`, a conformance
@@ -291,7 +293,7 @@ The subsystems, and the doc that maps each:
 | PDF/A validation | `pdfa/` (rules in `pdfa/pdfa.go`, `pdfa/final_rules.go`, `pdfa/fonts.go`, `pdfa/content_operators.go`, `pdfa/filestructure.go`, `pdfa/pdfa_levela.go`; the builder in `pdfa/create.go`), with `pdfa_api.go`, `embedded.go`, `preflight.go` and `save.go` in the root | [pdfa.md](docs/pdfa.md) |
 | The other validators | `pdfua/`, `pdfx/`, `pdfvt/`, `pdfr/`, `dpart/`, `facturx/`, with their `*_api.go` entry points in the root, `violations.go`, `internal/finding` | [validators.md](docs/validators.md), [pdfua.md](docs/pdfua.md) |
 | Content, pages and building | `content/`, `pages.go`, `pagetree.go`, `pageimport.go`, `page_add.go`, `create.go`, `structure.go`, `outline.go`, `annotation.go`, `form.go` | [architecture.md](docs/architecture.md) |
-| Fonts | `fonts/`, `faceembed.go`, with shaping and program parsing in [forme](https://github.com/mgilbir/forme) | [fonts.md](docs/fonts.md) |
+| Fonts | `fonts/`, `simplefont/`, `faceembed.go`, with shaping and program parsing in [forme](https://github.com/mgilbir/forme) | [fonts.md](docs/fonts.md) |
 | HTML and CSS to PDF | `htmlpdf/`, with the whole layout engine in [forme](https://github.com/mgilbir/forme) | [htmlpdf.md](docs/htmlpdf.md) |
 | XMP metadata | `internal/xmp` (the model every writer edits), `pdfa/xmp.go`, `pdfa/xmp_schemas.go` (the validator's reading) | [xmp.md](docs/xmp.md) |
 | Signatures and PAdES | `sign/`, with `sign.go`, `sign_api.go`, `signedfile.go` and `doctimestamp.go` in the root | [signing.md](docs/signing.md) |

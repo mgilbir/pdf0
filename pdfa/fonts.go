@@ -3,9 +3,9 @@ package pdfa
 import (
 	"fmt"
 	"github.com/mgilbir/forme/font"
-	"github.com/mgilbir/pdf0/internal/checked"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/simplefont"
 	"math"
 	"strings"
 	"unicode"
@@ -554,16 +554,11 @@ var aglNames = map[string]bool{
 func simpleFontCodeToName(doc core.View, fontDict *object.Dictionary, symbolic bool) map[byte]string {
 	table := make(map[byte]string)
 	applyBase := func(name object.Name) {
-		var src map[byte]string
-		switch name {
-		case "WinAnsiEncoding":
-			src = font.WinAnsiEncodingNames
-		case "MacRomanEncoding":
-			src = font.MacRomanEncodingNames
-		case "StandardEncoding":
-			src = font.StandardEncodingNames
+		enc, ok := simplefont.EncodingNamed(string(name))
+		if !ok {
+			return
 		}
-		for c, n := range src {
+		for c, n := range enc.Codes() {
 			table[c] = n
 		}
 	}
@@ -766,7 +761,7 @@ func checkSimpleFontConsistency(doc core.View, level Level, rule string, fontDic
 			// A code that the cmap does not resolve is only evidence of a
 			// missing glyph when the cmap is complete. When the work budget
 			// truncated it (fp.cmapPartial) the code is *unknown*, and
-			// font.TrueTypeGID's "non-nil cmap is authoritative" contract would
+			// simplefont.TrueTypeGlyph's "non-nil cmap is authoritative" contract would
 			// otherwise turn every unread mapping into glyph 0 — audit C46's
 			// false positive, reached through the budget instead of the
 			// dropped-segment bug.
@@ -1025,7 +1020,7 @@ func simpleDeclaredWidth(doc core.View, widths object.Array, firstChar int, code
 // simpleGlyphWidth returns the embedded program's advance width for a code.
 func simpleGlyphWidth(fp *font.Program, subtype object.Name, symbolic bool, code byte, name string) (float64, bool) {
 	if subtype == "TrueType" {
-		gid, ok := font.TrueTypeGID(fp, symbolic, code, name)
+		gid, ok := simplefont.TrueTypeGlyph(fp, symbolic, code, name)
 		if !ok || gid >= len(fp.WidthByGID) {
 			return 0, false
 		}
@@ -1041,7 +1036,7 @@ func simpleGlyphWidth(fp *font.Program, subtype object.Name, symbolic bool, code
 
 func simpleGlyphExists(fp *font.Program, subtype object.Name, symbolic bool, code byte, name string) bool {
 	if subtype == "TrueType" {
-		gid, ok := font.TrueTypeGID(fp, symbolic, code, name)
+		gid, ok := simplefont.TrueTypeGlyph(fp, symbolic, code, name)
 		return ok && gid > 0 && gid < fp.NumGlyphs
 	}
 	if name == "" {
@@ -1055,7 +1050,7 @@ func isNotdefGlyph(fp *font.Program, subtype object.Name, symbolic bool, code by
 		return true
 	}
 	if subtype == "TrueType" {
-		gid, ok := font.TrueTypeGID(fp, symbolic, code, name)
+		gid, ok := simplefont.TrueTypeGlyph(fp, symbolic, code, name)
 		return ok && gid == 0
 	}
 	return false
@@ -1222,22 +1217,29 @@ func type3GlyphWidth(doc core.View, cp *object.Stream) (float64, bool) {
 	if data == nil {
 		return 0, false
 	}
-	var nums []float64
-	found := false
-	var w float64
+	// Each operand since the last operator, and whether it is a PDF number. A
+	// token the lexer calls a number but that is not one ("1e3", "1.2.3") is
+	// kept in its place, so that it cannot shift the operand after it into
+	// the width's position, and a width written that way is no width at all.
+	type operand struct {
+		v  float64
+		ok bool
+	}
+	var nums []operand
 	lx := core.NewContentLexer(doc.Cancel, data)
 	var t core.ContentTok
-	for !found && lx.Next(&t) {
+	for lx.Next(&t) {
 		switch t.Kind {
 		case core.ContentNumber:
-			nums = append(nums, parseNumberToken(t.Raw))
+			v, _, ok := t.ParseNumber()
+			nums = append(nums, operand{v, ok})
 		case core.ContentOperator:
 			switch string(t.Raw) {
 			case "d0", "d1":
 				if len(nums) >= 1 {
-					w = nums[0]
-					found = true
+					return nums[0].v, nums[0].ok
 				}
+				nums = nums[:0]
 			default:
 				nums = nums[:0]
 			}
@@ -1248,30 +1250,7 @@ func type3GlyphWidth(doc core.View, cp *object.Stream) (float64, bool) {
 			nums = nums[:0]
 		}
 	}
-	return w, found
-}
-
-// parseNumberToken parses a numeric content token.
-func parseNumberToken(b []byte) float64 {
-	s := string(b)
-	if strings.ContainsAny(s, ".eE") {
-		var f float64
-		font.ParseFloat(s, &f)
-		return f
-	}
-	neg := false
-	i := 0
-	if i < len(s) && (s[i] == '+' || s[i] == '-') {
-		neg = s[i] == '-'
-		i++
-	}
-	// Out-of-range integers saturate rather than wrap; the magnitude rules
-	// report them as out of range either way.
-	v, _, _ := checked.Decimal(s[i:])
-	if neg {
-		v = -v
-	}
-	return float64(v)
+	return 0, false
 }
 
 // --- subset CharSet / CIDSet completeness ---
