@@ -413,8 +413,9 @@ func TestUprightTextIsDrawnByItsVerticalMetrics(t *testing.T) {
 // TestUprightTextInAFaceWithoutVerticalMetricsIsSetOnEmBoxes: Noto Sans and
 // the standard faces state no vertical metrics. Layout measures an upright
 // run in them at an em a character, CSS Writing Modes 4.4's synthesis, and
-// the backend draws them by it: each character's glyphs are centred in their
-// em box, as a cluster, and the run is as long as layout made it. Noto Sans
+// the backend draws them by it: each character's glyphs are hung from the
+// top of its em box, where layout.ShapedGlyphs puts them, and the run is as
+// long as layout made it. Noto Sans
 // is composite and is written in its vertical form; a standard face has
 // none, and its glyphs are placed one by one in the horizontal font.
 func TestUprightTextInAFaceWithoutVerticalMetricsIsSetOnEmBoxes(t *testing.T) {
@@ -473,9 +474,8 @@ func TestUprightTextInAFaceWithoutVerticalMetricsIsSetOnEmBoxes(t *testing.T) {
 			// box is an em down the line from the last, after its
 			// spacing. A character's glyphs — its cluster, and a mark
 			// shaping left in a cluster of its own after it — keep their
-			// places relative to each other as shaped, and the middle of
-			// the cell shaping gave them is the middle of the character's
-			// boxes.
+			// places relative to each other as shaped, hung from the top
+			// of the character's boxes.
 			v := run
 			v.Features.Vertical = true
 			glyphs, _ := layout.ShapedGlyphs(v)
@@ -504,7 +504,14 @@ func TestUprightTextInAFaceWithoutVerticalMetricsIsSetOnEmBoxes(t *testing.T) {
 				for _, g := range glyphs[lo:hi] {
 					cell -= g.YAdvance
 				}
-				top := run.At.Y.Px() + float64(before)*(size+tc.spacing) + float64(chars)*size/2 - cell*s/2
+				// forme gives the character an em (layout.ShapedGlyphs,
+				// forme 5a6c5b6), and each glyph hangs where shaping hung it
+				// from the pen at the top of the character's box.
+				if cell != 1000*float64(chars) {
+					t.Errorf("glyphs %d to %d advance %v down the line for %d character(s); layout measured an em each",
+						lo, hi, cell, chars)
+				}
+				top := run.At.Y.Px() + float64(before)*(size+tc.spacing)
 				p := 0.0
 				for j := lo; j < hi; j++ {
 					g := glyphs[j]

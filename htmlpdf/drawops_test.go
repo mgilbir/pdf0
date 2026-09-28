@@ -27,6 +27,14 @@ func TestEveryDrawOpFieldIsAccountedFor(t *testing.T) {
 		"DrawImage": reflect.TypeOf(layout.DrawImage{}),
 		"TileImage": reflect.TypeOf(layout.TileImage{}),
 		"Link":      reflect.TypeOf(layout.Link{}),
+
+		"FillGradient":     reflect.TypeOf(layout.FillGradient{}),
+		"FillPath":         reflect.TypeOf(layout.FillPath{}),
+		"ClipPath":         reflect.TypeOf(layout.ClipPath{}),
+		"FilterGroup":      reflect.TypeOf(layout.FilterGroup{}),
+		"DrawTextShadow":   reflect.TypeOf(layout.DrawTextShadow{}),
+		"DrawEmphasisMark": reflect.TypeOf(layout.DrawEmphasisMark{}),
+		"DrawGlyphs":       reflect.TypeOf(layout.DrawGlyphs{}),
 	}
 	// The operation set itself, from the source: Op's method is unexported,
 	// so the types that implement it are exactly the ones layout declares a

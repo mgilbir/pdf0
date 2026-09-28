@@ -24,9 +24,10 @@ getting it back](#setting-text-and-getting-it-back) below is about that half.
 
 ## Setting text and getting it back
 
-`fonts.Face` has six ways to put a string on a page — `Encode`, `Shape`,
-`ShapeWith`, `Draw`, `DrawShaped` and `DrawUpright` — and `htmlpdf.Render`
-draws through `Draw`, and `DrawUpright` for text set upright down the page.
+`fonts.Face` has eight ways to put a string on a page — `Encode`, `Shape`,
+`ShapeWith`, `Draw`, `DrawShaped`, `DrawUpright`, `DrawReplaced` and
+`DrawUprightReplaced` — and `htmlpdf.Render` draws through `Draw`, and
+`DrawUpright` for text set upright down the page.
 All of them go through one path in `fonts/draw.go`:
 
 - **One function writes a code** (`appendCode`): `GlyphCode`'s two bytes for a
@@ -73,6 +74,22 @@ looks for words. `Face.EmbedForms` writes the forms a document names over one
 descendant: one program, one descriptor, one ToUnicode CMap. `Page.Faces`
 takes either form under its own name and asks for every form its pages have
 named; `/W2` is written only when the vertical font is.
+
+`DrawReplaced` and `DrawUprightReplaced` draw as `Draw` and `DrawUpright` do,
+for glyphs that do not stand in the page's text for what they were shaped
+from, and say what they stand for instead: the run is one `/ActualText` with
+the replacement, and none inside it. An empty replacement says the glyphs are
+no text at all — htmlpdf draws text shadows and emphasis marks this way, as
+artifacts — and a replacement of one character says a set of pieces is that
+character once: a formula's stretched bracket, drawn by glyph index. The
+ToUnicode CMap still says what each glyph means.
+
+A glyph drawn by index that no shaping reached — the pieces of a stretched
+operator, from a MATH table — is not in forme's record of use
+(`shape.Face.Used`), which is what forme's subsetter keeps, and forme offers no
+way to add to it. A face that drew one is embedded whole, so the glyph is in
+the program, `/W`, `/CIDSet` and the ToUnicode CMap; the page is valid and the
+file is larger.
 
 Embedding honours the font's licence (OS/2 `fsType`): Restricted License
 embedding is refused with `fonts.ErrRestrictedLicense`, bitmap-only with
@@ -482,6 +499,40 @@ the program `Adopt` never saw, which carries the ROS and the charset through
 untouched. For a loaded face the collection is known before subsetting, so a
 font that cannot be embedded says so for the reason that matters rather than
 reporting whatever the subsetter met first.
+
+## Variable fonts and CFF2
+
+A variable face is embedded as the instance it draws. forme hands a backend
+the instance itself (`shape.LoadInstance`, which htmlpdf receives from layout
+for bold text in a variable face): a static face with its own program, name,
+advances and metrics at that point of the design space. `fonts.Adopt` embeds
+it like any other face — its subset, `/W` from its advances and `/CIDSet` from
+the glyphs the subset kept — so nothing of the default master reaches the
+document. A variable face that was loaded rather than instanced (`fonts.Load`,
+`fonts.NotoSans`) is its default master, and that is what it draws and what is
+embedded; forme's subsetter drops the variation tables either way.
+
+A CFF2 font is read as the CFF it draws (forme 6f4fa65) and embedded as that:
+a `CIDFontType0` whose `/FontFile3` is `/OpenType`, an sfnt with a CID-keyed
+`CFF ` table in `Adobe-Identity-0` and no `CFF2`, which PDF has no font file
+type for. Its instances are cut the same way.
+
+`TestAnInstanceIsEmbeddedAsItIsDrawn` holds both to an oracle outside the two
+modules: `testdata/fontinstance/oracle.txt`, what HarfBuzz and fontTools'
+instancer say each glyph advances and inks at two locations of Noto Sans and
+of forme's CFF2 fixture. The document is written at every PDF/A level and read
+back: `/W`, the embedded program's own advance and outline box, `/CIDSet` and
+the validator. The drawing-path matrix has a variable instance and both CFF2
+faces as rows.
+
+One reader does not draw these programs: Poppler (24.02) shows nothing, or the
+wrong glyph, for an OpenType-wrapped CID-keyed CFF whose CIDs are not its glyph
+indices, which is every CID-keyed subset this package writes and so every CFF2
+font. It passes the CID to FreeType, which addresses an sfnt-wrapped font by
+glyph index. Ghostscript draws them, and Poppler draws the same program
+embedded bare as `/CIDFontType0C`. The wrapper is kept because `hmtx` in it is
+what makes the widths authoritative (see [CID-keyed CFF](#cid-keyed-cff)), and
+the fonts it applies to predate CFF2.
 
 ## CMaps
 

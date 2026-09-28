@@ -137,7 +137,7 @@ func (f *Face) embedComposite(doc Allocator, forms Forms) (Embedded, error) {
 	if f.NumGlyphs() == 0 {
 		return Embedded{}, errNoGlyphs
 	}
-	if len(f.Used()) == 0 {
+	if len(f.glyphsDrawn()) == 0 {
 		return Embedded{}, errEmbedBeforeUse
 	}
 	// §9.7.4.2: the collection the descendant's CIDs are numbered in, which
@@ -295,7 +295,7 @@ func (f *Face) embedComposite(doc Allocator, forms Forms) (Embedded, error) {
 // EmbedForms).
 func (f *Face) EmbedRevision() int {
 	f = f.Horizontal()
-	n := len(f.Used())
+	n := len(f.glyphsDrawn())
 	if f.rec != nil {
 		n += len(f.rec.byGID)
 	}
@@ -661,7 +661,7 @@ func (f *Face) cidSetBits(kept []int) []byte {
 // nothing for the glyphs shaping reaches that no character maps to.
 func (f *Face) toUnicodeCMap() []byte {
 	rec := f.record()
-	used := f.Used()
+	used := f.glyphsDrawn()
 	entries := make([]toUnicodeEntry, 0, len(used))
 	for _, gid := range used {
 		if gid == 0 {

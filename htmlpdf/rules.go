@@ -35,4 +35,12 @@ const (
 	// which can only be one a newer layout engine added. Leaving it out
 	// would leave part of the page undrawn.
 	RuleUnknownOp layout.Rule = "backend-unknown-op"
+
+	// RuleUndrawable is an operation this backend knows and cannot write as
+	// the display list states it, because ISO 32000-2 has no way to say it
+	// exactly: a Gaussian blur, for one, which a PDF page has no operator
+	// for. The finding's message names the first such operation and why.
+	// Leaving it out, or drawing an approximation of it, would put a page in
+	// the file other than the one layout composed.
+	RuleUndrawable layout.Rule = "backend-undrawable"
 )

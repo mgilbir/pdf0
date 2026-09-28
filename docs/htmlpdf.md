@@ -153,6 +153,7 @@ document with the finding, for a caller who can live with the loss:
 | `backend-vertical-text` (`RuleVerticalText`) | a run turned in a way forme does not turn text: `Anticlockwise` or `Upright` without `Sideways`, or `Upright` with `Anticlockwise` | no writing mode produces it (CSS Writing Modes 5.1: `sideways-lr` turns every character, so nothing on it is upright), and the backend does not guess what it means. Every run forme sets down the page — turned either way, or upright in any face — is drawn |
 | `backend-link-dropped` (`RuleLinkDropped`) | a link whose target a PDF link cannot carry: a reference left relative to the HTML document (`other.html`, `/a/b`, with no `<base href>` or under one that is a path), a fragment with no such base (`#section`), or a URI [`pdf0.LinkURI`](../annotation.go) refuses | the HTML document's address is not given to the backend, and a PDF reader resolves a relative URI against the PDF's own; the display list does not say where a fragment's target is; so the page would have the link's text and nothing to follow |
 | `backend-unknown-op` (`RuleUnknownOp`) | an operation a newer forme added | part of the page would be undrawn |
+| `backend-undrawable` (`RuleUndrawable`) | an operation the backend knows and ISO 32000-2 cannot state exactly; the message names the first one and why | the page would show something other than what layout composed |
 
 Every field of every display-list operation is either drawn or refused, and
 `drawnFields` in `htmlpdf/pdfout.go` says which; a test holds that list to
@@ -186,10 +187,80 @@ What is drawn:
   layout gave it. A face that states vertical metrics is drawn by them, as
   layout measured it. One that states none (Noto Sans, the standard faces) is
   measured by layout at an em a character, CSS Writing Modes 4.4's synthesis,
-  and drawn on those em boxes: each character's glyphs, as shaping placed
-  them relative to each other, centred in its box. A standard face has no
+  and drawn on those em boxes as `layout.ShapedGlyphs` states them: an em
+  down the line for each character, each glyph hung where shaping hangs it
+  from the top of its box. A standard face has no
   vertical font, and its glyphs are placed one by one in the horizontal one.
   See [fonts.md](fonts.md#setting-text-and-getting-it-back).
+- **Rounded corners.** A rounded background or border is a `FillPath` and a
+  box that clips to its rounded border a `ClipPath`: lines and arcs of
+  axis-aligned ellipses, filled by the even-odd rule (`f*`) and clipped by it
+  (`W* n`, around a `q`/`Q`, so the clip cannot outlive what it holds; ISO
+  32000-2 8.5.3.3.3, 8.5.4). PDF has no arc, and each arc is written as cubic
+  Béziers of at most 45°, within 4.2·10⁻⁶ of the radius of the ellipse — under
+  a hundredth of a pixel below a radius of 2,300 px. An arc sweeping past a
+  whole turn, or with angles that are not numbers, is refused, and so is a link
+  inside a curved clip, since its annotation's rectangle cannot follow the
+  curve; forme makes neither.
+- **Gradients.** Linear, radial and conic gradients, repeating or not, in a
+  background tiled or not, are shadings (ISO 32000-2 8.7.4.5): axial (type 2)
+  along the gradient line, radial (type 3) about the centre under a matrix
+  that makes CSS's ellipse of PDF's circles, and function-based (type 1) for a
+  conic gradient, whose PostScript calculator function (type 4) takes the
+  angle with `atan`. The colour is exactly forme's
+  `layout.Gradient.ColorAtOffset`: the line the tile reaches is cut at every
+  stop and every period into pieces joined by a stitching function (type 3),
+  each piece an exponential function (type 2) whose `/N` is the transition
+  hint's exponent, or a type 4 function where two stops' alphas differ and the
+  blend has to be premultiplied (CSS Color 4 13.4). A gradient CSS
+  interpolates in another colour space arrives from forme restated as sRGB
+  stops, within 0.4/255, and is drawn as those. The alpha is `/ca` where every
+  stop has the same one, and otherwise a luminosity soft mask of the same
+  shading over the alphas, in a DeviceGray group so that no colour management
+  touches it. A gradient that would take more than 65,536 pieces (4,096 for a
+  conic one, each a branch of a program a reader runs per pixel) is refused.
+  Ghostscript 10.02 cannot render some of what this writes and ISO 32000-2
+  allows, so the file works around it: a type 1 shading states its `/Matrix`,
+  has one function per colour component, and every number in a type 4 program
+  is at most 15 characters. It still paints a conic gradient with a hard stop,
+  or with alphas that differ, with bands of wrong colour across the tile (it
+  subdivides the tile into patches it takes to be smooth); Poppler draws them
+  as written.
+- **Filters.** forme folds into the marks every filter it can apply to them
+  exactly and leaves a `FilterGroup` for the rest. `opacity()` is drawn as a
+  form XObject that is an isolated transparency group, painted at `/ca` (ISO
+  32000-2 11.4, 11.6.4.4), so overlapping marks composite before they fade. A
+  `drop-shadow()` with no blur is the group's alpha moved by the offset — an
+  alpha soft mask (11.6.5.2) — flooded with the shadow's colour under the
+  group. A chain is a group per step. `blur()`, a blurred drop shadow and the
+  colour-matrix functions forme could not fold (over a picture, or marks that
+  overlap) are refused: PDF has no convolution, and no combination of its
+  blend modes and transfer functions is a colour matrix.
+- **Text shadows and emphasis marks.** A sharp `text-shadow` is the run's
+  glyphs moved by the offset in the shadow's colour, under the run, and a
+  `text-emphasis` mark is its character drawn where forme puts it. Neither is
+  the document's text: each is marked as an artifact (ISO 32000-2 14.8.2.2)
+  and drawn inside an `/ActualText` that says nothing (14.9.4), so the page
+  extracts as its words once, with no mark among them. A blurred text shadow is
+  refused: PDF has no blur.
+- **MathML's stretched operators.** A stretched operator is a size variant of
+  its glyph or an assembly of pieces from the font's MATH table — glyphs no
+  character maps to, drawn by index (`DrawGlyphs`) through the same glyph-code
+  path as all text, each at the offsets forme placed it. The pieces stand for
+  the operator's character once, in one `/ActualText`; each piece's ToUnicode
+  entry is the character it is a piece of. forme does not record such a glyph
+  as used and has no way to be told of one, so a face that draws one is
+  embedded whole (see [fonts.md](fonts.md#setting-text-and-getting-it-back)).
+  A simple or standard face, whose codes are characters, cannot draw a glyph
+  by index, and is refused.
+- **Squeezed text.** A `text-combine-upright` composition wider than its em,
+  which forme squeezes to fit (`DrawText.WidthScale`, CSS Writing Modes
+  9.1.3), is written with PDF's horizontal scaling, `Tz` at a hundred times the
+  squeeze, which scales the glyphs and every displacement along the run (ISO
+  32000-2 9.3.4). Letter-spacing, which forme does not squeeze, is written
+  divided by the squeeze so that `Tz` brings it back to what layout measured.
+  A squeezed upright run cannot be written this way (`Tz` scales across the
+  page and the run advances down it) and is refused; forme makes none.
 - **Links.** Each `<a href>` forme lays out is a `Link` in the display list,
   with one area per fragment of the `<a>`: a line of an inline link, the box of
   a block one, an image or inline-block inside one. Each area is a link
@@ -243,7 +314,7 @@ default, because it is surprising and it degrades images.
 ## How it is known to work
 
 The layout engine's oracle is the CSS Working Group reftests, run in forme:
-**5,982 of 6,253 documents pass with nothing unsupported reported in either
+**5,996 of 6,253 documents pass with nothing unsupported reported in either
 document**, and the number is a ratchet that a change may not lower. That is a
 measurement of the engine, not of this backend.
 
