@@ -168,8 +168,40 @@ func (f *Face) DrawShaped(b *content.Builder, s string, size float64) int {
 // the line. The ToUnicode CMap says what each glyph means, as for every other
 // path.
 func (f *Face) DrawUpright(b *content.Builder, text string, glyphs []Glyph, size float64) {
+	actual := visible(text)
+	f.drawUpright(b, text, glyphs, size, actual, actual != "")
+}
+
+// DrawReplaced is Draw for glyphs that do not stand in the page's text for the
+// string they were shaped from, and says what they stand for instead: the run
+// is one /ActualText saying actual (ISO 32000-2 14.9.4), with none inside it.
+//
+// actual may be empty, which says the glyphs are no text at all: a text
+// shadow, an emphasis mark — ink that repeats or decorates the text and is
+// not a character of the document. A reader that honours /ActualText, pdf0's
+// extractor among them, reads nothing for them. It is also what a set of
+// glyphs that stand for one character says, when shaping did not make them
+// from it: the pieces of a stretched bracket, each placed where a formula put
+// it and none reached from the character by the font's cmap, are the bracket
+// once.
+//
+// text is what the glyphs were shaped from, if anything — their Cluster
+// offsets are byte offsets into it — and is what the ToUnicode CMap is written
+// from, as for Draw: a shadow's glyphs are the text's own glyphs, and mean
+// what they mean there.
+func (f *Face) DrawReplaced(b *content.Builder, text string, glyphs []Glyph, size float64, actual string) {
+	f.drawReplaced(b, glyphs, text, size, actual, true, false)
+}
+
+// DrawUprightReplaced is DrawUpright for glyphs that stand for actual in the
+// page's text, as DrawReplaced is Draw.
+func (f *Face) DrawUprightReplaced(b *content.Builder, text string, glyphs []Glyph, size float64, actual string) {
+	f.drawUpright(b, text, glyphs, size, actual, true)
+}
+
+func (f *Face) drawUpright(b *content.Builder, text string, glyphs []Glyph, size float64, actual string, wrap bool) {
 	if f.IsVertical() {
-		f.drawWhole(b, glyphs, text, size)
+		f.drawReplaced(b, glyphs, text, size, actual, wrap, true)
 		return
 	}
 	placed := make([]Glyph, len(glyphs))
@@ -186,5 +218,5 @@ func (f *Face) DrawUpright(b *content.Builder, text string, glyphs []Glyph, size
 		placed[i] = p
 		pen += g.YAdvance
 	}
-	f.drawWhole(b, placed, text, size)
+	f.drawReplaced(b, placed, text, size, actual, wrap, false)
 }

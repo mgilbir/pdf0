@@ -104,13 +104,63 @@ type textRecord struct {
 	// canon is the character the font's own cmap assigns each glyph, where it
 	// assigns one, built once on first use. See canonical.
 	canon map[int]rune
+	// drawn is every glyph a composite face drew through this package. It is
+	// what makes a glyph the caller placed by index — one no shaping call
+	// reached, which forme's record of use (shape.Face.Used) does not hold —
+	// part of the embedding: see unshaped.
+	drawn map[int]bool
 }
 
 func (f *Face) record() *textRecord {
 	if f.rec == nil {
-		f.rec = &textRecord{byGID: map[int]string{}}
+		f.rec = &textRecord{byGID: map[int]string{}, drawn: map[int]bool{}}
 	}
 	return f.rec
+}
+
+// glyphsDrawn is every glyph of the face a document shows: what forme's
+// shaping and encoding used, and what was drawn here by index besides.
+func (f *Face) glyphsDrawn() []int {
+	used := f.Used()
+	rec := f.record()
+	if len(rec.drawn) == 0 {
+		return used
+	}
+	all := make(map[int]bool, len(used)+len(rec.drawn))
+	for _, g := range used {
+		all[g] = true
+	}
+	for g := range rec.drawn {
+		all[g] = true
+	}
+	out := make([]int, 0, len(all))
+	for g := range all {
+		out = append(out, g)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// unshaped reports whether the face drew a glyph forme's record of use does
+// not hold: one handed to a drawing call by index, as a formula's stretched
+// operator is (layout.DrawGlyphs), rather than reached by shaping or encoding
+// text. forme subsets a face to its record, and offers no way to add to it,
+// so a subset would leave such a glyph out.
+func (f *Face) unshaped() bool {
+	rec := f.record()
+	if len(rec.drawn) == 0 {
+		return false
+	}
+	used := map[int]bool{}
+	for _, g := range f.Used() {
+		used[g] = true
+	}
+	for g := range rec.drawn {
+		if !used[g] {
+			return true
+		}
+	}
+	return false
 }
 
 // canonical is the one character the font's cmap maps to a glyph, choosing as
@@ -391,6 +441,14 @@ type segment struct {
 // are drawn and a reader reads them in that order: without the /ActualText an
 // Arabic word comes back reversed.
 func (f *Face) plan(glyphs []Glyph, text string) []segment {
+	if f.composite() {
+		rec := f.record()
+		for _, g := range glyphs {
+			if g.GID >= 0 && g.GID < f.NumGlyphs() {
+				rec.drawn[g.GID] = true
+			}
+		}
+	}
 	if len(glyphs) == 0 {
 		if visible(text) == "" {
 			return nil
@@ -602,34 +660,34 @@ func (f *Face) draw(b *content.Builder, glyphs []Glyph, text string, size float6
 	f.drawPlanned(b, glyphs, f.plan(glyphs, text), size)
 }
 
-// drawWhole is draw for a run whose glyphs a reader cannot read in the order
-// they stand: the whole run is one /ActualText saying the text, and the
-// per-glyph plan decides only the ToUnicode CMap.
+// drawReplaced is draw for a run whose glyphs a reader is not to read as they
+// stand: the whole run is one /ActualText saying actual, when wrap is set, and
+// the per-glyph plan decides only the ToUnicode CMap. There is no /ActualText
+// inside it: the one says it all, and a reader that keeps a single
+// /ActualText at a time would lose the outer to an inner. vertical says the
+// glyphs are written by the vertical form's emitter.
 //
-// It is for DrawUpright. Where an upright run's glyphs stand is not where a
-// reader rebuilding text from positions looks for its words. In a horizontal
-// font each glyph is placed by a displacement along the line and a rise
-// across it: a glyph moved right by more than a small gap — a mark hung over
-// its base, a narrow letter centred in the column — reads as the start of a
-// word, and a glyph below another as a new line. In a vertical form the
-// reader knows the line runs down, and still reads a letter-spaced column,
-// or a glyph centred in an em longer than its own advance, as words, and a
-// move across the line as a new one. The /ActualText is the run's text in
-// the order it was written, and the glyphs are written by the form's own
-// emitter.
-func (f *Face) drawWhole(b *content.Builder, glyphs []Glyph, text string, size float64) {
+// It is for DrawUpright, whose run is its text in the order it was written:
+// where an upright run's glyphs stand is not where a reader rebuilding text
+// from positions looks for its words. In a horizontal font each glyph is
+// placed by a displacement along the line and a rise across it: a glyph moved
+// right by more than a small gap — a mark hung over its base, a narrow letter
+// centred in the column — reads as the start of a word, and a glyph below
+// another as a new line. In a vertical form the reader knows the line runs
+// down, and still reads a letter-spaced column, or a glyph centred in an em
+// longer than its own advance, as words, and a move across the line as a new
+// one. And it is for DrawReplaced and DrawUprightReplaced, whose glyphs stand
+// for something else than their text, or for nothing.
+func (f *Face) drawReplaced(b *content.Builder, glyphs []Glyph, text string, size float64, actual string, wrap, vertical bool) {
 	emit := f.drawPlanned
-	if f.IsVertical() {
+	if vertical {
 		emit = f.drawPlannedVertical
 	}
 	segs := f.plan(glyphs, text)
-	actual := visible(text)
-	if actual == "" {
+	if !wrap {
 		emit(b, glyphs, segs, size)
 		return
 	}
-	// Not nested inside another: the one says it all, and a reader that
-	// keeps a single /ActualText at a time would lose the outer to an inner.
 	for i := range segs {
 		segs[i].marked = false
 	}

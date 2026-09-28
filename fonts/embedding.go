@@ -82,6 +82,14 @@ func (f *Face) programToEmbed() (program []byte, kept []int, subset bool, err er
 	if err != nil {
 		return nil, nil, false, err
 	}
+	// A glyph drawn by index that no shaping reached — a formula's stretched
+	// operator, drawn from its MATH table — is not in forme's record of use,
+	// which is what its subsetter keeps, and forme has no way to be told of
+	// one. A subset would draw it as nothing, so the program goes whole:
+	// larger, and every glyph the page draws is in it.
+	if !whole && f.composite() && f.unshaped() {
+		whole = true
+	}
 	if whole {
 		program = f.Program()
 		if program == nil {

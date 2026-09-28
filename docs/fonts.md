@@ -24,9 +24,10 @@ getting it back](#setting-text-and-getting-it-back) below is about that half.
 
 ## Setting text and getting it back
 
-`fonts.Face` has six ways to put a string on a page — `Encode`, `Shape`,
-`ShapeWith`, `Draw`, `DrawShaped` and `DrawUpright` — and `htmlpdf.Render`
-draws through `Draw`, and `DrawUpright` for text set upright down the page.
+`fonts.Face` has eight ways to put a string on a page — `Encode`, `Shape`,
+`ShapeWith`, `Draw`, `DrawShaped`, `DrawUpright`, `DrawReplaced` and
+`DrawUprightReplaced` — and `htmlpdf.Render` draws through `Draw`, and
+`DrawUpright` for text set upright down the page.
 All of them go through one path in `fonts/draw.go`:
 
 - **One function writes a code** (`appendCode`): `GlyphCode`'s two bytes for a
@@ -73,6 +74,22 @@ looks for words. `Face.EmbedForms` writes the forms a document names over one
 descendant: one program, one descriptor, one ToUnicode CMap. `Page.Faces`
 takes either form under its own name and asks for every form its pages have
 named; `/W2` is written only when the vertical font is.
+
+`DrawReplaced` and `DrawUprightReplaced` draw as `Draw` and `DrawUpright` do,
+for glyphs that do not stand in the page's text for what they were shaped
+from, and say what they stand for instead: the run is one `/ActualText` with
+the replacement, and none inside it. An empty replacement says the glyphs are
+no text at all — htmlpdf draws text shadows and emphasis marks this way, as
+artifacts — and a replacement of one character says a set of pieces is that
+character once: a formula's stretched bracket, drawn by glyph index. The
+ToUnicode CMap still says what each glyph means.
+
+A glyph drawn by index that no shaping reached — the pieces of a stretched
+operator, from a MATH table — is not in forme's record of use
+(`shape.Face.Used`), which is what forme's subsetter keeps, and forme offers no
+way to add to it. A face that drew one is embedded whole, so the glyph is in
+the program, `/W`, `/CIDSet` and the ToUnicode CMap; the page is valid and the
+file is larger.
 
 Embedding honours the font's licence (OS/2 `fsType`): Restricted License
 embedding is refused with `fonts.ErrRestrictedLicense`, bitmap-only with
