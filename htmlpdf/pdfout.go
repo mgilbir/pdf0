@@ -248,8 +248,9 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 		}
 		counts[rule]++
 	}
-	var visit func(ops []layout.Op)
-	visit = func(ops []layout.Op) {
+	// curved is whether the operations are inside a ClipPath.
+	var visit func(ops []layout.Op, curved bool)
+	visit = func(ops []layout.Op, curved bool) {
 		for _, op := range ops {
 			if why := undrawable(op); why != "" {
 				note(RuleUndrawable, why)
@@ -262,14 +263,22 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 			case layout.Link:
 				if _, err := linkTarget(v.Href); err != nil {
 					note(RuleLinkDropped, err.Error())
+				} else if curved {
+					// A link annotation's area is its /Rect, which cannot be
+					// cut to a curve, so the link would reach past the
+					// rounded clip it is inside. forme puts no link in one.
+					note(RuleUndrawable, "a link inside a clip to a rounded shape, which a link "+
+						"annotation's rectangle cannot follow")
 				}
-			case layout.FillRect, layout.DrawImage, layout.TileImage:
+			case layout.ClipPath:
+				visit(v.Ops, true)
+			case layout.FillRect, layout.DrawImage, layout.TileImage, layout.FillPath:
 			default:
 				note(RuleUnknownOp, "")
 			}
 		}
 	}
-	visit(c.Ops)
+	visit(c.Ops, false)
 	firstLink, firstUndrawable := first[RuleLinkDropped], first[RuleUndrawable]
 
 	messages := map[layout.Rule]string{
@@ -319,6 +328,10 @@ func undrawable(op layout.Op) string {
 	switch v := op.(type) {
 	case layout.DrawText:
 		return squeezeUndrawable(v)
+	case layout.FillPath:
+		return pathUndrawable(v.Path)
+	case layout.ClipPath:
+		return pathUndrawable(v.Path)
 	}
 	return ""
 }
@@ -532,9 +545,17 @@ var drawnFields = map[string]map[string]string{
 	},
 	// The operations forme 0.4.0 added, which this backend does not draw
 	// yet: each is refused whole, as an operation it does not know is.
-	"FillGradient":     unknownOpFields("Clip", "Tile", "StepX", "StepY", "Gradient", "Overhang"),
-	"FillPath":         unknownOpFields("Path", "Color", "Clip", "Overhang"),
-	"ClipPath":         unknownOpFields("Path", "Ops"),
+	"FillGradient": unknownOpFields("Clip", "Tile", "StepX", "StepY", "Gradient", "Overhang"),
+	"FillPath": {
+		"Path":     "the path, arcs as cubic Béziers of at most 45°, filled by the even-odd rule (f*): pathTo; refused for an arc that is no number or sweeps past a turn: pathUndrawable",
+		"Color":    "the fill colour; alpha through an ExtGState, and nothing painted at zero",
+		"Clip":     "clipTo",
+		"Overhang": "read by layout's page-overflow guard; it says nothing about painting",
+	},
+	"ClipPath": {
+		"Path": "the clip, by the even-odd rule (W* n), around a Save and Restore: pathTo; refused as FillPath's is",
+		"Ops":  "drawn inside the clip; a link among them is refused, since its rectangle cannot follow the curve",
+	},
 	"FilterGroup":      unknownOpFields("Filters", "Ops", "Clip"),
 	"DrawTextShadow":   unknownOpFields("Run", "StdDev"),
 	"DrawEmphasisMark": unknownOpFields("Mark"),

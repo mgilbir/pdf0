@@ -124,6 +124,8 @@ type canvas struct {
 	shadings  map[object.Name]object.Object
 	states    map[object.Name]object.Object
 	alphas    *alphaStates
+	// curved counts the ClipPaths around what is being drawn.
+	curved int
 }
 
 func (w *pageWriter) newCanvas(base [6]float64) *canvas {
@@ -307,8 +309,20 @@ func (c *canvas) drawOp(op layout.Op) error {
 		}
 		b.Restore()
 
+	case layout.FillPath:
+		if undrawable(v) != "" {
+			return nil // checkDrawable reported it, and the policy let the page through without it
+		}
+		c.fillPath(v)
+
+	case layout.ClipPath:
+		if undrawable(v) != "" {
+			return nil // checkDrawable reported it, and the policy let the page through without it
+		}
+		return c.clipPath(v)
+
 	case layout.Link:
-		if _, err := linkTarget(v.Href); err != nil {
+		if _, err := linkTarget(v.Href); err != nil || c.curved > 0 {
 			return nil // checkDrawable reported it, and the policy let the page through without it
 		}
 		// One annotation per area, in the order forme painted them, so

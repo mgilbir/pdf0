@@ -192,6 +192,16 @@ What is drawn:
   from the top of its box. A standard face has no
   vertical font, and its glyphs are placed one by one in the horizontal one.
   See [fonts.md](fonts.md#setting-text-and-getting-it-back).
+- **Rounded corners.** A rounded background or border is a `FillPath` and a
+  box that clips to its rounded border a `ClipPath`: lines and arcs of
+  axis-aligned ellipses, filled by the even-odd rule (`f*`) and clipped by it
+  (`W* n`, around a `q`/`Q`, so the clip cannot outlive what it holds; ISO
+  32000-2 8.5.3.3.3, 8.5.4). PDF has no arc, and each arc is written as cubic
+  Béziers of at most 45°, within 4.2·10⁻⁶ of the radius of the ellipse — under
+  a hundredth of a pixel below a radius of 2,300 px. An arc sweeping past a
+  whole turn, or with angles that are not numbers, is refused, and so is a link
+  inside a curved clip, since its annotation's rectangle cannot follow the
+  curve; forme makes neither.
 - **Squeezed text.** A `text-combine-upright` composition wider than its em,
   which forme squeezes to fit (`DrawText.WidthScale`, CSS Writing Modes
   9.1.3), is written with PDF's horizontal scaling, `Tz` at a hundred times the
