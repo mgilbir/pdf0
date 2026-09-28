@@ -192,6 +192,14 @@ What is drawn:
   from the top of its box. A standard face has no
   vertical font, and its glyphs are placed one by one in the horizontal one.
   See [fonts.md](fonts.md#setting-text-and-getting-it-back).
+- **Squeezed text.** A `text-combine-upright` composition wider than its em,
+  which forme squeezes to fit (`DrawText.WidthScale`, CSS Writing Modes
+  9.1.3), is written with PDF's horizontal scaling, `Tz` at a hundred times the
+  squeeze, which scales the glyphs and every displacement along the run (ISO
+  32000-2 9.3.4). Letter-spacing, which forme does not squeeze, is written
+  divided by the squeeze so that `Tz` brings it back to what layout measured.
+  A squeezed upright run cannot be written this way (`Tz` scales across the
+  page and the run advances down it) and is refused; forme makes none.
 - **Links.** Each `<a href>` forme lays out is a `Link` in the display list,
   with one area per fragment of the `<a>`: a line of an inline link, the box of
   a block one, an image or inline-block inside one. Each area is a link

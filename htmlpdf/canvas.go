@@ -357,6 +357,14 @@ func (c *canvas) text(v layout.DrawText) {
 	// above set up. See textMatrix.
 	a, bb, cc, d := textMatrix(v)
 	b.SetTextMatrix(a, bb, cc, d, v.At.X.Px(), v.At.Y.Px())
+	if v.WidthScale > 0 {
+		// A run squeezed across the direction it advances in, about At: a
+		// text-combine-upright composition wider than its em (CSS Writing
+		// Modes 9.1.3). Tz is a percentage and scales the glyphs and every
+		// displacement along the run (ISO 32000-2 9.3.4), which is what
+		// forme squeezes; see squeezeUndrawable for the run it cannot.
+		b.SetHorizontalScale(100 * v.WidthScale)
+	}
 	// The glyphs layout measured, shaped with the run's direction, its
 	// context either side and the features the document turned off —
 	// layout.ShapedGlyphs is the pairing of all of them, and a backend

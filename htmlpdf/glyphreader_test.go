@@ -146,9 +146,11 @@ func fontModels(t *testing.T, doc *pdf0.Document, page *object.Dictionary, width
 // strings of Tj and TJ and TJ's numbers — over the fonts' models, and
 // returns every glyph shown and where, and for each Tm where the current
 // point is when the next Tm or the end of the text object comes: where the
-// run drawn from that Tm left the pen. Tc, Tw, Tz, TL, T*, TD, ' and " are
-// not written by the code under test, and meeting one fails the test rather
-// than being followed wrongly.
+// run drawn from that Tm left the pen. Tz scales the horizontal displacements
+// — a glyph's width and a TJ number — as 9.4.4 has it (tx is multiplied by
+// Th) and leaves vertical ones alone. Tc, Tw, TL, T*, TD, ' and " are not
+// written by the code under test, and meeting one fails the test rather than
+// being followed wrongly.
 func placedGlyphs(t *testing.T, stream []byte, models map[string]fontModel) (glyphs []placedGlyph, ends [][2]float64) {
 	t.Helper()
 	var (
@@ -161,7 +163,9 @@ func placedGlyphs(t *testing.T, stream []byte, models map[string]fontModel) (gly
 		font     string
 		model    fontModel
 		inArray  bool
-		started  bool // a Tm has been set whose run has not ended
+		started  bool  // a Tm has been set whose run has not ended
+		th       = 1.0 // horizontal scaling, Tz / 100
+		saved    []float64
 	)
 	textSpace := func(x, y float64) [2]float64 {
 		return [2]float64{tm[0]*x + tm[2]*y + tm[4], tm[1]*x + tm[3]*y + tm[5]}
@@ -186,7 +190,7 @@ func placedGlyphs(t *testing.T, stream []byte, models map[string]fontModel) (gly
 				continue
 			}
 			glyphs = append(glyphs, placedGlyph{font, code, textSpace(cur[0], cur[1]+rise), false})
-			cur[0] += model.w0(code) * size / 1000
+			cur[0] += model.w0(code) * size / 1000 * th
 		}
 	}
 	for tk := range core.TokenizeContent(core.Canceler{}, stream) {
@@ -208,7 +212,7 @@ func placedGlyphs(t *testing.T, stream []byte, models map[string]fontModel) (gly
 				if model.vertical {
 					cur[1] -= tk.Number() * size / 1000
 				} else {
-					cur[0] -= tk.Number() * size / 1000
+					cur[0] -= tk.Number() * size / 1000 * th
 				}
 				continue
 			}
@@ -240,9 +244,17 @@ func placedGlyphs(t *testing.T, stream []byte, models map[string]fontModel) (gly
 				model = m
 			case tk.Op == "Ts" && n >= 1:
 				rise = operands[n-1].Number()
+			case tk.Op == "Tz" && n >= 1:
+				th = operands[n-1].Number() / 100
+			case tk.Op == "q":
+				// The text state is part of the graphics state (9.3.1), so
+				// a Q takes a run's Tz away with the rest of it.
+				saved = append(saved, th)
+			case tk.Op == "Q" && len(saved) > 0:
+				th, saved = saved[len(saved)-1], saved[:len(saved)-1]
 			case tk.Op == "Tj" && n >= 1:
 				show(operands[n-1].Str)
-			case tk.Op == "Tc" || tk.Op == "Tw" || tk.Op == "Tz" || tk.Op == "TL" ||
+			case tk.Op == "Tc" || tk.Op == "Tw" || tk.Op == "TL" ||
 				tk.Op == "T*" || tk.Op == "'" || tk.Op == "\"" || tk.Op == "TD":
 				t.Fatalf("the stream uses %s, which this reader does not follow", tk.Op)
 			}

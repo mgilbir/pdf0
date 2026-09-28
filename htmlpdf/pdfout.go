@@ -24,6 +24,7 @@ package htmlpdf
 
 import (
 	"fmt"
+	"math"
 	"net/url"
 	"sort"
 	"strings"
@@ -317,10 +318,34 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 func undrawable(op layout.Op) string {
 	switch v := op.(type) {
 	case layout.DrawText:
-		if v.WidthScale != 0 {
-			return fmt.Sprintf("a run of text squeezed to %g of its width (DrawText.WidthScale), "+
-				"which this backend does not yet write", v.WidthScale)
-		}
+		return squeezeUndrawable(v)
+	}
+	return ""
+}
+
+// squeezeUndrawable is why a run's DrawText.WidthScale cannot be written, or
+// "".
+//
+// The squeeze is PDF's horizontal scaling, Tz (ISO 32000-2 9.3.4), which
+// scales text space's x axis: the glyphs' widths, and every displacement along
+// the run with them. That is the direction a run across the page, or one
+// turned sideways, advances in, and the one forme squeezes. It is not the
+// direction an upright run advances in — the pen goes down the page by the
+// vertical advances, which Tz leaves alone, and the glyphs would be narrowed
+// across the line instead — so a squeezed upright run is refused. forme makes
+// none (only a text-combine-upright composition is squeezed, and it is a
+// horizontal run), and a scale that is not a positive number squeezes nothing
+// a page can show.
+func squeezeUndrawable(v layout.DrawText) string {
+	switch {
+	case v.WidthScale == 0:
+		return ""
+	case !(v.WidthScale > 0) || math.IsInf(v.WidthScale, 0):
+		return fmt.Sprintf("a run of text squeezed by %g (DrawText.WidthScale), which is no width", v.WidthScale)
+	case v.Upright:
+		return "a run of text set upright and squeezed across its advance (DrawText.WidthScale), " +
+			"which PDF's horizontal scaling (Tz) cannot say: it scales across the page, and an " +
+			"upright run advances down it"
 	}
 	return ""
 }
@@ -483,7 +508,7 @@ var drawnFields = map[string]map[string]string{
 		"ContextKerns":  "through layout.ShapedGlyphs",
 		"Features":      "through layout.ShapedGlyphs, with Vertical set for an upright run",
 		"CharSpacing":   "added after each typographic character unit: withLetterSpacing",
-		"WidthScale":    "refused when set: RuleUndrawable",
+		"WidthScale":    "horizontal scaling, Tz at a hundred times it, with the letter-spacing unsqueezed for it: withLetterSpacing; refused on an upright run: squeezeUndrawable",
 		"Clip":          "clipTo",
 	},
 	"DrawImage": {
@@ -610,6 +635,14 @@ func withLetterSpacing(glyphs []shape.Glyph, text string, v layout.DrawText) []s
 		}
 	}
 	perUnit := v.CharSpacing.Px() * 1000 / v.Size.Px()
+	if v.WidthScale > 0 && !v.Upright {
+		// Horizontal scaling (Tz) scales every displacement along the run,
+		// and the spacing is written as one. forme squeezes the glyphs and
+		// their advances and offsets, and not the spacing (DrawText.WidthScale;
+		// its reference drawing adds CharSpacing unscaled), so it is written
+		// unsqueezed here for Tz to squeeze back to what layout measured.
+		perUnit /= v.WidthScale
+	}
 	out := append([]shape.Glyph(nil), glyphs...)
 	for i := range out {
 		if i+1 < len(out) && out[i+1].Cluster == out[i].Cluster {
