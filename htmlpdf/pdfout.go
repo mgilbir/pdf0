@@ -243,12 +243,22 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 	// The first link that cannot be written, and why: the links a document
 	// cannot carry are usually all one kind — every relative reference in it
 	// — and the first says which.
-	var firstLink string
+	var firstLink, firstUndrawable string
+	undrawable := func(why string) {
+		if counts[RuleUndrawable] == 0 {
+			firstUndrawable = why
+		}
+		counts[RuleUndrawable]++
+	}
 	for _, op := range c.Ops {
 		switch v := op.(type) {
 		case layout.DrawText:
 			if !drawableTurn(v) {
 				counts[RuleVerticalText]++
+			}
+			if v.WidthScale != 0 {
+				undrawable(fmt.Sprintf("a run of text squeezed to %g of its width (DrawText.WidthScale), "+
+					"which this backend does not yet write", v.WidthScale))
 			}
 		case layout.Link:
 			if _, err := linkTarget(v.Href); err != nil {
@@ -271,12 +281,14 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 			"show their text with nothing to follow; the first: " + firstLink,
 		RuleUnknownOp: "the display list has %d operation(s) of a kind this backend does not " +
 			"know, which a newer layout engine added; the page would be missing them",
+		RuleUndrawable: "%d operation(s) ask for what a PDF page cannot say as the display list " +
+			"states it, so the page would be missing them; the first: " + firstUndrawable,
 	}
 	var (
 		out     []layout.Finding
 		refused bool
 	)
-	for _, rule := range []layout.Rule{RuleVerticalText, RuleLinkDropped, RuleUnknownOp} {
+	for _, rule := range []layout.Rule{RuleVerticalText, RuleLinkDropped, RuleUnknownOp, RuleUndrawable} {
 		n := counts[rule]
 		if n == 0 {
 			continue
@@ -568,6 +580,9 @@ func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Docu
 			if v.Face == nil || v.Text == "" {
 				continue
 			}
+			if v.WidthScale != 0 {
+				continue // checkDrawable reported it, and the policy let the page through without it
+			}
 			name, ok := names[v.Face]
 			if !ok {
 				name = object.Name(fmt.Sprintf("F%d", len(names)+1))
@@ -765,6 +780,7 @@ var drawnFields = map[string]map[string]string{
 		"ContextKerns":  "through layout.ShapedGlyphs",
 		"Features":      "through layout.ShapedGlyphs, with Vertical set for an upright run",
 		"CharSpacing":   "added after each typographic character unit: withLetterSpacing",
+		"WidthScale":    "refused when set: RuleUndrawable",
 		"Clip":          "clipTo",
 	},
 	"DrawImage": {
@@ -786,6 +802,25 @@ var drawnFields = map[string]map[string]string{
 		"Image": "embedded through images.Embed",
 		"Key":   "one image XObject per key",
 	},
+	// The operations forme 0.4.0 added, which this backend does not draw
+	// yet: each is refused whole, as an operation it does not know is.
+	"FillGradient":     unknownOpFields("Clip", "Tile", "StepX", "StepY", "Gradient", "Overhang"),
+	"FillPath":         unknownOpFields("Path", "Color", "Clip", "Overhang"),
+	"ClipPath":         unknownOpFields("Path", "Ops"),
+	"FilterGroup":      unknownOpFields("Filters", "Ops", "Clip"),
+	"DrawTextShadow":   unknownOpFields("Run", "StdDev"),
+	"DrawEmphasisMark": unknownOpFields("Mark"),
+	"DrawGlyphs":       unknownOpFields("At", "Text", "Glyphs", "Face", "Size", "Color", "Clip"),
+}
+
+// unknownOpFields accounts for every field of an operation this backend
+// refuses whole.
+func unknownOpFields(fields ...string) map[string]string {
+	out := make(map[string]string, len(fields))
+	for _, f := range fields {
+		out[f] = "the operation is not drawn: RuleUnknownOp"
+	}
+	return out
 }
 
 // alphaStates is the ExtGStates a page's translucent marks select, one per

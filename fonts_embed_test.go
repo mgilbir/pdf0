@@ -2,9 +2,12 @@ package pdf0
 
 import (
 	"bytes"
+	"fmt"
 	"github.com/mgilbir/pdf0/internal/testfiles"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -621,10 +624,13 @@ func TestCFFSubsetIsSmallerAndStillParses(t *testing.T) {
 	if cff == nil {
 		t.Fatal("the subsetted CFF table did not parse")
 	}
-	// The Private DICT must survive the move intact: it carries the default and
+	// The Private DICT must survive the move: it carries the default and
 	// nominal widths every charstring's width is expressed against, so a subset
 	// that relocated it wrongly would give every glyph a different width
-	// without changing a single charstring.
+	// without changing a single charstring. Every entry is the original's but
+	// /Subrs, the offset of the local subroutines, which forme's subsetter
+	// (since v0.4.0, e1e2640) writes afresh because it keeps only the
+	// subroutines the kept glyphs call.
 	origPriv, err := shape.PrivateDictForTest(font.SFNTTables(program)["CFF "])
 	if err != nil {
 		t.Fatalf("reading the original Private DICT: %v", err)
@@ -633,8 +639,17 @@ func TestCFFSubsetIsSmallerAndStillParses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading the subset Private DICT: %v", err)
 	}
-	if !bytes.Equal(origPriv, subPriv) {
-		t.Errorf("the Private DICT changed across subsetting: %d bytes became %d", len(origPriv), len(subPriv))
+	origEntries, subEntries := cffDict(t, origPriv), cffDict(t, subPriv)
+	const subrs = "19"
+	if _, had := origEntries[subrs]; had {
+		if _, has := subEntries[subrs]; !has {
+			t.Error("the subset's Private DICT lost its /Subrs, which the original's has")
+		}
+	}
+	delete(origEntries, subrs)
+	delete(subEntries, subrs)
+	if !reflect.DeepEqual(origEntries, subEntries) {
+		t.Errorf("the Private DICT changed across subsetting: %v became %v", origEntries, subEntries)
 	}
 
 	// A kept glyph keeps its width; the widths are what /W is written from, so
@@ -1544,4 +1559,54 @@ func TestAnAdoptedCIDFaceIsKeyedCorrectly(t *testing.T) {
 	if _, ok := widthOfCID(t, doc, cidFont, gid); ok {
 		t.Errorf("/W has an entry at %d, the glyph index", gid)
 	}
+}
+
+// cffDict decodes a CFF DICT (Adobe Technical Note #5176, 4) into its entries,
+// keyed by operator ("12 7" for an escaped one), each the operands as written:
+// integers as decimal, reals as their nibble strings.
+func cffDict(t *testing.T, b []byte) map[string][]string {
+	t.Helper()
+	out := map[string][]string{}
+	var operands []string
+	for i := 0; i < len(b); {
+		c := b[i]
+		switch {
+		case c <= 21:
+			op := strconv.Itoa(int(c))
+			i++
+			if c == 12 {
+				if i >= len(b) {
+					t.Fatal("a DICT ends inside an escaped operator")
+				}
+				op, i = "12 "+strconv.Itoa(int(b[i])), i+1
+			}
+			out[op] = operands
+			operands = nil
+		case c == 28 && i+2 < len(b):
+			operands = append(operands, strconv.Itoa(int(int16(uint16(b[i+1])<<8|uint16(b[i+2])))))
+			i += 3
+		case c == 29 && i+4 < len(b):
+			operands = append(operands, strconv.Itoa(int(int32(uint32(b[i+1])<<24|uint32(b[i+2])<<16|uint32(b[i+3])<<8|uint32(b[i+4])))))
+			i += 5
+		case c == 30:
+			j := i + 1
+			for j < len(b) && b[j]&0x0f != 0x0f && b[j]>>4 != 0x0f {
+				j++
+			}
+			operands = append(operands, fmt.Sprintf("%x", b[i+1:j+1]))
+			i = j + 1
+		case c >= 32 && c <= 246:
+			operands = append(operands, strconv.Itoa(int(c)-139))
+			i++
+		case c >= 247 && c <= 250 && i+1 < len(b):
+			operands = append(operands, strconv.Itoa((int(c)-247)*256+int(b[i+1])+108))
+			i += 2
+		case c >= 251 && c <= 254 && i+1 < len(b):
+			operands = append(operands, strconv.Itoa(-(int(c)-251)*256-int(b[i+1])-108))
+			i += 2
+		default:
+			t.Fatalf("byte %d of a DICT is %d, which starts no operand or operator", i, c)
+		}
+	}
+	return out
 }

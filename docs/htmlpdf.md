@@ -153,6 +153,7 @@ document with the finding, for a caller who can live with the loss:
 | `backend-vertical-text` (`RuleVerticalText`) | a run turned in a way forme does not turn text: `Anticlockwise` or `Upright` without `Sideways`, or `Upright` with `Anticlockwise` | no writing mode produces it (CSS Writing Modes 5.1: `sideways-lr` turns every character, so nothing on it is upright), and the backend does not guess what it means. Every run forme sets down the page — turned either way, or upright in any face — is drawn |
 | `backend-link-dropped` (`RuleLinkDropped`) | a link whose target a PDF link cannot carry: a reference left relative to the HTML document (`other.html`, `/a/b`, with no `<base href>` or under one that is a path), a fragment with no such base (`#section`), or a URI [`pdf0.LinkURI`](../annotation.go) refuses | the HTML document's address is not given to the backend, and a PDF reader resolves a relative URI against the PDF's own; the display list does not say where a fragment's target is; so the page would have the link's text and nothing to follow |
 | `backend-unknown-op` (`RuleUnknownOp`) | an operation a newer forme added | part of the page would be undrawn |
+| `backend-undrawable` (`RuleUndrawable`) | an operation the backend knows and ISO 32000-2 cannot state exactly; the message names the first one and why | the page would show something other than what layout composed |
 
 Every field of every display-list operation is either drawn or refused, and
 `drawnFields` in `htmlpdf/pdfout.go` says which; a test holds that list to
@@ -243,7 +244,7 @@ default, because it is surprising and it degrades images.
 ## How it is known to work
 
 The layout engine's oracle is the CSS Working Group reftests, run in forme:
-**5,982 of 6,253 documents pass with nothing unsupported reported in either
+**5,996 of 6,253 documents pass with nothing unsupported reported in either
 document**, and the number is a ratchet that a change may not lower. That is a
 measurement of the engine, not of this backend.
 
