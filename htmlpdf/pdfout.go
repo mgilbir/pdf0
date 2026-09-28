@@ -364,86 +364,33 @@ func drawableTurn(v layout.DrawText) bool {
 	return true
 }
 
-// uprightGlyphs shapes a run set upright, as layout measured it: with the
-// vertical rules and metrics (shape.Features.Vertical, which layout leaves to
-// the backend to ask for), the run's context either side, and its
+// uprightGlyphs is a run set upright as layout measured it, with its
 // letter-spacing down the run.
 //
-// Each glyph comes back with its vertical advance and the point it is hung
-// from. Where the face states vertical metrics (its vmtx, see
-// shape.Face.StatesVerticalMetrics) those are what layout measured the run by,
-// and they are drawn as shaped. Where it states none, layout measured an em a
-// character, which is CSS Writing Modes 4.4's synthesis and not shaping's
-// (the height of the face's line, HarfBuzz's), and DrawText.Upright says a
-// backend has to draw by the em: emBoxes moves the glyphs onto it.
-func uprightGlyphs(v layout.DrawText) []shape.Glyph {
-	v.Features.Vertical = true
-	glyphs, _ := layout.ShapedGlyphs(v)
-	text := layout.ShapedText(v)
-	if !v.Face.StatesVerticalMetrics() {
-		glyphs = emBoxes(glyphs, text)
-	}
-	return withLetterSpacing(glyphs, text, v)
-}
-
-// emBoxes sets glyphs shaped upright in a face that states no vertical
-// metrics on the em boxes CSS Writing Modes 4.4 synthesizes for them: each
-// typographic character an em down the line (paragraph.UprightUnits, which
-// is how layout counted the run), and a mark, which is none, nothing.
+// layout.ShapedGlyphs shapes an upright run as layout measured it (forme
+// 5a6c5b6): the run's own text, with the vertical rules and metrics
+// (shape.Features.Vertical) and its context either side, each glyph with its
+// vertical advance and the point it is hung from. Where the face states
+// vertical metrics (its vmtx, see shape.Face.StatesVerticalMetrics) those are
+// the advances. Where it states none, the advances are the em a character CSS
+// Writing Modes 4.4 synthesizes, which is how layout measured the run, given to
+// the first glyph of each character's cluster; each glyph is still hung where
+// shaping hangs it. DrawText.Upright states that a backend stepping its pen
+// down by -YAdvance draws the glyphs where layout placed them, so that is what
+// is drawn.
 //
-// It moves glyphs a character at a time: a shaping cluster, together with
-// the clusters after it that hold no character of their own (a mark shaping
-// left in a cluster apart from its base). That is what shaping placed
-// together: a mark is positioned against its base by offsets measured in the
-// shaped advances, and moving the base alone would move it off. So each such
-// group keeps its glyphs where shaping put them relative to each other and is
-// moved whole: its advance becomes the em boxes of its characters, and it is
-// centred in them, the middle of the cell shaping gave it (the line's height,
-// for such a face) on the middle of theirs. Across the line nothing changes:
-// shaping hangs each glyph by half its advance, which centres it on the line,
-// as layout's one-em-wide column is.
-func emBoxes(glyphs []shape.Glyph, text string) []shape.Glyph {
-	out := append([]shape.Glyph(nil), glyphs...)
-	// Each cluster's text, from its offset to the next cluster's.
-	starts := make([]int, 0, len(out))
-	seen := map[int]bool{}
-	for _, g := range out {
-		if !seen[g.Cluster] {
-			seen[g.Cluster] = true
-			starts = append(starts, g.Cluster)
-		}
-	}
-	sort.Ints(starts)
-	chars := make(map[int]int, len(starts))
-	for i, c := range starts {
-		end := len(text)
-		if i+1 < len(starts) {
-			end = starts[i+1]
-		}
-		if c >= 0 && c <= end && end <= len(text) {
-			chars[c] = paragraph.UprightUnits(text[c:end])
-		}
-	}
-	for lo := 0; lo < len(out); {
-		// The group: this cluster, and the clusters after it with no
-		// character of their own.
-		units := chars[out[lo].Cluster]
-		hi := lo + 1
-		for hi < len(out) && (out[hi].Cluster == out[hi-1].Cluster || chars[out[hi].Cluster] == 0) {
-			hi++
-		}
-		shaped := 0.0 // the group's length down the line as shaped, positive
-		for _, g := range out[lo:hi] {
-			shaped -= g.YAdvance
-		}
-		delta := shaped - 1000*float64(units)
-		for j := lo; j < hi; j++ {
-			out[j].YOffset += delta / 2
-		}
-		out[hi-1].YAdvance += delta
-		lo = hi
-	}
-	return out
+// This used to move the glyphs onto the em boxes itself, centring the cell
+// shaping gave a character (the height of the face's line) on its em box,
+// because layout.ShapedGlyphs shaped an upright run as a horizontal one. It
+// no longer does, and a second placement here would draw the run somewhere
+// layout did not put it.
+//
+// The text is the run's own and not layout.ShapedText's: an upright run is set
+// in the order it is written (CSS Writing Modes 5.1 treats its characters as
+// strong left-to-right), and its glyphs' clusters are offsets into v.Text.
+func uprightGlyphs(v layout.DrawText) []shape.Glyph {
+	glyphs, _ := layout.ShapedGlyphs(v)
+	return withLetterSpacing(glyphs, v.Text, v)
 }
 
 // linkTarget is the URI a display-list link is written with, or why it
@@ -631,7 +578,7 @@ func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Docu
 			if v.Upright {
 				// Upright: each glyph hung from its vertical origin, one
 				// below the other. See uprightGlyphs.
-				face.DrawUpright(b, text, uprightGlyphs(v), v.Size.Px())
+				face.DrawUpright(b, v.Text, uprightGlyphs(v), v.Size.Px())
 			} else {
 				glyphs, _ := layout.ShapedGlyphs(v)
 				glyphs = withLetterSpacing(glyphs, text, v)
@@ -769,7 +716,7 @@ var drawnFields = map[string]map[string]string{
 		"RTL":           "through layout.ShapedText and layout.ShapedGlyphs",
 		"Sideways":      "the text matrix turned a quarter clockwise: textMatrix",
 		"Anticlockwise": "the text matrix turned a quarter anticlockwise: textMatrix",
-		"Upright":       "shaped with the vertical metrics, on em boxes where the face states none (emBoxes), and drawn in the face's vertical form, each glyph hung from its vertical origin: uprightGlyphs, fonts.Face.DrawUpright; refused without Sideways or with Anticlockwise: RuleVerticalText",
+		"Upright":       "shaped by layout.ShapedGlyphs with the vertical metrics, an em a character where the face states none, and drawn in the face's vertical form, each glyph hung from its vertical origin: uprightGlyphs, fonts.Face.DrawUpright; refused without Sideways or with Anticlockwise: RuleVerticalText",
 		"Face":          "the font, adopted and embedded",
 		"Size":          "the font size",
 		"Color":         "the fill colour; alpha through an ExtGState, and invisible text at zero",

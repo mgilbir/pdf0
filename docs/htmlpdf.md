@@ -187,8 +187,9 @@ What is drawn:
   layout gave it. A face that states vertical metrics is drawn by them, as
   layout measured it. One that states none (Noto Sans, the standard faces) is
   measured by layout at an em a character, CSS Writing Modes 4.4's synthesis,
-  and drawn on those em boxes: each character's glyphs, as shaping placed
-  them relative to each other, centred in its box. A standard face has no
+  and drawn on those em boxes as `layout.ShapedGlyphs` states them: an em
+  down the line for each character, each glyph hung where shaping hangs it
+  from the top of its box. A standard face has no
   vertical font, and its glyphs are placed one by one in the horizontal one.
   See [fonts.md](fonts.md#setting-text-and-getting-it-back).
 - **Links.** Each `<a href>` forme lays out is a `Link` in the display list,
