@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/mgilbir/forme/layout"
 	"github.com/mgilbir/forme/paragraph"
@@ -414,8 +415,9 @@ func TestUprightTextIsDrawnByItsVerticalMetrics(t *testing.T) {
 // the standard faces state no vertical metrics. Layout measures an upright
 // run in them at an em a character, CSS Writing Modes 4.4's synthesis, and
 // the backend draws them by it: each character's glyphs are hung from the
-// top of its em box, where layout.ShapedGlyphs puts them, and the run is as
-// long as layout made it. Noto Sans
+// top of its em box, where layout.ShapedGlyphs puts them, each character's
+// ink is centred in its box (forme #858), and the run is as long as layout
+// made it. Noto Sans
 // is composite and is written in its vertical form; a standard face has
 // none, and its glyphs are placed one by one in the horizontal font.
 func TestUprightTextInAFaceWithoutVerticalMetricsIsSetOnEmBoxes(t *testing.T) {
@@ -525,6 +527,32 @@ func TestUprightTextInAFaceWithoutVerticalMetricsIsSetOnEmBoxes(t *testing.T) {
 					}
 					if math.Abs(got.at[0]-want[0]) > 1e-3 || math.Abs(got.at[1]-want[1]) > 1e-3 {
 						t.Errorf("glyph %d of %q is drawn at %v; its em box puts it at %v", j, tc.text, got.at, want)
+					}
+					// And the character's own glyph is centred in its box,
+					// measured from where the file draws it and the ink the
+					// font gives the glyph, not from the origin shaping
+					// states: an origin synthesized for another advance
+					// (HarfBuzz's, the line's height) with the em's advance
+					// puts every glyph low in its box (forme #858).
+					// A standard face has no glyph program, and states its
+					// ink per character (Adobe's AFM boxes, InkExtent).
+					if j == lo && chars == 1 {
+						var above, below float64 // the ink, from the baseline, in px
+						if _, yb, _, h, ok := run.Face.GlyphExtents(g.GID); ok {
+							u := size / float64(run.Face.UnitsPerEm())
+							above, below = float64(yb)*u, -float64(yb+h)*u
+						} else {
+							r, _ := utf8.DecodeRuneInString(tc.text[g.Cluster:])
+							var ok bool
+							if above, below, ok = run.Face.InkExtent(string(r), size); !ok {
+								t.Fatalf("%s states no ink for %q; the centring is not measured", run.Face.Name(), r)
+							}
+						}
+						ink := got.at[1] - (above-below)/2
+						if centre := top + size/2; math.Abs(ink-centre) > size/100 {
+							t.Errorf("glyph %d of %q has its ink centred %+.3f em from its em box's centre (+ is down the line)",
+								j, tc.text, (ink-centre)/size)
+						}
 					}
 					p += g.YAdvance
 				}

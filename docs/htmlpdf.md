@@ -189,7 +189,8 @@ What is drawn:
   measured by layout at an em a character, CSS Writing Modes 4.4's synthesis,
   and drawn on those em boxes as `layout.ShapedGlyphs` states them: an em
   down the line for each character, each glyph hung where shaping hangs it
-  from the top of its box. A standard face has no
+  from the top of its box, which centres its ink in the box. A standard face
+  has no
   vertical font, and its glyphs are placed one by one in the horizontal one.
   See [fonts.md](fonts.md#setting-text-and-getting-it-back).
 - **Rounded corners.** A rounded background or border is a `FillPath` and a
