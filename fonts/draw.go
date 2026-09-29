@@ -104,63 +104,13 @@ type textRecord struct {
 	// canon is the character the font's own cmap assigns each glyph, where it
 	// assigns one, built once on first use. See canonical.
 	canon map[int]rune
-	// drawn is every glyph a composite face drew through this package. It is
-	// what makes a glyph the caller placed by index — one no shaping call
-	// reached, which forme's record of use (shape.Face.Used) does not hold —
-	// part of the embedding: see unshaped.
-	drawn map[int]bool
 }
 
 func (f *Face) record() *textRecord {
 	if f.rec == nil {
-		f.rec = &textRecord{byGID: map[int]string{}, drawn: map[int]bool{}}
+		f.rec = &textRecord{byGID: map[int]string{}}
 	}
 	return f.rec
-}
-
-// glyphsDrawn is every glyph of the face a document shows: what forme's
-// shaping and encoding used, and what was drawn here by index besides.
-func (f *Face) glyphsDrawn() []int {
-	used := f.Used()
-	rec := f.record()
-	if len(rec.drawn) == 0 {
-		return used
-	}
-	all := make(map[int]bool, len(used)+len(rec.drawn))
-	for _, g := range used {
-		all[g] = true
-	}
-	for g := range rec.drawn {
-		all[g] = true
-	}
-	out := make([]int, 0, len(all))
-	for g := range all {
-		out = append(out, g)
-	}
-	slices.Sort(out)
-	return out
-}
-
-// unshaped reports whether the face drew a glyph forme's record of use does
-// not hold: one handed to a drawing call by index, as a formula's stretched
-// operator is (layout.DrawGlyphs), rather than reached by shaping or encoding
-// text. forme subsets a face to its record, and offers no way to add to it,
-// so a subset would leave such a glyph out.
-func (f *Face) unshaped() bool {
-	rec := f.record()
-	if len(rec.drawn) == 0 {
-		return false
-	}
-	used := map[int]bool{}
-	for _, g := range f.Used() {
-		used[g] = true
-	}
-	for g := range rec.drawn {
-		if !used[g] {
-			return true
-		}
-	}
-	return false
 }
 
 // canonical is the one character the font's cmap maps to a glyph, choosing as
@@ -441,13 +391,16 @@ type segment struct {
 // are drawn and a reader reads them in that order: without the /ActualText an
 // Arabic word comes back reversed.
 func (f *Face) plan(glyphs []Glyph, text string) []segment {
+	// Every glyph drawn goes into forme's record of use, which is what the
+	// subset keeps and /CIDSet lists. Shaping records what it returns; a glyph
+	// a caller placed by index — a formula's stretched operator, drawn from its
+	// MATH table — reaches no shaping, and is recorded here (forme #857).
 	if f.composite() {
-		rec := f.record()
+		gids := make([]int, 0, len(glyphs))
 		for _, g := range glyphs {
-			if g.GID >= 0 && g.GID < f.NumGlyphs() {
-				rec.drawn[g.GID] = true
-			}
+			gids = append(gids, g.GID)
 		}
+		f.Use(gids...)
 	}
 	if len(glyphs) == 0 {
 		if visible(text) == "" {

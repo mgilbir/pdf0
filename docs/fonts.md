@@ -85,11 +85,11 @@ character once: a formula's stretched bracket, drawn by glyph index. The
 ToUnicode CMap still says what each glyph means.
 
 A glyph drawn by index that no shaping reached — the pieces of a stretched
-operator, from a MATH table — is not in forme's record of use
-(`shape.Face.Used`), which is what forme's subsetter keeps, and forme offers no
-way to add to it. A face that drew one is embedded whole, so the glyph is in
-the program, `/W`, `/CIDSet` and the ToUnicode CMap; the page is valid and the
-file is larger.
+operator, from a MATH table — is recorded in forme's record of use
+(`shape.Face.Use`) as it is drawn, since shaping records only what it returns.
+The record is what forme's subsetter keeps and what `/CIDSet` lists, so the
+face is still subset and the glyph is in the program, `/W`, `/CIDSet` and the
+ToUnicode CMap.
 
 Embedding honours the font's licence (OS/2 `fsType`): Restricted License
 embedding is refused with `fonts.ErrRestrictedLicense`, bitmap-only with
