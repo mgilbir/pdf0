@@ -189,7 +189,8 @@ What is drawn:
   measured by layout at an em a character, CSS Writing Modes 4.4's synthesis,
   and drawn on those em boxes as `layout.ShapedGlyphs` states them: an em
   down the line for each character, each glyph hung where shaping hangs it
-  from the top of its box. A standard face has no
+  from the top of its box, which centres its ink in the box. A standard face
+  has no
   vertical font, and its glyphs are placed one by one in the horizontal one.
   See [fonts.md](fonts.md#setting-text-and-getting-it-back).
 - **Rounded corners.** A rounded background or border is a `FillPath` and a
@@ -248,9 +249,9 @@ What is drawn:
   character maps to, drawn by index (`DrawGlyphs`) through the same glyph-code
   path as all text, each at the offsets forme placed it. The pieces stand for
   the operator's character once, in one `/ActualText`; each piece's ToUnicode
-  entry is the character it is a piece of. forme does not record such a glyph
-  as used and has no way to be told of one, so a face that draws one is
-  embedded whole (see [fonts.md](fonts.md#setting-text-and-getting-it-back)).
+  entry is the character it is a piece of. Each piece is recorded as used when
+  it is drawn, so the face is still subset
+  (see [fonts.md](fonts.md#setting-text-and-getting-it-back)).
   A simple or standard face, whose codes are characters, cannot draw a glyph
   by index, and is refused.
 - **Squeezed text.** A `text-combine-upright` composition wider than its em,
