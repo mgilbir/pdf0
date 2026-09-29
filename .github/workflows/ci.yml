@@ -15,9 +15,9 @@ jobs:
   build-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.26.x'
 
@@ -112,9 +112,9 @@ jobs:
   corpus:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.26.x'
 
@@ -127,7 +127,7 @@ jobs:
       # never put an old copy of a committed file over the checked-out one.
       - name: restore corpora
         id: corpora
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             testdata/verapdf-corpus
@@ -203,9 +203,9 @@ jobs:
   fuzz:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.26.x'
           cache: true
@@ -215,7 +215,7 @@ jobs:
       # instead of rediscovering the same inputs. Keyed by commit so it always
       # restores, and never grows without bound because the cache expires.
       - name: restore the fuzz corpus
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/go-build/fuzz
           key: fuzz-${{ github.sha }}
@@ -229,7 +229,7 @@ jobs:
       # Without this the log says a target failed and the input is gone.
       - name: keep any failing input
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-failure
           path: testdata/fuzz/
