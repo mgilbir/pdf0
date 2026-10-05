@@ -180,7 +180,7 @@ func TestToUnicodeSaysWhatEachGlyphWasDrawnFor(t *testing.T) {
 	}
 	var b content.Builder
 	b.BeginText().SetFont("F1", 12)
-	for _, s := range []string{"office", "क्षत्रिय", "नमस्ते"} {
+	for _, s := range []string{"office", "क्षत्रिय", "नमस्ते", "कर्म"} {
 		face.DrawShaped(&b, s, 12)
 	}
 	b.EndText()
@@ -194,12 +194,18 @@ func TestToUnicodeSaysWhatEachGlyphWasDrawnFor(t *testing.T) {
 	if len(conjunct) != 1 {
 		t.Fatalf("क्ष shaped as %d glyphs; the fixture needs the conjunct", len(conjunct))
 	}
-	// स्ते is three glyphs in one cluster: a half form no character maps to,
-	// the letter and the vowel sign. The two the cmap names are those
-	// characters, and the half form takes what they leave, which is स्.
+	// स् in नमस्ते is a half form no character maps to, a cluster of its
+	// own: it stands for the whole of it.
 	ste, _ := face.ShapeGlyphs("नमस्ते")
-	if len(ste) != 5 || ste[2].Cluster != ste[3].Cluster {
+	if len(ste) != 5 || ste[2].Cluster == ste[3].Cluster {
 		t.Fatalf("नमस्ते shaped as %v; the fixture needs the half form", ste)
+	}
+	// र्म in कर्म is two glyphs in one cluster: the letter and a reph no
+	// character maps to. The cmap names the letter, and the reph takes what
+	// it leaves, which is र्.
+	karma, _ := face.ShapeGlyphs("कर्म")
+	if len(karma) != 3 || karma[1].Cluster != karma[2].Cluster {
+		t.Fatalf("कर्म shaped as %v; the fixture needs the reph", karma)
 	}
 	cmap := string(face.toUnicodeCMap())
 	for _, tc := range []struct {
@@ -211,6 +217,8 @@ func TestToUnicodeSaysWhatEachGlyphWasDrawnFor(t *testing.T) {
 		{glyphs[0].GID, "o"},
 		{ste[2].GID, "स्"},
 		{ste[3].GID, "त"},
+		{karma[1].GID, "म"},
+		{karma[2].GID, "र्"},
 	} {
 		var entry bytes.Buffer
 		entry.WriteByte('<')
