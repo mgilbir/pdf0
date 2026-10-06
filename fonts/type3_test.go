@@ -455,7 +455,7 @@ func TestAGlyphPNGPastTheLimitIsRefusedUndecoded(t *testing.T) {
 	if cfg, err := png.DecodeConfig(bytes.NewReader(data)); err != nil || cfg.Width != 4096 {
 		t.Fatalf("the crafted header does not read as 4096 wide: %v %v", cfg, err)
 	}
-	err := embedPNG(&capture{}, shape.Image{Format: shape.ImagePNG, Data: data})
+	err := embedPNG(&capture{}, shape.Image{Format: shape.ImagePNG, Data: data}, false)
 	if err == nil || !strings.Contains(err.Error(), "pixels a glyph may have") {
 		t.Errorf("a 4096×4096 glyph PNG: %v", err)
 	}

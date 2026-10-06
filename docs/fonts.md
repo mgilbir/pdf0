@@ -649,9 +649,10 @@ same budget as any other.
   256 ppem other than the largest is never drawn from. SVG glyphs are not
   drawn. A font whose glyphs have outlines *and* bitmaps is embedded as its
   outlines, so a licence that permits embedding only its bitmaps
-  (`fonts.ErrBitmapEmbeddingOnly`) still refuses it. PDF/A-1 forbids soft
-  masks, so a greyscale glyph in a colour and a colour bitmap are not PDF/A-1:
-  the validator reports them (6.4), and 1-bit glyphs are PDF/A-1.
+  (`fonts.ErrBitmapEmbeddingOnly`) still refuses it. In a document that
+  claims PDF/A-1, which forbids soft masks, a greyscale glyph is a stencil and
+  a colour bitmap is painted through a 1-bit `/Mask` (`fonts.Forms.Opaque`):
+  their colours are kept and their anti-aliased edges are not.
 
 - **Predefined CMaps are not decoded.** A Type 0 font whose `/Encoding` names
   one of Adobe's published CMaps — `UniJIS-UCS2-H` and the rest — is checked at

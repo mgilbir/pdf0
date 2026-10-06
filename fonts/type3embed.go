@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
 	"image/png"
 	"math"
 	"strconv"
@@ -112,7 +113,7 @@ func (f *Face) embedType3(doc Allocator, forms Forms) (Embedded, error) {
 	}
 	var out Embedded
 	for _, sub := range f.t3.subs {
-		ref, err := f.embedSubfont(doc, sub)
+		ref, err := f.embedSubfont(doc, sub, forms.Opaque)
 		if err != nil {
 			return Embedded{}, err
 		}
@@ -127,8 +128,8 @@ func (f *Face) embedType3(doc Allocator, forms Forms) (Embedded, error) {
 
 // embedSubfont writes one sub-font: its glyph procedures and their images,
 // the ToUnicode CMap, a descriptor and the font dictionary, which is the
-// reference returned.
-func (f *Face) embedSubfont(doc Allocator, sub *subFont) (object.IndirectRef, error) {
+// reference returned. opaque writes it without transparency (Forms.Opaque).
+func (f *Face) embedSubfont(doc Allocator, sub *subFont, opaque bool) (object.IndirectRef, error) {
 	t := f.t3
 	toGlyph := 1000 / float64(f.UnitsPerEm())
 	charProcs := &object.Dictionary{}
@@ -164,13 +165,18 @@ func (f *Face) embedSubfont(doc Allocator, sub *subFont) (object.IndirectRef, er
 					math.Max(bbox[2], box[2]), math.Max(bbox[3], box[3]),
 				}
 			}
-			c, err := t.imageFor(f, sub.key, gid, g)
+			// A greyscale glyph is a stencil where it has no colour of its
+			// own to carry, and where transparency is not allowed: its
+			// sub-font is only ever shown in the colour it is keyed by,
+			// which is the colour a stencil paints in.
+			stencil := g.kind == glyphMask || (g.kind == glyphGrey && (sub.key.colour == "" || opaque))
+			c, err := t.imageFor(f, sub.key, gid, g, stencil, opaque)
 			if err != nil {
 				return object.IndirectRef{}, fmt.Errorf("fonts: glyph %d: %w", gid, err)
 			}
 			imName := object.Name("I" + strconv.Itoa(code))
 			xobjects.Set(imName, c.replay(doc))
-			if g.kind == glyphMask || (g.kind == glyphGrey && sub.key.colour == "") {
+			if stencil {
 				proc = appendNums(nil, wx, 0, box[0], box[1], box[2], box[3])
 				proc = append(proc, "d1\n"...)
 			} else {
@@ -255,9 +261,9 @@ func (f *Face) embedSubfont(doc Allocator, sub *subFont) (object.IndirectRef, er
 const flagSymbolic = 1 << 2
 
 // imageFor is the image objects a glyph's procedure draws, written once per
-// sub-font key and kept.
-func (t *type3State) imageFor(f *Face, key subKey, gid int, g bitmapGlyph) (*capture, error) {
-	k := builtKey{key: key, gid: gid}
+// sub-font key, glyph and kind of writing, and kept.
+func (t *type3State) imageFor(f *Face, key subKey, gid int, g bitmapGlyph, stencil, opaque bool) (*capture, error) {
+	k := builtKey{key: key, gid: gid, opaque: opaque}
 	if c, ok := t.built[k]; ok {
 		return c, nil
 	}
@@ -265,8 +271,8 @@ func (t *type3State) imageFor(f *Face, key subKey, gid int, g bitmapGlyph) (*cap
 	var err error
 	switch {
 	case g.kind == glyphColour:
-		err = embedPNG(c, g.img)
-	case g.kind == glyphGrey && key.colour != "":
+		err = embedPNG(c, g.img, opaque)
+	case !stencil:
 		err = embedCoverage(c, t.colours[key.colour], g.img)
 	default:
 		// A stencil of the coverage: a pixel paints where it is at least half
@@ -292,8 +298,9 @@ const maxGlyphPixels = 1 << 22
 
 // embedPNG writes a colour bitmap's PNG as an image, after checking its size
 // against the pixel limit before decoding it: the font is untrusted, and its
-// header says how much decoding would allocate.
-func embedPNG(doc Allocator, img shape.Image) error {
+// header says how much decoding would allocate. opaque writes its alpha as a
+// 1-bit /Mask, painted where it is at least half, instead of an /SMask.
+func embedPNG(doc *capture, img shape.Image, opaque bool) error {
 	cfg, err := png.DecodeConfig(bytes.NewReader(img.Data))
 	if err != nil {
 		return fmt.Errorf("its PNG cannot be read: %w", err)
@@ -305,8 +312,34 @@ func embedPNG(doc Allocator, img shape.Image) error {
 	if err != nil {
 		return fmt.Errorf("its PNG cannot be decoded: %w", err)
 	}
-	_, err = images.Embed(doc, decoded)
-	return err
+	if !opaque {
+		_, err = images.Embed(doc, decoded)
+		return err
+	}
+	// The colour without its alpha, and the alpha as a stencil the image is
+	// painted through (ISO 32000-2 8.9.6.3, explicit masking). The mask is
+	// written first: an object refers only to ones written before it.
+	b := decoded.Bounds()
+	colour := image.NewNRGBA(b)
+	alpha := image.NewAlpha(b)
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			c := color.NRGBAModel.Convert(decoded.At(x, y)).(color.NRGBA)
+			alpha.SetAlpha(x, y, color.Alpha{A: c.A})
+			c.A = 0xFF
+			colour.SetNRGBA(x, y, c)
+		}
+	}
+	mask, err := images.EmbedStencil(doc, alpha)
+	if err != nil {
+		return err
+	}
+	ref, err := images.Embed(doc, colour)
+	if err != nil {
+		return err
+	}
+	doc.objs[-ref.Number-1].(*object.Stream).Dict.Set("Mask", mask)
+	return nil
 }
 
 // embedCoverage writes a greyscale glyph in a colour: one pixel of the colour,

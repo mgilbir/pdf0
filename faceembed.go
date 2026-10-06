@@ -68,6 +68,12 @@ func (d *Document) embedFaces(faces map[object.Name]*fonts.Face) (map[object.Nam
 		old   []int // the numbers the previous embedding held
 	}
 	stage := d.stageAdds()
+	// A document that claims PDF/A-1 may not use transparency (ISO 19005-1
+	// 6.4), and a bitmap face's anti-aliased and colour glyphs are soft
+	// masks unless they are written without (fonts.Forms.Opaque). The claim
+	// is read as each page is added, so a font embedded before it was made
+	// is rewritten with the next page that names it.
+	opaque := d.existingPDFAIdentification().part == "1"
 	refs := make(map[object.Name]object.IndirectRef, len(faces))
 	var rewrites []rewrite
 	// The two forms of one face are one embedding, keyed by the face they
@@ -110,6 +116,7 @@ func (d *Document) embedFaces(faces map[object.Name]*fonts.Face) (map[object.Nam
 			}
 		}
 		want := named[face]
+		want.Opaque = opaque
 		if have {
 			want.Horizontal = want.Horizontal || prev.forms.Horizontal
 			want.Vertical = want.Vertical || prev.forms.Vertical

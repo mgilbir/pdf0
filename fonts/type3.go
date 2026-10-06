@@ -108,8 +108,9 @@ type type3State struct {
 }
 
 type builtKey struct {
-	key subKey
-	gid int
+	key    subKey
+	gid    int
+	opaque bool
 }
 
 func (f *Face) type3() *type3State {

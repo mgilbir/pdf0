@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"image"
+	"image/color"
 	"image/png"
 	"math"
 	"os"
@@ -35,6 +36,9 @@ type placedGlyph struct {
 	// rgb is the colour the text is painted in, 0-255, for the comparison;
 	// nil for black.
 	rgb []float64
+	// opaque says the document may not use transparency (PDF/A-1), where a
+	// greyscale glyph is a stencil whatever its colour.
+	opaque bool
 }
 
 const bitmapPageW, bitmapPageH = 300.0, 120.0
@@ -199,7 +203,7 @@ func compareGlyph(page image.Image, dpi int, face *fonts.Face, c placedGlyph) (b
 	if colour == nil {
 		colour = []float64{0, 0, 0}
 	}
-	stencil := binary || c.colour == nil
+	stencil := binary || c.colour == nil || c.opaque
 	scale := float64(dpi) / 72
 	var first string
 	for j := range img.Height {
@@ -417,7 +421,7 @@ func TestColourBitmapGlyphsAreTheirImages(t *testing.T) {
 					// Poppler smooths an image it scales up, so its edges are
 					// compared only where they are flat; Ghostscript does not,
 					// and every pixel is compared.
-					bad, total, first := compareColourGlyph(t, page, dpi, f, glyphs[0].GID, size, r.x, r.y, rz.name == "poppler")
+					bad, total, first := compareColourGlyph(t, page, dpi, f, glyphs[0].GID, size, r.x, r.y, rz.name == "poppler", false)
 					if bad != 0 {
 						t.Errorf("%s: %q: %d of %d pixels differ; first: %s", rz.name, r.text, bad, total, first)
 					}
@@ -430,7 +434,7 @@ func TestColourBitmapGlyphsAreTheirImages(t *testing.T) {
 // compareColourGlyph samples the page at the centre of every pixel of a colour
 // glyph's PNG, and counts those that differ from the pixel composited over
 // white. smooth compares only the pixels whose neighbours are their colour.
-func compareColourGlyph(t *testing.T, page image.Image, dpi int, face *fonts.Face, gid int, size, x0, y0 float64, smooth bool) (bad, total int, first string) {
+func compareColourGlyph(t *testing.T, page image.Image, dpi int, face *fonts.Face, gid int, size, x0, y0 float64, smooth, opaque bool) (bad, total int, first string) {
 	t.Helper()
 	var c oneImage
 	if err := face.PaintGlyph(gid, shape.PaintOptions{PPEM: int(math.Round(size * 4 / 3))}, &c); err != nil || !c.got {
@@ -448,6 +452,15 @@ func compareColourGlyph(t *testing.T, page image.Image, dpi int, face *fonts.Fac
 	w, h := src.Bounds().Dx(), src.Bounds().Dy()
 	scale := float64(dpi) / 72
 	over := func(i, j int) [3]float64 {
+		if opaque {
+			// The colour where the alpha is at least half, through a 1-bit
+			// mask, and the page elsewhere.
+			c := color.NRGBAModel.Convert(src.At(src.Bounds().Min.X+i, src.Bounds().Min.Y+j)).(color.NRGBA)
+			if c.A < 128 {
+				return [3]float64{255, 255, 255}
+			}
+			return [3]float64{float64(c.R), float64(c.G), float64(c.B)}
+		}
 		nr, ng, nb, na := src.At(src.Bounds().Min.X+i, src.Bounds().Min.Y+j).RGBA()
 		a := float64(na) / 0xFFFF
 		// Premultiplied, so composited over white is c + 255(1-a).
@@ -501,34 +514,80 @@ func compareColourGlyph(t *testing.T, page image.Image, dpi int, face *fonts.Fac
 	return bad, total, first
 }
 
-// TestPDFA1TakesTheStencilsAndReportsTheSoftMasks pins a known limit. PDF/A-1
-// forbids transparency, so an image with an /SMask is not PDF/A-1 (6.4): a
-// stencil glyph is, and a greyscale glyph in a colour, whose anti-aliasing is
-// its soft mask, is reported by the validator rather than written as
-// something else.
-func TestPDFA1TakesTheStencilsAndReportsTheSoftMasks(t *testing.T) {
+// TestAPDFA1DocumentsBitmapGlyphsAreOpaque: PDF/A-1 forbids transparency
+// (ISO 19005-1 6.4), so in a document that claims it a greyscale glyph is a
+// stencil in the colour it was drawn in. The document is valid PDF/A-1b,
+// renders as that, and extracts as drawn.
+func TestAPDFA1DocumentsBitmapGlyphsAreOpaque(t *testing.T) {
 	red := func(b *content.Builder) { b.SetRGB(1, 0, 0) }
-	for _, tc := range []struct {
-		name  string
-		glyph placedGlyph
-		want  string // the rule reported, or "" for none
-	}{
-		{"1-bit", placedGlyph{r: 'A', size: 9, x: 20, y: 80, colour: red}, ""},
-		{"greyscale in an unknown colour", placedGlyph{r: 'A', size: 12, x: 20, y: 80}, ""},
-		{"greyscale in a colour", placedGlyph{r: 'A', size: 12, x: 20, y: 80, colour: red}, "6.4"},
-	} {
-		doc := mustPDFADoc(t, pdfa.PDFA1b)
-		bitmapPage(t, doc, bitmapFace(t, "Strikes.ttf"), []placedGlyph{tc.glyph})
-		back, _ := writeAndRead(t, doc)
-		var rules []string
-		for _, v := range ValidatePDFA(back, pdfa.PDFA1b) {
-			rules = append(rules, v.Rule)
+	cases := []placedGlyph{
+		{r: 'A', size: 9, x: 20, y: 80, colour: red, rgb: []float64{255, 0, 0}, opaque: true},
+		{r: 'B', size: 12, x: 60, y: 80, colour: red, rgb: []float64{255, 0, 0}, opaque: true},
+		{r: 'M', size: 12, x: 100, y: 80, colour: func(b *content.Builder) { b.SetGray(0.25) }, rgb: []float64{64, 64, 64}, opaque: true},
+	}
+	face := bitmapFace(t, "Strikes.ttf")
+	doc := mustPDFADoc(t, pdfa.PDFA1b)
+	bitmapPage(t, doc, face, cases)
+	back, data := writeAndRead(t, doc)
+	for _, v := range ValidatePDFA(back, pdfa.PDFA1b) {
+		t.Errorf("%s", v.Error())
+	}
+	if got := strings.ReplaceAll(strings.TrimSpace(mustExtractText(t, back)), " ", ""); got != "ABM" {
+		t.Errorf("extracted %q", got)
+	}
+	path := filepath.Join(t.TempDir(), "a1.pdf")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const dpi = 576
+	for _, r := range rasterisers() {
+		page := r.render(t, path, 1, dpi)
+		for _, c := range cases {
+			if bad, first := compareGlyph(page, dpi, face, c); bad != 0 {
+				t.Errorf("%s: %d pixels differ; first: %s", r.name, bad, first)
+			}
 		}
-		switch {
-		case tc.want == "" && len(rules) != 0:
-			t.Errorf("%s: PDF/A-1b reports %v", tc.name, rules)
-		case tc.want != "" && (len(rules) != 1 || rules[0] != tc.want):
-			t.Errorf("%s: PDF/A-1b reports %v, want %s alone", tc.name, rules, tc.want)
+	}
+}
+
+// TestAPDFA1DocumentsEmojiAreMasked is the colour half: Noto Color Emoji in a
+// PDF/A-1b document is valid, and renders as each PNG's colours where its
+// alpha is at least half, through a 1-bit /Mask.
+func TestAPDFA1DocumentsEmojiAreMasked(t *testing.T) {
+	face := emojiFace(t)
+	const size = 24
+	runs := []struct {
+		text string
+		x, y float64
+	}{{"😀", 20, 60}, {"🇪🇸", 120, 60}}
+	doc := mustPDFADoc(t, pdfa.PDFA1b)
+	var b content.Builder
+	for _, r := range runs {
+		b.BeginText().SetFont("F1", size).SetTextMatrix(1, 0, 0, 1, r.x, r.y)
+		face.DrawShaped(&b, r.text, size)
+		b.EndText()
+	}
+	if _, err := doc.AddPage(Page{Width: bitmapPageW, Height: bitmapPageH, Content: &b,
+		Faces: map[object.Name]*fonts.Face{"F1": face}}); err != nil {
+		t.Fatal(err)
+	}
+	back, data := writeAndRead(t, doc)
+	for _, v := range ValidatePDFA(back, pdfa.PDFA1b) {
+		t.Errorf("%s", v.Error())
+	}
+	path := filepath.Join(t.TempDir(), "a1emoji.pdf")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const dpi = 1200
+	for _, rz := range rasterisers() {
+		page := rz.render(t, path, 1, dpi)
+		for _, r := range runs {
+			glyphs, _ := face.ShapeGlyphs(r.text)
+			bad, total, first := compareColourGlyph(t, page, dpi, face, glyphs[0].GID, size, r.x, r.y, true, true)
+			if bad != 0 {
+				t.Errorf("%s: %q: %d of %d pixels differ; first: %s", rz.name, r.text, bad, total, first)
+			}
 		}
 	}
 }
