@@ -3,7 +3,11 @@ package fonts
 import (
 	"bytes"
 	"compress/zlib"
+	"encoding/binary"
 	"errors"
+	"hash/crc32"
+	"image"
+	"image/png"
 	"io"
 	"os"
 	"os/exec"
@@ -13,6 +17,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/object"
 )
@@ -429,5 +434,29 @@ func TestABitmapFacesLicenceIsHonoured(t *testing.T) {
 		if _, err := face.Embed(&allocator{}); !errors.Is(err, tc.want) {
 			t.Errorf("%s: Embed: %v, want %v", tc.name, err, tc.want)
 		}
+	}
+}
+
+// TestAGlyphPNGPastTheLimitIsRefusedUndecoded: a colour glyph's PNG header
+// says how large an image decoding it allocates, and a font is untrusted. One
+// past maxGlyphPixels is refused from its header, before any decoding.
+func TestAGlyphPNGPastTheLimitIsRefusedUndecoded(t *testing.T) {
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, image.NewNRGBA(image.Rect(0, 0, 1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	data := buf.Bytes()
+	// The IHDR chunk follows the 8-byte signature: length, type, then width
+	// and height, then its CRC over type and data.
+	const ihdr = 8
+	binary.BigEndian.PutUint32(data[ihdr+8:], 4096)
+	binary.BigEndian.PutUint32(data[ihdr+12:], 4096)
+	binary.BigEndian.PutUint32(data[ihdr+8+13:], crc32.ChecksumIEEE(data[ihdr+4:ihdr+8+13]))
+	if cfg, err := png.DecodeConfig(bytes.NewReader(data)); err != nil || cfg.Width != 4096 {
+		t.Fatalf("the crafted header does not read as 4096 wide: %v %v", cfg, err)
+	}
+	err := embedPNG(&capture{}, shape.Image{Format: shape.ImagePNG, Data: data})
+	if err == nil || !strings.Contains(err.Error(), "pixels a glyph may have") {
+		t.Errorf("a 4096×4096 glyph PNG: %v", err)
 	}
 }

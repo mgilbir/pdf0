@@ -317,6 +317,9 @@ func (t *type3State) glyphAt(f *Face, gid, strike int) (bitmapGlyph, error) {
 	if !ok {
 		g = bitmapGlyph{kind: glyphEmpty}
 		best := -1
+		// 0 asks for the largest strike. Each size from 1 up asks for the
+		// smallest strike at least that large, so once one is found the sizes
+		// up to it ask for it again and are skipped.
 		for p := 0; p <= maxProbePPEM; p++ {
 			cand, ok, err := f.paint(gid, p)
 			if err != nil {
@@ -328,6 +331,9 @@ func (t *type3State) glyphAt(f *Face, gid, strike int) (bitmapGlyph, error) {
 			s := f.strikeOfImage(cand.img)
 			if best < 0 || nearer(s, best, strike) {
 				g, best = cand, s
+			}
+			if p > 0 && s > p {
+				p = s
 			}
 		}
 	}

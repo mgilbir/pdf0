@@ -283,6 +283,13 @@ func (t *type3State) imageFor(f *Face, key subKey, gid int, g bitmapGlyph) (*cap
 	return c, nil
 }
 
+// maxGlyphPixels bounds one bitmap glyph's image: 2048×2048. A strike is drawn
+// for a size on a screen — Noto Color Emoji's is 136×128, Apple's largest sbix
+// strike 160 ppem — and a font is untrusted input whose PNG header names the
+// size decoding allocates, four bytes a pixel. The images package's own limit
+// is for a page's pictures, and is 16 times this.
+const maxGlyphPixels = 1 << 22
+
 // embedPNG writes a colour bitmap's PNG as an image, after checking its size
 // against the pixel limit before decoding it: the font is untrusted, and its
 // header says how much decoding would allocate.
@@ -291,8 +298,8 @@ func embedPNG(doc Allocator, img shape.Image) error {
 	if err != nil {
 		return fmt.Errorf("its PNG cannot be read: %w", err)
 	}
-	if int64(cfg.Width)*int64(cfg.Height) > images.MaxPixels {
-		return fmt.Errorf("its PNG is %d×%d, past the %d-pixel limit", cfg.Width, cfg.Height, images.MaxPixels)
+	if int64(cfg.Width)*int64(cfg.Height) > maxGlyphPixels {
+		return fmt.Errorf("its PNG is %d×%d, past the %d pixels a glyph may have", cfg.Width, cfg.Height, maxGlyphPixels)
 	}
 	decoded, err := png.Decode(bytes.NewReader(img.Data))
 	if err != nil {
@@ -307,8 +314,8 @@ func embedPNG(doc Allocator, img shape.Image) error {
 // be the size of the image it masks (ISO 32000-2 11.6.5.3); both are mapped
 // onto the same unit square.
 func embedCoverage(doc Allocator, c content.Color, img shape.Image) error {
-	if int64(img.Width)*int64(img.Height) > images.MaxPixels {
-		return fmt.Errorf("its coverage is %d×%d, past the %d-pixel limit", img.Width, img.Height, images.MaxPixels)
+	if int64(img.Width)*int64(img.Height) > maxGlyphPixels {
+		return fmt.Errorf("its coverage is %d×%d, past the %d pixels a glyph may have", img.Width, img.Height, maxGlyphPixels)
 	}
 	mask := imageXObject(img.Data, img.Width, img.Height, "DeviceGray")
 	maskRef := doc.Add(mask)

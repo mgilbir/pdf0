@@ -500,3 +500,35 @@ func compareColourGlyph(t *testing.T, page image.Image, dpi int, face *fonts.Fac
 	}
 	return bad, total, first
 }
+
+// TestPDFA1TakesTheStencilsAndReportsTheSoftMasks pins a known limit. PDF/A-1
+// forbids transparency, so an image with an /SMask is not PDF/A-1 (6.4): a
+// stencil glyph is, and a greyscale glyph in a colour, whose anti-aliasing is
+// its soft mask, is reported by the validator rather than written as
+// something else.
+func TestPDFA1TakesTheStencilsAndReportsTheSoftMasks(t *testing.T) {
+	red := func(b *content.Builder) { b.SetRGB(1, 0, 0) }
+	for _, tc := range []struct {
+		name  string
+		glyph placedGlyph
+		want  string // the rule reported, or "" for none
+	}{
+		{"1-bit", placedGlyph{r: 'A', size: 9, x: 20, y: 80, colour: red}, ""},
+		{"greyscale in an unknown colour", placedGlyph{r: 'A', size: 12, x: 20, y: 80}, ""},
+		{"greyscale in a colour", placedGlyph{r: 'A', size: 12, x: 20, y: 80, colour: red}, "6.4"},
+	} {
+		doc := mustPDFADoc(t, pdfa.PDFA1b)
+		bitmapPage(t, doc, bitmapFace(t, "Strikes.ttf"), []placedGlyph{tc.glyph})
+		back, _ := writeAndRead(t, doc)
+		var rules []string
+		for _, v := range ValidatePDFA(back, pdfa.PDFA1b) {
+			rules = append(rules, v.Rule)
+		}
+		switch {
+		case tc.want == "" && len(rules) != 0:
+			t.Errorf("%s: PDF/A-1b reports %v", tc.name, rules)
+		case tc.want != "" && (len(rules) != 1 || rules[0] != tc.want):
+			t.Errorf("%s: PDF/A-1b reports %v, want %s alone", tc.name, rules, tc.want)
+		}
+	}
+}
