@@ -46,10 +46,45 @@ func SubfontName(base object.Name, k int) object.Name {
 }
 
 // isType3 reports whether the face is written as Type 3 fonts: a face whose
-// glyphs are only bitmaps. Such a face is loaded composite — LoadSimple
-// refuses it — and shapes and records as one, and only the codes it writes and
-// the fonts it embeds differ.
-func (f *Face) isType3() bool { return f.composite() && f.BitmapOnly() }
+// glyphs are only bitmaps, or one whose licence permits embedding only its
+// bitmaps and that has bitmaps forme paints (bitmapLicensed). Such a face is
+// loaded composite — LoadSimple refuses one with only bitmaps — and shapes
+// and records as one, and only the codes it writes and the fonts it embeds
+// differ.
+func (f *Face) isType3() bool {
+	return f.composite() && (f.BitmapOnly() || f.bitmapLicensed())
+}
+
+// bitmapLicensed reports whether a face with outlines may be embedded only as
+// its bitmaps (OS/2 fsType 0x0200) and has bitmaps forme paints: CBDT or sbix
+// images, which forme paints whatever outlines the face has. Its EBDT strikes
+// it does not paint beside outlines (forme#918), and such a face is refused
+// with ErrBitmapEmbeddingOnly. The answer is the face's, fixed when it was
+// loaded, and asked once.
+func (f *Face) bitmapLicensed() bool {
+	if f.licensed != 0 {
+		return f.licensed > 0
+	}
+	f.licensed = -1
+	fsType, stated := f.EmbeddingPermissions()
+	if !stated || fsType&shape.FSTypeBitmapOnly == 0 {
+		return false
+	}
+	for gid := range f.NumGlyphs() {
+		if f.GlyphColour(gid, 0) == shape.ColourBitmap {
+			f.licensed = 1
+			return true
+		}
+	}
+	return false
+}
+
+// errOutlineOnly is a glyph of a face that may be embedded only as its
+// bitmaps (bitmapLicensed) that has ink and no bitmap in any strike: what it
+// draws is its outline, which its licence forbids embedding.
+func errOutlineOnly(gid int) error {
+	return fmt.Errorf("%w: glyph %d has an outline and no bitmap", ErrBitmapEmbeddingOnly, gid)
+}
 
 // subKey is what decides a glyph's procedure, beside the glyph.
 type subKey struct {
@@ -317,6 +352,19 @@ func (t *type3State) glyphAt(f *Face, gid, strike int) (bitmapGlyph, error) {
 	}
 	if !ok {
 		g = bitmapGlyph{kind: glyphEmpty}
+		if !f.BitmapOnly() {
+			// A face with outlines whose licence permits only its bitmaps:
+			// a glyph no strike has may be nothing, as a space is, or its
+			// outline, which cannot be embedded. forme paints its colour
+			// strikes at any size, so there is no other strike to try.
+			// .notdef stands for a character the face does not have, and is
+			// drawn as nothing rather than as its outline.
+			if _, _, w, h, ok := f.GlyphExtents(gid); gid != 0 && ok && w != 0 && h != 0 {
+				return bitmapGlyph{}, errOutlineOnly(gid)
+			}
+			t.glyphs[k] = g
+			return g, nil
+		}
 		best := -1
 		// 0 asks for the largest strike. Each size from 1 up asks for the
 		// smallest strike at least that large, so once one is found the sizes

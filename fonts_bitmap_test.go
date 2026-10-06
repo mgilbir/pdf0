@@ -2,6 +2,8 @@ package pdf0
 
 import (
 	"bytes"
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -10,9 +12,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
+	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/fonts"
@@ -590,4 +594,180 @@ func TestAPDFA1DocumentsEmojiAreMasked(t *testing.T) {
 			}
 		}
 	}
+}
+
+// emojiWithOutlines is Noto Color Emoji with outlines added and its OS/2
+// fsType set: every glyph's outline empty but .notdef's and the one for
+// U+0020, which are boxes, so that the face is no longer bitmap-only, has one
+// glyph whose ink is an outline alone, and has a .notdef drawn as most fonts
+// draw it. It stands for a font with outlines and colour strikes, which no
+// fixture to hand is.
+func emojiWithOutlines(t *testing.T, fsType uint16) []byte {
+	t.Helper()
+	data, err := os.ReadFile(testfiles.NotoEmoji.File(t, "NotoColorEmoji.ttf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := fonts.Load(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	space, ok := f.GlyphID(' ')
+	if !ok {
+		t.Fatal("the emoji face has no space")
+	}
+	tables := font.SFNTTables(data)
+	n := int(binary.BigEndian.Uint16(tables["maxp"][4:6]))
+	// A box, 100 to 400 font units square: one contour of four on-curve
+	// points, coordinates as 16-bit deltas.
+	var box []byte
+	box = binary.BigEndian.AppendUint16(box, 1) // contours
+	for _, v := range []int16{100, 100, 400, 400} {
+		box = binary.BigEndian.AppendUint16(box, uint16(v))
+	}
+	box = binary.BigEndian.AppendUint16(box, 3) // last point of the contour
+	box = binary.BigEndian.AppendUint16(box, 0) // no instructions
+	box = append(box, 1, 1, 1, 1)               // on-curve, long coordinates
+	for _, d := range []int16{100, 300, 0, -300} {
+		box = binary.BigEndian.AppendUint16(box, uint16(d))
+	}
+	for _, d := range []int16{100, 0, 300, 0} {
+		box = binary.BigEndian.AppendUint16(box, uint16(d))
+	}
+	for len(box)%4 != 0 {
+		box = append(box, 0)
+	}
+	// Long loca offsets, which head says.
+	head := append([]byte(nil), tables["head"]...)
+	binary.BigEndian.PutUint16(head[50:], 1)
+	tables["head"] = head
+	// Glyph 0 is the first box and the space the second; every other glyph
+	// is empty, its offset the same as the next one's.
+	var loca []byte
+	for g := 0; g <= n; g++ {
+		off := 2 * len(box)
+		switch {
+		case g == 0:
+			off = 0
+		case g <= space:
+			off = len(box)
+		}
+		loca = binary.BigEndian.AppendUint32(loca, uint32(off))
+	}
+	tables["glyf"], tables["loca"] = append(append([]byte(nil), box...), box...), loca
+	os2 := append([]byte(nil), tables["OS/2"]...)
+	binary.BigEndian.PutUint16(os2[8:], fsType)
+	tables["OS/2"] = os2
+	return assembleSFNT(tables)
+}
+
+// assembleSFNT writes tables as an sfnt, in tag order, each 4-byte aligned.
+func assembleSFNT(tables map[string][]byte) []byte {
+	tags := make([]string, 0, len(tables))
+	for tag := range tables {
+		tags = append(tags, tag)
+	}
+	sort.Strings(tags)
+	out := make([]byte, 12+16*len(tags))
+	binary.BigEndian.PutUint32(out, 0x00010000)
+	binary.BigEndian.PutUint16(out[4:], uint16(len(tags)))
+	for i, tag := range tags {
+		off := len(out)
+		out = append(out, tables[tag]...)
+		for len(out)%4 != 0 {
+			out = append(out, 0)
+		}
+		rec := out[12+16*i:]
+		copy(rec, tag)
+		binary.BigEndian.PutUint32(rec[8:], uint32(off))
+		binary.BigEndian.PutUint32(rec[12:], uint32(len(tables[tag])))
+	}
+	return out
+}
+
+// TestAFontLicensedForItsBitmapsIsEmbeddedAsThem: a font with outlines whose
+// licence permits embedding only its bitmaps (OS/2 fsType 0x0200) is written
+// as Type 3 fonts painting its colour strikes, renders as them, and is valid
+// PDF/A. The same font with no such restriction is embedded as its outlines,
+// as before. A glyph whose only ink is its outline is refused rather than
+// drawn blank.
+func TestAFontLicensedForItsBitmapsIsEmbeddedAsThem(t *testing.T) {
+	const size = 24
+	draw := func(t *testing.T, face *fonts.Face, text string) (*Document, []byte, error) {
+		doc := mustPDFADoc(t, pdfa.PDFA2b)
+		var b content.Builder
+		b.BeginText().SetFont("F1", size).SetTextMatrix(1, 0, 0, 1, 20, 60)
+		face.DrawShaped(&b, text, size)
+		b.EndText()
+		if _, err := doc.AddPage(Page{Width: bitmapPageW, Height: bitmapPageH, Content: &b,
+			Faces: map[object.Name]*fonts.Face{"F1": face}}); err != nil {
+			return nil, nil, err
+		}
+		back, data := writeAndRead(t, doc)
+		return back, data, nil
+	}
+	fontSubtype := func(doc *Document) object.Object {
+		res := doc.ResolveDict(doc.PageList()[0].Get("Resources"))
+		return doc.ResolveDict(doc.ResolveDict(res.Get("Font")).Get("F1")).Get("Subtype")
+	}
+
+	t.Run("bitmap embedding only", func(t *testing.T) {
+		face, err := fonts.Load(emojiWithOutlines(t, 0x0200))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if face.BitmapOnly() {
+			t.Fatal("the fixture has no outlines")
+		}
+		back, data, err := draw(t, face, "😀")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st := fontSubtype(back); st != object.Name("Type3") {
+			t.Fatalf("the face is embedded as %v", st)
+		}
+		for _, v := range ValidatePDFA(back, pdfa.PDFA2b) {
+			t.Errorf("%s", v.Error())
+		}
+		if got := strings.TrimSpace(mustExtractText(t, back)); got != "😀" {
+			t.Errorf("extracted %q", got)
+		}
+		path := filepath.Join(t.TempDir(), "licensed.pdf")
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		glyphs, _ := face.ShapeGlyphs("😀")
+		for _, rz := range rasterisers() {
+			page := rz.render(t, path, 1, 1200)
+			if bad, total, first := compareColourGlyph(t, page, 1200, face, glyphs[0].GID, size, 20, 60, rz.name == "poppler", false); bad != 0 {
+				t.Errorf("%s: %d of %d pixels differ; first: %s", rz.name, bad, total, first)
+			}
+		}
+	})
+	t.Run("installable", func(t *testing.T) {
+		face, err := fonts.Load(emojiWithOutlines(t, 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		back, _, err := draw(t, face, "😀")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st := fontSubtype(back); st != object.Name("Type0") {
+			t.Errorf("an unrestricted face with outlines is embedded as %v, not its outlines", st)
+		}
+	})
+	t.Run("a glyph that is only an outline", func(t *testing.T) {
+		face, err := fonts.Load(emojiWithOutlines(t, 0x0200))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var b content.Builder
+		b.BeginText().SetFont("F1", size)
+		face.DrawShaped(&b, "😀 😀", size)
+		b.EndText()
+		if _, err := b.Bytes(); !errors.Is(err, fonts.ErrBitmapEmbeddingOnly) {
+			t.Errorf("drawing a glyph whose ink is its outline: %v", err)
+		}
+	})
 }
