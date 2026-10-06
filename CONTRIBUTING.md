@@ -53,10 +53,11 @@ CI runs on every `push` (branches: [main]) and every `pull_request`, as 3 jobs.
 
 **`corpus`** (Go `1.26.x`):
 
-1. restore corpora: `testdata/verapdf-corpus`, `testdata/arlington-pdf-model`, `testdata/pdf20examples`, `spec/verapdf-profiles`, `testdata/notocjk`, `testdata/facturx/*.pdf`, `testdata/facturx/.ok`, `testdata/wtpdf/*.pdf`, `testdata/wtpdf/.ok`, `testdata/ccitt/*.pdf`, `testdata/ccitt/.ok`, `testdata/jbig2/*.pdf`, `testdata/jbig2/.ok`
-2. fetch corpora (only if `steps.corpora.outputs.cache-hit != 'true'`): `make corpus arlington refpdfs facturx profiles wtpdf ccitt jbig2 notocjk`
+1. restore corpora: `testdata/verapdf-corpus`, `testdata/arlington-pdf-model`, `testdata/pdf20examples`, `spec/verapdf-profiles`, `testdata/notocjk`, `testdata/notoemoji`, `testdata/facturx/*.pdf`, `testdata/facturx/.ok`, `testdata/wtpdf/*.pdf`, `testdata/wtpdf/.ok`, `testdata/ccitt/*.pdf`, `testdata/ccitt/.ok`, `testdata/jbig2/*.pdf`, `testdata/jbig2/.ok`
+2. fetch corpora (only if `steps.corpora.outputs.cache-hit != 'true'`): `make corpus arlington refpdfs facturx profiles wtpdf ccitt jbig2 notocjk notoemoji`
 3. corpora are present and complete
-4. conformance ratchets: `go test ./... -count=1`
+4. install the renderers
+5. conformance ratchets: `go test ./... -count=1`
 
 **`fuzz`** (Go `1.26.x`):
 
@@ -79,6 +80,7 @@ has the data.
 | CCITT samples | `testdata/ccitt` | `make ccitt` | fetched; fails below the manifest's count of `*.pdf` files |
 | JBIG2 samples | `testdata/jbig2` | `make jbig2` | fetched; fails below the manifest's count of `*.pdf` files |
 | Noto Sans CJK face | `testdata/notocjk` | `make notocjk` | fetched; fails below 1 `*.otf` files |
+| Noto Color Emoji (CBDT) | `testdata/notoemoji` | `make notoemoji` | fetched; fails below 1 `*.ttf` files |
 | Cal Poly PDF/VT-1 suite | `testdata/pdfvt` | It is copyrighted and placed by hand | **no**: local only |
 | PDFUA-Reference-Files | `spec/pdfua/reference-files` | It is placed by hand | **no**: local only |
 | Order-X examples | `spec/order-x/Order-X100_EN/05-ORDER-X EXAMPLES` | They come with the Order-X specification bundle and are placed by hand | **no**: local only |

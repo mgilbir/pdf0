@@ -1,6 +1,10 @@
 # Bitmap-only fonts as Type 3 fonts — design record
 
-**Status:** proposed; being built in stages (see [Stages](#stages)).
+**Status:** implemented. The three stages below are built; the user-facing
+description is [Bitmap-only faces](../fonts.md#bitmap-only-faces) in fonts.md.
+Two things were added while building that this record did not foresee: the
+size's unit (`Face.SetPixelsPerUnit`, because htmlpdf's stream is in CSS
+pixels, not points), and the licence rule for these faces (see fonts.md).
 
 A font whose glyphs are only bitmaps (EBDT/EBLC, Apple's bdat/bloc, CBDT/CBLC,
 sbix) and that has no glyf, CFF or CFF2 outlines cannot be embedded as a

@@ -45,6 +45,10 @@ type Face struct {
 	// t3 is a bitmap face's Type 3 sub-fonts and the codes it gave out in
 	// them; see type3.go. Like rec, it is what this wrapper drew.
 	t3 *type3State
+	// pxPerUnit is how many CSS pixels a unit of the size drawn at is, which
+	// picks a bitmap face's strike; 0 is a size in points. See
+	// SetPixelsPerUnit.
+	pxPerUnit float64
 }
 
 // Adopt wraps a shaping face so it can be drawn and embedded.

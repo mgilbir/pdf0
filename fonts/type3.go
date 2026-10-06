@@ -125,12 +125,27 @@ func (f *Face) type3() *type3State {
 	return f.t3
 }
 
-// ppemFor is the strike size a text size asks for: the size in CSS pixels,
-// points × 4/3, which is the strike a browser at 1× draws. A strike is
-// designed for the pixel size it is drawn at, and the CSS pixel is the size a
-// document's text was set in.
-func ppemFor(size float64) int {
-	p := int(math.Round(size * 4 / 3))
+// SetPixelsPerUnit says how many CSS pixels one unit of the size this face is
+// drawn at is: 4/3, the default, for a size in points, and 1 for a caller
+// whose content stream is in CSS pixels, as htmlpdf's is. It matters only for
+// a face whose glyphs are only bitmaps, whose strike is picked by the size in
+// CSS pixels — the strike a browser at 1× draws, since a strike is designed for
+// the pixel size it is shown at. A value that is not positive and finite
+// restores the default.
+func (f *Face) SetPixelsPerUnit(v float64) {
+	if !(v > 0) || math.IsInf(v, 0) {
+		v = 0
+	}
+	f.pxPerUnit = v
+}
+
+// ppemFor is the strike size a text size asks for: the size in CSS pixels.
+func (f *Face) ppemFor(size float64) int {
+	scale := f.pxPerUnit
+	if scale == 0 {
+		scale = 4.0 / 3
+	}
+	p := int(math.Round(size * scale))
 	if p < 1 {
 		p = 1
 	}
@@ -415,7 +430,7 @@ func (t *type3State) place(f *Face, gid int, size float64, fill content.Color, f
 	if _, err := t.home(f); err != nil {
 		return nil, 0, err
 	}
-	s, err := t.strikeFor(f, ppemFor(size))
+	s, err := t.strikeFor(f, f.ppemFor(size))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -465,4 +480,16 @@ var errType3NoFont = errors.New("fonts: a face whose glyphs are only bitmaps is 
 func (f *Face) homeCode(gid int) (byte, bool) {
 	c, ok, err := f.type3().homeCode(f, gid)
 	return c, ok && err == nil
+}
+
+// NumSubfonts is how many fonts a face whose glyphs are only bitmaps has drawn
+// with beside its home font: SubfontName(name, 1) to SubfontName(name, n) are
+// the names its drawing has selected, and Embedded.Subfonts their font
+// dictionaries. It is 0 for every other face.
+func (f *Face) NumSubfonts() int {
+	f = f.Horizontal()
+	if f.t3 == nil || len(f.t3.subs) == 0 {
+		return 0
+	}
+	return len(f.t3.subs) - 1
 }

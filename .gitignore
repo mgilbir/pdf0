@@ -130,3 +130,5 @@ testdata/cc/run/
 
 # A CID-keyed CFF face for the font-embedding tests, fetched by `make notocjk`.
 testdata/notocjk/
+# A colour-bitmap (CBDT) face for the Type 3 tests, fetched by `make notoemoji`.
+testdata/notoemoji/

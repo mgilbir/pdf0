@@ -35,6 +35,10 @@ type faceEmbedding struct {
 	// vertical form refers to. Each is the zero reference until a page names
 	// that form, and never changes once written.
 	ref, vref object.IndirectRef
+	// subs are a bitmap face's other Type 3 fonts, by fonts.SubfontName
+	// number less one. A page names each one its drawing selected, and each
+	// keeps its number once written, as ref does.
+	subs []object.IndirectRef
 	// nums are the object numbers the embedding wrote, in the order it wrote
 	// them; a rewrite reuses them in the same order.
 	nums []int
@@ -92,13 +96,14 @@ func (d *Document) embedFaces(faces map[object.Name]*fonts.Face) (map[object.Nam
 		face := faces[name].Horizontal()
 		if e, ok := pending[face]; ok {
 			refs[name] = formOf(faces[name], e)
+			subfontRefs(refs, name, e)
 			continue
 		}
 		prev, have := d.faces[face]
 		if have {
 			// An embedding whose font dictionaries are no longer in the
 			// document — a caller edited Objects directly — is written afresh.
-			for _, ref := range []object.IndirectRef{prev.ref, prev.vref} {
+			for _, ref := range append([]object.IndirectRef{prev.ref, prev.vref}, prev.subs...) {
 				if _, ok := d.Objects[ref.Number]; ref.Number != 0 && !ok {
 					have = false
 				}
@@ -111,8 +116,9 @@ func (d *Document) embedFaces(faces map[object.Name]*fonts.Face) (map[object.Nam
 		}
 		rev := face.EmbedRevision()
 		if have && prev.revision == rev && prev.forms == want {
-			e := fonts.Embedded{Horizontal: prev.ref, Vertical: prev.vref}
+			e := fonts.Embedded{Horizontal: prev.ref, Vertical: prev.vref, Subfonts: prev.subs}
 			refs[name] = formOf(faces[name], e)
+			subfontRefs(refs, name, e)
 			pending[face] = e
 			continue
 		}
@@ -139,7 +145,11 @@ func (d *Document) embedFaces(faces map[object.Name]*fonts.Face) (map[object.Nam
 			}
 			a, b := got.Number, was.Number
 			swapRefs(written, a, b)
-			for _, r := range []*object.IndirectRef{&e.Horizontal, &e.Vertical} {
+			moved := []*object.IndirectRef{&e.Horizontal, &e.Vertical}
+			for i := range e.Subfonts {
+				moved = append(moved, &e.Subfonts[i])
+			}
+			for _, r := range moved {
 				switch r.Number {
 				case a:
 					r.Number = b
@@ -151,18 +161,24 @@ func (d *Document) embedFaces(faces map[object.Name]*fonts.Face) (map[object.Nam
 		if have {
 			keep(&e.Horizontal, prev.ref)
 			keep(&e.Vertical, prev.vref)
+			// A bitmap face's sub-fonts only ever grow in number, and the
+			// ones a page already names keep their numbers.
+			for i := range min(len(prev.subs), len(e.Subfonts)) {
+				keep(&e.Subfonts[i], prev.subs[i])
+			}
 		}
 		nums := make([]int, len(written))
 		for i, o := range written {
 			nums[i] = o.Number
 		}
-		entry := faceEmbedding{ref: e.Horizontal, vref: e.Vertical, nums: nums, revision: rev, forms: want}
+		entry := faceEmbedding{ref: e.Horizontal, vref: e.Vertical, subs: e.Subfonts, nums: nums, revision: rev, forms: want}
 		var old []int
 		if have {
 			old = prev.nums
 		}
 		rewrites = append(rewrites, rewrite{face: face, entry: entry, old: old})
 		refs[name] = formOf(faces[name], e)
+		subfontRefs(refs, name, e)
 		pending[face] = e
 	}
 	stage.commit()
@@ -183,6 +199,14 @@ func (d *Document) embedFaces(faces map[object.Name]*fonts.Face) (map[object.Nam
 		d.faces[r.face] = &entry
 	}
 	return refs, nil
+}
+
+// subfontRefs names a bitmap face's other Type 3 fonts after the name the face
+// has, as its drawing selected them (fonts.SubfontName).
+func subfontRefs(refs map[object.Name]object.IndirectRef, name object.Name, e fonts.Embedded) {
+	for k, ref := range e.Subfonts {
+		refs[fonts.SubfontName(name, k+1)] = ref
+	}
 }
 
 // embedFace is Face.EmbedForms, as embedFaces calls it. It is a variable only

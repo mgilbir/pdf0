@@ -94,7 +94,7 @@ func formFor(t *testing.T, face *fonts.Face, path drawPath) (*fonts.Face, bool) 
 	}
 	v, err := face.Vertical()
 	if err != nil {
-		if !face.IsSimple() && !face.IsStandard() {
+		if !face.IsSimple() && !face.IsStandard() && !face.BitmapOnly() {
 			t.Fatalf("a composite face has no vertical form: %v", err)
 		}
 		return nil, false
@@ -215,6 +215,20 @@ func drawPathFaces() []faceCase {
 			embedded: true,
 		},
 		{
+			// Bitmap-only faces, written as Type 3 fonts: forme's EBDT and
+			// Apple bdat strike fixtures, A to Y and nothing else.
+			name:     "bitmap-ebdt",
+			load:     func(t *testing.T) *fonts.Face { return bitmapFace(t, "Strikes.ttf") },
+			texts:    []string{"HELLO", "ABCXY", "E"},
+			embedded: true,
+		},
+		{
+			name:     "bitmap-bdat",
+			load:     func(t *testing.T) *fonts.Face { return bitmapFace(t, "StrikesApple.ttf") },
+			texts:    []string{"HELLO", "ABCXY"},
+			embedded: true,
+		},
+		{
 			// A standard face: nothing embedded, one byte per character.
 			name: "standard",
 			load: func(t *testing.T) *fonts.Face {
@@ -252,6 +266,19 @@ func arabicFace(t *testing.T) *fonts.Face {
 	f, err := fonts.Load(data)
 	if err != nil {
 		t.Fatalf("loading: %v", err)
+	}
+	return f
+}
+
+// bitmapFace is one of forme's bitmap strike fixtures, which have no outlines.
+func bitmapFace(t *testing.T, name string) *fonts.Face {
+	t.Helper()
+	f, err := fonts.Load(formeFile(t, "testdata/freetype/fonts/"+name))
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	if !f.BitmapOnly() {
+		t.Fatalf("%s has outlines", name)
 	}
 	return f
 }

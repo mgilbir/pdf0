@@ -62,6 +62,12 @@ var (
 		Stamp: ".ok",
 		Fetch: "run `make notocjk`",
 	}
+	NotoEmoji = Dataset{
+		Name:  "Noto Color Emoji (CBDT)",
+		Dir:   "testdata/notoemoji",
+		Stamp: ".ok",
+		Fetch: "run `make notoemoji`",
+	}
 
 	// Placed by hand: no make target, so no stamp. The directory's presence is
 	// the signal, and a present directory with nothing in it fails.

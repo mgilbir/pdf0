@@ -259,6 +259,16 @@ func (r resourceSet) check(used content.Resources) error {
 			return fmt.Errorf(
 				"pdf0: %s names both a face to embed and a font dictionary; it can be one of them", name)
 		}
+		// A bitmap face's other Type 3 fonts are named after it, and those
+		// names are taken too.
+		for k := 1; k <= r.faces[name].NumSubfonts(); k++ {
+			sub := fonts.SubfontName(name, k)
+			_, font := r.groups[0].defs[sub]
+			if _, face := r.faces[sub]; font || face {
+				return fmt.Errorf("pdf0: %s names a resource, and it is also the name of one of the Type 3 fonts "+
+					"the face named %s is drawn in; name it something else", sub, name)
+			}
+		}
 	}
 	for _, g := range r.groups {
 		for _, name := range sortedNames(g.defs) {
@@ -273,10 +283,29 @@ func (r resourceSet) check(used content.Resources) error {
 			if _, ok := r.faces[name]; ok && g.key == "Font" {
 				continue
 			}
+			if g.key == "Font" && r.subfont(name) {
+				continue
+			}
 			return fmt.Errorf("pdf0: the content stream uses %s but no %s resource defines it", name, g.key)
 		}
 	}
 	return nil
+}
+
+// subfont reports whether name is one of the Type 3 fonts a bitmap face in
+// the set is drawn in.
+func (r resourceSet) subfont(name object.Name) bool {
+	for base, face := range r.faces {
+		if face == nil {
+			continue
+		}
+		for k := 1; k <= face.NumSubfonts(); k++ {
+			if fonts.SubfontName(base, k) == name {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // build writes the /Resources dictionary: the names the drawing used, in the

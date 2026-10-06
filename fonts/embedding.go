@@ -22,7 +22,9 @@ import (
 //     usage bits beside it): the font must not be embedded at all. Embed
 //     refuses, and says so.
 //   - Bitmap embedding only (0x0200): only the font's bitmaps may be embedded.
-//     This package embeds outlines and nothing else, so it refuses those too.
+//     A face with outlines is embedded as its outlines, so it is refused. A
+//     face whose glyphs are only bitmaps is embedded as images of them, in
+//     Type 3 fonts (type3.go), which is what the bit permits.
 //   - No subsetting (0x0100): the font may be embedded only whole. Embed then
 //     writes the program it was loaded from, untouched, and names it without a
 //     subset tag, because it is not one. That includes a face from Adopt.
@@ -40,6 +42,29 @@ var ErrRestrictedLicense = errors.New("fonts: the font's licence forbids embeddi
 // bitmaps, which this package does not write.
 var ErrBitmapEmbeddingOnly = errors.New("fonts: the font's licence permits embedding " +
 	"only its bitmaps (OS/2 fsType 0x0200), and this package embeds outlines")
+
+// ErrBitmapNoSubsetting is a face whose glyphs are only bitmaps and whose
+// licence forbids subsetting it. Its Type 3 fonts carry images of the glyphs a
+// document drew, which is a subset, and they are not written.
+var ErrBitmapNoSubsetting = errors.New("fonts: the font's licence forbids subsetting it " +
+	"(OS/2 fsType 0x0100), and a face whose glyphs are only bitmaps is embedded as images of the glyphs drawn")
+
+// type3Allowed is embeddingAllowed for a face whose glyphs are only bitmaps,
+// which is embedded as images of them: what the bitmap-only bit permits, and
+// what no subsetting forbids.
+func type3Allowed(fsType shape.FSType, stated bool) error {
+	if !stated {
+		return nil
+	}
+	permissive := shape.FSTypePreviewPrint | shape.FSTypeEditable
+	if fsType&shape.FSTypeRestricted != 0 && fsType&permissive == 0 {
+		return ErrRestrictedLicense
+	}
+	if fsType&shape.FSTypeNoSubsetting != 0 {
+		return ErrBitmapNoSubsetting
+	}
+	return nil
+}
 
 // errNoProgram is a face that must be embedded whole and has no program to
 // embed. Only a standard face has none, and a standard face is never

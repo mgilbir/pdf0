@@ -104,6 +104,9 @@ func (f *Face) embedType3(doc Allocator, forms Forms) (Embedded, error) {
 	if forms.Vertical {
 		return Embedded{}, errNoType3Vertical
 	}
+	if err := type3Allowed(f.EmbeddingPermissions()); err != nil {
+		return Embedded{}, err
+	}
 	if f.t3 == nil || len(f.t3.subs) == 0 {
 		return Embedded{}, errEmbedBeforeUse
 	}

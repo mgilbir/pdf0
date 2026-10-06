@@ -384,3 +384,50 @@ func TestABitmapFaceHasNoVerticalForm(t *testing.T) {
 		t.Errorf("Vertical: %v", err)
 	}
 }
+
+// withFSType is a font with its OS/2 fsType set to v.
+func withFSType(t *testing.T, data []byte, v uint16) []byte {
+	t.Helper()
+	out := append([]byte(nil), data...)
+	n := int(out[4])<<8 | int(out[5])
+	for i := range n {
+		rec := out[12+16*i:]
+		if string(rec[:4]) == "OS/2" {
+			off := int(rec[8])<<24 | int(rec[9])<<16 | int(rec[10])<<8 | int(rec[11])
+			out[off+8], out[off+9] = byte(v>>8), byte(v)
+			return out
+		}
+	}
+	t.Fatal("the font has no OS/2 table")
+	return nil
+}
+
+// TestABitmapFacesLicenceIsHonoured: a bitmap face is embedded as images of the
+// glyphs drawn, which the bitmap-only bit permits and the restricted and
+// no-subsetting bits forbid.
+func TestABitmapFacesLicenceIsHonoured(t *testing.T) {
+	data := formeTestFile(t, "testdata/freetype/fonts/Strikes.ttf")
+	for _, tc := range []struct {
+		name   string
+		fsType uint16
+		want   error
+	}{
+		{"installable", 0x0000, nil},
+		{"bitmap embedding only", 0x0200, nil},
+		{"preview and print", 0x0004, nil},
+		{"restricted", 0x0002, ErrRestrictedLicense},
+		{"no subsetting", 0x0100, ErrBitmapNoSubsetting},
+	} {
+		face, err := Load(withFSType(t, data, tc.fsType))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, stated := face.EmbeddingPermissions(); !stated || uint16(got) != tc.fsType {
+			t.Fatalf("%s: the patched font states fsType %#x (%v)", tc.name, got, stated)
+		}
+		drawIn(t, face, "AB", 9, nil)
+		if _, err := face.Embed(&allocator{}); !errors.Is(err, tc.want) {
+			t.Errorf("%s: Embed: %v, want %v", tc.name, err, tc.want)
+		}
+	}
+}

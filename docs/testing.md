@@ -113,6 +113,7 @@ through) and from the tests themselves:
 | CCITT samples | `testdata/ccitt` | — | `make ccitt` | `TestCCITTRealFiles` |
 | JBIG2 samples | `testdata/jbig2` | — | `make jbig2` | `TestJBIG2EdgeCases`, `TestJBIG2GenericCrossCheck`, `TestJBIG2Halftone`, `TestJBIG2Huffman`, `TestJBIG2Refinement`, `TestJBIG2SymbolText` |
 | Noto Sans CJK face | `testdata/notocjk` | — | `make notocjk` | `TestACJKDocumentIsWrittenAndReadsBack`, `TestAFaceNeverSetUprightWritesNoVerticalFont`, `TestAFontRemovedFromTheDocumentIsWrittenAfresh`, `TestAFormAddedLaterKeepsTheFontNumbers`, `TestAnAdoptedCIDFaceIsKeyedCorrectly`, `TestBothFormsOfAFaceAreOneFont`, `TestCIDKeyedSetIsKeyedByCID`, `TestCIDKeyedWidthsAreKeyedByCID`, `TestDrawReplacedSaysItsReplacement`, `TestEveryDrawingPathRoundTripsInEveryFaceKind`, `TestEveryDrawingPathValidatesAtEveryLevel`, `TestTheCIDSetIsTheEmbeddedProgramsCharset`, `TestTheVerticalMetricsAreTheGlyphsOwn`, `fonts: TestAGlyphDrawnForTwoTextsCarriesBoth`, `fonts: TestEncodeAgreesWithFormesEncode`, `fonts: TestEveryPathWritesTheCodeTheFontIsAddressedBy`, `fonts: TestToUnicodeCoversOnlyTheGlyphsDrawn`, `htmlpdf: TestDrawUprightHangsEachGlyphBelowTheLast`, `htmlpdf: TestLetterSpacingGoesDownAnUprightRun`, `htmlpdf: TestRenderInEveryFaceKindRoundTrips`, `htmlpdf: TestUprightTextIsDrawnByItsVerticalMetrics` |
+| Noto Color Emoji (CBDT) | `testdata/notoemoji` | — | `make notoemoji` | `TestColourBitmapGlyphsAreTheirImages`, `htmlpdf: TestRenderInEveryFaceKindRoundTrips` |
 | Cal Poly PDF/VT-1 suite | `testdata/pdfvt` | — | by hand | `TestCorpusContentStateMemoSound`, `TestValidateDPartsCalPolySuite`, `TestValidatePDFVTCalPolySuite`, `TestValidatePDFXCalPolySuite`, `TestWorkMeterHeadroom` |
 | PDFUA-Reference-Files | `spec/pdfua/reference-files` | — | by hand | `TestUAReferenceFilesNoFalsePositives` |
 | Order-X examples | `spec/order-x/Order-X100_EN/05-ORDER-X EXAMPLES` | — | by hand | `TestValidateOrderXCorpus` |
@@ -176,6 +177,7 @@ CoreText, and the Universal Shaping Engine's category corrections — are
 | `make ccitt` | Run `testdata/ccitt/download.sh` to fetch the CCITT sample PDFs |
 | `make jbig2` | Run `testdata/jbig2/download.sh` to fetch the JBIG2 sample PDFs |
 | `make notocjk` | Download the Noto Sans JP face into `testdata/notocjk/` and check its digest |
+| `make notoemoji` | Download Noto Color Emoji's CBDT build into `testdata/notoemoji/` and check its digest |
 | `make cc-sweep` | Sweep real-world Common Crawl PDFs for parser panics and hangs (`FIRST=`/`LAST=` pick the block range); `make cc-sweep-limited` runs the same sweep inside a memory- and CPU-capped cgroup |
 
 Each fetch target is guarded by a `.ok` stamp file, so re-running is a no-op.
@@ -197,7 +199,7 @@ which fetches it again and writes the stamp.
 
 **Clean**
 
-`make clean-corpus`, `clean-arlington`, `clean-notocjk` (each `rm -rf` the
+`make clean-corpus`, `clean-arlington`, `clean-notocjk`, `clean-notoemoji` (each `rm -rf` the
 fetched directory), `clean-wtpdf`, `clean-facturx`, `clean-ccitt`, `clean-jbig2`
 (each removes the downloaded `*.pdf` and the `.ok` stamp, keeping the committed
 manifest and script) and `clean-cc` (the sweep's working directory). There is
@@ -417,10 +419,11 @@ CI runs on every `push` (branches: [main]) and every `pull_request`, as 3 jobs.
 
 **`corpus`** (Go `1.26.x`):
 
-1. restore corpora: `testdata/verapdf-corpus`, `testdata/arlington-pdf-model`, `testdata/pdf20examples`, `spec/verapdf-profiles`, `testdata/notocjk`, `testdata/facturx/*.pdf`, `testdata/facturx/.ok`, `testdata/wtpdf/*.pdf`, `testdata/wtpdf/.ok`, `testdata/ccitt/*.pdf`, `testdata/ccitt/.ok`, `testdata/jbig2/*.pdf`, `testdata/jbig2/.ok`
-2. fetch corpora (only if `steps.corpora.outputs.cache-hit != 'true'`): `make corpus arlington refpdfs facturx profiles wtpdf ccitt jbig2 notocjk`
+1. restore corpora: `testdata/verapdf-corpus`, `testdata/arlington-pdf-model`, `testdata/pdf20examples`, `spec/verapdf-profiles`, `testdata/notocjk`, `testdata/notoemoji`, `testdata/facturx/*.pdf`, `testdata/facturx/.ok`, `testdata/wtpdf/*.pdf`, `testdata/wtpdf/.ok`, `testdata/ccitt/*.pdf`, `testdata/ccitt/.ok`, `testdata/jbig2/*.pdf`, `testdata/jbig2/.ok`
+2. fetch corpora (only if `steps.corpora.outputs.cache-hit != 'true'`): `make corpus arlington refpdfs facturx profiles wtpdf ccitt jbig2 notocjk notoemoji`
 3. corpora are present and complete
-4. conformance ratchets: `go test ./... -count=1`
+4. install the renderers
+5. conformance ratchets: `go test ./... -count=1`
 
 **`fuzz`** (Go `1.26.x`):
 
@@ -443,6 +446,7 @@ has the data.
 | CCITT samples | `testdata/ccitt` | `make ccitt` | fetched; fails below the manifest's count of `*.pdf` files |
 | JBIG2 samples | `testdata/jbig2` | `make jbig2` | fetched; fails below the manifest's count of `*.pdf` files |
 | Noto Sans CJK face | `testdata/notocjk` | `make notocjk` | fetched; fails below 1 `*.otf` files |
+| Noto Color Emoji (CBDT) | `testdata/notoemoji` | `make notoemoji` | fetched; fails below 1 `*.ttf` files |
 | Cal Poly PDF/VT-1 suite | `testdata/pdfvt` | It is copyrighted and placed by hand | **no**: local only |
 | PDFUA-Reference-Files | `spec/pdfua/reference-files` | It is placed by hand | **no**: local only |
 | Order-X examples | `spec/order-x/Order-X100_EN/05-ORDER-X EXAMPLES` | They come with the Order-X specification bundle and are placed by hand | **no**: local only |
