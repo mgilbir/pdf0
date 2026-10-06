@@ -41,6 +41,10 @@ type Face struct {
 	// horizontal is the face a vertical form belongs to. Exactly one of the two
 	// forms has horizontal set. See vertical.go.
 	vertical, horizontal *Face
+
+	// t3 is a bitmap face's Type 3 sub-fonts and the codes it gave out in
+	// them; see type3.go. Like rec, it is what this wrapper drew.
+	t3 *type3State
 }
 
 // Adopt wraps a shaping face so it can be drawn and embedded.
@@ -168,6 +172,7 @@ func (f *Face) Clone() *Face {
 	c := *f
 	c.Face = f.Face.Clone()
 	c.rec = nil
+	c.t3 = nil
 	c.vertical = nil
 	return &c
 }

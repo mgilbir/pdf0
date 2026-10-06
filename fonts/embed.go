@@ -93,6 +93,11 @@ type Embedded struct {
 	// Vertical is the Identity-V Type 0 font over the same descendant,
 	// written after every other object of the embedding.
 	Vertical object.IndirectRef
+	// Subfonts are the other fonts of a face whose glyphs are only bitmaps,
+	// which is written as Type 3 fonts (see SubfontName): Subfonts[k-1] is
+	// the font selected as SubfontName(name, k), where Horizontal is the one
+	// selected as name. Nil for every other face.
+	Subfonts []object.IndirectRef
 }
 
 // errNoForm is EmbedForms asked for no font at all.
@@ -126,6 +131,9 @@ func (f *Face) EmbedForms(doc Allocator, forms Forms) (Embedded, error) {
 		}
 		ref, err := f.embedSimple(doc)
 		return Embedded{Horizontal: ref}, err
+	}
+	if f.isType3() {
+		return f.embedType3(doc, forms)
 	}
 	return f.embedComposite(doc, forms)
 }
@@ -298,6 +306,11 @@ func (f *Face) EmbedRevision() int {
 	n := len(f.Used())
 	if f.rec != nil {
 		n += len(f.rec.byGID)
+	}
+	if f.t3 != nil {
+		// A bitmap face's codes: each one given out is a glyph some
+		// sub-font gained, and a new sub-font gains one when it is made.
+		n += f.t3.assigned
 	}
 	return n
 }

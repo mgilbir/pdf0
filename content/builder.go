@@ -154,6 +154,18 @@ func (b *Builder) Bytes() ([]byte, error) {
 // makes. It is for a caller that wants to abandon a drawing early.
 func (b *Builder) Err() error { return b.err }
 
+// Fail records err as the stream's error, as a refused operator would be, and
+// returns the Builder. It is for a drawing layered on the Builder that finds
+// it cannot draw what it was asked to — a glyph its font cannot paint — and
+// whose own calls return nothing: the stream is then refused by Bytes rather
+// than written with the drawing silently missing. The first error is kept.
+func (b *Builder) Fail(err error) *Builder {
+	if b.err == nil && err != nil {
+		b.err = err
+	}
+	return b
+}
+
 // fail records the first error. Later calls become no-ops, so a caller may keep
 // drawing and check once at the end.
 func (b *Builder) fail(format string, args ...any) *Builder {

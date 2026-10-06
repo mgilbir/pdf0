@@ -1,0 +1,386 @@
+package fonts
+
+import (
+	"bytes"
+	"compress/zlib"
+	"errors"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/mgilbir/pdf0/content"
+	"github.com/mgilbir/pdf0/object"
+)
+
+// A face whose glyphs are only bitmaps is drawn and embedded as Type 3 fonts:
+// one per strike and, for a greyscale strike, per text colour, split into
+// planes of 256 codes (type3.go, docs/proposals/bitmap-fonts-type3.md).
+//
+// The fixture is forme's Strikes.ttf, built for its strike reader: EBDT with
+// no outlines, 26 glyphs for A to Y, a 1-bit strike at 12 ppem, a 2-bit one at
+// 16, and strikes at 24 and 32, the largest, which glyph 5 (E) is missing from.
+
+var formeModuleDir = sync.OnceValues(func() (string, error) {
+	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/mgilbir/forme").Output()
+	return strings.TrimSpace(string(out)), err
+})
+
+func formeTestFile(t *testing.T, rel string) []byte {
+	t.Helper()
+	dir, err := formeModuleDir()
+	if err != nil || dir == "" {
+		t.Fatalf("locating the forme module: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatalf("reading forme's %s: %v", rel, err)
+	}
+	return data
+}
+
+func strikesFace(t *testing.T) *Face {
+	t.Helper()
+	f, err := Load(formeTestFile(t, "testdata/freetype/fonts/Strikes.ttf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.BitmapOnly() || !f.isType3() {
+		t.Fatal("the fixture is not a bitmap-only face")
+	}
+	return f
+}
+
+func inflate(t *testing.T, s *object.Stream) []byte {
+	t.Helper()
+	r, err := zlib.NewReader(bytes.NewReader(s.Data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// drawIn draws s in face at size into a fresh stream that selected it as F1,
+// with whatever the setup did to the stream first.
+func drawIn(t *testing.T, face *Face, s string, size float64, setup func(*content.Builder)) string {
+	t.Helper()
+	var b content.Builder
+	if setup != nil {
+		setup(&b)
+	}
+	b.BeginText().SetFont("F1", size)
+	if missing := face.DrawShaped(&b, s, size); missing != 0 {
+		t.Fatalf("%d of %q missing", missing, s)
+	}
+	b.EndText()
+	out, err := b.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
+}
+
+// type3Font is one embedded sub-font, read back.
+type type3Font struct {
+	dict   *object.Dictionary
+	procs  map[object.Name]string // glyph name -> procedure
+	names  []object.Name          // code -> glyph name
+	widths []float64
+	cmap   string
+}
+
+func readType3(t *testing.T, a *allocator, ref object.IndirectRef) type3Font {
+	t.Helper()
+	d := a.dict(t, ref)
+	if d.Get("Subtype") != object.Name("Type3") {
+		t.Fatalf("font %v is %v, not Type3", ref, d.Get("Subtype"))
+	}
+	f := type3Font{dict: d, procs: map[object.Name]string{}}
+	procs := d.Get("CharProcs").(*object.Dictionary)
+	for name, r := range procs.All() {
+		f.procs[name] = string(inflate(t, a.at(r).(*object.Stream)))
+	}
+	diff := d.Get("Encoding").(*object.Dictionary).Get("Differences").(object.Array)
+	if diff[0] != object.Integer(0) {
+		t.Fatalf("Differences start at %v", diff[0])
+	}
+	for _, n := range diff[1:] {
+		f.names = append(f.names, n.(object.Name))
+	}
+	for _, w := range d.Get("Widths").(object.Array) {
+		switch v := w.(type) {
+		case object.Integer:
+			f.widths = append(f.widths, float64(v))
+		case object.Real:
+			f.widths = append(f.widths, float64(v))
+		}
+	}
+	if last := d.Get("LastChar"); last != object.Integer(len(f.names)-1) || len(f.widths) != len(f.names) {
+		t.Fatalf("LastChar %v, %d widths, for %d codes", last, len(f.widths), len(f.names))
+	}
+	f.cmap = string(inflate(t, a.at(d.Get("ToUnicode")).(*object.Stream)))
+	return f
+}
+
+// wx is the width a procedure states, its first operand.
+func wx(proc string) string { return strings.Fields(proc)[0] }
+
+func TestABitmapFaceIsDrawnInTheFontOfItsStrike(t *testing.T) {
+	face := strikesFace(t)
+	// 9pt is 12 CSS pixels: the 12 ppem strike, which is not the home
+	// font's (the largest, 32), so the run switches to a sub-font and back.
+	stream := drawIn(t, face, "ABC", 9, func(b *content.Builder) { b.SetRGB(1, 0, 0) })
+	if !strings.Contains(stream, "/F1.1 9 Tf\n(\x00\x01\x02) Tj\n/F1 9 Tf\n") {
+		t.Errorf("the run was not drawn in F1.1 and F1 selected after it:\n%q", stream)
+	}
+
+	a := &allocator{}
+	e, err := face.Embed(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := readType3(t, a, e)
+	if len(home.names) != 1 {
+		t.Errorf("the home font has %d glyphs, want .notdef alone", len(home.names))
+	}
+	all, err := face.EmbedForms(&allocator{}, Forms{Horizontal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all.Subfonts) != 1 {
+		t.Fatalf("%d sub-fonts beside the home font, want 1", len(all.Subfonts))
+	}
+	a = &allocator{}
+	all, _ = face.EmbedForms(a, Forms{Horizontal: true})
+	sub := readType3(t, a, all.Subfonts[0])
+	if len(sub.names) != 3 {
+		t.Fatalf("the sub-font has %d glyphs, want 3", len(sub.names))
+	}
+	for code, name := range sub.names {
+		proc := sub.procs[name]
+		// A 1-bit strike is a stencil: d1, which takes the text's colour.
+		if !strings.Contains(proc, " d1\n") || !strings.Contains(proc, " Do\n") {
+			t.Errorf("code %d's procedure is not a stencil:\n%s", code, proc)
+		}
+		if wx(proc) != "600" || sub.widths[code] != 600 {
+			t.Errorf("code %d: wx %s, /Widths %v, want the face's advance, 600", code, wx(proc), sub.widths[code])
+		}
+	}
+	for _, want := range []string{"<00> <0041>", "<01> <0042>", "<02> <0043>"} {
+		if !strings.Contains(sub.cmap, want) {
+			t.Errorf("the ToUnicode CMap has no %s:\n%s", want, sub.cmap)
+		}
+	}
+}
+
+func TestAGreyscaleStrikeIsPaintedInTheTextColour(t *testing.T) {
+	face := strikesFace(t)
+	// 12pt is 16 CSS pixels: the 2-bit strike.
+	red := drawIn(t, face, "AB", 12, func(b *content.Builder) { b.SetRGB(1, 0, 0) })
+	green := drawIn(t, face, "AB", 12, func(b *content.Builder) { b.SetRGB(0, 1, 0) })
+	unknown := drawIn(t, face, "AB", 12, nil)
+	for i, s := range []string{red, green, unknown} {
+		want := "/F1." + string(rune('1'+i)) + " 12 Tf"
+		if !strings.Contains(s, want) {
+			t.Errorf("draw %d is not in its own sub-font %s:\n%q", i, want, s)
+		}
+	}
+
+	a := &allocator{}
+	e, err := face.EmbedForms(a, Forms{Horizontal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(e.Subfonts) != 3 {
+		t.Fatalf("%d sub-fonts, want red, green and the stencils", len(e.Subfonts))
+	}
+	for i, wantRGB := range [][]byte{{255, 0, 0}, {0, 255, 0}} {
+		f := readType3(t, a, e.Subfonts[i])
+		for _, name := range f.names {
+			proc := f.procs[name]
+			if !strings.Contains(proc, " d0\n") {
+				t.Errorf("sub-font %d's %s is not a coloured glyph:\n%s", i+1, name, proc)
+			}
+		}
+		xobjects := f.dict.Get("Resources").(*object.Dictionary).Get("XObject").(*object.Dictionary)
+		for imName, ref := range xobjects.All() {
+			im := a.at(ref).(*object.Stream)
+			if im.Dict.Get("ColorSpace") != object.Name("DeviceRGB") || im.Dict.Get("Width") != object.Integer(1) {
+				t.Errorf("%s is not one DeviceRGB pixel: %v", imName, im.Dict.Get("ColorSpace"))
+			}
+			if got := inflate(t, im); !bytes.Equal(got, wantRGB) {
+				t.Errorf("%s's colour is %v, want %v", imName, got, wantRGB)
+			}
+			mask := a.at(im.Dict.Get("SMask")).(*object.Stream)
+			cov := inflate(t, mask)
+			partial := false
+			for _, v := range cov {
+				partial = partial || (v != 0 && v != 255)
+			}
+			if !partial {
+				t.Errorf("%s's soft mask has no partial coverage: the anti-aliasing is gone", imName)
+			}
+		}
+	}
+	// In a colour the stream has not set, the glyph is a stencil.
+	f := readType3(t, a, e.Subfonts[2])
+	for _, name := range f.names {
+		if !strings.Contains(f.procs[name], " d1\n") {
+			t.Errorf("a greyscale glyph in an unknown colour is not a stencil:\n%s", f.procs[name])
+		}
+	}
+}
+
+func TestAGlyphMissingFromItsStrikeIsDrawnFromTheNearest(t *testing.T) {
+	face := strikesFace(t)
+	gid, ok := face.GlyphID('E')
+	if !ok {
+		t.Fatal("no E")
+	}
+	if _, has, _ := face.paint(gid, 32); has {
+		t.Fatal("the fixture's E is in the 32 ppem strike; this test needs it missing")
+	}
+	// 24pt is 32 CSS pixels.
+	drawIn(t, face, "E", 24, nil)
+	a := &allocator{}
+	e, err := face.EmbedForms(a, Forms{Horizontal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := readType3(t, a, e.Horizontal) // the 32 ppem strike is the home font's
+	name := object.Name("g" + itoa(gid))
+	proc, ok := f.procs[name]
+	if !ok {
+		t.Fatalf("E is not in the home font: %v", f.names)
+	}
+	if !strings.Contains(proc, " Do\n") {
+		t.Fatalf("E is drawn blank rather than from another strike:\n%s", proc)
+	}
+	// The nearest strike to 32 that has E is 24: its image there, which is
+	// not the 16 ppem strike's either.
+	want, _, _ := face.paint(gid, 24)
+	if other, _, _ := face.paint(gid, 16); other.img.Width == want.img.Width && other.img.Height == want.img.Height {
+		t.Fatal("E is the same size at 16 and 24 ppem; this test cannot tell the strikes apart")
+	}
+	im := a.at(f.dict.Get("Resources").(*object.Dictionary).Get("XObject").(*object.Dictionary).Get("I1")).(*object.Stream)
+	if im.Dict.Get("Width") != object.Integer(want.img.Width) || im.Dict.Get("Height") != object.Integer(want.img.Height) {
+		t.Errorf("E's image is %v×%v, want the 24 ppem strike's %d×%d",
+			im.Dict.Get("Width"), im.Dict.Get("Height"), want.img.Width, want.img.Height)
+	}
+}
+
+func itoa(v int) string { return strconv.Itoa(v) }
+
+func TestASubfontSplitsIntoPlanesWhenItsCodesRunOut(t *testing.T) {
+	defer func(n int) { maxCodes = n }(maxCodes)
+	maxCodes = 4
+	face := strikesFace(t)
+	const text = "ABCDEFGHIJ"
+	stream := drawIn(t, face, text, 9, nil)
+	a := &allocator{}
+	e, err := face.EmbedForms(a, Forms{Horizontal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Ten glyphs in planes of four: three planes, F1.1 to F1.3.
+	if len(e.Subfonts) != 3 {
+		t.Fatalf("%d sub-fonts, want 3 planes", len(e.Subfonts))
+	}
+	for k := 1; k <= 3; k++ {
+		if !strings.Contains(stream, "/F1."+itoa(k)+" 9 Tf") {
+			t.Errorf("the stream never selects plane %d:\n%q", k, stream)
+		}
+	}
+	// What the planes' ToUnicode CMaps say, in the order the stream shows
+	// codes, is the text.
+	cmaps := map[string]map[byte]string{}
+	for k, ref := range e.Subfonts {
+		f := readType3(t, a, ref)
+		if len(f.names) > 4 {
+			t.Errorf("plane %d has %d codes", k+1, len(f.names))
+		}
+		m := map[byte]string{}
+		for _, line := range strings.Split(f.cmap, "\n") {
+			var code, r int
+			if n, _ := sscanHex(line, &code, &r); n == 2 {
+				m[byte(code)] = string(rune(r))
+			}
+		}
+		cmaps["F1."+itoa(k+1)] = m
+	}
+	var got strings.Builder
+	var cur string
+	for _, line := range strings.Split(stream, "\n") {
+		switch {
+		case strings.HasSuffix(line, " Tf"):
+			cur = strings.TrimPrefix(strings.Fields(line)[0], "/")
+		case strings.HasSuffix(line, " Tj"):
+			codes := strings.TrimSuffix(strings.TrimPrefix(line, "("), ") Tj")
+			for i := 0; i < len(codes); i++ {
+				got.WriteString(cmaps[cur][codes[i]])
+			}
+		}
+	}
+	if got.String() != text {
+		t.Errorf("the planes spell %q, want %q", got.String(), text)
+	}
+}
+
+// sscanHex reads a bfchar line "<cc> <uuuu>".
+func sscanHex(line string, code, r *int) (int, error) {
+	if len(line) != 11 || line[0] != '<' || line[3] != '>' || line[5] != '<' || line[10] != '>' {
+		return 0, nil
+	}
+	parse := func(s string) int {
+		v := 0
+		for _, c := range s {
+			v <<= 4
+			switch {
+			case c >= '0' && c <= '9':
+				v |= int(c - '0')
+			case c >= 'A' && c <= 'F':
+				v |= int(c-'A') + 10
+			}
+		}
+		return v
+	}
+	*code, *r = parse(line[1:3]), parse(line[6:10])
+	return 2, nil
+}
+
+func TestABitmapFaceNeedsItsFontSelected(t *testing.T) {
+	face := strikesFace(t)
+	var b content.Builder
+	b.BeginText()
+	face.DrawShaped(&b, "A", 9)
+	b.EndText()
+	if _, err := b.Bytes(); !errors.Is(err, errType3NoFont) {
+		t.Errorf("drawing with no font selected: %v", err)
+	}
+}
+
+func TestEncodeWritesABitmapFacesHomeCodes(t *testing.T) {
+	defer func(n int) { maxCodes = n }(maxCodes)
+	maxCodes = 3
+	face := strikesFace(t)
+	// The home font's first code is .notdef; A and B take the other two,
+	// and C has no code left.
+	codes, missing := face.Encode("ABC")
+	if !bytes.Equal(codes, []byte{1, 2}) || missing != 1 {
+		t.Errorf("Encode = %v, %d missing; want [1 2], 1", codes, missing)
+	}
+}
+
+func TestABitmapFaceHasNoVerticalForm(t *testing.T) {
+	if _, err := strikesFace(t).Vertical(); !errors.Is(err, errNoType3Vertical) {
+		t.Errorf("Vertical: %v", err)
+	}
+}

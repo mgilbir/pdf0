@@ -1,6 +1,7 @@
 package content
 
 import (
+	"errors"
 	"slices"
 	"testing"
 
@@ -130,4 +131,18 @@ func TestStrokeColourIsNotFill(t *testing.T) {
 	b.SetGray(0.5).SetStrokeRGB(1, 0, 0).SetStrokeGray(0).SetStrokeCMYK(0, 0, 0, 1).
 		SetStrokeColorSpace("DeviceRGB").SetStrokeColor(0, 1, 0)
 	wantFill(t, &b, "DeviceGray", 0.5)
+}
+
+func TestFailRefusesTheStream(t *testing.T) {
+	var b Builder
+	b.SetGray(0)
+	b.Fail(nil) // nothing to record
+	if b.Err() != nil {
+		t.Fatalf("Fail(nil) recorded %v", b.Err())
+	}
+	first := errors.New("the glyph cannot be painted")
+	b.Fail(first).Fail(errors.New("second"))
+	if _, err := b.Bytes(); err != first {
+		t.Errorf("Bytes() error = %v, want the first Fail", err)
+	}
 }
