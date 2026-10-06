@@ -99,7 +99,8 @@ jobs:
   # The oracles: corpus FP=0/missed=0, Isartor, Level A, the whole-corpus parse
   # sweep, the Arlington structural oracle, the Factur-X container oracle, the
   # per-rule coverage ratchet (profiles), the WTPDF round trips, the CCITT and
-  # JBIG2 decode oracles and CID-keyed CFF embedding (notocjk). Every one is a
+  # JBIG2 decode oracles, CID-keyed CFF embedding (notocjk) and colour-bitmap
+  # Type 3 embedding (notoemoji). Every one is a
   # measurement of specific documents, and a test whose data is absent skips —
   # so a data set with a make target that is not fetched here is a check CI
   # never makes. TestCIRunsEveryFetchableOracle fails if one is left out.
@@ -135,6 +136,7 @@ jobs:
             testdata/pdf20examples
             spec/verapdf-profiles
             testdata/notocjk
+            testdata/notoemoji
             testdata/facturx/*.pdf
             testdata/facturx/.ok
             testdata/wtpdf/*.pdf
@@ -147,7 +149,7 @@ jobs:
 
       - name: fetch corpora
         if: steps.corpora.outputs.cache-hit != 'true'
-        run: make corpus arlington refpdfs facturx profiles wtpdf ccitt jbig2 notocjk
+        run: make corpus arlington refpdfs facturx profiles wtpdf ccitt jbig2 notocjk notoemoji
 
       # A half-finished fetch must be red, not green. The corpus-gated tests skip
       # when their directory is empty, and a skip reads as a pass: this repository
@@ -187,6 +189,15 @@ jobs:
           # 732 profile documents at the pinned revision, PDF/UA's included.
           check spec/verapdf-profiles            '*.xml'  700
           check testdata/notocjk                 '*.otf'    1
+          check testdata/notoemoji               '*.ttf'    1
+
+      # The rendering oracles: what Ghostscript and poppler paint for a page
+      # pdf0 wrote, compared with what the font or the layout says should be
+      # there (bitmap glyphs written as Type 3 fonts, htmlpdf's ink box). The
+      # tests skip where neither renderer is installed, which a runner image is
+      # not promised to have.
+      - name: install the renderers
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends ghostscript poppler-utils
 
       - name: conformance ratchets
         env:

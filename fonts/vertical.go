@@ -62,6 +62,9 @@ func (f *Face) Vertical() (*Face, error) {
 	if !f.composite() {
 		return nil, errNoVerticalForm
 	}
+	if f.isType3() {
+		return nil, errNoType3Vertical
+	}
 	if f.vertical == nil {
 		f.vertical = &Face{Face: f.Face, rec: f.record(), horizontal: f}
 	}

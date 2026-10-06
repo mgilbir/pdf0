@@ -156,6 +156,9 @@ func (c *canvas) face(f *shape.Face, vertical bool) (object.Name, *fonts.Face) {
 	face, ok := c.w.faces[f]
 	if !ok {
 		face = fonts.Adopt(f)
+		// This stream is in CSS pixels, which is what picks a bitmap
+		// face's strike.
+		face.SetPixelsPerUnit(1)
 		c.w.faces[f] = face
 	}
 	prefix := "F"

@@ -44,6 +44,9 @@ import (
 // A number no code can carry — a glyph handed in from somewhere other than this
 // face — is written as code 0, .notdef, which a reader shows as the missing
 // glyph it is, rather than truncated into some other glyph's code.
+//
+// A bitmap face's code depends on which of its Type 3 fonts the glyph is drawn
+// in, which this cannot say; its writers ask type3.go instead.
 func (f *Face) appendCode(dst []byte, gid int) []byte {
 	if f.composite() {
 		code := f.GlyphCode(gid)
@@ -569,11 +572,12 @@ func indexOf(sorted []int, x int) int {
 // states, which is not what shaping decided, so the difference comes off. The
 // two are emitted as one number where they meet, because a displacement is
 // three bytes of content stream and a page has thousands of them.
-func (f *Face) spans(glyphs []Glyph, text string) []content.TextSpan {
-	var (
-		out []content.TextSpan
-		run []byte
-	)
+//
+// A bitmap face's codes are its home font's, there being no stream to switch
+// fonts in, and dropped is the count of glyphs that font cannot take: its 256
+// codes given out. See type3.go.
+func (f *Face) spans(glyphs []Glyph, text string) (out []content.TextSpan, dropped int) {
+	var run []byte
 	flush := func() {
 		if len(run) > 0 {
 			out = append(out, content.TextSpan{Codes: run})
@@ -594,8 +598,18 @@ func (f *Face) spans(glyphs []Glyph, text string) []content.TextSpan {
 			out = append(out, content.ActualTextStart(seg.actual))
 		}
 		for _, g := range glyphs[seg.lo:seg.hi] {
-			adjust(g.XOffset)
-			run = f.appendCode(run, g.GID)
+			if f.isType3() {
+				c, ok := f.homeCode(g.GID)
+				if !ok {
+					dropped++
+					continue
+				}
+				adjust(g.XOffset)
+				run = append(run, c)
+			} else {
+				adjust(g.XOffset)
+				run = f.appendCode(run, g.GID)
+			}
 			adjust(g.XAdvance - f.nominalAdvance(g) - g.XOffset)
 		}
 		if seg.marked {
@@ -604,7 +618,7 @@ func (f *Face) spans(glyphs []Glyph, text string) []content.TextSpan {
 		}
 	}
 	flush()
-	return out
+	return out, dropped
 }
 
 // draw writes planned glyphs as text operators, with a rise for an offset
@@ -662,6 +676,48 @@ func (f *Face) drawPlanned(b *content.Builder, glyphs []Glyph, segs []segment, s
 			run = nil
 		}
 	}
+	code := func(g Glyph) bool {
+		run = f.appendCode(run, g.GID)
+		return true
+	}
+	if f.isType3() {
+		// A bitmap face is several Type 3 fonts, and the one a glyph is drawn
+		// in depends on the size and the fill colour; see type3.go. The
+		// caller selected the face under its own name, which is the home
+		// font, and gets that selection back after the run.
+		base, tfSize, ok := b.Font()
+		if !ok {
+			b.Fail(errType3NoFont)
+			return
+		}
+		t := f.type3()
+		cur, err := t.home(f)
+		if err != nil {
+			b.Fail(err)
+			return
+		}
+		code = func(g Glyph) bool {
+			fill, known := b.FillColor()
+			sub, c, err := t.place(f, g.GID, size, fill, known, cur)
+			if err != nil {
+				b.Fail(err)
+				return false
+			}
+			if sub != cur {
+				flush()
+				b.SetFont(SubfontName(base, sub.index), tfSize)
+				cur = sub
+			}
+			run = append(run, c)
+			return true
+		}
+		defer func() {
+			if cur.index != 0 {
+				flush()
+				b.SetFont(base, tfSize)
+			}
+		}()
+	}
 	move := func(d float64) {
 		if d == 0 {
 			return
@@ -684,7 +740,9 @@ func (f *Face) drawPlanned(b *content.Builder, glyphs []Glyph, segs []segment, s
 				rise = g.YOffset
 			}
 			move(g.XOffset)
-			run = f.appendCode(run, g.GID)
+			if !code(g) {
+				return
+			}
 			// The operator will advance the pen by the font's own width; the
 			// run wants to end up XAdvance further on, with the offset undone.
 			move(g.XAdvance - f.nominalAdvance(g) - g.XOffset)

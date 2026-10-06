@@ -1,6 +1,10 @@
 package content
 
-import "github.com/mgilbir/pdf0/object"
+import (
+	"slices"
+
+	"github.com/mgilbir/pdf0/object"
+)
 
 // Graphics state, path construction, painting, clipping and colour
 // (ISO 32000-2 8.4, 8.5 and 8.6).
@@ -18,7 +22,11 @@ func (b *Builder) Save() *Builder {
 		return b.fail("q/Q nesting deeper than %d", MaxNestingDepth)
 	}
 	b.depth++
-	return b.op("q")
+	b.op("q")
+	if b.err == nil {
+		b.saved = append(b.saved, b.state)
+	}
+	return b
 }
 
 // Restore pops the graphics state (Q).
@@ -33,7 +41,12 @@ func (b *Builder) Restore() *Builder {
 		return b.fail("Restore without a matching Save")
 	}
 	b.depth--
-	return b.op("Q")
+	b.op("Q")
+	if b.err == nil {
+		b.state = b.saved[len(b.saved)-1]
+		b.saved = b.saved[:len(b.saved)-1]
+	}
+	return b
 }
 
 // Concat concatenates a matrix onto the current transformation matrix (cm).
@@ -271,7 +284,9 @@ func (b *Builder) SetGray(level float64) *Builder {
 	if !inUnit(level) {
 		return b.fail("gray level %v is outside [0,1]", level)
 	}
-	return b.op("g", level)
+	b.op("g", level)
+	b.setFill(Color{Space: "DeviceGray", Components: []float64{level}})
+	return b
 }
 
 // SetStrokeGray sets the stroke colour to a DeviceGray level (G).
@@ -287,7 +302,9 @@ func (b *Builder) SetRGB(r, g, bl float64) *Builder {
 	if !inUnit(r) || !inUnit(g) || !inUnit(bl) {
 		return b.fail("RGB components (%v, %v, %v) are outside [0,1]", r, g, bl)
 	}
-	return b.op("rg", r, g, bl)
+	b.op("rg", r, g, bl)
+	b.setFill(Color{Space: "DeviceRGB", Components: []float64{r, g, bl}})
+	return b
 }
 
 // SetStrokeRGB sets the stroke colour in DeviceRGB (RG).
@@ -303,7 +320,9 @@ func (b *Builder) SetCMYK(c, m, y, k float64) *Builder {
 	if !inUnit(c) || !inUnit(m) || !inUnit(y) || !inUnit(k) {
 		return b.fail("CMYK components (%v, %v, %v, %v) are outside [0,1]", c, m, y, k)
 	}
-	return b.op("k", c, m, y, k)
+	b.op("k", c, m, y, k)
+	b.setFill(Color{Space: "DeviceCMYK", Components: []float64{c, m, y, k}})
+	return b
 }
 
 // SetStrokeCMYK sets the stroke colour in DeviceCMYK (K).
@@ -321,7 +340,9 @@ func (b *Builder) SetColorSpace(name object.Name) *Builder {
 	if !isDeviceSpace(name) {
 		record(&b.res.ColorSpaces, name)
 	}
-	return b.op("cs", name)
+	b.op("cs", name)
+	b.setFill(Color{Space: name, Components: initialComponents(name)})
+	return b
 }
 
 // SetStrokeColorSpace selects a named colour space for stroking (CS).
@@ -334,7 +355,17 @@ func (b *Builder) SetStrokeColorSpace(name object.Name) *Builder {
 
 // SetColor sets the fill colour components in the current colour space (scn).
 func (b *Builder) SetColor(components ...float64) *Builder {
-	return b.setColorN("scn", components)
+	b.setColorN("scn", components)
+	if b.state.hasFill {
+		// The components are in whatever space cs last selected. Before any
+		// cs in this stream that space is the inherited one, which this does
+		// not know, so the colour stays unknown.
+		c := b.state.fill
+		c.Components = slices.Clone(components)
+		c.Pattern = ""
+		b.setFill(c)
+	}
+	return b
 }
 
 // SetStrokeColor sets the stroke colour components in the current stroking
@@ -359,7 +390,9 @@ func (b *Builder) setColorN(operator string, components []float64) *Builder {
 // colour space must be /Pattern.
 func (b *Builder) SetPattern(name object.Name) *Builder {
 	record(&b.res.Patterns, name)
-	return b.op("scn", name)
+	b.op("scn", name)
+	b.setFill(Color{Space: "Pattern", Pattern: name})
+	return b
 }
 
 // SetStrokePattern is SetPattern for stroking (SCN).

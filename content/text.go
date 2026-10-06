@@ -54,7 +54,11 @@ func (b *Builder) SetFont(name object.Name, size float64) *Builder {
 		return b.fail("font size %v is not positive", size)
 	}
 	record(&b.res.Fonts, name)
-	return b.textOp("Tf", name, size)
+	b.textOp("Tf", name, size)
+	if b.err == nil {
+		b.state.font, b.state.size, b.state.hasFont = name, size, true
+	}
+	return b
 }
 
 // SetCharSpacing sets the extra space between glyphs, in unscaled text units

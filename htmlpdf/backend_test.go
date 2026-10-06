@@ -5,7 +5,10 @@ import (
 	"errors"
 	"math"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -32,6 +35,39 @@ func (o oneFace) Face(string, bool, bool) (*shape.Face, bool) { return o.face, t
 func notoSansSet(t *testing.T) oneFace {
 	t.Helper()
 	f, err := notosans.Face()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return oneFace{f}
+}
+
+// strikesSet is forme's EBDT fixture: A to Y as 1-bit and 2-bit strikes, and
+// no outlines.
+func strikesSet(t *testing.T) oneFace {
+	t.Helper()
+	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/mgilbir/forme").Output()
+	if err != nil {
+		t.Fatalf("locating forme: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(strings.TrimSpace(string(out)), "testdata", "freetype", "fonts", "Strikes.ttf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := shape.Load(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return oneFace{f}
+}
+
+// emojiSet is Noto Color Emoji's CBDT build: colour bitmaps, no outlines.
+func emojiSet(t *testing.T) oneFace {
+	t.Helper()
+	data, err := os.ReadFile(testfiles.NotoEmoji.File(t, "NotoColorEmoji.ttf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := shape.Load(data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,10 +131,15 @@ func TestRenderInEveryFaceKindRoundTrips(t *testing.T) {
 		{"cid-keyed-cff", func(t *testing.T) layout.FontSet { return cjkSet(t) }, []string{"ｱ日本", "日本語のテキスト"}},
 		{"truetype", func(t *testing.T) layout.FontSet { return notoSansSet(t) }, []string{"office", "affluent", "क्षत्रिय", "नमस्ते"}},
 		{"standard", func(t *testing.T) layout.FontSet { return nil }, []string{"Hello office", "Café"}},
+		// Faces whose glyphs are only bitmaps, written as Type 3 fonts: an
+		// EBDT face with 1-bit and 2-bit strikes, and colour emoji.
+		{"bitmap-ebdt", func(t *testing.T) layout.FontSet { return strikesSet(t) }, []string{"HELLO", "ABCXY"}},
+		{"bitmap-cbdt", func(t *testing.T) layout.FontSet { return emojiSet(t) }, []string{"😀", "👍🏽🎉", "🇪🇸"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, text := range tc.texts {
-				doc, raw := roundTrip(t, Input{HTML: "<p>" + text + "</p>", Fonts: tc.fonts(t)}, Options{})
+				// In a colour, which a greyscale strike carries into its glyphs.
+				doc, raw := roundTrip(t, Input{HTML: `<p style="color: #c00; font-size: 12pt">` + text + "</p>", Fonts: tc.fonts(t)}, Options{})
 				if got := strings.TrimSpace(mustExtractText(t, doc)); got != text {
 					t.Errorf("%q extracted as %q", text, got)
 				}
@@ -474,3 +515,72 @@ func TestEachVerticalFlagIsJudgedOnItsOwn(t *testing.T) {
 		}
 	}
 }
+
+// TestABitmapFacesStrikeIsTheOneItsCSSPixelSizePicks: a bitmap face's strike
+// is chosen by the text size in CSS pixels, which is what htmlpdf's content
+// stream is in. 9pt is 12px, which forme's EBDT fixture has a 1-bit strike
+// for; 12pt is 16px, which it has a 2-bit strike for, drawn in the text colour.
+func TestABitmapFacesStrikeIsTheOneItsCSSPixelSizePicks(t *testing.T) {
+	set := strikesSet(t)
+	gid, _ := set.face.GlyphID('A')
+	for _, tc := range []struct {
+		css     string
+		ppem    int
+		painter string // the procedure's operator: d1 a stencil, d0 a colour
+	}{
+		{"font-size: 9pt", 12, "d1"},
+		{"font-size: 12pt", 16, "d0"},
+	} {
+		doc, _ := roundTrip(t, Input{HTML: `<p style="color: #c00; ` + tc.css + `">A</p>`, Fonts: set}, Options{})
+		var want oneImageCapture
+		if err := set.face.PaintGlyph(gid, shape.PaintOptions{PPEM: tc.ppem}, &want); err != nil || !want.got {
+			t.Fatalf("A has no image at %d ppem: %v", tc.ppem, err)
+		}
+		res := doc.ResolveDict(doc.PageList()[0].Get("Resources"))
+		found := false
+		for _, ref := range doc.ResolveDict(res.Get("Font")).All() {
+			fd := doc.ResolveDict(ref)
+			proc, ok := doc.Resolve(doc.ResolveDict(fd.Get("CharProcs")).Get(object.Name("g" + strconv.Itoa(gid)))).(*object.Stream)
+			if !ok {
+				continue
+			}
+			found = true
+			data, _ := doc.StreamData(proc)
+			if !strings.Contains(string(data), " "+tc.painter+"\n") {
+				t.Errorf("%s: A's procedure is not %s:\n%s", tc.css, tc.painter, data)
+			}
+			for _, im := range doc.ResolveDict(doc.ResolveDict(fd.Get("Resources")).Get("XObject")).All() {
+				st := doc.Resolve(im).(*object.Stream)
+				if sm := st.Dict.Get("SMask"); sm != nil {
+					st = doc.Resolve(sm).(*object.Stream)
+				}
+				if st.Dict.Get("Width") != object.Integer(want.img.Width) || st.Dict.Get("Height") != object.Integer(want.img.Height) {
+					t.Errorf("%s: A is drawn %v×%v, the %d ppem strike's image is %d×%d",
+						tc.css, st.Dict.Get("Width"), st.Dict.Get("Height"), tc.ppem, want.img.Width, want.img.Height)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%s: no font on the page draws A", tc.css)
+		}
+	}
+}
+
+// oneImageCapture keeps the one image a bitmap glyph is painted as.
+type oneImageCapture struct {
+	img shape.Image
+	got bool
+}
+
+func (o *oneImageCapture) PushTransform(shape.Transform)       {}
+func (o *oneImageCapture) PopTransform()                       {}
+func (o *oneImageCapture) PushClipGlyph(int)                   {}
+func (o *oneImageCapture) PushClipRect(shape.Rect)             {}
+func (o *oneImageCapture) PopClip()                            {}
+func (o *oneImageCapture) PushGroup()                          {}
+func (o *oneImageCapture) PopGroup(shape.CompositeMode)        {}
+func (o *oneImageCapture) Solid(shape.Color, bool)             {}
+func (o *oneImageCapture) LinearGradient(shape.LinearGradient) {}
+func (o *oneImageCapture) RadialGradient(shape.RadialGradient) {}
+func (o *oneImageCapture) SweepGradient(shape.SweepGradient)   {}
+func (o *oneImageCapture) Image(img shape.Image)               { o.img, o.got = img, true }

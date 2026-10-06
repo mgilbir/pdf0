@@ -48,9 +48,16 @@ import "github.com/mgilbir/pdf0/content"
 // spans are the smaller and simpler thing to write. DrawShaped, which places
 // each glyph, for text that carries marks. MeasureShaped agrees with both,
 // because a width does not depend on the vertical.
+//
+// A face whose glyphs are only bitmaps is several Type 3 fonts (see
+// SubfontName), and spans show codes in one of them: its home font, painted
+// from its largest strike with no colour of the text's. A glyph that font has
+// no code left for is counted in the second result and not shown. Draw and
+// DrawShaped pick each glyph's font by size and colour.
 func (f *Face) Shape(s string) (spans []content.TextSpan, missing int) {
 	glyphs, missing := f.ShapeGlyphs(s)
-	return f.spans(glyphs, s), missing
+	spans, dropped := f.spans(glyphs, s)
+	return spans, missing + dropped
 }
 
 // ShapeWith is Shape with additional OpenType features applied by name — the
@@ -68,7 +75,8 @@ func (f *Face) Shape(s string) (spans []content.TextSpan, missing int) {
 // no layout tables to apply them from, and sets the text as Shape does.
 func (f *Face) ShapeWith(s string, features ...string) (spans []content.TextSpan, missing int) {
 	glyphs, missing := f.ShapeGlyphsWith(s, features...)
-	return f.spans(glyphs, s), missing
+	spans, dropped := f.spans(glyphs, s)
+	return spans, missing + dropped
 }
 
 // Encode maps a string to character codes, one glyph per character with no
@@ -81,6 +89,9 @@ func (f *Face) ShapeWith(s string, features ...string) (spans []content.TextSpan
 // as e and U+0301), as shaping and Measure treat it. Otherwise it is .notdef
 // in a composite face and the space in a simple or standard one, which keeps
 // its place in the text, and the count of those is the second result.
+//
+// A face whose glyphs are only bitmaps writes codes in its home font, as Shape
+// does, and counts a glyph that font has no code left for as missing.
 //
 // Bare codes cannot carry an /ActualText, which is the one thing this cannot
 // say that Draw can: a glyph the font's cmap reaches from two characters — 日
@@ -96,6 +107,15 @@ func (f *Face) Encode(s string) (codes []byte, missing int) {
 	f.plan(glyphs, s)
 	codes = make([]byte, 0, 2*len(glyphs))
 	for _, g := range glyphs {
+		if f.isType3() {
+			c, ok := f.homeCode(g.GID)
+			if !ok {
+				missing++
+				continue
+			}
+			codes = append(codes, c)
+			continue
+		}
 		codes = f.appendCode(codes, g.GID)
 	}
 	return codes, missing
@@ -118,6 +138,13 @@ func (f *Face) Encode(s string) (codes []byte, missing int) {
 //
 // The builder must already be inside a text object with this face's font
 // selected at this size.
+//
+// A face whose glyphs are only bitmaps is drawn as Type 3 fonts: each glyph in
+// the one for the strike the size picks and, for a greyscale strike, the fill
+// colour the builder last set, selected as SubfontName of the name the builder
+// selected for the face, which is selected again after the run. A builder that
+// has selected no font is failed. A glyph forme cannot paint fails the
+// builder too, rather than being drawn blank.
 func (f *Face) Draw(b *content.Builder, text string, glyphs []Glyph, size float64) {
 	f.draw(b, glyphs, text, size)
 }

@@ -95,12 +95,13 @@ Embedding honours the font's licence (OS/2 `fsType`): Restricted License
 embedding is refused with `fonts.ErrRestrictedLicense`, bitmap-only with
 `fonts.ErrBitmapEmbeddingOnly`, and a font that forbids subsetting is embedded
 whole, without a subset tag. The program, `/CIDSet` and `/ToUnicode` streams
-are Flate-compressed.
+are Flate-compressed. A face whose glyphs are only bitmaps follows its own
+rule; see [Bitmap-only faces](#bitmap-only-faces).
 
 `fonts_drawpaths_test.go` draws every path in a CID-keyed CFF, a TrueType face,
-an Arabic face, a simple face and a standard face, and checks both that the
-text extracts as written and that PDF/A-1b, -2b, -3b and -4 find nothing wrong
-with the font.
+an Arabic face, two bitmap-only faces, a simple face and a standard face, and
+checks both that the text extracts as written and that PDF/A-1b, -2b, -3b and
+-4 find nothing wrong with the font.
 
 ## Font types and what each requires
 
@@ -534,6 +535,51 @@ embedded bare as `/CIDFontType0C`. The wrapper is kept because `hmtx` in it is
 what makes the widths authoritative (see [CID-keyed CFF](#cid-keyed-cff)), and
 the fonts it applies to predate CFF2.
 
+## Bitmap-only faces
+
+A face whose glyphs are only bitmaps — EBDT, Apple's bdat, CBDT or sbix, with
+no glyf, CFF or CFF2 outlines (`shape.Face.BitmapOnly`) — cannot be embedded
+as a font program: a reader draws a program from its outlines, and would draw
+these blank. It is written as Type 3 fonts instead (ISO 32000-2 9.6.4), whose
+glyphs are content streams painting forme's image of each glyph
+(`shape.Face.PaintGlyph`). The design record is
+[bitmap-fonts-type3.md](proposals/bitmap-fonts-type3.md).
+
+- **A 1-bit glyph** is a `d1` stencil: an image mask, painted in whatever
+  colour the text is shown in.
+- **A greyscale glyph** (a 2-, 4- or 8-bit strike) is a `d0` image of the fill
+  colour with the coverage as its `/SMask`, so it keeps its anti-aliasing. The
+  colour is baked into the glyph, so each text colour is its own font.
+- **A colour bitmap** (CBDT, sbix) is a `d0` image of its PNG, with an `/SMask`
+  for its alpha.
+
+The strike is the one the text size picks in CSS pixels — points × 4/3 by
+default, or the size itself for a stream drawn in CSS pixels, as htmlpdf's is
+(`fonts.Face.SetPixelsPerUnit`). A glyph missing from that strike is drawn from
+the nearest strike that has it, rather than blank.
+
+A Type 3 font has one-byte codes, so a face is a set of sub-fonts keyed by
+strike and colour and split into planes of 256 codes. The caller names the face
+once, as it names any face; that name is the home font, and the others are
+`fonts.SubfontName` of it. `Draw` and the other `Draw` methods pick each glyph's
+font, select it with `Tf` inside the run, and select the caller's name again
+after it, which is why the content builder now reports the font and fill colour
+a stream has set (`content.Builder.Font`, `content.Builder.FillColor`).
+`fonts.Embedded.Subfonts` are the other fonts' dictionaries, and `Page.Faces`
+defines every one under its name. `Encode` and `Shape` have no stream to switch
+in, and write codes in the home font.
+
+The licence reads differently here: bitmap embedding only (0x0200) is exactly
+what these fonts are, and is embedded; Restricted License is refused as for
+every face; and no subsetting (0x0100) is refused with
+`fonts.ErrBitmapNoSubsetting`, because the fonts carry images of the glyphs
+drawn and nothing else.
+
+`fonts_bitmap_test.go` renders the result with Ghostscript and poppler and
+compares every pixel of every glyph with forme's image of it, over forme's EBDT
+and bdat fixtures and Noto Color Emoji (`make notoemoji`), and holds it to the
+PDF/A validator and to the text a reader extracts.
+
 ## CMaps
 
 A Type 0 font's `/Encoding` says how the bytes in a content stream become CIDs,
@@ -595,6 +641,17 @@ one wider than 65,536 refuses the whole map, and the stream decodes through the
 same budget as any other.
 
 ## Confirmed limitations
+
+- **Bitmap-only faces:** a greyscale glyph in a colour that is not
+  DeviceGray, DeviceRGB or DeviceCMYK (a named ICC space, a Separation, a
+  pattern), or in a colour the stream has not set, is drawn as a stencil of its
+  coverage, which keeps the colour and loses the anti-aliasing. A strike past
+  256 ppem other than the largest is never drawn from. SVG glyphs are not
+  drawn. A font whose glyphs have outlines *and* bitmaps is embedded as its
+  outlines, so a licence that permits embedding only its bitmaps
+  (`fonts.ErrBitmapEmbeddingOnly`) still refuses it. PDF/A-1 forbids soft
+  masks, so a greyscale glyph in a colour and a colour bitmap are not PDF/A-1:
+  the validator reports them (6.4), and 1-bit glyphs are PDF/A-1.
 
 - **Predefined CMaps are not decoded.** A Type 0 font whose `/Encoding` names
   one of Adobe's published CMaps — `UniJIS-UCS2-H` and the rest — is checked at
