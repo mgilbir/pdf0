@@ -85,6 +85,11 @@ type Builder struct {
 	colorOp string
 
 	res Resources
+
+	// state is the font and fill colour this stream has set, and saved what
+	// each open q saved of it (see state.go).
+	state tracked
+	saved []tracked
 }
 
 // Resources records the names a content stream referred to, grouped by the
