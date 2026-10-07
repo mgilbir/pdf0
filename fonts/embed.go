@@ -75,13 +75,21 @@ func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	return e.Horizontal, nil
 }
 
-// Forms says which of a face's fonts EmbedForms writes.
+// Forms says which of a face's fonts EmbedForms writes, and how.
 type Forms struct {
 	// Horizontal is the face's own font: Identity-H for a composite face.
 	Horizontal bool
 	// Vertical is the Identity-V font of its vertical form (see Vertical),
 	// which only a composite face has.
 	Vertical bool
+	// Opaque writes a face whose glyphs are only bitmaps without
+	// transparency, for a document that may not use it (PDF/A-1, ISO
+	// 19005-1 6.4): a greyscale glyph is a stencil of its coverage, in the
+	// colour it was drawn in, and a colour bitmap is its image with a 1-bit
+	// /Mask cut from its alpha rather than an /SMask. Both lose their
+	// anti-aliased edges and keep their colours. Every other face is
+	// written as it is either way.
+	Opaque bool
 }
 
 // Embedded is what EmbedForms writes: the font dictionary for each form it

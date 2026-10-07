@@ -189,15 +189,22 @@ jobs:
           # 732 profile documents at the pinned revision, PDF/UA's included.
           check spec/verapdf-profiles            '*.xml'  700
           check testdata/notocjk                 '*.otf'    1
-          check testdata/notoemoji               '*.ttf'    1
+          check testdata/notoemoji               '*.ttf'    2
 
       # The rendering oracles: what Ghostscript and poppler paint for a page
       # pdf0 wrote, compared with what the font or the layout says should be
-      # there (bitmap glyphs written as Type 3 fonts, htmlpdf's ink box). The
-      # tests skip where neither renderer is installed, which a runner image is
-      # not promised to have.
+      # there (bitmap glyphs written as Type 3 fonts, htmlpdf's ink box), and
+      # what HarfBuzz (hb-view) and Skia (blackrenderer, testdata/colrv1)
+      # paint for a colour glyph. The tests skip where a renderer is not
+      # installed, which a runner image is not promised to have.
       - name: install the renderers
-        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends ghostscript poppler-utils
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends ghostscript poppler-utils libharfbuzz-bin libegl1 libgl1
+          # skia-python loads libEGL and libGL even to draw off screen.
+          python3 -m venv "$RUNNER_TEMP/skia"
+          "$RUNNER_TEMP/skia/bin/pip" install -q -r testdata/colrv1/requirements.txt
+          echo "PDF0_SKIA_PYTHON=$RUNNER_TEMP/skia/bin/python" >> "$GITHUB_ENV"
 
       - name: conformance ratchets
         env:

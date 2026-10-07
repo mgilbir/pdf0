@@ -130,3 +130,48 @@ glyph, so it keeps its colour and loses its anti-aliasing. This is a known limit
 3. **Document and htmlpdf:** `embedFaces` embeds and rewrites every sub-font,
    the resource sets get the derived names, htmlpdf stops refusing bitmap
    faces, and the end-to-end oracles above run.
+
+## COLR colour glyphs (follow-up)
+
+**Status:** implemented; the user-facing description is
+[Colour glyphs (COLR)](../fonts.md#colour-glyphs-colr). Two things changed
+from this design while building it: linear and radial gradients are stitched
+linear functions, not calculator functions, because Ghostscript samples a
+shading's function and draws a repeating one flat; and a group that blends or
+masks is drawn as an isolated group wherever it goes, which the conformance
+font's composite glyphs showed is needed.
+
+A face with a COLR table has outlines, and used to be embedded as them, so
+its colour glyphs came out in the text colour alone. It is now drawn as Type 3
+fonts too, by default. `Face.SetColourGlyphs(false)` keeps the old embedding.
+Each glyph's procedure is the PDF translation of forme's `PaintGlyph` calls:
+
+| COLR paint | PDF | exact |
+|---|---|---|
+| transform | `q … cm … Q` | yes |
+| clip to a glyph / a rectangle | its outline / `re`, then `W n` | yes |
+| solid | `rg` with an ExtGState `ca` for its alpha, filling the clip's box | yes |
+| linear gradient | an axial shading from P0 to P0 + the projection of P1−P0 across P0P2 | yes |
+| radial gradient | a radial shading between the two circles | yes |
+| sweep gradient | a function-based shading with a Type 4 function computing the angle | yes |
+| repeat and reflect extends | a Type 4 function taking the fractional part | yes |
+| stops with alpha | the shading drawn through a luminosity soft mask of the alpha | yes |
+| composite SrcOver | the two drawn in turn (src-over is associative) | yes |
+| Multiply … Luminosity (the 15 blend modes) | the source as an isolated group, drawn with `/BM` | yes |
+| Clear, Src, Dest, DestOver, SrcIn, DestIn, SrcOut, DestOut | the groups reordered, or one drawn through an alpha soft mask of the other | yes |
+| SrcAtop, DestAtop, Xor, Plus | — | refused for that glyph |
+
+A paint in the foreground colour sets no colour. A `d0` procedure starts
+with the colour the text is shown in, and every other paint sets its own
+colour inside `q`/`Q`. So one font serves every text colour, and only a
+gradient with a foreground stop, which has to state its colours, is keyed by
+the text colour as a greyscale strike is. A glyph with no colour of its own
+is its outline filled in the text colour, as a `d1` procedure.
+
+In a document that may not use transparency (`Forms.Opaque`, PDF/A-1), a
+colour glyph is its outline in the text colour, which is what it was before.
+A colour glyph with no outline of its own is refused there.
+
+Oracle: HarfBuzz's own renderer, `hb-view` (cairo), against Ghostscript's
+and poppler's rendering of the same glyph in a PDF, over forme's COLR
+fixtures and Noto Color Emoji's COLRv1 build.

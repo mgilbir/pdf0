@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
 	"image/png"
 	"math"
 	"strconv"
@@ -48,13 +49,20 @@ func (c *capture) Add(o object.Object) object.IndirectRef {
 // returns the reference the last one got. An object refers only to ones added
 // before it, since a reference exists only once its object is added.
 func (c *capture) replay(doc Allocator) object.IndirectRef {
-	refs := make([]object.IndirectRef, 0, len(c.objs))
-	var last object.IndirectRef
-	for _, o := range c.objs {
-		last = doc.Add(rebind(o, refs))
-		refs = append(refs, last)
+	refs := c.replayAll(doc)
+	if len(refs) == 0 {
+		return object.IndirectRef{}
 	}
-	return last
+	return refs[len(refs)-1]
+}
+
+// replayAll is replay, returning the reference each object got, in order.
+func (c *capture) replayAll(doc Allocator) []object.IndirectRef {
+	refs := make([]object.IndirectRef, 0, len(c.objs))
+	for _, o := range c.objs {
+		refs = append(refs, doc.Add(rebind(o, refs)))
+	}
+	return refs
 }
 
 // rebind is o with the capture's own references replaced by refs, the
@@ -112,7 +120,7 @@ func (f *Face) embedType3(doc Allocator, forms Forms) (Embedded, error) {
 	}
 	var out Embedded
 	for _, sub := range f.t3.subs {
-		ref, err := f.embedSubfont(doc, sub)
+		ref, err := f.embedSubfont(doc, sub, forms.Opaque)
 		if err != nil {
 			return Embedded{}, err
 		}
@@ -127,20 +135,25 @@ func (f *Face) embedType3(doc Allocator, forms Forms) (Embedded, error) {
 
 // embedSubfont writes one sub-font: its glyph procedures and their images,
 // the ToUnicode CMap, a descriptor and the font dictionary, which is the
-// reference returned.
-func (f *Face) embedSubfont(doc Allocator, sub *subFont) (object.IndirectRef, error) {
+// reference returned. opaque writes it without transparency (Forms.Opaque).
+func (f *Face) embedSubfont(doc Allocator, sub *subFont, opaque bool) (object.IndirectRef, error) {
 	t := f.t3
 	toGlyph := 1000 / float64(f.UnitsPerEm())
 	charProcs := &object.Dictionary{}
 	xobjects := &object.Dictionary{}
+	extGStates := &object.Dictionary{}
+	shadings := &object.Dictionary{}
 	differences := object.Array{object.Integer(0)}
 	widths := make(object.Array, 0, len(sub.gids))
 	bbox := [4]float64{}
 	haveBox := false
 	for code, gid := range sub.gids {
-		g, err := t.glyphAt(f, gid, sub.key.strike)
-		if err != nil {
-			return object.IndirectRef{}, err
+		var g bitmapGlyph
+		if !f.vectorGlyph(gid) {
+			var err error
+			if g, err = t.glyphAt(f, gid, sub.key.strike); err != nil {
+				return object.IndirectRef{}, err
+			}
 		}
 		wx := f.GlyphAdvance(gid)
 		name := object.Name("g" + strconv.Itoa(gid))
@@ -148,7 +161,26 @@ func (f *Face) embedSubfont(doc Allocator, sub *subFont) (object.IndirectRef, er
 		widths = append(widths, widthNumber(wx))
 
 		var proc []byte
-		if g.kind == glyphEmpty {
+		if f.vectorGlyph(gid) {
+			pr, inked, err := t.vectorProc(f, doc, sub.key, gid, wx, opaque, map[string]*object.Dictionary{
+				"XObject": xobjects, "ExtGState": extGStates, "Shading": shadings,
+			})
+			if err != nil {
+				return object.IndirectRef{}, err
+			}
+			proc = pr
+			if !inked.empty() {
+				box := [4]float64{inked.x0 * toGlyph, inked.y0 * toGlyph, inked.x1 * toGlyph, inked.y1 * toGlyph}
+				if !haveBox {
+					bbox, haveBox = box, true
+				} else {
+					bbox = [4]float64{
+						math.Min(bbox[0], box[0]), math.Min(bbox[1], box[1]),
+						math.Max(bbox[2], box[2]), math.Max(bbox[3], box[3]),
+					}
+				}
+			}
+		} else if g.kind == glyphEmpty {
 			proc = appendNums(nil, wx, 0, 0, 0, 0, 0)
 			proc = append(proc, "d1\n"...)
 		} else {
@@ -164,13 +196,18 @@ func (f *Face) embedSubfont(doc Allocator, sub *subFont) (object.IndirectRef, er
 					math.Max(bbox[2], box[2]), math.Max(bbox[3], box[3]),
 				}
 			}
-			c, err := t.imageFor(f, sub.key, gid, g)
+			// A greyscale glyph is a stencil where it has no colour of its
+			// own to carry, and where transparency is not allowed: its
+			// sub-font is only ever shown in the colour it is keyed by,
+			// which is the colour a stencil paints in.
+			stencil := g.kind == glyphMask || (g.kind == glyphGrey && (sub.key.colour == "" || opaque))
+			c, err := t.imageFor(f, sub.key, gid, g, stencil, opaque)
 			if err != nil {
 				return object.IndirectRef{}, fmt.Errorf("fonts: glyph %d: %w", gid, err)
 			}
 			imName := object.Name("I" + strconv.Itoa(code))
 			xobjects.Set(imName, c.replay(doc))
-			if g.kind == glyphMask || (g.kind == glyphGrey && sub.key.colour == "") {
+			if stencil {
 				proc = appendNums(nil, wx, 0, box[0], box[1], box[2], box[3])
 				proc = append(proc, "d1\n"...)
 			} else {
@@ -244,6 +281,12 @@ func (f *Face) embedSubfont(doc Allocator, sub *subFont) (object.IndirectRef, er
 	if xobjects.Len() > 0 {
 		resources.Set("XObject", xobjects)
 	}
+	if extGStates.Len() > 0 {
+		resources.Set("ExtGState", extGStates)
+	}
+	if shadings.Len() > 0 {
+		resources.Set("Shading", shadings)
+	}
 	fd.Set("Resources", resources)
 	fd.Set("FontDescriptor", descriptorRef)
 	fd.Set("ToUnicode", toUnicodeRef)
@@ -255,9 +298,9 @@ func (f *Face) embedSubfont(doc Allocator, sub *subFont) (object.IndirectRef, er
 const flagSymbolic = 1 << 2
 
 // imageFor is the image objects a glyph's procedure draws, written once per
-// sub-font key and kept.
-func (t *type3State) imageFor(f *Face, key subKey, gid int, g bitmapGlyph) (*capture, error) {
-	k := builtKey{key: key, gid: gid}
+// sub-font key, glyph and kind of writing, and kept.
+func (t *type3State) imageFor(f *Face, key subKey, gid int, g bitmapGlyph, stencil, opaque bool) (*capture, error) {
+	k := builtKey{key: key, gid: gid, opaque: opaque}
 	if c, ok := t.built[k]; ok {
 		return c, nil
 	}
@@ -265,8 +308,8 @@ func (t *type3State) imageFor(f *Face, key subKey, gid int, g bitmapGlyph) (*cap
 	var err error
 	switch {
 	case g.kind == glyphColour:
-		err = embedPNG(c, g.img)
-	case g.kind == glyphGrey && key.colour != "":
+		err = embedPNG(c, g.img, opaque)
+	case !stencil:
 		err = embedCoverage(c, t.colours[key.colour], g.img)
 	default:
 		// A stencil of the coverage: a pixel paints where it is at least half
@@ -292,8 +335,9 @@ const maxGlyphPixels = 1 << 22
 
 // embedPNG writes a colour bitmap's PNG as an image, after checking its size
 // against the pixel limit before decoding it: the font is untrusted, and its
-// header says how much decoding would allocate.
-func embedPNG(doc Allocator, img shape.Image) error {
+// header says how much decoding would allocate. opaque writes its alpha as a
+// 1-bit /Mask, painted where it is at least half, instead of an /SMask.
+func embedPNG(doc *capture, img shape.Image, opaque bool) error {
 	cfg, err := png.DecodeConfig(bytes.NewReader(img.Data))
 	if err != nil {
 		return fmt.Errorf("its PNG cannot be read: %w", err)
@@ -305,8 +349,34 @@ func embedPNG(doc Allocator, img shape.Image) error {
 	if err != nil {
 		return fmt.Errorf("its PNG cannot be decoded: %w", err)
 	}
-	_, err = images.Embed(doc, decoded)
-	return err
+	if !opaque {
+		_, err = images.Embed(doc, decoded)
+		return err
+	}
+	// The colour without its alpha, and the alpha as a stencil the image is
+	// painted through (ISO 32000-2 8.9.6.3, explicit masking). The mask is
+	// written first: an object refers only to ones written before it.
+	b := decoded.Bounds()
+	colour := image.NewNRGBA(b)
+	alpha := image.NewAlpha(b)
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			c := color.NRGBAModel.Convert(decoded.At(x, y)).(color.NRGBA)
+			alpha.SetAlpha(x, y, color.Alpha{A: c.A})
+			c.A = 0xFF
+			colour.SetNRGBA(x, y, c)
+		}
+	}
+	mask, err := images.EmbedStencil(doc, alpha)
+	if err != nil {
+		return err
+	}
+	ref, err := images.Embed(doc, colour)
+	if err != nil {
+		return err
+	}
+	doc.objs[-ref.Number-1].(*object.Stream).Dict.Set("Mask", mask)
+	return nil
 }
 
 // embedCoverage writes a greyscale glyph in a colour: one pixel of the colour,
@@ -362,3 +432,81 @@ func cleanZero(v float64) float64 {
 
 // realNumber writes a number as an integer when it is one.
 func realNumber(v float64) object.Object { return widthNumber(cleanZero(v)) }
+
+// errNoOpaqueColour is a colour glyph with no outline of its own, in a
+// document that may not use transparency: there is nothing it can be drawn as
+// there but its painting, which is.
+var errNoOpaqueColour = errors.New("fonts: the colour glyph has no outline to draw in a document " +
+	"that may not use transparency (PDF/A-1), and its painting uses it")
+
+// vectorProc is a vector glyph's procedure (colr.go), with the resources it
+// names added to res, and the box it inks in font units.
+//
+// Painted, it is d0 when it sets a colour or paints anything but the text
+// colour, and d1 otherwise, a shape a reader may cache. opaque draws it as
+// its outline in the text colour, as it was drawn before colour glyphs were.
+func (t *type3State) vectorProc(f *Face, doc Allocator, key subKey, gid int, wx float64, opaque bool,
+	res map[string]*object.Dictionary) ([]byte, box, error) {
+	scale := 1000 / float64(f.UnitsPerEm())
+	wrap := func(head []byte, body []byte) []byte {
+		head = append(head, "q\n"...)
+		head = appendNums(head, scale, 0, 0, scale, 0, 0)
+		head = append(head, "cm\n"...)
+		head = append(head, body...)
+		return append(head, "Q\n"...)
+	}
+	d1 := func(b box) []byte {
+		if b.empty() {
+			return append(appendNums(nil, wx, 0, 0, 0, 0, 0), "d1\n"...)
+		}
+		return append(appendNums(nil, wx, 0, b.x0*scale, b.y0*scale, b.x1*scale, b.y1*scale), "d1\n"...)
+	}
+	if opaque {
+		p := newColrPainter(f, &capture{}, gid, nil, box{})
+		path, bb, err := p.outline(gid)
+		if err != nil {
+			return nil, box{}, err
+		}
+		if len(path) == 0 {
+			if k := f.GlyphColour(gid, 0); k == shape.ColourLayers || k == shape.ColourPaint {
+				return nil, box{}, fmt.Errorf("glyph %d: %w", gid, errNoOpaqueColour)
+			}
+			return d1(box{}), box{}, nil
+		}
+		return wrap(d1(bb), append(path, "f\n"...)), bb, nil
+	}
+	k := builtKey{key: key, gid: gid}
+	art, ok := t.arts[k]
+	if !ok {
+		var fg *content.Color
+		if key.colour != "" {
+			c := t.colours[key.colour]
+			fg = &c
+		}
+		var err error
+		if art, err = f.paintColour(gid, fg, f.paintRoot()); err != nil {
+			return nil, box{}, err
+		}
+		t.arts[k] = art
+	}
+	refs := art.cap.replayAll(doc)
+	for _, r := range art.res {
+		d := res[r.kind]
+		if d == nil {
+			return nil, box{}, fmt.Errorf("fonts: glyph %d names a %s resource", gid, r.kind)
+		}
+		d.Set(r.name, refs[art.refs[r]-1])
+	}
+	if art.coloured {
+		return wrap(append(appendNums(nil, wx, 0), "d0\n"...), art.content), art.inked, nil
+	}
+	return wrap(d1(art.inked), art.content), art.inked, nil
+}
+
+// paintRoot is the box a colour glyph is painted within when nothing clips
+// it: the face's own box with an em about it, in font units.
+func (f *Face) paintRoot() box {
+	d := f.Descriptor()
+	em := float64(f.UnitsPerEm())
+	return box{float64(d.BBox[0]) - em, float64(d.BBox[1]) - em, float64(d.BBox[2]) + em, float64(d.BBox[3]) + em}
+}

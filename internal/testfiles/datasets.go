@@ -63,7 +63,7 @@ var (
 		Fetch: "run `make notocjk`",
 	}
 	NotoEmoji = Dataset{
-		Name:  "Noto Color Emoji (CBDT)",
+		Name:  "Noto Color Emoji (CBDT and COLRv1)",
 		Dir:   "testdata/notoemoji",
 		Stamp: ".ok",
 		Fetch: "run `make notoemoji`",

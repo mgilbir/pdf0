@@ -583,7 +583,8 @@ defines every one under its name. `Encode` and `Shape` have no stream to switch
 in, and write codes in the home font.
 
 The licence reads differently here: bitmap embedding only (0x0200) is exactly
-what these fonts are, and is embedded; Restricted License is refused as for
+what these fonts are, and is embedded, and it makes a face with outlines and
+colour strikes one of them; Restricted License is refused as for
 every face; and no subsetting (0x0100) is refused with
 `fonts.ErrBitmapNoSubsetting`, because the fonts carry images of the glyphs
 drawn and nothing else.
@@ -592,6 +593,53 @@ drawn and nothing else.
 compares every pixel of every glyph with forme's image of it, over forme's EBDT
 and bdat fixtures and Noto Color Emoji (`make notoemoji`), and holds it to the
 PDF/A validator and to the text a reader extracts.
+
+## Colour glyphs (COLR)
+
+A face with COLR colour glyphs (COLRv0 layers, COLRv1 paint graphs) has
+outlines, and used to be embedded as them, so its glyphs came out in the text
+colour alone. It is now drawn in colour, as Type 3 fonts like a bitmap face's,
+by default; `fonts.Face.SetColourGlyphs(false)` keeps the old embedding. Each
+glyph's procedure is the PDF translation of forme's painting
+(`shape.Face.PaintGlyph`), in `fonts/colr.go`:
+
+- transforms and clips are `cm` and `W n` inside `q`/`Q`;
+- solid fills set their colour and, through an ExtGState `ca`, their alpha;
+- linear and radial gradients are axial and radial shadings whose function
+  is the colour line stitched from linear pieces, a period at a time for
+  repeat and reflect, mirrored for reflect;
+- sweep gradients are function-based shadings computing the angle with a
+  PostScript calculator function;
+- a stop with alpha draws its shading through a luminosity soft mask;
+- the fifteen blend modes are isolated groups drawn with `/BM`, and Clear,
+  Src, Dest, DestOver, SrcIn, DestIn, SrcOut and DestOut are the groups
+  reordered or one drawn through an alpha soft mask of the other. A group
+  that blends or masks is itself drawn as an isolated group, so it blends
+  with its own backdrop and nothing on the page;
+- SrcAtop, DestAtop, Xor and Plus have no exact PDF equivalent, and a glyph
+  that uses one is refused rather than approximated.
+
+A paint in the foreground colour sets no colour: a `d0` procedure starts in
+the colour the text is shown in. So one font serves every text colour, and
+only a gradient with a stop in the foreground colour, whose shading has to
+state it, is keyed by the text colour. A glyph that sets no colour of its own
+is a `d1` procedure. In a PDF/A-1 document a colour glyph is its outline in
+the text colour; one with no outline of its own, as Noto Color Emoji's are,
+is refused.
+
+`fonts_colr_test.go` holds every glyph of Google's COLRv1 conformance font
+(`testdata/colrv1`) to Skia, the renderer COLRv1 was specified against,
+through blackrenderer, and Noto Color Emoji's COLRv1 build to HarfBuzz
+(`hb-view`), in Ghostscript's and poppler's rendering: edges to within
+anti-aliasing, and the inside of every shape to within 12 levels a channel.
+Skia, not HarfBuzz, is the oracle for the conformance font: HarfBuzz's cairo
+renderer draws the sweeps that pass a full turn differently from Skia, and
+pdf0 draws them as Skia does. Two renderer defects were found on the way and
+are worked around in what pdf0 writes: Ghostscript refuses a calculator
+function with a real of seventeen digits and a function-based shading without
+an explicit `/Matrix`. One is not: Ghostscript draws a shading inside two
+nested clips as one flat colour (glyph 208 of the conformance font), which
+poppler draws correctly.
 
 ## CMaps
 
@@ -655,6 +703,13 @@ same budget as any other.
 
 ## Confirmed limitations
 
+- **Colour glyphs:** a COLR glyph that composites in SrcAtop, DestAtop, Xor
+  or Plus is refused. A gradient stop in the text colour needs the text in
+  DeviceRGB or DeviceGray. In PDF/A-1 a colour glyph with no outline of its
+  own is refused. A linear or radial colour line whose stops all share one
+  offset is drawn as a step even when it repeats; Skia draws such a sweep as
+  nothing, and pdf0 does the same for a sweep, with nothing to say what a
+  linear or radial one should be.
 - **HTML→PDF shaping is unbounded.** `htmlpdf.Render` shapes through forme's
   `layout.Compose`, which takes no context or limits (forme#917). The bounded
   drawing calls above cover only text pdf0 shapes itself.
@@ -664,11 +719,15 @@ same budget as any other.
   pattern), or in a colour the stream has not set, is drawn as a stencil of its
   coverage, which keeps the colour and loses the anti-aliasing. A strike past
   256 ppem other than the largest is never drawn from. SVG glyphs are not
-  drawn. A font whose glyphs have outlines *and* bitmaps is embedded as its
-  outlines, so a licence that permits embedding only its bitmaps
-  (`fonts.ErrBitmapEmbeddingOnly`) still refuses it. PDF/A-1 forbids soft
-  masks, so a greyscale glyph in a colour and a colour bitmap are not PDF/A-1:
-  the validator reports them (6.4), and 1-bit glyphs are PDF/A-1.
+  drawn. A font with outlines *and* bitmaps is embedded as its outlines,
+  unless its licence permits embedding only its bitmaps: then its colour
+  strikes (CBDT, sbix) are written as Type 3 fonts, as a bitmap-only face's
+  are, and a glyph whose only ink is its outline is refused. Its EBDT strikes
+  forme does not paint beside outlines (forme#918), and such a font is still
+  refused (`fonts.ErrBitmapEmbeddingOnly`). In a document that
+  claims PDF/A-1, which forbids soft masks, a greyscale glyph is a stencil and
+  a colour bitmap is painted through a 1-bit `/Mask` (`fonts.Forms.Opaque`):
+  their colours are kept and their anti-aliased edges are not.
 
 - **Predefined CMaps are not decoded.** A Type 0 font whose `/Encoding` names
   one of Adobe's published CMaps — `UniJIS-UCS2-H` and the rest — is checked at

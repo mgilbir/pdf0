@@ -80,7 +80,7 @@ has the data.
 | CCITT samples | `testdata/ccitt` | `make ccitt` | fetched; fails below the manifest's count of `*.pdf` files |
 | JBIG2 samples | `testdata/jbig2` | `make jbig2` | fetched; fails below the manifest's count of `*.pdf` files |
 | Noto Sans CJK face | `testdata/notocjk` | `make notocjk` | fetched; fails below 1 `*.otf` files |
-| Noto Color Emoji (CBDT) | `testdata/notoemoji` | `make notoemoji` | fetched; fails below 1 `*.ttf` files |
+| Noto Color Emoji (CBDT and COLRv1) | `testdata/notoemoji` | `make notoemoji` | fetched; fails below 2 `*.ttf` files |
 | Cal Poly PDF/VT-1 suite | `testdata/pdfvt` | It is copyrighted and placed by hand | **no**: local only |
 | PDFUA-Reference-Files | `spec/pdfua/reference-files` | It is placed by hand | **no**: local only |
 | Order-X examples | `spec/order-x/Order-X100_EN/05-ORDER-X EXAMPLES` | They come with the Order-X specification bundle and are placed by hand | **no**: local only |
