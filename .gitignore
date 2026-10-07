@@ -132,3 +132,6 @@ testdata/cc/run/
 testdata/notocjk/
 # A colour-bitmap (CBDT) face for the Type 3 tests, fetched by `make notoemoji`.
 testdata/notoemoji/
+
+# A virtualenv with the Skia oracle's packages (testdata/colrv1/README.md).
+.venv-skia/

@@ -47,6 +47,10 @@ type Face struct {
 	t3 *type3State
 	// licensed caches bitmapLicensed: 0 not yet asked, 1 yes, -1 no.
 	licensed int8
+	// coloured caches colourFace in the same way, and noColour is
+	// SetColourGlyphs(false). Both are the horizontal form's.
+	coloured int8
+	noColour bool
 
 	// pxPerUnit is how many CSS pixels a unit of the size drawn at is, which
 	// picks a bitmap face's strike; 0 is a size in points. See

@@ -100,37 +100,49 @@ func writeAndRead(t *testing.T, doc *Document) (*Document, []byte) {
 }
 
 // rasteriser renders page n (from 1) of a PDF at a resolution, with
-// anti-aliasing off so a stencil's edge is its own.
+// anti-aliasing off so a stencil's edge is its own; renderAA with it on, as a
+// screen renderer such as HarfBuzz's draws.
 type rasteriser struct {
 	name   string
 	render func(t *testing.T, path string, page, dpi int) image.Image
+	aa     func(t *testing.T, path string, page, dpi int) image.Image
+}
+
+func (r rasteriser) renderAA(t *testing.T, path string, page, dpi int) image.Image {
+	return r.aa(t, path, page, dpi)
 }
 
 func rasterisers() []rasteriser {
 	var out []rasteriser
 	if gs, err := exec.LookPath("gs"); err == nil {
-		out = append(out, rasteriser{"ghostscript", func(t *testing.T, path string, page, dpi int) image.Image {
-			png := filepath.Join(t.TempDir(), "page.png")
-			cmd := exec.Command(gs, "-q", "-dNOPAUSE", "-dBATCH", "-dSAFER", "-sDEVICE=png16m",
-				fmt.Sprintf("-r%d", dpi), "-dTextAlphaBits=1", "-dGraphicsAlphaBits=1",
-				fmt.Sprintf("-dFirstPage=%d", page), fmt.Sprintf("-dLastPage=%d", page),
-				"-sOutputFile="+png, path)
-			if out, err := cmd.CombinedOutput(); err != nil {
-				t.Fatalf("gs: %v\n%s", err, out)
+		run := func(bits string) func(t *testing.T, path string, page, dpi int) image.Image {
+			return func(t *testing.T, path string, page, dpi int) image.Image {
+				png := filepath.Join(t.TempDir(), "page.png")
+				cmd := exec.Command(gs, "-q", "-dNOPAUSE", "-dBATCH", "-dSAFER", "-sDEVICE=png16m",
+					fmt.Sprintf("-r%d", dpi), "-dTextAlphaBits="+bits, "-dGraphicsAlphaBits="+bits,
+					fmt.Sprintf("-dFirstPage=%d", page), fmt.Sprintf("-dLastPage=%d", page),
+					"-sOutputFile="+png, path)
+				if out, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("gs: %v\n%s", err, out)
+				}
+				return readPNG(t, png)
 			}
-			return readPNG(t, png)
-		}})
+		}
+		out = append(out, rasteriser{"ghostscript", run("1"), run("4")})
 	}
 	if pp, err := exec.LookPath("pdftoppm"); err == nil {
-		out = append(out, rasteriser{"poppler", func(t *testing.T, path string, page, dpi int) image.Image {
-			prefix := filepath.Join(t.TempDir(), "page")
-			cmd := exec.Command(pp, "-r", fmt.Sprint(dpi), "-png", "-aa", "no", "-aaVector", "no",
-				"-f", fmt.Sprint(page), "-l", fmt.Sprint(page), "-singlefile", path, prefix)
-			if out, err := cmd.CombinedOutput(); err != nil {
-				t.Fatalf("pdftoppm: %v\n%s", err, out)
+		run := func(aa string) func(t *testing.T, path string, page, dpi int) image.Image {
+			return func(t *testing.T, path string, page, dpi int) image.Image {
+				prefix := filepath.Join(t.TempDir(), "page")
+				cmd := exec.Command(pp, "-r", fmt.Sprint(dpi), "-png", "-aa", aa, "-aaVector", aa,
+					"-f", fmt.Sprint(page), "-l", fmt.Sprint(page), "-singlefile", path, prefix)
+				if out, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("pdftoppm: %v\n%s", err, out)
+				}
+				return readPNG(t, prefix+".png")
 			}
-			return readPNG(t, prefix+".png")
-		}})
+		}
+		out = append(out, rasteriser{"poppler", run("no"), run("yes")})
 	}
 	return out
 }

@@ -36,11 +36,13 @@ PROFILES_REF       ?= c4b3ab5164e4f0ae9bb235f8154db587e0ea483e
 # a font that changed would move every CID the embedding tests assert.
 NOTOCJK_REF        ?= f8d157532fbfaeda587e826d4cd5b21a49186f7c
 NOTOCJK_SHA256     := dff723ba59d57d136764a04b9b2d03205544f7cd785a711442d6d2d085ac5073
-# Noto Color Emoji's CBDT build (v2.047): a font whose glyphs are only colour
-# bitmaps, which pdf0 writes as Type 3 fonts. Fetched by URL at the release's
-# commit and its digest checked, as noto-cjk is.
+# Noto Color Emoji (v2.047) in two builds: CBDT, whose glyphs are only colour
+# bitmaps, and COLRv1, whose glyphs are paint graphs. pdf0 writes both as Type
+# 3 fonts. Fetched by URL at the release's commit and their digests checked,
+# as noto-cjk is.
 NOTOEMOJI_REF      ?= 22e564626297b4df0a40570ad81d6c05cc7c38bd
 NOTOEMOJI_SHA256   := 39ee3c587e10e89669b9ff32703261d10d5f9c4dd5ad147b6b5a1c5200591817
+NOTOCOLRV1_SHA256  := 23549f29b5ad741fcb4c025b8dc44652ff0f459892467ebcccec1e6bbe839b44
 
 # shallow_at fetches exactly one commit of one repository: no history, no other
 # branches. $(1) directory, $(2) URL, $(3) commit.
@@ -278,9 +280,10 @@ $(CJK_DIR)/.ok:
 clean-notocjk:
 	rm -rf $(CJK_DIR)
 
-# A face whose glyphs are only colour bitmaps (CBDT), for the Type 3 tests:
-# forme's own CBDT and sbix fixtures carry placeholder PNGs, not images. 10.6 MB,
-# fetched and gitignored like the CJK face, and the tests skip without it.
+# Colour emoji faces for the Type 3 tests: a CBDT face, whose glyphs are only
+# colour bitmaps (forme's own CBDT and sbix fixtures carry placeholder PNGs,
+# not images), and a COLRv1 face. 15 MB, fetched and gitignored like the CJK
+# face, and the tests skip without them.
 EMOJI_DIR := testdata/notoemoji
 
 notoemoji: $(EMOJI_DIR)/.ok
@@ -290,6 +293,9 @@ $(EMOJI_DIR)/.ok:
 	curl -sSfL -o $(EMOJI_DIR)/NotoColorEmoji.ttf \
 		https://github.com/googlefonts/noto-emoji/raw/$(NOTOEMOJI_REF)/fonts/NotoColorEmoji.ttf
 	echo "$(NOTOEMOJI_SHA256)  $(EMOJI_DIR)/NotoColorEmoji.ttf" | sha256sum -c -
+	curl -sSfL -o $(EMOJI_DIR)/Noto-COLRv1.ttf \
+		https://github.com/googlefonts/noto-emoji/raw/$(NOTOEMOJI_REF)/fonts/Noto-COLRv1.ttf
+	echo "$(NOTOCOLRV1_SHA256)  $(EMOJI_DIR)/Noto-COLRv1.ttf" | sha256sum -c -
 	touch $@
 
 clean-notoemoji:

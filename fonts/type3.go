@@ -52,7 +52,55 @@ func SubfontName(base object.Name, k int) object.Name {
 // and records as one, and only the codes it writes and the fonts it embeds
 // differ.
 func (f *Face) isType3() bool {
-	return f.composite() && (f.BitmapOnly() || f.bitmapLicensed())
+	return f.composite() && (f.hasBitmaps() || f.colourFace())
+}
+
+// hasBitmaps reports whether the face's glyphs are drawn from bitmap strikes:
+// it has nothing else, or its licence permits embedding nothing else.
+func (f *Face) hasBitmaps() bool { return f.BitmapOnly() || f.bitmapLicensed() }
+
+// SetColourGlyphs says whether a face with COLR colour glyphs is drawn in
+// colour, as Type 3 fonts whose glyphs paint them (the default), or as it was
+// before, its outlines embedded as a font program and shown in the text
+// colour. It has to be said before the face draws anything, since the two
+// write different codes, and it changes nothing for a face without COLR
+// glyphs.
+func (f *Face) SetColourGlyphs(on bool) {
+	f.Horizontal().noColour = !on
+	f.Horizontal().coloured = 0
+}
+
+// colourFace reports whether the face is drawn as its COLR colour glyphs:
+// it has one, and SetColourGlyphs has not said otherwise. Asked once.
+func (f *Face) colourFace() bool {
+	h := f.Horizontal()
+	if h.noColour {
+		return false
+	}
+	if h.coloured != 0 {
+		return h.coloured > 0
+	}
+	h.coloured = -1
+	for gid := range f.NumGlyphs() {
+		if k := f.GlyphColour(gid, 0); k == shape.ColourLayers || k == shape.ColourPaint {
+			h.coloured = 1
+			return true
+		}
+	}
+	return false
+}
+
+// vectorGlyph reports whether a glyph of a Type 3 face is painted as vectors,
+// through the COLR translator (colr.go): a colour glyph, and in a face with
+// no bitmaps every glyph, a plain one being its outline in the text colour.
+func (f *Face) vectorGlyph(gid int) bool {
+	if !f.colourFace() {
+		return false
+	}
+	if k := f.GlyphColour(gid, 0); k == shape.ColourLayers || k == shape.ColourPaint {
+		return true
+	}
+	return !f.hasBitmaps()
 }
 
 // bitmapLicensed reports whether a face with outlines may be embedded only as
@@ -88,6 +136,9 @@ func errOutlineOnly(gid int) error {
 
 // subKey is what decides a glyph's procedure, beside the glyph.
 type subKey struct {
+	// vector marks a font of glyphs painted as vectors (vectorGlyph), whose
+	// strike means nothing.
+	vector bool
 	// strike is the ppem of the strike the glyphs are painted from.
 	strike int
 	// colour is the text colour a greyscale glyph is painted in, written as
@@ -134,6 +185,10 @@ type type3State struct {
 	// has it.
 	strikeOf map[int]int
 	glyphs   map[[2]int]bitmapGlyph
+	// fgStops says whether a vector glyph has a gradient stop in the text
+	// colour, by glyph; arts are vector glyphs' paintings, by key and glyph.
+	fgStops map[int]bool
+	arts    map[builtKey]*colrArt
 	// assigned counts the codes given out, for EmbedRevision.
 	assigned int
 	// built holds each glyph's image objects once written, by sub-font key
@@ -156,6 +211,8 @@ func (f *Face) type3() *type3State {
 			strikeOf: map[int]int{},
 			glyphs:   map[[2]int]bitmapGlyph{},
 			built:    map[builtKey]*capture{},
+			fgStops:  map[int]bool{},
+			arts:     map[builtKey]*colrArt{},
 		}
 	}
 	return f.t3
@@ -265,7 +322,13 @@ func (c *imageCapture) Image(img shape.Image) {
 // paint is a glyph as the strike for ppem paints it, and whether it has an
 // image there.
 func (f *Face) paint(gid, ppem int) (bitmapGlyph, bool, error) {
-	if f.GlyphColour(gid, ppem) == shape.ColourNone {
+	switch f.GlyphColour(gid, ppem) {
+	case shape.ColourBitmap, shape.ColourMask:
+	case shape.ColourSVG:
+		return bitmapGlyph{}, false, fmt.Errorf("%w: glyph %d is an SVG document", errUnpaintable, gid)
+	default:
+		// A glyph with no image here: its outline, or a COLR glyph, which
+		// is no bitmap.
 		return bitmapGlyph{}, false, nil
 	}
 	var c imageCapture
@@ -430,11 +493,15 @@ func (t *type3State) home(f *Face) (*subFont, error) {
 	if len(t.subs) > 0 {
 		return t.subs[0], nil
 	}
-	s, err := t.strikeFor(f, 0)
-	if err != nil {
-		return nil, err
+	key := subKey{vector: true}
+	if f.hasBitmaps() {
+		s, err := t.strikeFor(f, 0)
+		if err != nil {
+			return nil, err
+		}
+		key = subKey{strike: s}
 	}
-	sub := t.newSub(subKey{strike: s})
+	sub := t.newSub(key)
 	t.assign(sub, 0)
 	return sub, nil
 }
@@ -485,6 +552,20 @@ func (t *type3State) place(f *Face, gid int, size float64, fill content.Color, f
 	if _, err := t.home(f); err != nil {
 		return nil, 0, err
 	}
+	if f.vectorGlyph(gid) {
+		// A vector glyph is the same at every size, and carries the text
+		// colour by not setting one, unless a gradient of it has to state
+		// the colour (colr.go).
+		key := subKey{vector: true}
+		if t.foregroundStops(f, gid) {
+			if c, ok := colourKey(fill, fillKnown); ok {
+				key.colour = c
+				t.colours[c] = fill
+			}
+		}
+		sub, code := t.in(key, gid)
+		return sub, code, nil
+	}
 	s, err := t.strikeFor(f, f.ppemFor(size))
 	if err != nil {
 		return nil, 0, err
@@ -495,7 +576,7 @@ func (t *type3State) place(f *Face, gid int, size float64, fill content.Color, f
 	}
 	key := subKey{strike: s}
 	switch {
-	case g.kind == glyphEmpty && current != nil && current.key.strike == s:
+	case g.kind == glyphEmpty && current != nil && !current.key.vector && current.key.strike == s:
 		key = current.key
 	case g.kind == glyphGrey:
 		if c, ok := colourKey(fill, fillKnown); ok {
@@ -548,3 +629,38 @@ func (f *Face) NumSubfonts() int {
 	}
 	return len(f.t3.subs) - 1
 }
+
+// foregroundStops reports whether a vector glyph has a gradient stop in the
+// text colour, which its shading has to state, so that its fonts are keyed by
+// the colour. Asked once a glyph.
+func (t *type3State) foregroundStops(f *Face, gid int) bool {
+	if v, ok := t.fgStops[gid]; ok {
+		return v
+	}
+	var d stopFinder
+	_ = f.PaintGlyph(gid, shape.PaintOptions{}, &d)
+	t.fgStops[gid] = d.found
+	return d.found
+}
+
+// stopFinder is a painter that looks for a gradient stop in the foreground.
+type stopFinder struct{ found bool }
+
+func (d *stopFinder) line(l shape.ColorLine) {
+	for _, s := range l.Stops {
+		d.found = d.found || s.Foreground
+	}
+}
+
+func (d *stopFinder) PushTransform(shape.Transform)         {}
+func (d *stopFinder) PopTransform()                         {}
+func (d *stopFinder) PushClipGlyph(int)                     {}
+func (d *stopFinder) PushClipRect(shape.Rect)               {}
+func (d *stopFinder) PopClip()                              {}
+func (d *stopFinder) PushGroup()                            {}
+func (d *stopFinder) PopGroup(shape.CompositeMode)          {}
+func (d *stopFinder) Solid(shape.Color, bool)               {}
+func (d *stopFinder) Image(shape.Image)                     {}
+func (d *stopFinder) LinearGradient(g shape.LinearGradient) { d.line(g.Line) }
+func (d *stopFinder) RadialGradient(g shape.RadialGradient) { d.line(g.Line) }
+func (d *stopFinder) SweepGradient(g shape.SweepGradient)   { d.line(g.Line) }
