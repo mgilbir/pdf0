@@ -200,7 +200,8 @@ jobs:
       - name: install the renderers
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q --no-install-recommends ghostscript poppler-utils libharfbuzz-bin
+          sudo apt-get install -y -q --no-install-recommends ghostscript poppler-utils libharfbuzz-bin libegl1 libgl1
+          # skia-python loads libEGL and libGL even to draw off screen.
           python3 -m venv "$RUNNER_TEMP/skia"
           "$RUNNER_TEMP/skia/bin/pip" install -q -r testdata/colrv1/requirements.txt
           echo "PDF0_SKIA_PYTHON=$RUNNER_TEMP/skia/bin/python" >> "$GITHUB_ENV"
