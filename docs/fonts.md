@@ -49,6 +49,19 @@ All of them go through one path in `fonts/draw.go`:
 `Encode` returns bare codes, which cannot carry an `/ActualText`: a glyph the
 cmap reaches from two characters extracts as the one the CMap names it by.
 
+**Text you do not control.** Shaping runs the font's lookups over the text,
+and a hostile font, or text that is simply long, can make that cost more than
+a caller can afford. `Shape`, `ShapeWith` and `DrawShaped` are unbounded, as
+forme's `ShapeGlyphs` is. Their bounded forms, `ShapeContext`,
+`ShapeWithContext` and `DrawShapedContext`, shape under a context and
+`fonts.RunLimits` (input bytes, glyphs, lookup work). They fail with the
+context's error, or with one wrapping `fonts.ErrRunLimit`, and then nothing is
+drawn or recorded. When they succeed, they produce exactly what the unbounded
+calls would. A zero limit takes the default. The work default is pdf0's own,
+`fonts.DefaultRunWork`, because forme's refuses a single word of Devanagari
+(forme#916). htmlpdf's text is shaped inside forme's layout, which has no
+bounds yet (forme#917).
+
 `DrawUpright` draws a run shaped with `shape.Features.Vertical`: the pen moves
 down by each glyph's vertical advance and each glyph is hung from its vertical
 origin (the font's `vmtx` and `VORG`, as forme reads them). How it is written
@@ -641,6 +654,10 @@ one wider than 65,536 refuses the whole map, and the stream decodes through the
 same budget as any other.
 
 ## Confirmed limitations
+
+- **HTML→PDF shaping is unbounded.** `htmlpdf.Render` shapes through forme's
+  `layout.Compose`, which takes no context or limits (forme#917). The bounded
+  drawing calls above cover only text pdf0 shapes itself.
 
 - **Bitmap-only faces:** a greyscale glyph in a colour that is not
   DeviceGray, DeviceRGB or DeviceCMYK (a named ICC space, a Separation, a
