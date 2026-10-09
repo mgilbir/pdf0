@@ -28,7 +28,8 @@ import (
 //
 // The fixture is forme's Strikes.ttf, built for its strike reader: EBDT with
 // no outlines, 26 glyphs for A to Y, a 1-bit strike at 12 ppem, a 2-bit one at
-// 16, and strikes at 24 and 32, the largest, which glyph 5 (E) is missing from.
+// 16, and strikes at 20, 24 and 32, the largest, which glyph 5 (E) is missing
+// from.
 
 var formeModuleDir = sync.OnceValues(func() (string, error) {
 	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/mgilbir/forme").Output()
@@ -250,7 +251,7 @@ func TestAGlyphMissingFromItsStrikeIsDrawnFromTheNearest(t *testing.T) {
 	if !ok {
 		t.Fatal("no E")
 	}
-	if _, has, _ := face.paint(gid, 32); has {
+	if _, has := strikeImage(t, face, gid, 32); has {
 		t.Fatal("the fixture's E is in the 32 ppem strike; this test needs it missing")
 	}
 	// 24pt is 32 CSS pixels.
@@ -270,16 +271,29 @@ func TestAGlyphMissingFromItsStrikeIsDrawnFromTheNearest(t *testing.T) {
 		t.Fatalf("E is drawn blank rather than from another strike:\n%s", proc)
 	}
 	// The nearest strike to 32 that has E is 24: its image there, which is
-	// not the 16 ppem strike's either.
-	want, _, _ := face.paint(gid, 24)
-	if other, _, _ := face.paint(gid, 16); other.img.Width == want.img.Width && other.img.Height == want.img.Height {
-		t.Fatal("E is the same size at 16 and 24 ppem; this test cannot tell the strikes apart")
+	// not the 20 ppem strike's either.
+	want, _ := strikeImage(t, face, gid, 24)
+	if other, _ := strikeImage(t, face, gid, 20); other.Width == want.Width && other.Height == want.Height {
+		t.Fatal("E is the same size at 20 and 24 ppem; this test cannot tell the strikes apart")
 	}
 	im := a.at(f.dict.Get("Resources").(*object.Dictionary).Get("XObject").(*object.Dictionary).Get("I1")).(*object.Stream)
-	if im.Dict.Get("Width") != object.Integer(want.img.Width) || im.Dict.Get("Height") != object.Integer(want.img.Height) {
+	if im.Dict.Get("Width") != object.Integer(want.Width) || im.Dict.Get("Height") != object.Integer(want.Height) {
 		t.Errorf("E's image is %v×%v, want the 24 ppem strike's %d×%d",
-			im.Dict.Get("Width"), im.Dict.Get("Height"), want.img.Width, want.img.Height)
+			im.Dict.Get("Width"), im.Dict.Get("Height"), want.Width, want.Height)
 	}
+}
+
+// strikeImage is a glyph's image in the face's strike of a size, as forme
+// reads it from that strike alone.
+func strikeImage(t *testing.T, face *Face, gid, ppem int) (shape.Image, bool) {
+	t.Helper()
+	for _, s := range face.Strikes() {
+		if s.PPEM() == ppem {
+			return face.StrikeImage(gid, s)
+		}
+	}
+	t.Fatalf("the face has no %d ppem strike", ppem)
+	return shape.Image{}, false
 }
 
 func itoa(v int) string { return strconv.Itoa(v) }

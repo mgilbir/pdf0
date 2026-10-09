@@ -715,9 +715,8 @@ same budget as any other.
 - **Bitmap-only faces:** a greyscale glyph in a colour that is not
   DeviceGray, DeviceRGB or DeviceCMYK (a named ICC space, a Separation, a
   pattern), or in a colour the stream has not set, is drawn as a stencil of its
-  coverage, which keeps the colour and loses the anti-aliasing. A strike past
-  256 ppem other than the largest is never drawn from. SVG glyphs are not
-  drawn. A font with outlines *and* bitmaps is embedded as its outlines,
+  coverage, which keeps the colour and loses the anti-aliasing. SVG glyphs are
+  refused. A font with outlines *and* bitmaps is embedded as its outlines,
   unless its licence permits embedding only its bitmaps: then its colour
   strikes (CBDT, sbix) are written as Type 3 fonts, as a bitmap-only face's
   are, and a glyph whose only ink is its outline is refused. Its EBDT strikes
