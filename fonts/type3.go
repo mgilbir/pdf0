@@ -185,6 +185,8 @@ type type3State struct {
 	// colour, by glyph; arts are vector glyphs' paintings, by key and glyph.
 	fgStops map[int]bool
 	arts    map[builtKey]*colrArt
+	// procs are the glyph procedures already compressed (procStream).
+	procs map[procKey]compressedProc
 	// assigned counts the codes given out, for EmbedRevision.
 	assigned int
 	// built holds each glyph's image objects once written, by sub-font key
@@ -208,6 +210,7 @@ func (f *Face) type3() *type3State {
 			built:   map[builtKey]*capture{},
 			fgStops: map[int]bool{},
 			arts:    map[builtKey]*colrArt{},
+			procs:   map[procKey]compressedProc{},
 		}
 	}
 	return f.t3

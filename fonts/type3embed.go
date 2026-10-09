@@ -13,6 +13,7 @@ import (
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/images"
+	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 )
 
@@ -220,7 +221,7 @@ func (f *Face) embedSubfont(doc Allocator, sub *subFont, opaque bool) (object.In
 			proc = append(proc, imName...)
 			proc = append(proc, " Do\nQ\n"...)
 		}
-		charProcs.Set(name, doc.Add(flateStream(proc)))
+		charProcs.Set(name, doc.Add(t.procStream(sub.index, gid, opaque, proc)))
 	}
 
 	entries := make([]toUnicodeEntry, 0, len(sub.gids))
@@ -510,3 +511,32 @@ func (f *Face) paintRoot() box {
 	em := float64(f.UnitsPerEm())
 	return box{float64(d.BBox[0]) - em, float64(d.BBox[1]) - em, float64(d.BBox[2]) + em, float64(d.BBox[3]) + em}
 }
+
+// procKey names a glyph procedure as an embedding writes it: its sub-font,
+// its glyph and whether it is written without transparency.
+type procKey struct {
+	sub, gid int
+	opaque   bool
+}
+
+// procStream is a glyph procedure as a stream, compressed once. A document
+// embeds a face again each time a page gives it a glyph it had not drawn
+// (pdf0's embedFaces), and every procedure it has already written is the
+// same each time: compressing them all again made a document's embedding
+// quadratic in its glyphs, and a COLR glyph's procedure runs to hundreds of
+// lines. A procedure whose text has changed since is compressed afresh.
+func (t *type3State) procStream(sub, gid int, opaque bool, proc []byte) *object.Stream {
+	k := procKey{sub, gid, opaque}
+	c, ok := t.procs[k]
+	if !ok || !bytes.Equal(c.raw, proc) {
+		c = compressedProc{raw: proc, z: core.FlateEncode(proc)}
+		t.procs[k] = c
+	}
+	s := object.NewStream(nil, c.z)
+	s.Dict.Set("Filter", object.Name("FlateDecode"))
+	s.Dict.Set("Length", object.Integer(len(c.z)))
+	return s
+}
+
+// compressedProc is a procedure's text and its Flate encoding.
+type compressedProc struct{ raw, z []byte }
