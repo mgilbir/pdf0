@@ -2,12 +2,17 @@ package htmlpdf
 
 import (
 	"errors"
+	"fmt"
 	"image/color"
 	"math"
+	"reflect"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/mgilbir/forme/layout"
+	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/forme/style"
 	"github.com/mgilbir/pdf0/object"
 )
@@ -447,6 +452,16 @@ func TestMatrixArithmetic(t *testing.T) {
 				t.Errorf("invertMatrix(%v) takes %v back to (%v, %v)", a, p, bx, by)
 			}
 		}
+		// stretches is the longest and shortest a unit vector is drawn.
+		long, short := 0.0, math.Inf(1)
+		for i := 0; i < 3600; i++ {
+			s, c := math.Sincos(float64(i) * math.Pi / 1800)
+			l := math.Hypot(a[0]*c+a[2]*s, a[1]*c+a[3]*s)
+			long, short = math.Max(long, l), math.Min(short, l)
+		}
+		if most, least := stretches(a); math.Abs(most-long) > 1e-4*long || math.Abs(least-short) > 1e-4*long {
+			t.Errorf("stretches(%v) = %v, %v; a unit vector is drawn %v to %v long", a, most, least, short, long)
+		}
 		box := [4]float64{-3, 5, 40, 17}
 		got := boundsOf(a, box)
 		for _, c := range [][2]float64{{box[0], box[1]}, {box[2], box[1]}, {box[0], box[3]}, {box[2], box[3]}} {
@@ -455,5 +470,75 @@ func TestMatrixArithmetic(t *testing.T) {
 				t.Errorf("boundsOf(%v, %v) = %v misses the corner at (%v, %v)", a, box, got, x, y)
 			}
 		}
+	}
+}
+
+// TestABitmapStrikeIsTheOneTheTransformShowsTheTextAt: text in a bitmap face
+// inside a TransformGroup is drawn from the strike for the size it is shown
+// at, as text whose font size is that is. forme's EBDT fixture has a 1-bit
+// strike at 12px and a 2-bit one at 16px; 9pt is 12px, and a third more is
+// 16px — by a scale with the turn, by two groups each scaling a little, or by
+// a stretch along one axis, which is the direction the strike is chosen for.
+// A turn alone keeps the 12px strike, and one page with both draws both.
+func TestABitmapStrikeIsTheOneTheTransformShowsTheTextAt(t *testing.T) {
+	set := strikesSet(t)
+	gid, _ := set.face.GlyphID('A')
+	images := map[int]string{}
+	for _, ppem := range []int{12, 16} {
+		var c oneImageCapture
+		if err := set.face.PaintGlyph(gid, shape.PaintOptions{PPEM: ppem}, &c); err != nil || !c.got {
+			t.Fatalf("A has no image at %d ppem: %v", ppem, err)
+		}
+		images[ppem] = fmt.Sprintf("%d×%d", c.img.Width, c.img.Height)
+	}
+	if images[12] == images[16] {
+		t.Fatalf("the two strikes draw A the same size, %s; the case cannot tell them apart", images[12])
+	}
+	a := func(transform string) string {
+		return `<p style="margin:40px; color:#c00; font-size:9pt; transform:` + transform + `">A</p>`
+	}
+	for _, tc := range []struct {
+		name   string
+		html   string
+		groups int
+		want   []int // the strikes A is drawn from, by ppem
+	}{
+		{"a turn", a("rotate(10deg)"), 1, []int{12}},
+		{"a turn and a scale", a("rotate(10deg) scale(1.3333)"), 1, []int{16}},
+		{"two groups", `<div style="transform: rotate(5deg) scale(1.1547)">` + a("rotate(5deg) scale(1.1547)") + `</div>`, 2, []int{16}},
+		{"a stretch along one axis", a("rotate(10deg) scaleX(1.3333)"), 1, []int{16}},
+		{"one page, both", a("none") + a("rotate(10deg) scale(1.3333)"), 1, []int{12, 16}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := Input{HTML: tc.html, Fonts: set}
+			if n := transformGroups(layout.Compose(in, drawing(Options{})).Ops); n != tc.groups {
+				t.Fatalf("the display list holds %d TransformGroups; the case needs %d", n, tc.groups)
+			}
+			doc, _ := roundTrip(t, in, Options{})
+			var got []string
+			res := doc.ResolveDict(doc.PageList()[0].Get("Resources"))
+			for _, ref := range doc.ResolveDict(res.Get("Font")).All() {
+				fd := doc.ResolveDict(ref)
+				if doc.ResolveDict(fd.Get("CharProcs")).Get(object.Name("g"+strconv.Itoa(gid))) == nil {
+					continue
+				}
+				for _, im := range doc.ResolveDict(doc.ResolveDict(fd.Get("Resources")).Get("XObject")).All() {
+					st := doc.Resolve(im).(*object.Stream)
+					if sm := st.Dict.Get("SMask"); sm != nil {
+						st = doc.Resolve(sm).(*object.Stream)
+					}
+					got = append(got, fmt.Sprintf("%v×%v", st.Dict.Get("Width"), st.Dict.Get("Height")))
+				}
+			}
+			var want []string
+			for _, p := range tc.want {
+				want = append(want, images[p])
+			}
+			sort.Strings(got)
+			sort.Strings(want)
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("A is drawn from images %v; the strikes %v ppem draw it %v", got, tc.want, want)
+			}
+		})
 	}
 }

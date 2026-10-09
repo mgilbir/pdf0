@@ -286,8 +286,9 @@ What is drawn:
   (`backend-undrawable`), since a reader's numbers do not carry it exactly.
   forme still reports 3D transforms, and a transform on the root or on a
   table's parts, and draws those boxes untransformed. A bitmap font's strike
-  is chosen for the run's size before the matrix, so a bitmap glyph scaled
-  up by a transform is drawn from the strike for its unscaled size.
+  is chosen for the size the run is shown at, through the matrix, in the
+  direction it stretches most: text at 12px under `rotate(10deg) scale(2)` is
+  drawn from the strike a browser draws 24px text from.
 - **Text shadows and emphasis marks.** A sharp `text-shadow` is the run's
   glyphs moved by the offset in the shadow's colour, under the run, and a
   `text-emphasis` mark is its character drawn where forme puts it. Neither is
