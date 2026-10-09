@@ -104,27 +104,22 @@ func (f *Face) vectorGlyph(gid int) bool {
 }
 
 // bitmapLicensed reports whether a face with outlines may be embedded only as
-// its bitmaps (OS/2 fsType 0x0200) and has bitmaps forme paints: CBDT or sbix
-// images, which forme paints whatever outlines the face has. Its EBDT strikes
-// it does not paint beside outlines (forme#918), and such a face is refused
-// with ErrBitmapEmbeddingOnly. The answer is the face's, fixed when it was
-// loaded, and asked once.
+// its bitmaps (OS/2 fsType 0x0200) and has bitmaps: any strike, CBDT, sbix,
+// EBDT or bdat, which forme reads beside outlines (Face.StrikeImage; forme
+// 0.9.0 for EBDT and bdat, forme#918). A face whose licence says so and that
+// has no strike is refused with ErrBitmapEmbeddingOnly. The answer is the
+// face's, fixed when it was loaded, and asked once.
 func (f *Face) bitmapLicensed() bool {
 	if f.licensed != 0 {
 		return f.licensed > 0
 	}
 	f.licensed = -1
 	fsType, stated := f.EmbeddingPermissions()
-	if !stated || fsType&shape.FSTypeBitmapOnly == 0 {
+	if !stated || fsType&shape.FSTypeBitmapOnly == 0 || len(f.Strikes()) == 0 {
 		return false
 	}
-	for gid := range f.NumGlyphs() {
-		if f.GlyphColour(gid, 0) == shape.ColourBitmap {
-			f.licensed = 1
-			return true
-		}
-	}
-	return false
+	f.licensed = 1
+	return true
 }
 
 // errOutlineOnly is a glyph of a face that may be embedded only as its

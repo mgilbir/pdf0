@@ -582,7 +582,7 @@ in, and write codes in the home font.
 
 The licence reads differently here: bitmap embedding only (0x0200) is exactly
 what these fonts are, and is embedded, and it makes a face with outlines and
-colour strikes one of them; Restricted License is refused as for
+strikes beside them one of them; Restricted License is refused as for
 every face; and no subsetting (0x0100) is refused with
 `fonts.ErrBitmapNoSubsetting`, because the fonts carry images of the glyphs
 drawn and nothing else.
@@ -717,11 +717,11 @@ same budget as any other.
   pattern), or in a colour the stream has not set, is drawn as a stencil of its
   coverage, which keeps the colour and loses the anti-aliasing. SVG glyphs are
   refused. A font with outlines *and* bitmaps is embedded as its outlines,
-  unless its licence permits embedding only its bitmaps: then its colour
-  strikes (CBDT, sbix) are written as Type 3 fonts, as a bitmap-only face's
-  are, and a glyph whose only ink is its outline is refused. Its EBDT strikes
-  forme does not paint beside outlines (forme#918), and such a font is still
-  refused (`fonts.ErrBitmapEmbeddingOnly`). In a document that
+  unless its licence permits embedding only its bitmaps: then its strikes —
+  CBDT, sbix, EBDT or bdat — are written as Type 3 fonts, as a bitmap-only
+  face's are, and a glyph whose only ink is its outline is refused. Such a
+  font with no strikes is refused (`fonts.ErrBitmapEmbeddingOnly`). In a
+  document that
   claims PDF/A-1, which forbids soft masks, a greyscale glyph is a stencil and
   a colour bitmap is painted through a 1-bit `/Mask` (`fonts.Forms.Opaque`):
   their colours are kept and their anti-aliased edges are not.

@@ -22,11 +22,10 @@ import (
 //     usage bits beside it): the font must not be embedded at all. Embed
 //     refuses, and says so.
 //   - Bitmap embedding only (0x0200): only the font's bitmaps may be embedded.
-//     A face whose glyphs are only bitmaps, and a face with outlines and
-//     colour strikes (CBDT, sbix), are embedded as images of them, in Type 3
-//     fonts (type3.go), which is what the bit permits; a glyph of the second
-//     whose only ink is its outline is refused. A face with outlines and no
-//     strikes forme paints beside them — EBDT, until forme#918 — is refused.
+//     A face with bitmap strikes — whether or not it also has outlines — is
+//     embedded as images of them, in Type 3 fonts (type3.go), which is what
+//     the bit permits; a glyph whose only ink is its outline is refused. A
+//     face with no strikes is refused.
 //   - No subsetting (0x0100): the font may be embedded only whole. Embed then
 //     writes the program it was loaded from, untouched, and names it without a
 //     subset tag, because it is not one. That includes a face from Adopt.
@@ -41,10 +40,10 @@ var ErrRestrictedLicense = errors.New("fonts: the font's licence forbids embeddi
 	"(OS/2 fsType Restricted License embedding); a document using it cannot carry it")
 
 // ErrBitmapEmbeddingOnly is a font whose licence permits embedding only its
-// bitmaps, and which has none this package can write: a face with outlines
-// whose strikes are EBDT, or a glyph whose only ink is its outline.
+// bitmaps, and which has none for what is drawn: a face with no strikes, or a
+// glyph whose only ink is its outline.
 var ErrBitmapEmbeddingOnly = errors.New("fonts: the font's licence permits embedding " +
-	"only its bitmaps (OS/2 fsType 0x0200), and this package embeds outlines")
+	"only its bitmaps (OS/2 fsType 0x0200), and it has none for what is drawn")
 
 // ErrBitmapNoSubsetting is a face whose glyphs are only bitmaps and whose
 // licence forbids subsetting it. Its Type 3 fonts carry images of the glyphs a
