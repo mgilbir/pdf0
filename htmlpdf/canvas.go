@@ -129,6 +129,11 @@ type canvas struct {
 	alphas    *alphaStates
 	// curved counts the ClipPaths around what is being drawn.
 	curved int
+	// toLayout maps the coordinates being drawn in to the page's layout
+	// coordinates: the identity, except inside a TransformGroup, where it is
+	// the matrices of the groups around the drawing, the innermost acting
+	// first. A form drawn inside a group starts from its stream's.
+	toLayout [6]float64
 }
 
 func (w *pageWriter) newCanvas(base [6]float64) *canvas {
@@ -142,6 +147,7 @@ func (w *pageWriter) newCanvas(base [6]float64) *canvas {
 		imgNames:  map[string]object.Name{},
 		patterns:  map[object.Name]object.Object{},
 		shadings:  map[object.Name]object.Object{},
+		toLayout:  identityMatrix,
 	}
 	c.alphas = newAlphaStates()
 	c.states = c.alphas.states
@@ -354,6 +360,9 @@ func (c *canvas) drawOp(op layout.Op) error {
 		}
 		return c.filterGroup(v)
 
+	case layout.TransformGroup:
+		return c.transformGroup(v)
+
 	case layout.Link:
 		if _, err := linkTarget(v.Href); err != nil || c.curved > 0 {
 			return nil // checkDrawable reported it, and the policy let the page through without it
@@ -368,13 +377,20 @@ func (c *canvas) drawOp(op layout.Op) error {
 		// document wrote it; the builder normalises and encodes it.
 		//
 		// Every stream draws in layout's coordinates (see canvas), so an
-		// area inside a group is placed by the page transform as one
-		// outside it is.
+		// area inside a filter group is placed by the page transform as one
+		// outside it is. forme puts no link inside a TransformGroup — it
+		// puts the box's links ahead of the group, each the rectangle around
+		// where the matrix draws it — and one that is there is given the
+		// same rectangle, which is all a /Rect can say.
 		for _, r := range v.Rects {
 			if r.Empty() {
 				continue // forme drops these; nothing could activate one
 			}
-			c.w.links = append(c.w.links, pdf0.Link{Rect: c.w.toPage.rect(r), URI: v.Href})
+			area := [4]float64{r.X.Px(), r.Y.Px(), r.Right().Px(), r.Bottom().Px()}
+			if c.toLayout != identityMatrix {
+				area = boundsOf(c.toLayout, area)
+			}
+			c.w.links = append(c.w.links, pdf0.Link{Rect: c.w.toPage.box(area), URI: v.Href})
 		}
 
 	default:
@@ -382,6 +398,54 @@ func (c *canvas) drawOp(op layout.Op) error {
 		// it through knowing the operation is not drawn.
 	}
 	return nil
+}
+
+// transformGroup draws operations through a matrix: the group's clip, which is
+// in the coordinates outside it, then the matrix concatenated to whatever is
+// in force, then the operations as they would be drawn anywhere else. The
+// page's own "cm" already turns layout's y downwards into PDF's upwards, so the
+// group's matrix is written as layout states it.
+//
+// What is stated against a stream's default coordinates rather than the
+// current ones follows the matrix: a tiling pattern's /Matrix (base), and the
+// bounding box of a form a filter draws into (sheet), which is the sheet as
+// the group's coordinates see it.
+func (c *canvas) transformGroup(g layout.TransformGroup) error {
+	m := groupMatrix(g)
+	toLayout := concatMatrix(m, c.toLayout)
+	if transformUndrawable(toLayout) != "" {
+		return nil // checkDrawable reported it, and the policy let the page through without it
+	}
+	if det(m) == 0 {
+		// CSS Transforms 1 §6: a box whose matrix is not invertible "and
+		// its content do not get displayed". forme draws none; a group
+		// that says otherwise is drawn as that.
+		return nil
+	}
+	b := c.b
+	b.Save()
+	clipTo(b, g.Clip)
+	b.Concat(m[0], m[1], m[2], m[3], m[4], m[5])
+	base, outer := c.base, c.toLayout
+	c.base, c.toLayout = concatMatrix(m, c.base), toLayout
+	err := c.drawOps(g.Ops)
+	c.base, c.toLayout = base, outer
+	b.Restore()
+	return err
+}
+
+// sheet is the page in the coordinates being drawn in, as [xMin yMin xMax
+// yMax]: the page's sheet, or inside a TransformGroup the rectangle around
+// it as the group's coordinates see it.
+func (c *canvas) sheet() [4]float64 {
+	s := c.w.sheet
+	if c.toLayout == identityMatrix {
+		return s
+	}
+	// transformGroup draws only through a matrix transformUndrawable
+	// accepts, which is invertible.
+	inv := invertMatrix(c.toLayout)
+	return boundsOf(inv, s)
 }
 
 // text draws a run of text: the document's text, which extracts as the run's
