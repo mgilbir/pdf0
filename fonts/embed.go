@@ -63,7 +63,9 @@ var errEmbedBeforeUse = errors.New(
 //
 // A vertical form (see Vertical) embeds as its Identity-V font. A caller
 // naming both forms of a face uses EmbedForms, which writes them over one
-// descendant: Embed on each writes the font twice.
+// descendant: Embed on each writes the font twice. So does a caller writing a
+// document that claims PDF/A-1, which Embed cannot know: Forms.PDFA1 and
+// Forms.Opaque say so (Document.AddPage sets both from the claim).
 func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	e, err := f.EmbedForms(doc, Forms{Horizontal: !f.IsVertical(), Vertical: f.IsVertical()})
 	if err != nil {
@@ -82,6 +84,12 @@ type Forms struct {
 	// Vertical is the Identity-V font of its vertical form (see Vertical),
 	// which only a composite face has.
 	Vertical bool
+	// PDFA1 writes a face for a document that claims PDF/A-1, whose base is
+	// PDF 1.4 (ISO 19005-1 6.3.2): a CFF program is written bare, as
+	// /CIDFontType0C, rather than in the OpenType wrapper PDF 1.6 added, and
+	// a CFF that is not CID-keyed carries the /CIDSet a subset must have
+	// there (see cidSet).
+	PDFA1 bool
 	// Opaque writes a face whose glyphs are only bitmaps without
 	// transparency, for a document that may not use it (PDF/A-1, ISO
 	// 19005-1 6.4): a greyscale glyph is a stencil of its coverage, in the
@@ -180,6 +188,16 @@ func (f *Face) embedComposite(doc Allocator, forms Forms) (Embedded, error) {
 		return Embedded{}, err
 	}
 	baseFont := f.baseFontName(kept, subset)
+	cidSet, withCIDSet := f.cidSet(program, kept, forms.PDFA1)
+	if f.IsCFF() && forms.PDFA1 {
+		// PDF 1.4 has no OpenType font file; it has the CFF itself, which
+		// is the program's CFF table.
+		cff := font.SFNTTables(program)["CFF "]
+		if cff == nil {
+			return Embedded{}, errNoBareCFF
+		}
+		program = cff
+	}
 
 	// The program, Flate-compressed like every other stream this module
 	// writes. A CJK subset is a megabyte and a half of CFF before compression
@@ -191,7 +209,13 @@ func (f *Face) embedComposite(doc Allocator, forms Forms) (Embedded, error) {
 		// FontFile3 carries a program whose format its /Subtype names; an
 		// OpenType wrapper keeps the tables a reader may want beside the
 		// outlines. /Length1 belongs to FontFile2 and is not written here.
-		programStream.Dict.Set("Subtype", object.Name("OpenType"))
+		// ISO 32000-1 9.7.4.2: a CIDFontType0C whose CFF is not CID-keyed
+		// is read with the CIDs as glyph indices, which is what they are.
+		subtype := object.Name("OpenType")
+		if forms.PDFA1 {
+			subtype = "CIDFontType0C"
+		}
+		programStream.Dict.Set("Subtype", subtype)
 	} else {
 		programStream.Dict.Set("Length1", object.Integer(len(program)))
 	}
@@ -200,8 +224,11 @@ func (f *Face) embedComposite(doc Allocator, forms Forms) (Embedded, error) {
 	// /CIDSet: one bit per CID, high bit of each byte first, set for every
 	// CID the embedded program has. It is mandatory for a subset at PDF/A-1,
 	// and whenever it is present its contents are checked against the
-	// program — see cidSetBits for what "has" means.
-	cidSetRef := doc.Add(flateStream(f.cidSetBits(kept)))
+	// program — see cidSet for what "has" means, and when there is none.
+	var cidSetRef object.IndirectRef
+	if withCIDSet {
+		cidSetRef = doc.Add(flateStream(cidSet))
+	}
 
 	d := f.Descriptor()
 	descriptor := &object.Dictionary{}
@@ -223,9 +250,9 @@ func (f *Face) embedComposite(doc Allocator, forms Forms) (Embedded, error) {
 	} else {
 		descriptor.Set("FontFile2", programRef)
 	}
-	// /CIDSet is required of a subset font whatever its outlines are, and
-	// correct of a whole one, which lists every CID the program has.
-	descriptor.Set("CIDSet", cidSetRef)
+	if withCIDSet {
+		descriptor.Set("CIDSet", cidSetRef)
+	}
 	descriptorRef := doc.Add(descriptor)
 
 	advances := f.GlyphAdvances()
@@ -469,6 +496,11 @@ func (f *Face) collection() (registry, ordering string, supplement int, err erro
 	return r, o, sup, nil
 }
 
+// errNoBareCFF is a CFF face for a PDF/A-1 document whose program has no CFF
+// table to write bare: a CFF2 program, which PDF 1.4 has no way to carry.
+var errNoBareCFF = errors.New("fonts: the face's program has no CFF table, which a PDF/A-1 " +
+	"document, based on PDF 1.4, needs: PDF 1.4 cannot carry an OpenType or CFF2 program")
+
 // errNoCollection is a CID-keyed face that cannot say which collection its CIDs
 // belong to: a ROS naming strings the font does not carry, or a supplement
 // below zero, which is a version number and counts up.
@@ -624,19 +656,67 @@ func subsetTag(kept []int) string {
 	return string(tag)
 }
 
-// cidSetBits builds the /CIDSet bitmap: bit i, counting from the high bit of
-// byte 0, is set when the embedded program has CID i.
+// cidSet builds the /CIDSet bitmap — bit i, counting from the high bit of
+// byte 0, set when the embedded program has CID i — and says whether the
+// font carries one.
 //
 // ISO 19005-2 6.2.11.4.2 (and -1 6.3.5 before it) says the set "shall identify
 // all CIDs which are present in the font program, regardless of whether a CID
-// in the font is referenced or used by the PDF or not". Those are the glyphs
-// the program carries, each under the code GlyphCode gives it, and kept lists
-// exactly them. For a font addressed by glyph index the code is the index and
-// the program keeps the indices. For a CID-keyed CFF the code is the CID: a
-// subset holds only the kept glyphs, renumbered, with a charset giving each
-// the CID it had (forme 462f3b5), and a program embedded whole is every glyph,
-// which kept then lists. TestTheCIDSetIsTheEmbeddedProgramsCharset holds the
-// set to the charset of the program in the file.
+// in the font is referenced or used by the PDF or not". What a program has
+// depends on how it is keyed, and veraPDF, the reference validator, reads it
+// so (its GFPDCIDFont rule, over its font parser's list of a program's CIDs),
+// checking both ways at PDF/A-2 and -3 — every CID the program has is in the
+// set, and every CID in the set the program has:
+//
+//   - a TrueType program, addressed through the Identity CIDToGIDMap, has a
+//     CID for every glyph slot it declares, empty or not: the subset keeps
+//     the face's numbering and empties the slots it drops, so the set is
+//     every slot of the program, not the glyphs kept. Listing only those is
+//     what veraPDF reported on every page htmlpdf wrote;
+//   - a CID-keyed CFF has the CIDs its charset names. A subset holds only the
+//     kept glyphs, renumbered, with a charset giving each the CID it had
+//     (forme 462f3b5), so those are the kept glyphs' codes;
+//     TestTheCIDSetIsTheEmbeddedProgramsCharset holds the set to the charset
+//     of the program in the file;
+//   - a CFF that is not CID-keyed has no CIDs of its own — ISO 32000-1
+//     9.7.4.2 reads a CID as its glyph index — and veraPDF counts none, so
+//     any CID in a set is one the program lacks. It carries no /CIDSet,
+//     which PDF/A-2 and later do not require and PDF 2.0 deprecates, except
+//     under PDF/A-1, where a subset must have one and veraPDF checks only
+//     the CIDs shown: there it lists every glyph slot, as a TrueType's does.
+func (f *Face) cidSet(program []byte, kept []int, pdfa1 bool) ([]byte, bool) {
+	_, _, _, cidKeyed := f.CharacterCollection()
+	if f.IsCFF() && cidKeyed {
+		return f.cidSetBits(kept), true
+	}
+	if f.IsCFF() && !pdfa1 {
+		return nil, false
+	}
+	n := sfntGlyphCount(program)
+	if n <= 0 {
+		// A program with no maxp states no slots; the face's own count is
+		// the one the subset kept, since it keeps the numbering.
+		n = f.NumGlyphs()
+	}
+	bits := make([]byte, (n-1)/8+1)
+	for cid := 0; cid < n; cid++ {
+		bits[cid/8] |= 0x80 >> (cid % 8)
+	}
+	return bits, true
+}
+
+// sfntGlyphCount is the number of glyphs an sfnt program's maxp declares, or
+// zero when it has none to read.
+func sfntGlyphCount(program []byte) int {
+	maxp := font.SFNTTables(program)["maxp"]
+	if len(maxp) < 6 {
+		return 0
+	}
+	return int(maxp[4])<<8 | int(maxp[5])
+}
+
+// cidSetBits is the /CIDSet of a CID-keyed CFF: one bit for the code
+// GlyphCode gives each glyph the program carries, which kept lists.
 //
 // It used to add the embedded program's charset, read back out of it, because
 // forme's subsetter kept the whole charset and emptied the glyphs it dropped:

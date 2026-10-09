@@ -99,7 +99,12 @@ func cidSetAndCharset(t *testing.T, doc *Document) (set, charset map[int]bool) {
 			set[i] = true
 		}
 	}
-	cff := font.ParseCFF(font.SFNTTables(program)["CFF "])
+	// Bare under PDF/A-1, whose PDF 1.4 has no OpenType font file.
+	raw := program
+	if file.Dict.Get("Subtype") != object.Name("CIDFontType0C") {
+		raw = font.SFNTTables(program)["CFF "]
+	}
+	cff := font.ParseCFF(raw)
 	if cff == nil || cff.GIDToCID == nil {
 		t.Fatal("the embedded program is not a CID-keyed CFF")
 	}

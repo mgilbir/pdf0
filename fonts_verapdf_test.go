@@ -141,7 +141,17 @@ func TestType3DocumentsAreValidForVeraPDF(t *testing.T) {
 	}
 	save("colr-outline-1b", doc)
 
-	cmd := exec.Command(vera, append([]string{"--format", "text"}, written...)...)
+	veraPDFPasses(t, vera, written)
+	if len(written) < 17 {
+		t.Errorf("only %d documents were written", len(written))
+	}
+}
+
+// veraPDFPasses runs veraPDF (PDF0_VERAPDF) over documents, each at the
+// level it claims, and fails the test for each it does not pass.
+func veraPDFPasses(t *testing.T, vera string, paths []string) {
+	t.Helper()
+	cmd := exec.Command(vera, append([]string{"--format", "text"}, paths...)...)
 	report, err := cmd.Output()
 	if err != nil && len(report) == 0 {
 		t.Fatalf("veraPDF: %v", err)
@@ -153,7 +163,7 @@ func TestType3DocumentsAreValidForVeraPDF(t *testing.T) {
 			verdicts[filepath.Base(f[1])] = f[0] + " " + strings.Join(f[2:], " ")
 		}
 	}
-	for _, path := range written {
+	for _, path := range paths {
 		name := filepath.Base(path)
 		v, ok := verdicts[name]
 		switch {
@@ -162,9 +172,6 @@ func TestType3DocumentsAreValidForVeraPDF(t *testing.T) {
 		case !strings.HasPrefix(v, "PASS"):
 			t.Errorf("%s: veraPDF: %s", name, v)
 		}
-	}
-	if len(written) < 17 {
-		t.Errorf("only %d documents were written", len(written))
 	}
 }
 

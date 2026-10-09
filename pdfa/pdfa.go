@@ -275,6 +275,9 @@ func validateView(doc core.View, level Level) []Violation {
 		checkCMapCIDLimit,
 		// PDF/A-1 CIDSet program completeness (6.3.5)
 		checkCIDSetProgramComplete,
+		// PDF/A-2/-3 CIDSet against the program, both ways (6.2.11.4.2)
+		checkCIDSetMatchesProgram,
+
 		// CMap embedding (6.3.3.3, PDF/A-1 only)
 		checkCMapEmbedded,
 		// Unicode character maps (Level A and Level U: 6.3.8 / 6.2.11.7.2)
