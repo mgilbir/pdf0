@@ -316,6 +316,13 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 				visit(v.Ops, true)
 			case layout.FilterGroup:
 				visit(v.Ops, curved)
+			case layout.TransformGroup:
+				// The display list holds one only when the caller sets
+				// Options.TransformGroups, which asks for what this backend
+				// does not draw yet; with it off, layout draws what a page's
+				// own rectangles can say and reports the rest.
+				note(RuleUndrawable, "a transform drawn through a matrix (Options.TransformGroups), "+
+					"which this backend does not draw yet")
 			case layout.FillRect, layout.DrawImage, layout.TileImage, layout.FillPath, layout.FillGradient:
 			default:
 				note(RuleUnknownOp, "")
@@ -642,6 +649,11 @@ var drawnFields = map[string]map[string]string{
 	},
 	"DrawEmphasisMark": {
 		"Mark": "drawn as a DrawText is, every field of it as DrawText's list says, as an artifact inside an empty /ActualText: canvas.notText",
+	},
+	"TransformGroup": {
+		"Matrix": "refused, the group and all inside it: checkDrawable; layout makes none unless Options.TransformGroups is set",
+		"Ops":    "refused with the group",
+		"Clip":   "refused with the group",
 	},
 	"DrawGlyphs": {
 		"At":     "the origin of the text matrix",
