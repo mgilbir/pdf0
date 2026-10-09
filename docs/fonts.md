@@ -640,6 +640,29 @@ an explicit `/Matrix`. One is not: Ghostscript draws a shading inside two
 nested clips as one flat colour (glyph 208 of the conformance font), which
 poppler draws correctly.
 
+## Cost
+
+A face drawn as Type 3 fonts costs what its glyphs cost, once each: a page
+that draws glyphs already drawn adds nothing, and the embedding a document
+rewrites as pages add glyphs reuses each glyph's images, paintings and
+compressed procedure. Measured on 200 A4 pages of 50 glyphs each, cycling
+through every emoji the face has (1,212 distinct):
+
+| face | build | file | per glyph | peak RSS |
+|---|---|---|---|---|
+| Noto Sans (text, for scale) | 0.05 s | 0.2 MB | 0.3 KB | 34 MB |
+| Noto Color Emoji, CBDT | 0.62 s | 5.6 MB | 4.6 KB | 92 MB |
+| Noto Color Emoji, COLRv1 | 0.93 s | 8.6 MB | 7.1 KB | 276 MB |
+
+The time and the file grow with the distinct glyphs, not with the pages.
+Before the procedures were compressed once, a COLR face's build was
+quadratic in its glyphs: 3.4 s for the same document, each page slower than
+the last.
+
+Every PDF/A document these fonts produce, at every level, is also validated
+by veraPDF (`TestType3DocumentsAreValidForVeraPDF`, testdata/verapdf), as
+well as by pdf0's own validator.
+
 ## CMaps
 
 A Type 0 font's `/Encoding` says how the bytes in a content stream become CIDs,
