@@ -474,3 +474,37 @@ func TestAGlyphPNGPastTheLimitIsRefusedUndecoded(t *testing.T) {
 		t.Errorf("a 4096×4096 glyph PNG: %v", err)
 	}
 }
+
+// TestARepeatedEmbeddingDoesNotCompressItsGlyphsAgain: a document embeds a
+// face again each time a page gives it a glyph, and the glyphs already written
+// are the same each time. Their procedures are compressed once: compressing
+// them all again made a document quadratic in its glyphs.
+func TestARepeatedEmbeddingDoesNotCompressItsGlyphsAgain(t *testing.T) {
+	face := strikesFace(t)
+	drawIn(t, face, "ABC", 9, nil)
+	procData := func() map[object.Name]*byte {
+		a := &allocator{}
+		e, err := face.EmbedForms(a, Forms{Horizontal: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[object.Name]*byte{}
+		for _, ref := range append([]object.IndirectRef{e.Horizontal}, e.Subfonts...) {
+			for name, r := range a.dict(t, ref).Get("CharProcs").(*object.Dictionary).All() {
+				out[name] = &a.at(r).(*object.Stream).Data[0]
+			}
+		}
+		return out
+	}
+	first := procData()
+	drawIn(t, face, "D", 9, nil) // a new glyph: the next embedding writes it too
+	second := procData()
+	if len(second) <= len(first) {
+		t.Fatalf("the second embedding has %d procedures, the first %d", len(second), len(first))
+	}
+	for name, p := range first {
+		if second[name] != p {
+			t.Errorf("%s was compressed again", name)
+		}
+	}
+}
