@@ -35,6 +35,7 @@ func TestEveryDrawOpFieldIsAccountedFor(t *testing.T) {
 		"DrawTextShadow":   reflect.TypeOf(layout.DrawTextShadow{}),
 		"DrawEmphasisMark": reflect.TypeOf(layout.DrawEmphasisMark{}),
 		"DrawGlyphs":       reflect.TypeOf(layout.DrawGlyphs{}),
+		"TransformGroup":   reflect.TypeOf(layout.TransformGroup{}),
 	}
 	// The operation set itself, from the source: Op's method is unexported,
 	// so the types that implement it are exactly the ones layout declares a
