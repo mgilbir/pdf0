@@ -23,7 +23,8 @@ import (
 // nothing from it. A run that succeeds is exactly what the unbounded call
 // would have produced.
 //
-// htmlpdf's text is shaped by forme's layout, which these do not reach.
+// htmlpdf's text is shaped by forme's layout, which these do not reach; it is
+// bounded by htmlpdf.RenderContext.
 
 // RunLimits bounds one shaped run: its input bytes, the glyphs it may grow
 // to and the lookup work charged for it. A zero field is forme's default:

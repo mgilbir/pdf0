@@ -57,8 +57,9 @@ forme's `ShapeGlyphs` is. Their bounded forms, `ShapeContext`,
 `fonts.RunLimits` (input bytes, glyphs, lookup work). They fail with the
 context's error, or with one wrapping `fonts.ErrRunLimit`, and then nothing is
 drawn or recorded. When they succeed, they produce exactly what the unbounded
-calls would. A zero limit takes forme's default. htmlpdf's text is shaped inside forme's layout, which has no
-bounds yet (forme#917).
+calls would. A zero limit takes forme's default. htmlpdf's text is shaped
+inside forme's layout, and is bounded the same way by `htmlpdf.RenderContext`
+(see [htmlpdf](htmlpdf.md#documents-you-do-not-control)).
 
 `DrawUpright` draws a run shaped with `shape.Features.Vertical`: the pen moves
 down by each glyph's vertical advance and each glyph is hung from its vertical
@@ -708,9 +709,6 @@ same budget as any other.
   offset is drawn as a step even when it repeats; Skia draws such a sweep as
   nothing, and pdf0 does the same for a sweep, with nothing to say what a
   linear or radial one should be.
-- **HTML→PDF shaping is unbounded.** `htmlpdf.Render` shapes through forme's
-  `layout.Compose`, which takes no context or limits (forme#917). The bounded
-  drawing calls above cover only text pdf0 shapes itself.
 
 - **Bitmap-only faces:** a greyscale glyph in a colour that is not
   DeviceGray, DeviceRGB or DeviceCMYK (a named ICC space, a Separation, a

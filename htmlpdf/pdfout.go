@@ -23,6 +23,7 @@
 package htmlpdf
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"net/url"
@@ -89,6 +90,11 @@ type Result struct {
 	// NaturalSize is what the content needed at its natural size, before any
 	// scaling. It is what a caller adjusting a template needs to know.
 	NaturalSize layout.Size
+
+	// ShapingWork is the lookup work RenderContext charged the document's
+	// shaping, for a caller keeping a budget across documents. Render
+	// charges none and reports 0.
+	ShapingWork int64
 }
 
 // RefusedError is the engine, or this backend, declining to produce a document.
@@ -200,8 +206,35 @@ func (e *RefusedError) Error() string {
 // sheet is the one the document laid out on — the caller's, with the
 // document's own @page rules applied.
 func Render(in layout.Input, opts layout.Options) (Result, error) {
-	composed := layout.Compose(in, opts)
+	return finish(layout.Compose(in, opts), in)
+}
 
+// RenderContext is Render for a document a caller does not control: the
+// document is composed under ctx, and all the shaping it costs — every run of
+// text, in every face, measured to break lines or shaped to be drawn — under
+// one budget (forme's layout.ComposeContext). A zero field of limits is a
+// default that grows with the text: no bound on a paragraph's length, glyphs
+// in proportion to it, and 64 million units of work plus 1,024 a byte. A field
+// set is a fixed bound.
+//
+// When the context is done or the budget runs out, it returns the context's
+// error, or one wrapping ErrRunLimit, and a zero Result: no document, and no
+// findings from a composition that stopped part way. Otherwise it returns
+// what Render returns for the document, the same bytes, and the work charged
+// in Result.ShapingWork.
+func RenderContext(ctx context.Context, in layout.Input, opts layout.Options, limits RunLimits) (Result, error) {
+	composed, err := layout.ComposeContext(ctx, in, opts, limits)
+	if err != nil {
+		return Result{}, err
+	}
+	out, err := finish(composed, in)
+	out.ShapingWork = composed.ShapingWork
+	return out, err
+}
+
+// finish checks a composition and writes it: the part of Render that follows
+// laying the document out.
+func finish(composed layout.Composed, in layout.Input) (Result, error) {
 	out := Result{
 		Scale:       composed.Scale,
 		NaturalSize: composed.NaturalSize,
