@@ -162,11 +162,21 @@ func (c *canvas) face(f *shape.Face, vertical bool) (object.Name, *fonts.Face) {
 	face, ok := c.w.faces[f]
 	if !ok {
 		face = fonts.Adopt(f)
-		// This stream is in CSS pixels, which is what picks a bitmap
-		// face's strike.
-		face.SetPixelsPerUnit(1)
 		c.w.faces[f] = face
 	}
+	// This stream is in CSS pixels, which is what picks a bitmap face's
+	// strike: the one a browser at 1× draws the text at. Inside a
+	// TransformGroup the text is drawn larger or smaller than its size by
+	// the groups' matrix, so the strike is the one for the size it is shown
+	// at, in the direction the matrix stretches most, so that no bitmap is
+	// drawn larger than its strike was made for when one more detailed
+	// exists. A face is one embedding for the whole page and every run asks
+	// for it here, just before it draws, so each run picks its own strike.
+	ppu := 1.0
+	if c.toLayout != identityMatrix {
+		ppu, _ = stretches(c.toLayout)
+	}
+	face.SetPixelsPerUnit(ppu)
 	prefix := "F"
 	if vertical {
 		// The horizontal form is named too, as it always has been: the two

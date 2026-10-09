@@ -57,6 +57,19 @@ func boundsOf(m [6]float64, box [4]float64) [4]float64 {
 	return out
 }
 
+// stretches is the singular values of m's linear part: how much it stretches
+// the direction it stretches most, and the one it stretches least. Both are
+// zero for the zero matrix.
+func stretches(m [6]float64) (most, least float64) {
+	d := det(m)
+	s := m[0]*m[0] + m[1]*m[1] + m[2]*m[2] + m[3]*m[3]
+	most = math.Sqrt((s + math.Sqrt(math.Max(0, s*s-4*d*d))) / 2)
+	if most == 0 {
+		return 0, 0
+	}
+	return most, math.Abs(d) / most
+}
+
 // The bounds of what a TransformGroup may do to the drawing inside it and be
 // drawn: each axis scaled by at most maxGroupScale and at least its
 // reciprocal, and moved by at most maxGroupMove pixels.
@@ -86,16 +99,10 @@ func transformUndrawable(m [6]float64) string {
 		return fmt.Sprintf("a transform that moves what it draws by (%g, %g) pixels, past the "+
 			"%g a PDF reader's numbers carry exactly", m[4], m[5], maxGroupMove)
 	}
-	d := det(m)
-	if d == 0 {
+	if det(m) == 0 {
 		return ""
 	}
-	// The singular values of the linear part: how much the matrix stretches
-	// the direction it stretches most, and the one it stretches least.
-	s := m[0]*m[0] + m[1]*m[1] + m[2]*m[2] + m[3]*m[3]
-	most := math.Sqrt((s + math.Sqrt(math.Max(0, s*s-4*d*d))) / 2)
-	least := math.Abs(d) / most
-	if most > maxGroupScale || least < 1/maxGroupScale {
+	if most, least := stretches(m); most > maxGroupScale || least < 1/maxGroupScale {
 		return fmt.Sprintf("a transform that scales what it draws by between %g and %g, past the "+
 			"millionfold either way a PDF reader's numbers carry exactly", least, most)
 	}
