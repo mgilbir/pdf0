@@ -33,6 +33,7 @@ func TestTheDrawingOperationsAgainstPDFA(t *testing.T) {
 		{"text-shadow", Input{HTML: `<p style="text-shadow: 2px 3px rgb(255,0,0)">shadowed</p>`}, false},
 		{"emphasis", Input{HTML: `<p style="text-emphasis: dot rgb(255,0,0)">emphasis</p>`}, false},
 		{"squeeze", Input{HTML: `<p>12345</p>`, CSS: []Stylesheet{{Source: `html { writing-mode: vertical-rl } p { margin: 0; text-combine-upright: all }`}}}, false},
+		{"transform", Input{HTML: `<div style="margin:60px;width:100px;height:50px;background:rgb(255,0,0);transform:rotate(30deg) skewX(10deg)"><p style="transform:scaleX(-1)">turned</p></div>`}, false},
 		{"math", Input{HTML: `<math display="block"><msqrt><mfrac><mfrac>` + mathX + mathX + `</mfrac>` + mathX + `</mfrac></msqrt></math>`, Fonts: mathSet(t)}, false},
 	}
 	for _, g := range gradientCases {

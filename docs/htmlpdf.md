@@ -267,6 +267,27 @@ What is drawn:
   colour-matrix functions forme could not fold (over a picture, or marks that
   overlap) are refused: PDF has no convolution, and no combination of its
   blend modes and transfer functions is a colour matrix.
+- **Transforms.** forme applies a `transform` that keeps rectangles
+  rectangles — a move, a scale along the axes, a quarter turn — to the marks
+  themselves. Any other 2D transform (`rotate(30deg)`, a skew, a mirror) is a
+  `TransformGroup`, which htmlpdf draws by concatenating its matrix (`cm`,
+  ISO 32000-2 8.4.4) around the box's marks, after the clip of whatever cuts
+  the box from outside; a group inside a group concatenates again. htmlpdf
+  sets forme's `Options.TransformGroups` itself, whatever the caller passed,
+  since it says what the backend draws. What PDF states against a stream's
+  default coordinates rather than the current ones takes the matrix with it:
+  a tiling pattern's `/Matrix`, and the bounding box of the form a filter
+  draws into, which is the sheet as the group's coordinates see it. A link
+  stays a rectangle of the page (forme puts it ahead of the group, the
+  rectangle around where the matrix draws it). A matrix that is not
+  invertible draws nothing, as CSS Transforms 1 §6 says; one that, with the
+  groups around it, scales by more than a millionfold or less than a
+  millionth, or moves by more than a billion pixels, is refused
+  (`backend-undrawable`), since a reader's numbers do not carry it exactly.
+  forme still reports 3D transforms, and a transform on the root or on a
+  table's parts, and draws those boxes untransformed. A bitmap font's strike
+  is chosen for the run's size before the matrix, so a bitmap glyph scaled
+  up by a transform is drawn from the strike for its unscaled size.
 - **Text shadows and emphasis marks.** A sharp `text-shadow` is the run's
   glyphs moved by the offset in the shadow's colour, under the run, and a
   `text-emphasis` mark is its character drawn where forme puts it. Neither is

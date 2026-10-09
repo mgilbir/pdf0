@@ -150,7 +150,7 @@ func (c *canvas) dropShadow(inner object.IndirectRef, f layout.FilterFunction) e
 		b.SetExtGState(name)
 		c.alphas.use(b, f.Color.A)
 		b.SetRGB(f.Color.R/255, f.Color.G/255, f.Color.B/255)
-		s := c.w.sheet
+		s := c.sheet()
 		b.Rect(s[0], s[1], s[2]-s[0], s[3]-s[1])
 		b.Fill()
 		b.Restore()
@@ -164,14 +164,17 @@ func (c *canvas) dropShadow(inner object.IndirectRef, f layout.FilterFunction) e
 func (c *canvas) group(draw func(fc *canvas) error) (object.IndirectRef, error) {
 	fc := c.w.newCanvas([6]float64{1, 0, 0, 1, 0, 0})
 	// A group inside a curved clip is still inside it: a link drawn in the
-	// group is refused as one drawn beside it is.
+	// group is refused as one drawn beside it is. A form is painted in the
+	// coordinates in force, so inside a TransformGroup its own are the
+	// group's.
 	fc.curved = c.curved
+	fc.toLayout = c.toLayout
 	if err := draw(fc); err != nil {
 		return object.IndirectRef{}, err
 	}
 	c.w.transparent = true
 	ref, err := c.w.doc.AddForm(pdf0.Form{
-		BBox:       c.w.sheet,
+		BBox:       c.sheet(),
 		Content:    fc.b,
 		Group:      true,
 		Faces:      fc.fonts,

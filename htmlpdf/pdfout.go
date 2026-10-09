@@ -206,7 +206,18 @@ func (e *RefusedError) Error() string {
 // sheet is the one the document laid out on — the caller's, with the
 // document's own @page rules applied.
 func Render(in layout.Input, opts layout.Options) (Result, error) {
-	return finish(layout.Compose(in, opts), in)
+	return finish(layout.Compose(in, drawing(opts)), in)
+}
+
+// drawing is the options a document is composed under: the caller's, with
+// what this backend draws said. It draws a TransformGroup, so a transform at
+// any angle is drawn through its matrix rather than reported and drawn
+// untransformed; layout.Options.TransformGroups is set whatever the caller
+// set it to, since it is a fact about the backend, not a choice about the
+// document.
+func drawing(opts layout.Options) layout.Options {
+	opts.TransformGroups = true
+	return opts
 }
 
 // RenderContext is Render for a document a caller does not control: the
@@ -223,7 +234,7 @@ func Render(in layout.Input, opts layout.Options) (Result, error) {
 // what Render returns for the document, the same bytes, and the work charged
 // in Result.ShapingWork.
 func RenderContext(ctx context.Context, in layout.Input, opts layout.Options, limits RunLimits) (Result, error) {
-	composed, err := layout.ComposeContext(ctx, in, opts, limits)
+	composed, err := layout.ComposeContext(ctx, in, drawing(opts), limits)
 	if err != nil {
 		return Result{}, err
 	}
@@ -281,9 +292,10 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 		}
 		counts[rule]++
 	}
-	// curved is whether the operations are inside a ClipPath.
-	var visit func(ops []layout.Op, curved bool)
-	visit = func(ops []layout.Op, curved bool) {
+	// curved is whether the operations are inside a ClipPath, and m the
+	// matrices of the TransformGroups around them, multiplied.
+	var visit func(ops []layout.Op, curved bool, m [6]float64)
+	visit = func(ops []layout.Op, curved bool, m [6]float64) {
 		for _, op := range ops {
 			if why := undrawable(op); why != "" {
 				note(RuleUndrawable, why)
@@ -313,23 +325,25 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 						"annotation's rectangle cannot follow")
 				}
 			case layout.ClipPath:
-				visit(v.Ops, true)
+				visit(v.Ops, true, m)
 			case layout.FilterGroup:
-				visit(v.Ops, curved)
+				visit(v.Ops, curved, m)
 			case layout.TransformGroup:
-				// The display list holds one only when the caller sets
-				// Options.TransformGroups, which asks for what this backend
-				// does not draw yet; with it off, layout draws what a page's
-				// own rectangles can say and reports the rest.
-				note(RuleUndrawable, "a transform drawn through a matrix (Options.TransformGroups), "+
-					"which this backend does not draw yet")
+				// Not what is inside one that is refused: none of it is
+				// drawn, and a finding for it would be about nothing.
+				inner := concatMatrix(groupMatrix(v), m)
+				if why := transformUndrawable(inner); why != "" {
+					note(RuleUndrawable, why)
+				} else {
+					visit(v.Ops, curved, inner)
+				}
 			case layout.FillRect, layout.DrawImage, layout.TileImage, layout.FillPath, layout.FillGradient:
 			default:
 				note(RuleUnknownOp, "")
 			}
 		}
 	}
-	visit(c.Ops, false)
+	visit(c.Ops, false, identityMatrix)
 	firstLink, firstUndrawable := first[RuleLinkDropped], first[RuleUndrawable]
 
 	messages := map[layout.Rule]string{
@@ -557,12 +571,10 @@ func linkTarget(href string) (string, error) {
 // stream's "cm", so it is put through the same numbers here.
 type pageTransform struct{ k, tx, ty float64 }
 
-// rect is a layout rectangle in page space, as [xMin yMin xMax yMax].
-func (m pageTransform) rect(r layout.Rect) [4]float64 {
-	return [4]float64{
-		m.tx + m.k*r.X.Px(), m.ty - m.k*r.Bottom().Px(),
-		m.tx + m.k*r.Right().Px(), m.ty - m.k*r.Y.Px(),
-	}
+// box is a rectangle of layout's coordinates, as [xMin yMin xMax yMax] in
+// pixels, in page space, as the same.
+func (m pageTransform) box(b [4]float64) [4]float64 {
+	return [4]float64{m.tx + m.k*b[0], m.ty - m.k*b[3], m.tx + m.k*b[2], m.ty - m.k*b[1]}
 }
 
 // drawnFields says, for every display-list operation, what this backend does
@@ -651,9 +663,9 @@ var drawnFields = map[string]map[string]string{
 		"Mark": "drawn as a DrawText is, every field of it as DrawText's list says, as an artifact inside an empty /ActualText: canvas.notText",
 	},
 	"TransformGroup": {
-		"Matrix": "refused, the group and all inside it: checkDrawable; layout makes none unless Options.TransformGroups is set",
-		"Ops":    "refused with the group",
-		"Clip":   "refused with the group",
+		"Matrix": "its move from layout units to pixels (groupMatrix), concatenated (cm) inside a Save and Restore, and multiplied into a tiling pattern's /Matrix and a filter form's bounding box: canvas.transformGroup; nothing drawn when it is not invertible; refused, with the groups around it, past a millionfold scale or a billion-pixel move: transformUndrawable",
+		"Ops":    "drawn after the matrix, as they are anywhere else",
+		"Clip":   "clipTo, before the matrix",
 	},
 	"DrawGlyphs": {
 		"At":     "the origin of the text matrix",
