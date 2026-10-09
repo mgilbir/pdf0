@@ -26,20 +26,10 @@ import (
 // htmlpdf's text is shaped by forme's layout, which these do not reach.
 
 // RunLimits bounds one shaped run: its input bytes, the glyphs it may grow
-// to and the lookup work charged for it. A zero field is the default: 4096
-// bytes and 32768 glyphs, as forme's, and DefaultRunWork.
+// to and the lookup work charged for it. A zero field is forme's default:
+// 4096 bytes, 32768 glyphs and 64 million units of work, which admits 4096
+// bytes of the costliest real text with about fifty times to spare.
 type RunLimits = shape.RunLimits
-
-// DefaultRunWork is the lookup work a run may be charged when RunLimits
-// leaves it zero.
-//
-// It is not forme's default, 64 million units, which refuses ordinary text:
-// forme charges about 460 thousand units a byte of Latin and 8 million a byte
-// of Devanagari in Noto Sans, whatever lookups apply, so 64 million is 140
-// bytes of Latin and 8 of Devanagari (forme#916). This admits the input
-// default, 4096 bytes, of the costliest text measured with twice that to
-// spare, and is about 70 ms of shaping.
-const DefaultRunWork = 1 << 36
 
 // ErrRunLimit is what a run that went past its RunLimits fails with,
 // wrapped.
@@ -56,9 +46,6 @@ func (f *Face) shapeBounded(ctx context.Context, limits RunLimits, shapeFn func(
 		missing int
 		used    []int
 	)
-	if limits.MaxWork == 0 {
-		limits.MaxWork = DefaultRunWork
-	}
 	if _, err := f.Face.WithShapingLimits(ctx, limits, func(c *shape.Face) error {
 		glyphs, missing = shapeFn(c)
 		used = c.Used()

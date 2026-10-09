@@ -57,9 +57,7 @@ forme's `ShapeGlyphs` is. Their bounded forms, `ShapeContext`,
 `fonts.RunLimits` (input bytes, glyphs, lookup work). They fail with the
 context's error, or with one wrapping `fonts.ErrRunLimit`, and then nothing is
 drawn or recorded. When they succeed, they produce exactly what the unbounded
-calls would. A zero limit takes the default. The work default is pdf0's own,
-`fonts.DefaultRunWork`, because forme's refuses a single word of Devanagari
-(forme#916). htmlpdf's text is shaped inside forme's layout, which has no
+calls would. A zero limit takes forme's default. htmlpdf's text is shaped inside forme's layout, which has no
 bounds yet (forme#917).
 
 `DrawUpright` draws a run shaped with `shape.Features.Vertical`: the pen moves

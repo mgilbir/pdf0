@@ -169,9 +169,10 @@ func TestBoundedShapingThatStopsLeavesNothing(t *testing.T) {
 	}
 }
 
-// TestTheDefaultLimitsAdmitAFullRunOfDevanagari: the default work budget is
-// pdf0's own because forme's refuses a word of Devanagari (forme#916). A run
-// as long as the input default allows, of the costliest text measured, fits.
+// TestTheDefaultLimitsAdmitAFullRunOfDevanagari: a run as long as the input
+// default allows, of the costliest text measured, fits forme's default work
+// budget. Before forme 0.9.0 it did not: forme charged a lookup's size at every
+// position, and a word of Devanagari ran out (forme#916).
 func TestTheDefaultLimitsAdmitAFullRunOfDevanagari(t *testing.T) {
 	const word = "नमस्ते "
 	s := strings.Repeat(word, 4096/len(word))
