@@ -171,7 +171,7 @@ func glyphImage(t *testing.T, face *fonts.Face, r rune, size float64) shape.Imag
 	}
 	var c oneImage
 	ppem := int(math.Round(size * 4 / 3))
-	if err := face.PaintGlyph(gid, shape.PaintOptions{PPEM: ppem}, &c); err != nil {
+	if err := face.PaintGlyph(gid, shape.PaintOptions{PPEM: ppem, Bitmaps: true}, &c); err != nil {
 		t.Fatal(err)
 	}
 	if !c.got {
@@ -260,7 +260,7 @@ func compareGlyph(page image.Image, dpi int, face *fonts.Face, c placedGlyph) (b
 func glyphImageNoT(face *fonts.Face, r rune, size float64) shape.Image {
 	gid, _ := face.GlyphID(r)
 	var c oneImage
-	_ = face.PaintGlyph(gid, shape.PaintOptions{PPEM: int(math.Round(size * 4 / 3))}, &c)
+	_ = face.PaintGlyph(gid, shape.PaintOptions{PPEM: int(math.Round(size * 4 / 3)), Bitmaps: true}, &c)
 	return c.img
 }
 
@@ -780,6 +780,116 @@ func TestAFontLicensedForItsBitmapsIsEmbeddedAsThem(t *testing.T) {
 		b.EndText()
 		if _, err := b.Bytes(); !errors.Is(err, fonts.ErrBitmapEmbeddingOnly) {
 			t.Errorf("drawing a glyph whose ink is its outline: %v", err)
+		}
+	})
+}
+
+// strikesWithOutlines is forme's EBDT fixture with a box outline for every
+// glyph and its OS/2 fsType set: a font with outlines and monochrome and
+// greyscale strikes beside them, as older fonts with hand-drawn small sizes
+// are.
+func strikesWithOutlines(t *testing.T, fsType uint16) []byte {
+	t.Helper()
+	tables := font.SFNTTables(formeFile(t, "testdata/freetype/fonts/Strikes.ttf"))
+	n := int(binary.BigEndian.Uint16(tables["maxp"][4:6]))
+	// A box, 100 to 500 across and 0 to 700 up: one contour of four
+	// on-curve points, coordinates as 16-bit deltas.
+	var box []byte
+	box = binary.BigEndian.AppendUint16(box, 1)
+	for _, v := range []int16{100, 0, 500, 700} {
+		box = binary.BigEndian.AppendUint16(box, uint16(v))
+	}
+	box = binary.BigEndian.AppendUint16(box, 3)
+	box = binary.BigEndian.AppendUint16(box, 0)
+	box = append(box, 1, 1, 1, 1)
+	for _, d := range []int16{100, 400, 0, -400} {
+		box = binary.BigEndian.AppendUint16(box, uint16(d))
+	}
+	for _, d := range []int16{0, 0, 700, 0} {
+		box = binary.BigEndian.AppendUint16(box, uint16(d))
+	}
+	for len(box)%4 != 0 {
+		box = append(box, 0)
+	}
+	var glyf, loca []byte
+	for range n {
+		loca = binary.BigEndian.AppendUint32(loca, uint32(len(glyf)))
+		glyf = append(glyf, box...)
+	}
+	loca = binary.BigEndian.AppendUint32(loca, uint32(len(glyf)))
+	head := append([]byte(nil), tables["head"]...)
+	binary.BigEndian.PutUint16(head[50:], 1) // long loca offsets
+	tables["head"], tables["glyf"], tables["loca"] = head, glyf, loca
+	if len(tables["maxp"]) < 32 {
+		// A glyf font's maxp is version 1.0, 32 bytes.
+		maxp := make([]byte, 32)
+		copy(maxp, tables["maxp"])
+		binary.BigEndian.PutUint32(maxp, 0x00010000)
+		tables["maxp"] = maxp
+	}
+	os2 := append([]byte(nil), tables["OS/2"]...)
+	binary.BigEndian.PutUint16(os2[8:], fsType)
+	tables["OS/2"] = os2
+	return assembleSFNT(tables)
+}
+
+// TestAnOutlineFontLicensedForItsStrikesIsEmbeddedAsThem: a font with outlines
+// and EBDT strikes whose licence permits embedding only its bitmaps is written
+// as Type 3 fonts drawn from the strikes, which forme reads beside outlines
+// since 0.9.0, renders as them, is valid PDF/A and extracts as drawn. With no
+// such restriction it is embedded as its outlines.
+func TestAnOutlineFontLicensedForItsStrikesIsEmbeddedAsThem(t *testing.T) {
+	cases := bitmapCases()
+	t.Run("bitmap embedding only", func(t *testing.T) {
+		face, err := fonts.Load(strikesWithOutlines(t, 0x0200))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if face.BitmapOnly() {
+			t.Fatal("the fixture has no outlines")
+		}
+		doc := mustPDFADoc(t, pdfa.PDFA2b)
+		bitmapPage(t, doc, face, cases)
+		back, data := writeAndRead(t, doc)
+		res := back.ResolveDict(back.PageList()[0].Get("Resources"))
+		if st := back.ResolveDict(back.ResolveDict(res.Get("Font")).Get("F1")).Get("Subtype"); st != object.Name("Type3") {
+			t.Fatalf("the face is embedded as %v", st)
+		}
+		for _, v := range ValidatePDFA(back, pdfa.PDFA2b) {
+			t.Errorf("%s", v.Error())
+		}
+		var want strings.Builder
+		for _, c := range cases {
+			want.WriteRune(c.r)
+		}
+		if got := strings.ReplaceAll(strings.TrimSpace(mustExtractText(t, back)), " ", ""); got != want.String() {
+			t.Errorf("extracted %q, want %q", got, want.String())
+		}
+		path := filepath.Join(t.TempDir(), "licensed-ebdt.pdf")
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		const dpi = 576
+		for _, r := range rasterisers() {
+			page := r.render(t, path, 1, dpi)
+			for _, c := range cases {
+				if bad, first := compareGlyph(page, dpi, face, c); bad != 0 {
+					t.Errorf("%s: %d pixels differ; first: %s", r.name, bad, first)
+				}
+			}
+		}
+	})
+	t.Run("installable", func(t *testing.T) {
+		face, err := fonts.Load(strikesWithOutlines(t, 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		doc := NewDocument()
+		bitmapPage(t, doc, face, cases[:1])
+		back, _ := writeAndRead(t, doc)
+		res := back.ResolveDict(back.PageList()[0].Get("Resources"))
+		if st := back.ResolveDict(back.ResolveDict(res.Get("Font")).Get("F1")).Get("Subtype"); st != object.Name("Type0") {
+			t.Errorf("an unrestricted face with outlines is embedded as %v, not its outlines", st)
 		}
 	})
 }

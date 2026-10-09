@@ -1,6 +1,9 @@
 package htmlpdf
 
-import "github.com/mgilbir/forme/layout"
+import (
+	"github.com/mgilbir/forme/layout"
+	"github.com/mgilbir/forme/shape"
+)
 
 // The names a caller needs to render HTML, gathered here so that the common
 // case takes one import.
@@ -35,7 +38,13 @@ type (
 	// Severity is how much a Finding matters. Error is the one that refuses a
 	// document; see RefusedError.
 	Severity = layout.Severity
+	// RunLimits bounds the shaping RenderContext lets a document cost.
+	RunLimits = shape.RunLimits
 )
+
+// ErrRunLimit is what RenderContext fails with, wrapped, when a document's
+// shaping goes past its RunLimits.
+var ErrRunLimit = shape.ErrRunLimit
 
 // The severities, so that a caller reading Finding.Severity or writing a
 // Policy does not have to reach past this package for the constants.

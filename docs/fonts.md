@@ -57,10 +57,9 @@ forme's `ShapeGlyphs` is. Their bounded forms, `ShapeContext`,
 `fonts.RunLimits` (input bytes, glyphs, lookup work). They fail with the
 context's error, or with one wrapping `fonts.ErrRunLimit`, and then nothing is
 drawn or recorded. When they succeed, they produce exactly what the unbounded
-calls would. A zero limit takes the default. The work default is pdf0's own,
-`fonts.DefaultRunWork`, because forme's refuses a single word of Devanagari
-(forme#916). htmlpdf's text is shaped inside forme's layout, which has no
-bounds yet (forme#917).
+calls would. A zero limit takes forme's default. htmlpdf's text is shaped
+inside forme's layout, and is bounded the same way by `htmlpdf.RenderContext`
+(see [htmlpdf](htmlpdf.md#documents-you-do-not-control)).
 
 `DrawUpright` draws a run shaped with `shape.Features.Vertical`: the pen moves
 down by each glyph's vertical advance and each glyph is hung from its vertical
@@ -584,7 +583,7 @@ in, and write codes in the home font.
 
 The licence reads differently here: bitmap embedding only (0x0200) is exactly
 what these fonts are, and is embedded, and it makes a face with outlines and
-colour strikes one of them; Restricted License is refused as for
+strikes beside them one of them; Restricted License is refused as for
 every face; and no subsetting (0x0100) is refused with
 `fonts.ErrBitmapNoSubsetting`, because the fonts carry images of the glyphs
 drawn and nothing else.
@@ -710,21 +709,17 @@ same budget as any other.
   offset is drawn as a step even when it repeats; Skia draws such a sweep as
   nothing, and pdf0 does the same for a sweep, with nothing to say what a
   linear or radial one should be.
-- **HTML→PDF shaping is unbounded.** `htmlpdf.Render` shapes through forme's
-  `layout.Compose`, which takes no context or limits (forme#917). The bounded
-  drawing calls above cover only text pdf0 shapes itself.
 
 - **Bitmap-only faces:** a greyscale glyph in a colour that is not
   DeviceGray, DeviceRGB or DeviceCMYK (a named ICC space, a Separation, a
   pattern), or in a colour the stream has not set, is drawn as a stencil of its
-  coverage, which keeps the colour and loses the anti-aliasing. A strike past
-  256 ppem other than the largest is never drawn from. SVG glyphs are not
-  drawn. A font with outlines *and* bitmaps is embedded as its outlines,
-  unless its licence permits embedding only its bitmaps: then its colour
-  strikes (CBDT, sbix) are written as Type 3 fonts, as a bitmap-only face's
-  are, and a glyph whose only ink is its outline is refused. Its EBDT strikes
-  forme does not paint beside outlines (forme#918), and such a font is still
-  refused (`fonts.ErrBitmapEmbeddingOnly`). In a document that
+  coverage, which keeps the colour and loses the anti-aliasing. SVG glyphs are
+  refused. A font with outlines *and* bitmaps is embedded as its outlines,
+  unless its licence permits embedding only its bitmaps: then its strikes —
+  CBDT, sbix, EBDT or bdat — are written as Type 3 fonts, as a bitmap-only
+  face's are, and a glyph whose only ink is its outline is refused. Such a
+  font with no strikes is refused (`fonts.ErrBitmapEmbeddingOnly`). In a
+  document that
   claims PDF/A-1, which forbids soft masks, a greyscale glyph is a stencil and
   a colour bitmap is painted through a 1-bit `/Mask` (`fonts.Forms.Opaque`):
   their colours are kept and their anti-aliased edges are not.

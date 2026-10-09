@@ -104,27 +104,22 @@ func (f *Face) vectorGlyph(gid int) bool {
 }
 
 // bitmapLicensed reports whether a face with outlines may be embedded only as
-// its bitmaps (OS/2 fsType 0x0200) and has bitmaps forme paints: CBDT or sbix
-// images, which forme paints whatever outlines the face has. Its EBDT strikes
-// it does not paint beside outlines (forme#918), and such a face is refused
-// with ErrBitmapEmbeddingOnly. The answer is the face's, fixed when it was
-// loaded, and asked once.
+// its bitmaps (OS/2 fsType 0x0200) and has bitmaps: any strike, CBDT, sbix,
+// EBDT or bdat, which forme reads beside outlines (Face.StrikeImage; forme
+// 0.9.0 for EBDT and bdat, forme#918). A face whose licence says so and that
+// has no strike is refused with ErrBitmapEmbeddingOnly. The answer is the
+// face's, fixed when it was loaded, and asked once.
 func (f *Face) bitmapLicensed() bool {
 	if f.licensed != 0 {
 		return f.licensed > 0
 	}
 	f.licensed = -1
 	fsType, stated := f.EmbeddingPermissions()
-	if !stated || fsType&shape.FSTypeBitmapOnly == 0 {
+	if !stated || fsType&shape.FSTypeBitmapOnly == 0 || len(f.Strikes()) == 0 {
 		return false
 	}
-	for gid := range f.NumGlyphs() {
-		if f.GlyphColour(gid, 0) == shape.ColourBitmap {
-			f.licensed = 1
-			return true
-		}
-	}
-	return false
+	f.licensed = 1
+	return true
 }
 
 // errOutlineOnly is a glyph of a face that may be embedded only as its
@@ -139,7 +134,8 @@ type subKey struct {
 	// vector marks a font of glyphs painted as vectors (vectorGlyph), whose
 	// strike means nothing.
 	vector bool
-	// strike is the ppem of the strike the glyphs are painted from.
+	// strike is the strike the glyphs are drawn from: an index into the
+	// face's strikes (strikeList), or noStrike.
 	strike int
 	// colour is the text colour a greyscale glyph is painted in, written as
 	// colourKey writes it, or "" for a font whose glyphs carry no colour of
@@ -180,11 +176,11 @@ type type3State struct {
 	byKey map[subKey][]*subFont // a key's planes, in order
 	// colours are the colours the keys name, by key.
 	colours map[string]content.Color
-	// strikeOf is the strike a requested ppem paints from, and glyphs a
-	// glyph as a strike paints it, falling back to the nearest strike that
+	// strikes are the face's bitmap strikes (strikeList), and glyphs a
+	// glyph as a strike draws it, falling back to the nearest strike that
 	// has it.
-	strikeOf map[int]int
-	glyphs   map[[2]int]bitmapGlyph
+	strikes []shape.Strike
+	glyphs  map[[2]int]bitmapGlyph
 	// fgStops says whether a vector glyph has a gradient stop in the text
 	// colour, by glyph; arts are vector glyphs' paintings, by key and glyph.
 	fgStops map[int]bool
@@ -206,13 +202,12 @@ type builtKey struct {
 func (f *Face) type3() *type3State {
 	if f.t3 == nil {
 		f.t3 = &type3State{
-			byKey:    map[subKey][]*subFont{},
-			colours:  map[string]content.Color{},
-			strikeOf: map[int]int{},
-			glyphs:   map[[2]int]bitmapGlyph{},
-			built:    map[builtKey]*capture{},
-			fgStops:  map[int]bool{},
-			arts:     map[builtKey]*colrArt{},
+			byKey:   map[subKey][]*subFont{},
+			colours: map[string]content.Color{},
+			glyphs:  map[[2]int]bitmapGlyph{},
+			built:   map[builtKey]*capture{},
+			fgStops: map[int]bool{},
+			arts:    map[builtKey]*colrArt{},
 		}
 	}
 	return f.t3
@@ -249,110 +244,53 @@ func (f *Face) ppemFor(size float64) int {
 // image placed by its box.
 var errUnpaintable = errors.New("fonts: a bitmap glyph is painted with something a Type 3 glyph here cannot draw")
 
-// imageCapture is a shape.Painter that keeps the one image a bitmap glyph is
-// painted as, with the transforms around it applied to its box.
-type imageCapture struct {
-	stack []shape.Transform
-	img   shape.Image
-	got   bool
-	err   error
+// strikeList is the face's bitmap strikes, smallest first, as forme lists
+// them (shape.Face.Strikes): CBDT's, sbix's, and EBDT's or bdat's. A
+// sub-font's strike is an index into it.
+func (t *type3State) strikeList(f *Face) []shape.Strike {
+	if t.strikes == nil {
+		t.strikes = append([]shape.Strike{}, f.Strikes()...)
+	}
+	return t.strikes
 }
 
-func (c *imageCapture) current() shape.Transform {
-	if len(c.stack) == 0 {
-		return shape.Transform{XX: 1, YY: 1}
+// noStrike is the strike of a face that has none.
+const noStrike = -1
+
+// strikeFor is the strike a requested ppem paints from, as forme chooses it
+// for PaintOptions.PPEM: the smallest at least that large, or, failing any,
+// the largest; 0 asks for the largest.
+func (t *type3State) strikeFor(f *Face, ppem int) int {
+	list := t.strikeList(f)
+	if len(list) == 0 {
+		return noStrike
 	}
-	return c.stack[len(c.stack)-1]
+	if ppem > 0 {
+		for i, s := range list {
+			if s.PPEM() >= ppem {
+				return i
+			}
+		}
+	}
+	return len(list) - 1
 }
 
-func (c *imageCapture) PushTransform(t shape.Transform) {
-	p := c.current()
-	// The inner transform first, then the outer one.
-	c.stack = append(c.stack, shape.Transform{
-		XX: p.XX*t.XX + p.XY*t.YX,
-		YX: p.YX*t.XX + p.YY*t.YX,
-		XY: p.XX*t.XY + p.XY*t.YY,
-		YY: p.YX*t.XY + p.YY*t.YY,
-		X0: p.XX*t.X0 + p.XY*t.Y0 + p.X0,
-		Y0: p.YX*t.X0 + p.YY*t.Y0 + p.Y0,
-	})
-}
-
-func (c *imageCapture) PopTransform() {
-	if len(c.stack) > 0 {
-		c.stack = c.stack[:len(c.stack)-1]
-	}
-}
-
-func (c *imageCapture) unsupported(what string) {
-	if c.err == nil {
-		c.err = fmt.Errorf("%w: %s", errUnpaintable, what)
-	}
-}
-
-func (c *imageCapture) PushClipGlyph(int)                   { c.unsupported("a clip to an outline") }
-func (c *imageCapture) PushClipRect(shape.Rect)             { c.unsupported("a clip") }
-func (c *imageCapture) PopClip()                            {}
-func (c *imageCapture) PushGroup()                          { c.unsupported("a compositing group") }
-func (c *imageCapture) PopGroup(shape.CompositeMode)        {}
-func (c *imageCapture) Solid(shape.Color, bool)             { c.unsupported("a solid fill") }
-func (c *imageCapture) LinearGradient(shape.LinearGradient) { c.unsupported("a gradient") }
-func (c *imageCapture) RadialGradient(shape.RadialGradient) { c.unsupported("a gradient") }
-func (c *imageCapture) SweepGradient(shape.SweepGradient)   { c.unsupported("a gradient") }
-
-func (c *imageCapture) Image(img shape.Image) {
-	if c.got {
-		c.unsupported("more than one image")
-		return
-	}
-	t := c.current()
-	if t.YX != 0 || t.XY != 0 || t.XX <= 0 || t.YY <= 0 {
-		// An image is placed by its box, and a box only scales and moves.
-		c.unsupported("an image turned or mirrored")
-		return
-	}
-	b := img.Box
-	img.Box = shape.Rect{
-		XMin: t.XX*b.XMin + t.X0, YMin: t.YY*b.YMin + t.Y0,
-		XMax: t.XX*b.XMax + t.X0, YMax: t.YY*b.YMax + t.Y0,
-	}
-	c.img, c.got = img, true
-}
-
-// paint is a glyph as the strike for ppem paints it, and whether it has an
-// image there.
-func (f *Face) paint(gid, ppem int) (bitmapGlyph, bool, error) {
-	switch f.GlyphColour(gid, ppem) {
-	case shape.ColourBitmap, shape.ColourMask:
-	case shape.ColourSVG:
-		return bitmapGlyph{}, false, fmt.Errorf("%w: glyph %d is an SVG document", errUnpaintable, gid)
-	default:
-		// A glyph with no image here: its outline, or a COLR glyph, which
-		// is no bitmap.
+// bitmapOf is a strike's image of a glyph as the procedure draws it.
+func bitmapOf(gid int, img shape.Image) (bitmapGlyph, bool, error) {
+	if img.Width <= 0 || img.Height <= 0 || !(img.Box.XMax > img.Box.XMin) || !(img.Box.YMax > img.Box.YMin) {
 		return bitmapGlyph{}, false, nil
 	}
-	var c imageCapture
-	if err := f.PaintGlyph(gid, shape.PaintOptions{PPEM: ppem}, &c); err != nil {
-		return bitmapGlyph{}, false, fmt.Errorf("fonts: painting glyph %d: %w", gid, err)
-	}
-	if c.err != nil {
-		return bitmapGlyph{}, false, fmt.Errorf("glyph %d: %w", gid, c.err)
-	}
-	if !c.got || c.img.Width <= 0 || c.img.Height <= 0 ||
-		!(c.img.Box.XMax > c.img.Box.XMin) || !(c.img.Box.YMax > c.img.Box.YMin) {
-		return bitmapGlyph{}, false, nil
-	}
-	g := bitmapGlyph{img: c.img}
-	switch c.img.Format {
+	g := bitmapGlyph{img: img}
+	switch img.Format {
 	case shape.ImagePNG:
 		g.kind = glyphColour
 	case shape.ImageMask:
-		if len(c.img.Data) != c.img.Width*c.img.Height {
+		if len(img.Data) != img.Width*img.Height {
 			return bitmapGlyph{}, false, fmt.Errorf("fonts: glyph %d's coverage is %d bytes for %d×%d pixels",
-				gid, len(c.img.Data), c.img.Width, c.img.Height)
+				gid, len(img.Data), img.Width, img.Height)
 		}
 		g.kind = glyphMask
-		for _, v := range c.img.Data {
+		for _, v := range img.Data {
 			if v != 0 && v != 0xFF {
 				g.kind = glyphGrey
 				break
@@ -364,93 +302,71 @@ func (f *Face) paint(gid, ppem int) (bitmapGlyph, bool, error) {
 	return g, true, nil
 }
 
-// strikeOfImage is the ppem of the strike an image was painted from: its
-// pixels per em across, or down for an image with no width.
-func (f *Face) strikeOfImage(img shape.Image) int {
-	upem := float64(f.UnitsPerEm())
-	if w := img.Box.XMax - img.Box.XMin; w > 0 {
-		return int(math.Round(float64(img.Width) * upem / w))
-	}
-	return int(math.Round(float64(img.Height) * upem / (img.Box.YMax - img.Box.YMin)))
-}
-
-// strikeFor is the strike a requested ppem paints from: forme picks it, and the
-// first glyph with an image there says which it is.
-func (t *type3State) strikeFor(f *Face, ppem int) (int, error) {
-	if s, ok := t.strikeOf[ppem]; ok {
-		return s, nil
-	}
-	s := ppem
-	for gid := range f.NumGlyphs() {
-		g, ok, err := f.paint(gid, ppem)
-		if err != nil {
-			return 0, err
-		}
-		if ok {
-			s = f.strikeOfImage(g.img)
-			break
-		}
-	}
-	t.strikeOf[ppem] = s
-	return s, nil
-}
-
-// maxProbePPEM bounds the sizes asked about when a glyph is missing from the
-// strike its text size picks. forme names no face's strikes, so they are found
-// by asking for each size: every strike up to this size, and the largest,
-// which a request past every strike paints from.
-const maxProbePPEM = 256
-
-// glyphAt is a glyph as strike paints it, or, when that strike has no image for
-// it, as the nearest strike that has one does — the larger of two as near. A
-// glyph no strike has an image for, such as a space, is empty.
+// glyphAt is a glyph as a strike draws it (shape.Face.StrikeImage), or, when
+// that strike has no image of it, as the nearest strike that has one does —
+// the larger of two as near, a strike drawn smaller being sharper than one
+// drawn larger. A glyph no strike has an image of, such as a space, is empty,
+// unless the face's outlines draw it: in a face whose licence permits
+// embedding only its bitmaps that outline cannot be embedded, and the glyph
+// is refused. .notdef, which stands for a character the face does not have,
+// is drawn as nothing.
 func (t *type3State) glyphAt(f *Face, gid, strike int) (bitmapGlyph, error) {
 	k := [2]int{gid, strike}
 	if g, ok := t.glyphs[k]; ok {
 		return g, nil
 	}
-	g, ok, err := f.paint(gid, strike)
-	if err != nil {
-		return bitmapGlyph{}, err
+	if f.GlyphColour(gid, 0) == shape.ColourSVG {
+		return bitmapGlyph{}, fmt.Errorf("%w: glyph %d is an SVG document", errUnpaintable, gid)
 	}
-	if !ok {
-		g = bitmapGlyph{kind: glyphEmpty}
-		if !f.BitmapOnly() {
-			// A face with outlines whose licence permits only its bitmaps:
-			// a glyph no strike has may be nothing, as a space is, or its
-			// outline, which cannot be embedded. forme paints its colour
-			// strikes at any size, so there is no other strike to try.
-			// .notdef stands for a character the face does not have, and is
-			// drawn as nothing rather than as its outline.
-			if _, _, w, h, ok := f.GlyphExtents(gid); gid != 0 && ok && w != 0 && h != 0 {
-				return bitmapGlyph{}, errOutlineOnly(gid)
-			}
-			t.glyphs[k] = g
-			return g, nil
-		}
-		best := -1
-		// 0 asks for the largest strike. Each size from 1 up asks for the
-		// smallest strike at least that large, so once one is found the sizes
-		// up to it ask for it again and are skipped.
-		for p := 0; p <= maxProbePPEM; p++ {
-			cand, ok, err := f.paint(gid, p)
-			if err != nil {
+	list := t.strikeList(f)
+	g := bitmapGlyph{kind: glyphEmpty}
+	found := false
+	if strike >= 0 && strike < len(list) {
+		img, ok := f.StrikeImage(gid, list[strike])
+		var err error
+		if ok {
+			if g, found, err = bitmapOf(gid, img); err != nil {
 				return bitmapGlyph{}, err
 			}
+		}
+	}
+	if !found {
+		best := -1
+		for i, s := range list {
+			if i == strike {
+				continue
+			}
+			img, ok := f.StrikeImage(gid, s)
 			if !ok {
 				continue
 			}
-			s := f.strikeOfImage(cand.img)
-			if best < 0 || nearer(s, best, strike) {
-				g, best = cand, s
+			cand, ok, err := bitmapOf(gid, img)
+			if err != nil {
+				return bitmapGlyph{}, err
 			}
-			if p > 0 && s > p {
-				p = s
+			if ok && (best < 0 || nearer(s.PPEM(), list[best].PPEM(), want(list, strike))) {
+				g, best, found = cand, i, true
+			}
+		}
+	}
+	if !found {
+		g = bitmapGlyph{kind: glyphEmpty}
+		if !f.BitmapOnly() {
+			if _, _, w, h, ok := f.GlyphExtents(gid); gid != 0 && ok && w != 0 && h != 0 {
+				return bitmapGlyph{}, errOutlineOnly(gid)
 			}
 		}
 	}
 	t.glyphs[k] = g
 	return g, nil
+}
+
+// want is the size a strike stands for in choosing the nearest other one.
+func want(list []shape.Strike, strike int) int {
+	if strike >= 0 && strike < len(list) {
+		return list[strike].PPEM()
+	}
+	return 0
 }
 
 // nearer reports whether strike a is nearer to want than b, the larger of two
@@ -495,11 +411,7 @@ func (t *type3State) home(f *Face) (*subFont, error) {
 	}
 	key := subKey{vector: true}
 	if f.hasBitmaps() {
-		s, err := t.strikeFor(f, 0)
-		if err != nil {
-			return nil, err
-		}
-		key = subKey{strike: s}
+		key = subKey{strike: t.strikeFor(f, 0)}
 	}
 	sub := t.newSub(key)
 	t.assign(sub, 0)
@@ -566,10 +478,7 @@ func (t *type3State) place(f *Face, gid int, size float64, fill content.Color, f
 		sub, code := t.in(key, gid)
 		return sub, code, nil
 	}
-	s, err := t.strikeFor(f, f.ppemFor(size))
-	if err != nil {
-		return nil, 0, err
-	}
+	s := t.strikeFor(f, f.ppemFor(size))
 	g, err := t.glyphAt(f, gid, s)
 	if err != nil {
 		return nil, 0, err

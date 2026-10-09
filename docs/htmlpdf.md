@@ -57,6 +57,7 @@ case takes one import:
 | `Options`, `PageSize`, `PageSizePt` | the sheet and the refusal thresholds |
 | `A4`, `A5`, `Letter` | named sheets, each with a margin already |
 | `Finding`, `Size` | what `Result` carries |
+| `RunLimits`, `ErrRunLimit` | the bounds `RenderContext` renders under, and what it fails with past them |
 
 `Result` and `RefusedError` are this package's own, since what a render produced
 and why it would not are its business rather than the engine's.
@@ -122,6 +123,35 @@ missing glyphs really does reach this — one paragraph per character, since
 > reasoning is sound and the shape it produced was not: the second check is not
 > where anyone looks, and a caller who wrote the five lines above got a nil
 > dereference. A refusal is an error now.
+
+## Documents you do not control
+
+Laying a document out shapes all its text, and a hostile font, or a document
+that is simply large, can make that cost more than a caller can afford.
+`RenderContext` is `Render` under a context and one budget for all the shaping
+a document costs: every run, in every face, measured to break lines or shaped
+to be drawn (forme's `layout.ComposeContext`).
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+out, err := htmlpdf.RenderContext(ctx, in, opts, htmlpdf.RunLimits{})
+switch {
+case errors.Is(err, htmlpdf.ErrRunLimit), errors.Is(err, context.DeadlineExceeded):
+    // The document would have cost more than allowed; nothing was made.
+case err != nil:
+    return err
+}
+_ = out.ShapingWork // what it cost, for a budget kept across documents
+```
+
+A zero field of `RunLimits` is a default that grows with the text: no bound on
+a paragraph's length (layout shapes a paragraph as one run), glyphs in
+proportion to it, and 64 million units of work plus 1,024 a byte, which admits
+the costliest real text with room to spare. A field set is a fixed bound. When
+the context is done or the budget runs out, the result is zero: no document,
+and no findings from a composition that stopped part way. Otherwise it is
+`Render`'s, byte for byte, with `Result.ShapingWork` saying what was charged.
 
 ## Findings
 
