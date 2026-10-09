@@ -749,11 +749,14 @@ func TestCFFSubsetValidatesAtEveryLevel(t *testing.T) {
 			if err != nil {
 				t.Fatalf("drawing: %v", err)
 			}
-			fontRef, err := face.Embed(doc)
+			// Embedded directly, the face cannot know the document claims
+			// PDF/A-1; a caller that embeds it so says (Document.AddPage
+			// does it from the claim).
+			e, err := face.EmbedForms(doc, fonts.Forms{Horizontal: true, PDFA1: level.Part() == 1})
 			if err != nil {
 				t.Fatalf("embedding: %v", err)
 			}
-			attachPage(doc, drawn, fontRef)
+			attachPage(doc, drawn, e.Horizontal)
 
 			var buf bytes.Buffer
 			if err := doc.Write(&buf); err != nil {

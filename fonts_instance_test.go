@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bufio"
+	"bytes"
 	"os"
 	"path/filepath"
 	"sort"
@@ -191,6 +192,7 @@ func TestAnInstanceIsEmbeddedAsItIsDrawn(t *testing.T) {
 				t.Fatal("the default master draws every glyph as the instance does; the case cannot tell them apart")
 			}
 			text := c.text()
+			programs := map[pdfa.Level][]byte{}
 			for _, level := range levels {
 				face := fonts.Adopt(inst.Clone())
 				back, _ := drawnDocument(t, face, draw, text, level, true)
@@ -200,14 +202,26 @@ func TestAnInstanceIsEmbeddedAsItIsDrawn(t *testing.T) {
 				if got := strings.TrimSpace(mustExtractText(t, back)); got != text {
 					t.Errorf("%s: extracted %q, want %q", level, got, text)
 				}
-				checkEmbeddedInstance(t, back, inst, c)
+				programs[level] = checkEmbeddedInstance(t, back, inst, c, level.Part() == 1)
+			}
+			// PDF/A-1 carries the CFF bare; it is the CFF the other levels
+			// carry in their OpenType wrapper, which the checks above read.
+			if inst.IsCFF() {
+				wrapped := font.SFNTTables(programs[pdfa.PDFA2b])["CFF "]
+				if !bytes.Equal(programs[pdfa.PDFA1b], wrapped) {
+					t.Errorf("the PDF/A-1b program (%d bytes) is not the CFF table of the PDF/A-2b one (%d bytes)",
+						len(programs[pdfa.PDFA1b]), len(wrapped))
+				}
 			}
 		})
 	}
 }
 
-// checkEmbeddedInstance holds the font on the document's page to the oracle.
-func checkEmbeddedInstance(t *testing.T, doc *Document, inst *shape.Face, c instanceCase) {
+// checkEmbeddedInstance holds the font on the document's page to the oracle,
+// and returns the program embedded. bare is a document that claims PDF/A-1,
+// which carries a CFF program bare (/CIDFontType0C): the program's own glyphs
+// are not read then, and the caller holds it to the CFF table of a wrapped one.
+func checkEmbeddedInstance(t *testing.T, doc *Document, inst *shape.Face, c instanceCase, bare bool) []byte {
 	t.Helper()
 	res := doc.ResolveDict(doc.PageList()[0].Get("Resources"))
 	top := doc.ResolveDict(res.Get("Font")).Get("F1")
@@ -226,28 +240,41 @@ func checkEmbeddedInstance(t *testing.T, doc *Document, inst *shape.Face, c inst
 	if err != nil {
 		t.Fatal(err)
 	}
+	bare = bare && cff
 	if cff {
-		if sub := st.Dict.Get("Subtype"); sub != object.Name("OpenType") {
-			t.Errorf("the CFF program's /Subtype is %v, want /OpenType", sub)
+		wantSub := object.Name("OpenType")
+		if bare {
+			wantSub = "CIDFontType0C"
+		}
+		if sub := st.Dict.Get("Subtype"); sub != wantSub {
+			t.Errorf("the CFF program's /Subtype is %v, want %v", sub, wantSub)
 		}
 		if wantSub := object.Name("CIDFontType0"); cid.Get("Subtype") != wantSub {
 			t.Errorf("the CIDFont is %v, want %v", cid.Get("Subtype"), wantSub)
 		}
-		tables := font.SFNTTables(program)
-		if string(program[:4]) != "OTTO" || tables["CFF "] == nil || tables["CFF2"] != nil {
-			t.Errorf("the embedded program is not an OpenType font with CFF outlines and no CFF2 (tag %q)", program[:4])
+		if bare {
+			if font.ParseCFF(program) == nil {
+				t.Errorf("the bare program is not a CFF (starts %q)", program[:min(4, len(program))])
+			}
+		} else {
+			tables := font.SFNTTables(program)
+			if string(program[:4]) != "OTTO" || tables["CFF "] == nil || tables["CFF2"] != nil {
+				t.Errorf("the embedded program is not an OpenType font with CFF outlines and no CFF2 (tag %q)", program[:4])
+			}
 		}
 	}
-	emb, err := shape.Load(program)
-	if err != nil {
-		t.Fatalf("forme cannot read the embedded program: %v", err)
-	}
-	// The embedded program addresses a glyph by CID in a CID-keyed CFF
-	// (renumbered in the subset, each keeping its original index as its CID)
-	// and by its original index in a TrueType subset.
+	var emb *shape.Face
 	byCode := map[int]int{}
-	for g := 0; g < emb.NumGlyphs(); g++ {
-		byCode[emb.GlyphCode(g)] = g
+	if !bare {
+		if emb, err = shape.Load(program); err != nil {
+			t.Fatalf("forme cannot read the embedded program: %v", err)
+		}
+		// The embedded program addresses a glyph by CID in a CID-keyed CFF
+		// (renumbered in the subset, each keeping its original index as its
+		// CID) and by its original index in a TrueType subset.
+		for g := 0; g < emb.NumGlyphs(); g++ {
+			byCode[emb.GlyphCode(g)] = g
+		}
 	}
 	dw := 1000.0
 	switch v := doc.Resolve(cid.Get("DW")).(type) {
@@ -279,6 +306,9 @@ func checkEmbeddedInstance(t *testing.T, doc *Document, inst *shape.Face, c inst
 		if !bitSet(bits, code) {
 			t.Errorf("%q: /CIDSet does not list CID %d, which the page shows", g.r, code)
 		}
+		if bare {
+			continue
+		}
 		eg, ok := byCode[code]
 		if !ok {
 			t.Errorf("%q: the embedded program has no glyph for code %d", g.r, code)
@@ -297,6 +327,7 @@ func checkEmbeddedInstance(t *testing.T, doc *Document, inst *shape.Face, c inst
 			t.Errorf("%q: the embedded outline's box is %v; fontTools' instance has %v", g.r, box, g.bounds)
 		}
 	}
+	return program
 }
 
 // within reports whether two boxes agree to a font unit: HarfBuzz rounds a

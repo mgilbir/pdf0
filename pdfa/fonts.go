@@ -1,6 +1,7 @@
 package pdfa
 
 import (
+	"encoding/binary"
 	"fmt"
 	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/pdf0/internal/core"
@@ -222,6 +223,32 @@ func checkOneFontDict(doc core.View, level Level, rule string, fontDict *object.
 		if tu, ok := doc.Resolve(fontDict.Get("ToUnicode")).(*object.Stream); ok {
 			if core.HasForbiddenUnicodeTargets(doc, tu) {
 				bad("toUnicode", "ToUnicode CMap maps to a forbidden Unicode value (U+0000, U+FEFF or U+FFFE)")
+			}
+		}
+	}
+
+	// The font file's kind at PDF/A-1 (ISO 19005-1 6.3.2; veraPDF 6.3.2-7):
+	// PDF 1.4 names two, Type1C and CIDFontType0C, and a font file with any
+	// other /Subtype — OpenType, which PDF 1.6 added — is one PDF/A-1 does
+	// not allow. FontFile and FontFile2 carry no /Subtype.
+	if level.Part() == 1 {
+		fd := doc.ResolveDict(fontDict.Get("FontDescriptor"))
+		if subtype == "Type0" {
+			fd = nil
+			if desc := core.Type0Descendant(doc, fontDict); desc != nil {
+				fd = doc.ResolveDict(desc.Get("FontDescriptor"))
+			}
+		}
+		if fd != nil {
+			for _, key := range []object.Name{"FontFile", "FontFile2", "FontFile3"} {
+				s, ok := doc.Resolve(fd.Get(key)).(*object.Stream)
+				if !ok {
+					continue
+				}
+				if st, ok := doc.ResolveName(s.Dict.Get("Subtype")); ok && st != "Type1C" && st != "CIDFontType0C" {
+					bad("general", "the embedded font file's /Subtype is /%s; PDF 1.4 defines only "+
+						"/Type1C and /CIDFontType0C", string(st))
+				}
 			}
 		}
 	}
@@ -1256,13 +1283,12 @@ func type3GlyphWidth(doc core.View, cp *object.Stream) (float64, bool) {
 // --- subset CharSet / CIDSet completeness ---
 
 // subsetRule returns the clause a subset-embedding violation is reported
-// under: 19005-1 6.3.5, 19005-2/-3 6.2.11.4.2, 19005-4 6.2.10.4.2.
+// under: 19005-1 6.3.5, 19005-2/-3 6.2.11.4.2. PDF/A-4 has no such clause —
+// PDF 2.0 deprecates CharSet and CIDSet, and veraPDF's PDF/A-4 profile checks
+// 6.2.10.4.1 and nothing under 6.2.10.4.2 — so no subset rule runs there.
 func subsetRule(level Level) string {
-	switch level.Part() {
-	case 1:
+	if level.Part() == 1 {
 		return "6.3.5"
-	case 4:
-		return "6.2.10.4.2"
 	}
 	return "6.2.11.4.2"
 }
@@ -1270,8 +1296,12 @@ func subsetRule(level Level) string {
 // checkFontSubsetCompleteness verifies that a subset font descriptor's
 // CharSet (Type1) or CIDSet (CIDFont), when present, lists every glyph or
 // CID actually used for rendering (ISO 19005-1 6.3.5, -2/-3 6.2.11.4.2).
-// An empty or partial set omitting a shown glyph is a violation.
+// An empty or partial set omitting a shown glyph is a violation. PDF/A-4 does
+// not regulate either set (see subsetRule).
 func checkFontSubsetCompleteness(doc core.View, level Level) []Violation {
+	if level.Part() == 4 {
+		return nil
+	}
 	rule := subsetRule(level)
 	var errs []Violation
 
@@ -1408,6 +1438,178 @@ func checkCMapCIDLimit(doc core.View, level Level) []Violation {
 		}
 	}
 	return errs
+}
+
+// subsetTagged reports whether a font name begins with a subset tag: six
+// capital letters and a plus sign (ISO 32000-1 9.6.4).
+func subsetTagged(name string) bool {
+	if len(name) < 7 || name[6] != '+' {
+		return false
+	}
+	for i := 0; i < 6; i++ {
+		if name[i] < 'A' || name[i] > 'Z' {
+			return false
+		}
+	}
+	return true
+}
+
+// checkCIDSetMatchesProgram enforces ISO 19005-2/-3 6.2.11.4.2 for a subset
+// CIDFont that carries a /CIDSet: the set "shall identify all CIDs which are
+// present in the font program, regardless of whether a CID in the font is
+// referenced or used by the PDF or not" — every CID the program has is in the
+// set, and every CID in the set is one the program has.
+//
+// What a program has is read as veraPDF reads it (its GFPDCIDFont rule, over
+// its font parser's list of a program's CIDs), since what the CIDs of a
+// program are depends on how it is keyed:
+//
+//   - a TrueType program (CIDFontType2) through an Identity CIDToGIDMap has
+//     the CIDs 0 to one less than the long metrics its hmtx states, empty
+//     glyphs included; through a mapping stream, the CIDs the stream maps
+//     to a glyph the program declares. A CID in the set has to map to a
+//     glyph the program declares (maxp);
+//   - a CID-keyed CFF has the CIDs its charset names;
+//   - a CFF that is not CID-keyed has none, so a set that names any CID but
+//     0 names one the program lacks.
+//
+// CID 0, .notdef, is neither required nor checked. PDF/A-1 checks the CIDs
+// shown instead (checkCIDSetProgramComplete), and PDF/A-4 drops the rule.
+func checkCIDSetMatchesProgram(doc core.View, level Level) []Violation {
+	if p := level.Part(); p != 2 && p != 3 {
+		return nil
+	}
+	var errs []Violation
+	for fontDict := range core.CollectFontTextUsage(doc) {
+		if st, _ := doc.ResolveName(fontDict.Get("Subtype")); st != "Type0" {
+			continue
+		}
+		desc := core.Type0Descendant(doc, fontDict)
+		if desc == nil {
+			continue
+		}
+		if name, _ := doc.ResolveName(desc.Get("BaseFont")); !subsetTagged(string(name)) {
+			continue
+		}
+		fd := doc.ResolveDict(desc.Get("FontDescriptor"))
+		if fd == nil {
+			continue
+		}
+		cidSetStream, ok := doc.Resolve(fd.Get("CIDSet")).(*object.Stream)
+		if !ok {
+			continue
+		}
+		set, r := core.DecodeCIDSet(doc, cidSetStream)
+		if r.Declined() {
+			continue // an unread CIDSet lists nothing; the producer recorded the trip (C47)
+		}
+		cids, has, ok := programCIDs(doc, desc, fd)
+		if !ok {
+			continue // a program this cannot read is not one it can hold the set to
+		}
+		num := 0
+		if ir, ok := doc.Resolve(fontDict.Get("DescendantFonts")).(object.Array); ok && len(ir) > 0 {
+			num = resolveObjNum(doc, ir[0])
+		}
+		missing, extra := -1, -1
+		for _, cid := range cids {
+			if cid != 0 && !set.Has(cid) {
+				missing = cid
+				break
+			}
+		}
+		for cid := 1; cid < 8*len(set); cid++ {
+			if set.Has(cid) && !has(cid) {
+				extra = cid
+				break
+			}
+		}
+		switch {
+		case missing >= 0:
+			errs = append(errs, Violation{Rule: subsetRule(level), Level: level, Object: num,
+				Message: fmt.Sprintf("the CIDSet does not list CID %d, which the embedded font program has", missing)})
+		case extra >= 0:
+			errs = append(errs, Violation{Rule: subsetRule(level), Level: level, Object: num,
+				Message: fmt.Sprintf("the CIDSet lists CID %d, which the embedded font program does not have", extra)})
+		}
+	}
+	return errs
+}
+
+// programCIDs is the CIDs a CIDFont's embedded program has, as
+// checkCIDSetMatchesProgram reads them, and a test for one; ok is false for a
+// program it cannot read or a kind it does not judge.
+func programCIDs(doc core.View, desc, fd *object.Dictionary) (cids []int, has func(int) bool, ok bool) {
+	none := func(int) bool { return false }
+	switch sub, _ := doc.ResolveName(desc.Get("Subtype")); sub {
+	case "CIDFontType2":
+		s, isStream := doc.Resolve(fd.Get("FontFile2")).(*object.Stream)
+		if !isStream {
+			return nil, nil, false
+		}
+		data, r := doc.Content(s)
+		if r != core.ReasonOK {
+			return nil, nil, false
+		}
+		tables := font.SFNTTables(data)
+		maxp, hhea := tables["maxp"], tables["hhea"]
+		if len(maxp) < 6 || len(hhea) < 36 {
+			return nil, nil, false
+		}
+		numGlyphs := int(binary.BigEndian.Uint16(maxp[4:]))
+		longMetrics := int(binary.BigEndian.Uint16(hhea[34:]))
+		switch m := doc.Resolve(desc.Get("CIDToGIDMap")).(type) {
+		case *object.Stream:
+			gids, r := doc.Content(m)
+			if r != core.ReasonOK {
+				return nil, nil, false
+			}
+			has = func(cid int) bool {
+				return cid != 0 && 2*cid+1 < len(gids) && int(binary.BigEndian.Uint16(gids[2*cid:])) < numGlyphs
+			}
+			for cid := 0; cid < len(gids)/2; cid++ {
+				if has(cid) {
+					cids = append(cids, cid)
+				}
+			}
+			return cids, has, true
+		case object.Name, nil:
+			if m != nil && m != object.Name("Identity") {
+				return nil, nil, false
+			}
+			for cid := 0; cid < longMetrics; cid++ {
+				cids = append(cids, cid)
+			}
+			return cids, func(cid int) bool { return cid != 0 && cid < numGlyphs }, true
+		}
+		return nil, nil, false
+	case "CIDFontType0":
+		s, isStream := doc.Resolve(fd.Get("FontFile3")).(*object.Stream)
+		if !isStream {
+			return nil, nil, false
+		}
+		data, r := doc.Content(s)
+		if r != core.ReasonOK {
+			return nil, nil, false
+		}
+		if st, _ := doc.ResolveName(s.Dict.Get("Subtype")); st == "OpenType" {
+			data = font.SFNTTables(data)["CFF "]
+		}
+		cff := font.ParseCFF(data)
+		if cff == nil {
+			return nil, nil, false
+		}
+		if cff.GIDToCID == nil {
+			return nil, none, true // not CID-keyed: no CIDs of its own
+		}
+		charset := map[int]bool{}
+		for _, cid := range cff.GIDToCID {
+			charset[cid] = true
+			cids = append(cids, cid)
+		}
+		return cids, func(cid int) bool { return cid != 0 && charset[cid] }, true
+	}
+	return nil, nil, false
 }
 
 // checkCIDSetProgramComplete enforces the stricter PDF/A-1 subset rule
