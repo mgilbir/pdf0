@@ -207,7 +207,7 @@ jobs:
           echo "PDF0_SKIA_PYTHON=$RUNNER_TEMP/skia/bin/python" >> "$GITHUB_ENV"
           # veraPDF, the PDF/A reference validator, for the Type 3 fonts'
           # documents (testdata/verapdf).
-          docker pull -q verapdf/cli:1.30.3
+          docker pull -q verapdf/cli:v1.30.3
           echo "PDF0_VERAPDF=$GITHUB_WORKSPACE/testdata/verapdf/verapdf-docker.sh" >> "$GITHUB_ENV"
 
       - name: conformance ratchets

@@ -11,7 +11,7 @@ for a in "$@"; do
 	fi
 done
 if [ -z "$dir" ]; then
-	exec docker run --rm "${VERAPDF_IMAGE:-verapdf/cli:1.30.3}" "$@"
+	exec docker run --rm "${VERAPDF_IMAGE:-verapdf/cli:v1.30.3}" "$@"
 fi
 # Rewrite each document to its path under /data, keeping the order.
 n=$#
@@ -26,4 +26,4 @@ while [ "$i" -lt "$n" ]; do
 	fi
 	i=$((i + 1))
 done
-exec docker run --rm -v "$dir:/data:ro" "${VERAPDF_IMAGE:-verapdf/cli:1.30.3}" "$@"
+exec docker run --rm -v "$dir:/data:ro" "${VERAPDF_IMAGE:-verapdf/cli:v1.30.3}" "$@"
