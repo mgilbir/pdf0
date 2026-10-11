@@ -24,8 +24,8 @@ document with the finding, for a caller who can live with the loss:
 
 Every field of every display-list operation is either drawn or refused, and
 `drawnFields` in `htmlpdf/pdfout.go` says which;
-`TestEveryDrawOpFieldIsAccountedFor` holds that list to forme's types, so a field forme adds fails the tests until the backend
-accounts for it.
+`TestEveryDrawOpFieldIsAccountedFor` holds that list to forme's types, so a
+field forme adds fails the tests until the backend accounts for it.
 
 ## What is drawn
 
@@ -59,8 +59,8 @@ Everything else in the display list is written, as follows.
   and drawn on those em boxes as `layout.ShapedGlyphs` states them: an em
   down the line for each character, each glyph hung where shaping hangs it
   from the top of its box, which centres its ink in the box. A standard face
-  has no
-  vertical font, and its glyphs are placed one by one in the horizontal one.
+  has no vertical font, and its glyphs are placed one by one in the
+  horizontal one.
   See [text.md](text.md#upright-text-down-the-page).
 - **Bitmap and colour faces.** A face whose glyphs are only bitmaps (EBDT,
   bdat, CBDT, sbix) and a face with COLR colour glyphs are drawn as Type 3
