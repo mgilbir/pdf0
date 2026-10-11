@@ -31,9 +31,10 @@
 // file, so a nil error means the file was parsed, not that it is well formed.
 // Write regenerates the file's structure from the object model: the header,
 // the object layout, the cross-reference section and the trailer. It refuses,
-// before writing anything, a document it cannot represent faithfully, and it
-// adds nothing the model lacks: a document with no /ID is written without one
-// (NewDocument starts a document that has one).
+// before writing anything, a document it cannot represent faithfully. It does
+// not make a document conformant: a document with no /ID, which PDF 2.0
+// requires, is written without one (NewDocument starts a document that has
+// one).
 //
 // Document.ExtractText and Document.ImagesContext read content out,
 // Document.ExtractPages and Document.AppendPages move pages between documents,
