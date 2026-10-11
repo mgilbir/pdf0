@@ -128,7 +128,7 @@ func cmdInfo(args []string) error {
 
 func cmdValidate(args []string) error {
 	fs := flag.NewFlagSet("validate", flag.ExitOnError)
-	level := fs.String("level", "2b", "PDF/A level: "+levelNames+", or declared (the level the file declares)")
+	level := fs.String("level", defaultLevel, "PDF/A level: "+levelNames+", or declared (the level the file declares)")
 	pw := addSecretFlags(fs, readPassword)
 	fs.Parse(args)
 	if fs.NArg() != 1 {
@@ -285,7 +285,7 @@ func cmdExtract(args []string) error {
 func cmdRepair(args []string) error {
 	fs := flag.NewFlagSet("repair", flag.ExitOnError)
 	force := fs.Bool("force", false, "replace <out> if it exists")
-	level := fs.String("level", "2b", "target PDF/A level: "+levelNames)
+	level := fs.String("level", defaultLevel, "target PDF/A level: "+levelNames)
 	pw := addSecretFlags(fs, readPassword)
 	fs.Parse(args)
 	if fs.NArg() != 2 {
@@ -445,6 +445,9 @@ func cmdUA(args []string) error {
 // readBack is how repair re-reads its own output: parseDoc, a variable only so
 // a test can make the read-back fail.
 var readBack = parseDoc
+
+// defaultLevel is what -level is when it is not given.
+const defaultLevel = "2b"
 
 // levelNames lists the -level values that name a profile, as parseLevel
 // reads them.

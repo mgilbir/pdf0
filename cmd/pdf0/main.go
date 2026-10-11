@@ -1,5 +1,5 @@
 // Command pdf0 is a small command-line front end to the pdf0 library:
-// inspect, validate, decrypt, and encrypt PDF files.
+// inspect, validate, repair, merge, decrypt, and encrypt PDF files.
 //
 // Exit codes: 0 — success (no violations found); 1 — the requested checks
 // reported violations; 2 — usage error, including a refusal to overwrite a
@@ -121,18 +121,25 @@ func run(args []string) int {
 	return exitCode(err)
 }
 
+// usage prints the top-level help. The -level names come from pdfa.Levels(),
+// as parseLevel reads them: a hand-kept copy here once offered four of the
+// eleven.
 func usage() {
-	fmt.Fprint(os.Stderr, `pdf0 — inspect, validate, and (de)encrypt PDF files
+	fmt.Fprintf(os.Stderr, `pdf0 — inspect, validate, repair, merge, and (de)encrypt PDF files
 
 usage:
   pdf0 info     [-password-file F] <file>
-  pdf0 validate [-level 1b|2b|3b|4] [-password-file F] <file>
+  pdf0 validate [-level LEVEL|declared] [-password-file F] <file>
   pdf0 decrypt  [-force] [-password-file F] <in> <out>
   pdf0 encrypt  [-force] [-user-password-file F] [-owner-password-file F] <in> <out>
   pdf0 extract  [-password-file F] <file>
-  pdf0 repair   [-force] [-level 1b|2b|3b|4] [-password-file F] <in> <out>
+  pdf0 repair   [-force] [-level LEVEL] [-password-file F] <in> <out>
   pdf0 merge    [-force] <out> <in1> <in2> [in3 ...]
   pdf0 ua       [-password-file F] <file>
+
+LEVEL is a PDF/A level (default %s):
+  %s
+validate also takes "declared": the level the file's own metadata claims.
 
 "-" is stdin as an input and stdout as an output. An existing output is
 replaced only with -force, and never when it is one of the inputs.
@@ -144,7 +151,7 @@ is a terminal.
 
 exit codes: 0 success, 1 violations reported, 2 usage error or refused
 overwrite, 3 read/write, parse, or encryption error
-`)
+`, defaultLevel, levelNames)
 }
 
 // parseDoc parses a PDF from memory, with a password when one is given.

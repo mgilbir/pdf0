@@ -73,9 +73,19 @@ func checkOutput(out string, force bool, inputs []*inputFile) error {
 		fi, err := os.Stdout.Stat()
 		if err == nil && fi.Mode().IsRegular() {
 			if in := sameAsInput(fi, inputs); in != nil {
-				// The shell truncated it before pdf0 started; nothing can
-				// be saved, but say what happened instead of a parse error.
-				return usagef("stdout is redirected to the input %s, which the shell has already truncated", in.name)
+				// Say what the redirect did, instead of a parse error or a
+				// guess: `>` truncated the input before pdf0 started, and
+				// nothing can be saved; `>>` left it whole, and writing would
+				// put a second PDF after the first; `1<>` left it whole, and
+				// writing would overwrite it in place (docs audit 2026-10-11
+				// D68).
+				switch {
+				case appends(os.Stdout):
+					return usagef("stdout is appended to the input %s; writing the PDF there would add it to the end of that file, which is left as it was", in.name)
+				case len(in.data) == 0:
+					return usagef("stdout is redirected to the input %s, which is empty: the shell has already truncated it", in.name)
+				}
+				return usagef("stdout is the input %s; writing the PDF there would overwrite it, so it is left as it was", in.name)
 			}
 		}
 		return nil
