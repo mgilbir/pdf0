@@ -184,7 +184,7 @@ err := doc.SetDocumentInfo(pdf0.DocumentInfo{
 })
 ```
 
-`examples/flavored` does this at three conformance levels.
+`examples/flavored` describes each document it saves this way.
 
 ## An outline (bookmarks)
 
