@@ -85,6 +85,12 @@ func probe(path string) outcome {
 		// buffering it would OOM the probe on otherwise-handled input. A real
 		// consumer writes to a streaming io.Writer, so this matches real usage
 		// while still exercising the serializer.
+		//
+		// The consent first: without it WriteContext refuses a signed file
+		// (ErrWouldInvalidateSignatures) before reaching the serializer, and
+		// the signed corpus files would no longer be probed. Nothing is
+		// written, so no signature is lost.
+		doc.AllowInvalidatingSignatures()
 		_ = doc.WriteContext(ctx, io.Discard)
 		_ = pdf0.ValidatePDFUAContext(ctx, doc)
 		if ctx.Err() != nil {
