@@ -195,6 +195,9 @@ v0.6.0.
   data, and a colour face was written as Type 3 path procedures regardless. It
   is now drawn from its bitmap strikes, or refused with
   `fonts.ErrBitmapEmbeddingOnly` when it has none, at every level.
+- **In a document whose metadata declares PDF/UA-2, `SetStructureTree` writes
+  the top-level `Document` element in the PDF 2.0 structure namespace**, as
+  part 2 requires. Other documents are unchanged.
 
 ### The `pdf0` command
 
@@ -266,6 +269,18 @@ v0.6.0.
   not shipped before, is now included, and `internal/saslprep/tables.go`
   carries RFC 3454's copyright notice and permission paragraph, as the RFC
   requires of derivative works.
+- **`DocumentInfo.Language`**: `SetDocumentInfo` writes the document's
+  language tag as the catalog `/Lang`. A value that is not a language tag is
+  refused; in a PDF/A-1 document its subtags must be letters only.
+- **`Document.DeclarePDFUA`** declares a document PDF/UA-1 or PDF/UA-2: it
+  writes the `pdfuaid` identification (with `pdfuaid:rev` for part 2), the
+  extension schema PDF/A requires for it, and `/ViewerPreferences
+  /DisplayDocTitle`, and for part 2 puts the structure tree's `Document`
+  element in the PDF 2.0 namespace. It refuses a document with no title, a PDF
+  version the part is not defined for, part 2 without a language, and a Locked
+  document. With `SetStructureTree` and `SetDocumentInfo`, a tagged document
+  passes `ValidatePDFUA` / `ValidatePDFUA2` and veraPDF; docs/building.md has
+  the recipe.
 
 ## Fixed
 
