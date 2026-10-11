@@ -53,6 +53,33 @@ v0.6.0.
   trust — is `sign.Result.Valid`, made over the signature's byte range, with
   trust reported beside it in `TrustedChain`, `ChainErr` and `Revocation`.
 
+### Behaviour that breaks callers (not reported by gorelease)
+
+- **`Write`, `WriteContext`, `Save` and `SaveContext` refuse a signed
+  document.** A document read from a file that carries a signature or document
+  time-stamp is refused with an error wrapping `ErrWouldInvalidateSignatures`,
+  and nothing is written. These writers regenerate the whole file, which moves
+  every byte a signature covers: they used to return nil and write a file whose
+  signatures no longer verified, even when nothing had changed. A document
+  built in memory is unaffected.
+  *Migration:* to keep the signatures, write the changes as an incremental
+  update with `WriteIncremental` (add signatures and time-stamps with
+  `WriteSignedIncremental` and `WriteArchivalTimestamp`). To rewrite the file
+  and discard them on purpose, call `AllowInvalidatingSignatures` on the
+  document first.
+- **`SetEncryption` refuses a signed document**, with an error wrapping
+  `ErrWouldInvalidateSignatures`, and changes nothing. Encryption can only be
+  applied by rewriting the whole file, and an incremental update cannot add it,
+  so "sign, then encrypt" produced a file whose signature did not verify.
+  *Migration:* call `AllowInvalidatingSignatures` first to encrypt it anyway;
+  pdf0 cannot produce a file that is both encrypted and validly signed.
+- **The incremental writers refuse a document read from an encrypted file,
+  even after `RemoveEncryption`.** `WriteIncremental`,
+  `WriteSignedIncremental` and `WriteArchivalTimestamp` checked only whether
+  the document was still encrypted (see Fixed).
+  *Migration:* write the decrypted document whole with `Write`; if it is
+  signed, that needs `AllowInvalidatingSignatures` too.
+
 ### Deprecated, not removed
 
 - **`Document.ExtractImages` is deprecated** (#335). It has no error result,
@@ -116,6 +143,14 @@ v0.6.0.
   were supplied". It is nil exactly when `TrustedChain` is set or the signature
   is not `Valid`.
 
+- **`WriteSigned` finds an existing signature as `VerifySignatures` does.** Its
+  `ErrAlreadySigned` refusal now asks what the file it was read from carries,
+  by the verifier's test. It used to miss a signature whose `/Contents` is
+  indirect, and rewrite the file without a word; it no longer refuses a
+  dictionary whose indirect `/Type` names no signature, nor a document built in
+  memory. It also accepts the document's `AllowInvalidatingSignatures` consent,
+  as it accepts `InvalidatingExistingSignatures()`.
+
 ### Extraction
 
 - **The extractors return an error for a Locked document** (#335). `ExtractText`,
@@ -152,6 +187,12 @@ v0.6.0.
   that declares no level is the common case; it exited 1. Any violation is still
   exit 1, with or without checker findings, and `repair`'s summary counts
   checker findings apart. See [cli.md](../cli.md#exit-codes).
+- **`decrypt`, `encrypt`, `repair` and `merge` refuse a signed input**, exit 3,
+  naming the input and nothing written: each rewrites the whole file, which
+  breaks every signature in it. `merge` refuses a signed input in any position.
+  They used to write the file, and its signatures no longer verified. The new
+  `-invalidate-signatures` flag writes it anyway. See
+  [cli.md](../cli.md#signed-inputs).
 - **`pdf0 -h` lists every `-level`** (#340): each PDF/A level `pdfa.Levels`
   returns, and `declared` for `validate`, where it offered only 1b, 2b, 3b and
   4.
@@ -193,7 +234,22 @@ v0.6.0.
   do the same for stroking. `content.Color.Underlying` records the underlying
   space.
 
+- **`ErrWouldInvalidateSignatures`**: the `errors.Is` target for a refusal to
+  rewrite a document whose file carries signatures.
+- **`Document.AllowInvalidatingSignatures`**: the consent to rewrite such a
+  document anyway, held by the document
+  ([ADR 0019](../adr/0019-signature-consent-on-the-document.md)).
+- **`pdf0`'s `-invalidate-signatures` flag** on `decrypt`, `encrypt`, `repair`
+  and `merge`: the same consent, from the command line.
+
 ## Fixed
+
+- **An incremental update of a file read encrypted no longer garbles it.**
+  After `RemoveEncryption`, `WriteIncremental`, `WriteSignedIncremental` and
+  `WriteArchivalTimestamp` appended plaintext objects to the file's ciphertext
+  under a trailer without `/Encrypt`, so every reader took the ciphertext for
+  content, while a signature over the original bytes still verified. They now
+  refuse.
 
 - **`Read` opens a rebuilt file whose catalog is in an object stream** (#334).
   A file whose cross-reference data is unusable is rebuilt by scanning; `/Root`
