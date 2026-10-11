@@ -593,7 +593,7 @@ func trailingBytes(file core.SignedFile, from int64) string {
 		}
 		got, err := file.ReaderAt().ReadAt(buf[:n], off)
 		if int64(got) != n && err != nil {
-			return "the bytes after the file's last %EOF could not be read"
+			return "the bytes after the file's last %%EOF could not be read"
 		}
 		for i, b := range buf[:n] {
 			switch b {
