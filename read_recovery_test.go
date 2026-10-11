@@ -4,15 +4,17 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
+	"strings"
 	"testing"
 
+	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 )
 
 // This file tests Read's recovery of files whose cross-reference data is
 // damaged: what the scan rebuild finds when the objects a reader needs first
 // (the catalog, the encryption dictionary's trailer) live where a byte-level
-// scan cannot see them.
+// scan cannot see them, and what an older section that fails reports.
 
 // objStmFile lays out a PDF 1.7 file with the compressed objects packed into
 // object stream 1 (in object-number order) and the uncompressed ones as
@@ -335,5 +337,84 @@ func TestRebuildDecryptsObjStmCatalog(t *testing.T) {
 	nd := doc.ResolveDict(object.IndirectRef{Number: 3})
 	if s, _ := nd.Get("Text").(object.String); string(s.Value) != "plaintext survives" {
 		t.Errorf("object 3 /Text = %q, want the decrypted plaintext", s.Value)
+	}
+}
+
+// TestOlderXRefSectionTripIsReported is docs audit 2026-10-11 D36. The newest
+// section is a traditional table whose /Prev names an older cross-reference
+// stream that pdf0 declines to decode: over the decoded-stream limit, or under
+// a filter it does not implement. The chain is cut there, so objects only
+// that section located are missing, and the reason is now recorded as a read
+// trip, as it is when the newest section is the one declined. A malformed
+// older section stays silent: it is a defect of the file, not a guard pdf0
+// applied.
+func TestOlderXRefSectionTripIsReported(t *testing.T) {
+	head, offs := numberedPDF([]string{
+		"<< /Type /Catalog /Pages 2 0 R >>",
+		"<< /Type /Pages /Kids [] /Count 0 >>",
+	})
+	build := func(before, filter string, data []byte) []byte {
+		var b bytes.Buffer
+		b.Write(head)
+		b.WriteString(before)
+		oldAt := b.Len()
+		fmt.Fprintf(&b, "3 0 obj\n<< /Type /XRef /Size 4 /W [1 3 1] /Root 1 0 R%s /Length %d >>\nstream\n", filter, len(data))
+		b.Write(data)
+		b.WriteString("\nendstream\nendobj\n")
+		newAt := b.Len()
+		fmt.Fprintf(&b, "xref\n0 3\n0000000000 65535 f \n%010d 00000 n \n%010d 00000 n \ntrailer\n<< /Size 4 /Root 1 0 R /Prev %d >>\nstartxref\n%d\n%%%%EOF\n",
+			offs[1], offs[2], oldAt, newAt)
+		return b.Bytes()
+	}
+	var rows []byte
+	rows = append(rows, 0, 0, 0, 0, 255)
+	for i := 1; i <= 2; i++ {
+		rows = append(append(append(rows, 1), be(offs[i], 3)...), 0)
+	}
+	rows = append(rows, 0, 0, 0, 0, 0)
+	flate := build("", " /Filter /FlateDecode", zlibBytes(rows))
+	// A standalone "xref" just before the older section is where Read looks
+	// for a section that is not at its stated offset; parsing there fails as
+	// malformed, which must not hide why the stated section was not read.
+	strayKeyword := build("% xref\n", " /Filter /FlateDecode", zlibBytes(rows))
+
+	for _, tc := range []struct {
+		name  string
+		file  []byte
+		opts  []Option
+		guard string // "" = no trip expected
+	}{
+		{"control", flate, nil, ""},
+		{"over the decode limit", flate, []Option{WithMaxDecodedStreamBytes(8)}, core.GuardDecodedStream},
+		{"over the decode limit, stray xref keyword before it", strayKeyword, []Option{WithMaxDecodedStreamBytes(8)}, core.GuardDecodedStream},
+		{"unsupported filter", build("", " /Filter /DCTDecode", rows), nil, core.GuardUnsupportedFilter},
+		{"malformed", build("", " /Filter /FlateDecode", []byte("not flate data")), nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := readRaw(t, tc.file, tc.opts...)
+			if doc.Source().Rebuilt() {
+				t.Fatal("rebuilt; the newest section should have been used")
+			}
+			wantSections := 1
+			if tc.name == "control" {
+				wantSections = 2
+			}
+			if got := len(doc.Source().sections); got != wantSections {
+				t.Fatalf("%d sections read, want %d", got, wantSections)
+			}
+			var msgs []string
+			for _, tr := range doc.readLimits.Snapshot() {
+				msgs = append(msgs, tr.Message())
+			}
+			if tc.guard == "" {
+				if len(msgs) > 0 {
+					t.Errorf("unexpected read trips: %q", msgs)
+				}
+				return
+			}
+			if len(msgs) != 1 || !strings.Contains(msgs[0], tc.guard) || !strings.Contains(msgs[0], "older cross-reference section") {
+				t.Errorf("read trips = %q, want one %s trip about the older section", msgs, tc.guard)
+			}
+		})
 	}
 }

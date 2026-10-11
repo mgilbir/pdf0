@@ -233,11 +233,24 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 	xrefOffset, adjust, err := locateXRef(data, headerOffset)
 	if err == nil {
 		var sections []XRefSection
-		sections, chainBroken, err = walkXRefChain(cancel, data, xrefOffset, adjust, lim, budget)
+		var cut error
+		sections, chainBroken, cut, err = walkXRefChain(cancel, data, xrefOffset, adjust, lim, budget)
 		if cerr := cancel.StopErr("reading PDF cross-reference chain"); cerr != nil {
 			return nil, cerr
 		}
 		if err == nil {
+			// An older section pdf0 declined to decode cut the chain there:
+			// every object only it or an older section located is missing, and
+			// the reader must be told why, as for the newest section below
+			// (docs audit 2026-10-11 D36). A malformed older section is a
+			// defect of the file, not a guard pdf0 applied, and stays out of
+			// the trip record, as a malformed newest section does.
+			switch core.ReasonOf(cut) {
+			case core.ReasonLimit:
+				doc.noteReadLimit(core.GuardDecodedStream, fmt.Sprintf("an older cross-reference section's stream decodes to more than the %s-byte per-stream limit, so the chain of updates was cut there; an object only that section or an older one located may be missing", core.LimitBound(int64(lim.DecodedStreamBytes), core.DefaultMaxDecodedStreamBytes)), 0)
+			case core.ReasonUnsupported:
+				doc.noteReadLimit(core.GuardUnsupportedFilter, "an older cross-reference section's stream is encoded in a way pdf0 does not implement ("+cut.Error()+"), so the chain of updates was cut there; an object only that section or an older one located may be missing", 0)
+			}
 			src.adjust = adjust
 			src.sections = sections
 			xrefTable = mergeSections(sections)
@@ -464,23 +477,30 @@ func locateXRef(data []byte, headerOffset int64) (offset, adjust int64, err erro
 // Only the newest section is required: its failure is the returned error, on
 // which Read rebuilds the table by scanning. A broken older section ends the
 // chain there and sets broken, so Read can still count the numbers that
-// section's objects use toward the high-water mark.
-func walkXRefChain(cancel core.Canceler, data []byte, stated, adjust int64, lim core.Limits, budget *inUseBudget) (sections []XRefSection, broken bool, err error) {
+// section's objects use toward the high-water mark; cut is that section's
+// error, so Read can report one pdf0 declined to decode (core.ReasonOf). A
+// /Prev that points outside the file also sets broken, with cut nil.
+//
+// When a section fails at its stated offset and again at the relocated one,
+// the error kept is the first, if pdf0 declined it (a limit, an unsupported
+// filter): that is the section the file named, and a malformed table found
+// by the relocation must not hide the reason it was not read.
+func walkXRefChain(cancel core.Canceler, data []byte, stated, adjust int64, lim core.Limits, budget *inUseBudget) (sections []XRefSection, broken bool, cut, err error) {
 	size := int64(len(data))
 	visited := make(map[int64]bool)
 	ends := eofEnds(data)
 	for {
 		// One iteration per incremental update; a file can carry thousands.
 		if err := cancel.StopErr("reading PDF cross-reference chain"); err != nil {
-			return nil, false, err
+			return nil, false, nil, err
 		}
 		offset := stated + adjust
 		if offset < 0 || offset >= size {
 			// /Prev points outside the file; ignore the broken chain tail.
-			return sections, true, nil
+			return sections, true, nil, nil
 		}
 		if visited[offset] {
-			return sections, false, nil // cycle in the /Prev chain
+			return sections, false, nil, nil // cycle in the /Prev chain
 		}
 		visited[offset] = true
 
@@ -496,13 +516,19 @@ func walkXRefChain(cancel core.Canceler, data []byte, stated, adjust int64, lim 
 			// nearest standalone "xref" keyword at or before the offset.
 			if rec := precedingXrefKeyword(data, offset); rec >= 0 && !visited[rec] {
 				visited[rec] = true
+				first := err
 				sec, err = parseXRefSection(cancel, data, rec, adjust, lim, budget)
+				if err != nil {
+					if r := core.ReasonOf(first); r == core.ReasonLimit || r == core.ReasonUnsupported {
+						err = first
+					}
+				}
 			}
 			if err != nil {
 				if len(sections) == 0 {
-					return nil, false, err
+					return nil, false, nil, err
 				}
-				return sections, true, nil // tolerate a broken older section
+				return sections, true, err, nil // tolerate a broken older section
 			}
 		}
 		sec.stated = stated
@@ -512,7 +538,7 @@ func walkXRefChain(cancel core.Canceler, data []byte, stated, adjust int64, lim 
 
 		prev, ok := sec.trailer.Get("Prev").(object.Integer)
 		if !ok {
-			return sections, false, nil
+			return sections, false, nil, nil
 		}
 		stated = int64(prev)
 	}
