@@ -14,9 +14,9 @@ table; this doc is the inside of the two UA cells.
 
 What a clean result is measured against, in short: the PDF Association's ten
 conformant reference files report nothing, and over the veraPDF corpus pdf0
-reports none of the PDF/UA-1 pass files and 153 of the 155 fail files, and none
-of the PDF/UA-2 pass files and 82 of the 84 fail files. [The
-oracles](#the-oracles) has the files on the wrong side of the line and why.
+reports none of the PDF/UA-1 or PDF/UA-2 pass files and every fail file of
+both (155 of 155 and 84 of 84). [The oracles](#the-oracles) says how that was
+reached, where pdf0 and veraPDF part ways on purpose, and why.
 
 ## The structure tree comes first
 
