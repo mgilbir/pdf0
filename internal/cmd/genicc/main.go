@@ -16,6 +16,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,6 +25,19 @@ import (
 )
 
 func main() {
+	flag.Usage = func() {
+		fmt.Fprint(flag.CommandLine.Output(), `usage: genicc
+
+Writes pdfa/icc/srgb-v2_1.icc and pdfa/icc/srgb-v4_3.icc, the sRGB profiles
+pdfa embeds, as golittlecms builds them. Run it from the repository root, and
+only to regenerate those files.
+`)
+	}
+	flag.Parse()
+	if flag.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, "usage: genicc")
+		os.Exit(2)
+	}
 	for _, p := range []struct {
 		version float64
 		file    string

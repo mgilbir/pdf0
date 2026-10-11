@@ -14,6 +14,7 @@ package main
 
 import (
 	"bytes"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -39,12 +40,22 @@ func stage(name string, budget time.Duration, fn func()) bool {
 }
 
 func main() {
-	if len(os.Args) < 2 {
+	flag.Usage = func() {
+		fmt.Fprint(flag.CommandLine.Output(), `usage: corpustime <file.pdf> [file.pdf ...]
+
+Times each stage of reading every file (Read, PageCount, Write,
+ValidatePDFUA) under a generous budget, to tell a hung stage from a slow one.
+Exit 0 when every stage of every file completed, 1 when one failed or hung,
+2 on a usage error.
+`)
+	}
+	flag.Parse()
+	if flag.NArg() < 1 {
 		fmt.Fprintln(os.Stderr, "usage: corpustime <file.pdf> [file.pdf ...]")
 		os.Exit(2)
 	}
 	ok := true
-	for _, path := range os.Args[1:] {
+	for _, path := range flag.Args() {
 		if !timeFile(path) {
 			ok = false
 		}

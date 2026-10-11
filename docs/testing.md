@@ -415,7 +415,7 @@ CI runs on every `push` (branches: [main]) and every `pull_request`, as 3 jobs.
 7. doc links resolve: `./scripts/check-links.sh`
 8. mermaid diagrams render: `./scripts/check-mermaid.sh`
 9. no binaries in the tree: `./scripts/check-no-binaries.sh`
-10. example runs: `go run ./examples/simple_pdfa`, `go run ./examples/extract_images`, `go run ./examples/sign_verify`, `go run ./examples/html_to_pdf`
+10. example runs: `go run ./examples/simple_pdf`, `go run ./examples/simple_pdf17`, `go run ./examples/simple_pdfa`, `go run ./examples/text`, `go run ./examples/html_to_pdf`, `go run ./examples/flavored -o "$out/flavored"`, `go run ./examples/extract_images`, `go run ./examples/sign_verify`
 
 **`corpus`** (Go `1.26.x`):
 

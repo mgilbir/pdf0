@@ -24,6 +24,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"flag"
 	"fmt"
 	"go/format"
 	"io"
@@ -64,6 +65,19 @@ var tables = []struct{ id, name, doc string }{
 var row = regexp.MustCompile(`^   ([0-9A-F]{4,6})(?:-([0-9A-F]{4,6}))?(?:;.*)?$`)
 
 func main() {
+	flag.Usage = func() {
+		fmt.Fprintf(flag.CommandLine.Output(), `usage: gensaslprep
+
+Fetches RFC 3454 from %s, checks its SHA-256, and writes
+%s from its tables. Run it from the repository root, and only
+to regenerate that file; it needs the network.
+`, rfcURL, outFile)
+	}
+	flag.Parse()
+	if flag.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, "usage: gensaslprep")
+		os.Exit(2)
+	}
 	text, err := fetch()
 	if err != nil {
 		fail(err)

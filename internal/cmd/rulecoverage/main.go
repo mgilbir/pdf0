@@ -47,6 +47,17 @@ var levels = []level{
 
 func main() {
 	verbose := flag.Bool("v", false, "also list the rules the corpus does not test")
+	flag.Usage = func() {
+		fmt.Fprint(flag.CommandLine.Output(), `usage: rulecoverage [-v]
+
+Reports, rule by rule, which veraPDF PDF/A rules pdf0 detects in the corpus
+files that test them. Needs the profiles (make profiles, or VERAPDF_PROFILES)
+and the corpus (make corpus, or VERAPDF_CORPUS); run it from the repository
+root, or as make rule-coverage.
+
+`)
+		flag.PrintDefaults()
+	}
 	flag.Parse()
 	if flag.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "usage: rulecoverage [-v]")
