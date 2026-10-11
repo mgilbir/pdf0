@@ -236,8 +236,9 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 	// newest section that does not parse — the table is rebuilt by scanning for
 	// object headers (the long-standing reader practice for damaged files; see
 	// rebuildXRefByScan). The trailer then comes from a scan too (step 4.1),
-	// and a file with no trailer left at all gets /Root synthesized from its
-	// catalog once every object, compressed ones included, is loaded (step 5.1).
+	// and a rebuilt file whose trailer names no /Root, or that has no trailer
+	// left at all, gets /Root synthesized from its catalog once every object,
+	// compressed ones included, is loaded (step 5.1).
 	var xrefTable *XRefTable
 	rebuilt := false // the table was reconstructed by scanning (load leniently)
 	var firstErr error
