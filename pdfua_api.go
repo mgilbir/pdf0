@@ -14,11 +14,21 @@ import (
 // builds that view, and appends the findings that can only be made from the
 // Document — the resource guards that tripped while the file was read.
 
-// ValidatePDFUA checks a document against the foundational PDF/UA-1 (ISO
-// 14289-1) requirements: the document must be tagged, carry a structure tree
-// and a default language, be configured to display its title, and give every
-// figure alternate text. It is a partial validator — a clean result means the
-// implemented checks passed, not full PDF/UA conformance.
+// ValidatePDFUA checks a document against PDF/UA-1 (ISO 14289-1). The checks
+// cover the catalog and identification (tagged, a structure tree, a displayed
+// title, a default language, the pdfuaid:part declaration and a 1.x header),
+// the structure tree (standard or role-mapped types, nesting, tables, lists,
+// headings, notes, figure alternate text, real content tagged or marked as an
+// artifact), fonts and Unicode mapping, annotations, form fields and tab
+// order, security, XFA, optional content, embedded files, media clips and
+// reference XObjects; docs/pdfua.md lists the rule families and the clause
+// each reports under. A finding names its clause in pdfua.Violation.Clause
+// (where the other validators' findings have Rule).
+//
+// It is a partial validator — a clean result means the implemented checks
+// passed, not full PDF/UA conformance — and the result may include checker
+// findings under the clauses "limit" and "internal", which say pdf0 could not
+// finish rather than that the document is wrong (see IsCheckerFinding).
 func ValidatePDFUA(doc *Document) []pdfua.Violation {
 	return validatePDFUA(core.Canceler{}, doc, "1")
 }
@@ -61,8 +71,19 @@ func validatePDFUA(cancel core.Canceler, doc *Document, part string) []pdfua.Vio
 	return pdfuaWithPart(v, part)
 }
 
-// ValidatePDFUA2 checks a document against PDF/UA-2. Findings reuse the pdfua.Violation
-// type; clause identifiers follow ISO 14289-2.
+// ValidatePDFUA2 checks a document against PDF/UA-2 (ISO 14289-2). It runs the
+// checks ValidatePDFUA does, with the identification rule requiring
+// pdfuaid:part 2 and without the 1.x-header rule, and adds the rules only part
+// 2 has: the declared PDF version must be 2.0 (clause "4"), a type in an
+// explicit namespace must not be role-mapped back into that namespace
+// ("8.2.4"), and MathML's math must sit in a Formula ("8.2.5.29").
+//
+// Findings reuse the pdfua.Violation type, with Part "2", and Error prints
+// "[PDF/UA-2 …]". Only those three rules carry ISO 14289-2 clause numbers: the
+// shared checks keep their ISO 14289-1 numbers, so read a clause against the
+// standard that numbers it (docs/pdfua.md, "PDF/UA-2"). The caveats of
+// ValidatePDFUA apply: it is a partial validator, and the result may include
+// checker findings.
 func ValidatePDFUA2(doc *Document) []pdfua.Violation {
 	return validatePDFUA2(core.Canceler{}, doc)
 }

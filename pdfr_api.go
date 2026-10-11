@@ -12,7 +12,13 @@ import (
 // through a core.View; this is the boundary that starts the run and reports the
 // guards that tripped while the file was read.
 
-// ValidatePDFR checks a document against the PDF/R structural profile.
+// ValidatePDFR checks a document against the PDF/R structural profile (ISO
+// 23504-1): PDF 2.0, no encryption, pdfrid identification in XMP, and pages that
+// draw raster images only, with permitted filters. The rules are written from
+// knowledge of the standard, which is not openly published, and no conformance
+// corpus calibrates them; transparency is not checked. An empty result means
+// none of the implemented checks fired, and the result may include checker
+// findings under the rules "limit" and "internal" (IsCheckerFinding).
 func ValidatePDFR(doc *Document) []pdfr.Violation {
 	return validatePDFR(core.Canceler{}, doc)
 }

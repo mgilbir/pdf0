@@ -12,8 +12,18 @@ import (
 // through a core.View; this is the boundary that starts the run and reports the
 // guards that tripped while the file was read.
 
-// ValidatePDFX checks whether doc conforms to the given PDF/X level. An empty
-// result means no violations were found.
+// ValidatePDFX checks doc against the implemented rules for the given PDF/X
+// level. The level is required in fact as well as in the signature: the zero
+// pdfx.Level is pdfx.PDFX4, so a level left unset validates PDF/X-4 without
+// saying so.
+//
+// An empty result means none of the implemented checks fired, not a guarantee
+// of full conformance: the checks are structural (identification, the output
+// intent and its profile, /Trapped, page boxes, font embedding, device colour,
+// forbidden features, transparency where the level predates it, encryption).
+// The result may include checker findings, under the rules "limit" and
+// "internal", which say pdf0 could not finish a check rather than that the
+// document is wrong (IsCheckerFinding).
 func ValidatePDFX(doc *Document, level pdfx.Level) []pdfx.Violation {
 	return validatePDFX(core.Canceler{}, doc, level)
 }
