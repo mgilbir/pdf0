@@ -155,7 +155,7 @@ Every conformance validator has the same shape, and `internal/lint` holds it
 The Context twin and the finding type go together for a reason. Cancellation
 is reported *as a finding* under `limit`, so an entry point whose findings
 `IsCheckerFinding` cannot classify has no honest way to report a cancelled run
-(see [architecture.md](architecture.md#which-entry-points-have-one)). The two
+(see [untrusted-input.md](untrusted-input.md#bounding-time-the-context-variants)). The two
 invoice containers lacked both until `formalis` v0.2.0. Their findings were
 `formalis.Violation`, an external type this package could not extend, and the
 invoice rule engine took no context. Both gaps are closed.

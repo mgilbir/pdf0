@@ -41,8 +41,9 @@ pipeline and its recovery ladder, the Write pipeline. Read before changing the
 parser or serializer.
 
 **[validators.md](validators.md)** — reference plus explanation. Every standard,
-which entry point returns what, the PDF/A dispatch and executed-content model,
-and where each rule lives.
+which entry point returns what, how to read a result (checker findings, what an
+empty result is worth), and how the composite validators — PDF/VT, Factur-X and
+Order-X — are put together.
 
 **[signing.md](signing.md)** — how-to plus reference. Opens with which verdict to
 read, because that is the question with a wrong answer that compiles.
@@ -51,9 +52,9 @@ read, because that is the question with a wrong answer that compiles.
 its memory contract, writing images into a document, the codec dispatch, the
 resource budgets.
 
-**[pdfa.md](pdfa.md)** — explanation. Inside the PDF/A engine: the anatomy of a
-rule, what the dispatched checks actually cover, the per-run memos, and how one
-rule body serves every level.
+**[pdfa.md](pdfa.md)** — explanation. Inside the PDF/A engine: how a run is
+dispatched, the anatomy of a rule, where each rule lives, the executed-content
+model, the per-run memos, and how one rule body serves every level.
 
 **[pdfua.md](pdfua.md)** — explanation. The structure tree, the UA rule
 families, table-grid reconstruction, and how much a clean result is worth.

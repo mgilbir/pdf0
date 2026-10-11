@@ -408,9 +408,10 @@ below the file's, and its second `/ID` string is refreshed.
 ## Validate
 
 Validation reads the object model and reports findings; it never mutates the
-document. Each standard has its own validator, and the PDF/A engine has its own dispatch,
-executed-content model and rule-file map — all of that lives in
-[validators.md](validators.md).
+document. Each standard has its own validator: which entry point to call and how
+to read its result is [validators.md](validators.md); the PDF/A engine's
+dispatch, executed-content model and rule-file map are
+[pdfa.md](pdfa.md).
 
 ## Resource limits
 
