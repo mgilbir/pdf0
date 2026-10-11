@@ -123,7 +123,7 @@ Workflow when your change moves the counts:
    bytes is a `func(*core.FileRecord, pdfa.Level) []pdfa.Violation` in
    `byteChecks` instead, and reads only the file record.
    Group it with related rules by file — see the table in
-   [docs/validators.md](docs/validators.md#where-the-rules-live).
+   [docs/pdfa.md](docs/pdfa.md#where-the-rules-live).
 2. Resolve indirect references before type-asserting (`doc.Resolve` /
    `resolveName`): a value behind an indirect reference must not evade the rule.
 3. Bound every recursion over the object graph by depth: call
@@ -135,7 +135,7 @@ Workflow when your change moves the counts:
    with neither. Guard every `arr[0]` with a length check too: the validator
    processes untrusted files and must not panic or hang.
 4. Respect the executed-content model where the rule is about *used* resources
-   (see [validators.md](docs/validators.md) and [ADR 0004](docs/adr/0004-executed-content-model.md)).
+   (see [pdfa.md](docs/pdfa.md#the-executed-content-model) and [ADR 0004](docs/adr/0004-executed-content-model.md)).
 5. Add a unit test, then run `make test-corpus` and follow the ratchet workflow
    above.
 
