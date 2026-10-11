@@ -135,6 +135,17 @@ v0.6.0.
   TrueType font whose `/Differences` names a glyph outside the Adobe Glyph
   List, or whose embedded program has no (3,1) cmap subtable. Both read the
   font as veraPDF does. PDF/A behaviour is unchanged.
+- **`ValidatePDFUA2` checks the ISO 14289-2 rules only part 2 has**:
+  `pdfuaid:rev` is `2024` under the `pdfuaid` prefix (5); one `Document` root
+  in the PDF 2.0 namespace (8.2.5.2); no `H` (8.2.5.12); a list with `Lbl`
+  items has a `ListNumbering` other than `None` (8.2.5.25); intra-document
+  destinations and GoTo actions are structure destinations (8.8); an invisible
+  annotation in the structure tree is an artifact (8.9.2.2); a file attachment
+  has an `AFRelationship` (8.9.2.4.10); one widget per `Form` (8.10.1); a field
+  widget has a label or `/Contents` (8.10.2.3); an embedded file has `/Desc`
+  (8.14.1). A document that passed may now get these findings. With the font
+  rules above, every fail file of veraPDF's PDF/UA-1 and PDF/UA-2 suites is
+  caught and none of their pass files is reported.
 
 ### Signatures
 
