@@ -69,6 +69,20 @@ type DocumentInfo struct {
 	// only entries of the information dictionary that are not deprecated.
 	Created  time.Time
 	Modified time.Time
+
+	// Language is the natural language of the document's text, as a language
+	// tag such as "en", "en-GB" or "zh-Hant-TW", written as the catalog's
+	// /Lang. It is the default a reader — a screen reader choosing its voice,
+	// above all — applies to every piece of text that does not state its own
+	// (StructElem.Lang). PDF/UA-2 requires it, and PDF/UA-1 requires that every
+	// text's language can be determined, which this settles for the whole
+	// document at once.
+	//
+	// It must be a language tag by the grammar the validators judge /Lang by:
+	// a primary tag of 1–8 letters, then hyphen-separated subtags of 1–8
+	// letters or digits — letters only in a document claiming PDF/A-1, which
+	// is written against RFC 1766. Anything else is refused.
+	Language string
 }
 
 // SetDocumentInfo describes the document, writing both the information
@@ -102,7 +116,12 @@ type DocumentInfo struct {
 // content Write passes through as ciphertext — are refused: the Info
 // dictionary and the packet would be written in the clear under its /Encrypt.
 //
-// It returns an error, and changes nothing, when a field cannot be written as
+// Language is the exception the other way: it is not metadata about the
+// document but a property of its text, and is written as the catalog's /Lang,
+// where readers look for it.
+//
+// It returns an error, and changes nothing, when Language is not a language
+// tag, when a field cannot be written as
 // XMP text (invalid UTF-8, or a character XML does not allow; the error wraps
 // xmp.ErrInvalidText), and when the document's existing metadata cannot be
 // edited: a packet that is not well-formed XML, has no rdf:RDF, or is larger
@@ -122,6 +141,19 @@ func (d *Document) SetDocumentInfo(info DocumentInfo) error {
 	}
 	if info.Producer == "" {
 		info.Producer = "pdf0"
+	}
+	if info.Language != "" {
+		// PDF/A-1 cites RFC 1766, where a subtag is letters only; everything
+		// later cites RFC 3066, which allows digits (core.ValidLanguageTag).
+		digits := d.existingPDFAIdentification().part != "1"
+		if !core.ValidLanguageTag(info.Language, digits) {
+			kind := "letters or digits"
+			if !digits {
+				kind = "letters (PDF/A-1 follows RFC 1766)"
+			}
+			return fmt.Errorf("pdf0: document info Language %q is not a language tag: "+
+				"a primary tag of 1-8 letters, then hyphen-separated subtags of 1-8 %s", info.Language, kind)
+		}
 	}
 	for _, f := range []struct{ name, value string }{
 		{"Title", info.Title}, {"Author", info.Author}, {"Subject", info.Subject},
@@ -149,6 +181,10 @@ func (d *Document) SetDocumentInfo(info DocumentInfo) error {
 		d.setInfoDictionary(info)
 	}
 	d.setMetadataStream(catalog, data)
+	if info.Language != "" {
+		// Validated above, so it is ASCII: the same bytes in PDFDocEncoding.
+		catalog.Set("Lang", object.String{Value: []byte(info.Language)})
+	}
 	return nil
 }
 

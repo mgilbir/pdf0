@@ -96,6 +96,11 @@ type StructElem struct {
 // the marks to whichever element now has that slot. An empty root removes the
 // tree, those indices and the /MarkInfo claim that the document is tagged.
 //
+// In a document that declares PDF/UA-2 (DeclarePDFUA), a top-level Document
+// element is written in the PDF 2.0 standard structure namespace, which
+// ISO 14289-2 8.2.5.2 requires of it; everywhere else Document, like every
+// type both standard namespaces define, is in the default one.
+//
 // The tree is checked whole before anything is written, so a refused tree
 // leaves the document as it was.
 func (d *Document) SetStructureTree(root []StructElem, roleMap map[string]string) error {
@@ -169,6 +174,10 @@ func (d *Document) SetStructureTree(root []StructElem, roleMap map[string]string
 	markInfo := &object.Dictionary{}
 	markInfo.Set("Marked", object.Boolean(true))
 	catalog.Set("MarkInfo", markInfo)
+	if d.declaresPDFUA2() {
+		// The declaration may have come first (DeclarePDFUA).
+		d.placeDocumentInPDF20Namespace(catalog)
+	}
 	return nil
 }
 
