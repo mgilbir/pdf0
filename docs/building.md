@@ -7,8 +7,10 @@ you have is HTML and CSS, [htmlpdf.md](htmlpdf.md) is the shorter road; it
 draws through this same API.
 
 The tutorial builds one page. The sections after it are how-tos, one per thing
-you may want to add, and each says which example in [`examples/`](../examples/)
-does it for real. The godoc is the reference for every call named here.
+you may want to add; where a program in [`examples/`](../examples/) does it
+for real, the section names it. Outlines, links, the structure tree, patterns
+and transparency have no example yet, but every snippet here is type-checked
+against the code. The godoc is the reference for every call named here.
 
 ## Tutorial: one page, from nothing
 

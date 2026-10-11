@@ -42,8 +42,8 @@ The per-symbol API reference is the godoc: `go doc github.com/mgilbir/pdf0`, or
 
 **[building.md](building.md)** — tutorial plus how-to. One page from nothing,
 then drawing, images, forms, document info, outlines, links, the structure
-tree, gradients and patterns, transparency and soft masks, PDF/A, and Factur-X,
-each pointing at the example that does it.
+tree, gradients and patterns, transparency and soft masks, PDF/A, Factur-X,
+and what makes `AddPage` refuse a page.
 
 **[architecture.md](architecture.md)** — explanation. The packages and how
 they depend on each other, which files hold each subsystem, the Document
