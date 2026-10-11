@@ -3,9 +3,10 @@
 //
 // Exit codes: 0 — success (no violations found); 1 — the requested checks
 // reported violations; 2 — usage error, including a refusal to overwrite a
-// file; 3 — the run failed: an operational error (I/O, parse, encryption), or
-// checks that reported nothing but checker findings, so conformance is unknown
-// (findingsError).
+// file; 3 — the run failed: an operational error (I/O, parse, encryption), a
+// signed input a command would rewrite without -invalidate-signatures
+// (refuseSigned), or checks that reported nothing but checker findings, so
+// conformance is unknown (findingsError).
 //
 // Passwords are never taken from argv; see secret.go. Outputs never replace an
 // input and are written atomically; see files.go.
@@ -166,11 +167,12 @@ func usage() {
 usage:
   pdf0 info     [-password-file F] <file>
   pdf0 validate [-level LEVEL|declared] [-password-file F] <file>
-  pdf0 decrypt  [-force] [-password-file F] <in> <out>
-  pdf0 encrypt  [-force] [-user-password-file F] [-owner-password-file F] <in> <out>
+  pdf0 decrypt  [-force] [-invalidate-signatures] [-password-file F] <in> <out>
+  pdf0 encrypt  [-force] [-invalidate-signatures] [-user-password-file F]
+                [-owner-password-file F] <in> <out>
   pdf0 extract  [-password-file F] <file>
-  pdf0 repair   [-force] [-level LEVEL] [-password-file F] <in> <out>
-  pdf0 merge    [-force] <out> <in1> <in2> [in3 ...]
+  pdf0 repair   [-force] [-invalidate-signatures] [-level LEVEL] [-password-file F] <in> <out>
+  pdf0 merge    [-force] [-invalidate-signatures] <out> <in1> <in2> [in3 ...]
   pdf0 ua       [-password-file F] <file>
 
 LEVEL is a PDF/A level (default %s):
@@ -180,14 +182,18 @@ validate also takes "declared": the level the file's own metadata claims.
 "-" is stdin as an input and stdout as an output. An existing output is
 replaced only with -force, and never when it is one of the inputs.
 
+decrypt, encrypt, repair and merge rewrite the whole file, which breaks every
+signature in it, so they refuse a signed input; -invalidate-signatures writes
+it anyway, and its signatures no longer verify.
+
 passwords are never taken on the command line. Each comes from, in order:
 its file flag ("-" reads stdin), the environment (PDF0_PASSWORD,
 PDF0_USER_PASSWORD, PDF0_OWNER_PASSWORD), or a no-echo prompt when stdin
 is a terminal.
 
 exit codes: 0 success, 1 violations reported, 2 usage error or refused
-overwrite, 3 read/write, parse, or encryption error, or checks that could
-not be completed (only "limit" or "internal" findings)
+overwrite, 3 read/write, parse, or encryption error, a refused signed input,
+or checks that could not be completed (only "limit" or "internal" findings)
 `, defaultLevel, levelNames)
 }
 

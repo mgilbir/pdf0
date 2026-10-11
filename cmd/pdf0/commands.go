@@ -11,6 +11,7 @@ import (
 
 	"github.com/mgilbir/pdf0"
 	"github.com/mgilbir/pdf0/pdfa"
+	"github.com/mgilbir/pdf0/sign"
 )
 
 // source is one command's PDF input together with how its password is
@@ -164,10 +165,11 @@ func cmdValidate(args []string) error {
 func cmdDecrypt(args []string) error {
 	fs := flag.NewFlagSet("decrypt", flag.ExitOnError)
 	force := fs.Bool("force", false, "replace <out> if it exists")
+	invalidate := addSignaturesFlag(fs)
 	pw := addSecretFlags(fs, readPassword)
 	fs.Parse(args)
 	if fs.NArg() != 2 {
-		return usagef("usage: pdf0 decrypt [-force] [-password-file F] <in> <out>")
+		return usagef("usage: pdf0 decrypt [-force] [-invalidate-signatures] [-password-file F] <in> <out>")
 	}
 	out := fs.Arg(1)
 	src, err := open(fs.Arg(0), pw, &stdinClaim{})
@@ -189,6 +191,9 @@ func cmdDecrypt(args []string) error {
 	if !doc.Encrypted {
 		return fmt.Errorf("%s is not encrypted", src.in.name)
 	}
+	if err := refuseSigned(doc, src.in.name, "decrypting rewrites the whole file", *invalidate); err != nil {
+		return err
+	}
 	doc.RemoveEncryption()
 	return writeDoc(doc, out, *force, permPlaintext)
 }
@@ -198,9 +203,10 @@ func cmdEncrypt(args []string) error {
 	force := fs.Bool("force", false, "replace <out> if it exists")
 	user := addSecretFlags(fs, userPassword)
 	owner := addSecretFlags(fs, ownerPassword)
+	invalidate := addSignaturesFlag(fs)
 	fs.Parse(args)
 	if fs.NArg() != 2 {
-		return usagef("usage: pdf0 encrypt [-force] [-user-password-file F] [-owner-password-file F] <in> <out>")
+		return usagef("usage: pdf0 encrypt [-force] [-invalidate-signatures] [-user-password-file F] [-owner-password-file F] <in> <out>")
 	}
 	out := fs.Arg(1)
 	stdin := &stdinClaim{}
@@ -225,6 +231,10 @@ func cmdEncrypt(args []string) error {
 	}
 	if doc.Encrypted {
 		return fmt.Errorf("%s is already encrypted; decrypt it first", src.in.name)
+	}
+	// Refused before any prompt: no password makes a signed file encryptable.
+	if err := refuseSigned(doc, src.in.name, "encrypting rewrites the whole file", *invalidate); err != nil {
+		return err
 	}
 	if !haveUser {
 		if !canPrompt(stdin) {
@@ -287,10 +297,11 @@ func cmdRepair(args []string) error {
 	fs := flag.NewFlagSet("repair", flag.ExitOnError)
 	force := fs.Bool("force", false, "replace <out> if it exists")
 	level := fs.String("level", defaultLevel, "target PDF/A level: "+levelNames)
+	invalidate := addSignaturesFlag(fs)
 	pw := addSecretFlags(fs, readPassword)
 	fs.Parse(args)
 	if fs.NArg() != 2 {
-		return usagef("usage: pdf0 repair [-force] [-level LEVEL] [-password-file F] <in> <out>")
+		return usagef("usage: pdf0 repair [-force] [-invalidate-signatures] [-level LEVEL] [-password-file F] <in> <out>")
 	}
 	lvl, ok := parseLevel(*level, false)
 	if !ok {
@@ -320,6 +331,9 @@ func cmdRepair(args []string) error {
 	var report io.Writer = stdout
 	if out == "-" {
 		report = os.Stderr
+	}
+	if err := refuseSigned(doc, src.in.name, "repairing rewrites the whole file", *invalidate); err != nil {
+		return err
 	}
 	actions, err := doc.Repair(lvl)
 	if err != nil {
@@ -367,11 +381,12 @@ func cmdRepair(args []string) error {
 func cmdMerge(args []string) error {
 	fs := flag.NewFlagSet("merge", flag.ExitOnError)
 	force := fs.Bool("force", false, "replace <out> if it exists")
+	invalidate := addSignaturesFlag(fs)
 	fs.Parse(args)
 	// Two inputs at least: with one, "merge a.pdf b.pdf" read as "merge a and
 	// b" silently replaced a.pdf with a copy of b.pdf (audit 2026-09-22 C155).
 	if fs.NArg() < 3 {
-		return usagef("usage: pdf0 merge [-force] <out> <in1> <in2> [in3 ...]")
+		return usagef("usage: pdf0 merge [-force] [-invalidate-signatures] <out> <in1> <in2> [in3 ...]")
 	}
 	out := fs.Arg(0)
 	stdin := &stdinClaim{}
@@ -396,6 +411,15 @@ func cmdMerge(args []string) error {
 		// merged document would corrupt it; require decrypted inputs.
 		if doc.Encrypted {
 			return fmt.Errorf("%s is encrypted; decrypt it before merging", in.name)
+		}
+		// Every input's signatures are lost: the first input's file is
+		// rewritten (the merged document is that input, read), and a later
+		// input's signature dictionaries are copied away from the bytes they
+		// cover. The library guards only the first, so each is asked here;
+		// with the flag, the first input's consent is the output's, since the
+		// merged document is that input.
+		if err := refuseSigned(doc, in.name, "merging writes its pages into a new file", *invalidate); err != nil {
+			return err
 		}
 		if merged == nil {
 			merged = doc
@@ -480,6 +504,46 @@ func parseLevel(s string, allowDeclared bool) (pdfa.Level, bool) {
 		}
 	}
 	return pdfa.LevelDeclared, false
+}
+
+// addSignaturesFlag adds -invalidate-signatures, the CLI's form of
+// pdf0.Document.AllowInvalidatingSignatures, to a command that rewrites a
+// whole file: decrypt, encrypt, repair and merge.
+func addSignaturesFlag(fs *flag.FlagSet) *bool {
+	return fs.Bool("invalidate-signatures", false, "rewrite a signed input anyway; its signatures stop verifying")
+}
+
+// refuseSigned is the refusal of a signed input before any work, or nil: with
+// -invalidate-signatures it records the consent on doc instead. Signed means
+// what the library's guard (pdf0.ErrWouldInvalidateSignatures) means — the
+// file carries a signature or document time-stamp, verified or not — and that
+// is what VerifySignatures lists for a document just read, so the library's
+// own refusal, which names a Go method, never reaches a user. Asking here
+// rather than translating that refusal also covers what the library cannot
+// see: a later merge input, whose signatures are copied away from the bytes
+// they cover, and a refusal that comes before encrypt's password prompt.
+// VerifySignatures's error means verification could not run, which is
+// reported rather than read as "unsigned".
+func refuseSigned(doc *pdf0.Document, name, why string, invalidate bool) error {
+	if invalidate {
+		doc.AllowInvalidatingSignatures()
+		return nil
+	}
+	sigs, err := doc.VerifySignatures(sign.VerifyOptions{})
+	if err != nil {
+		return fmt.Errorf("%s: looking for signatures: %w", name, err)
+	}
+	if len(sigs) > 0 {
+		return signedError(name, why)
+	}
+	return nil
+}
+
+// signedError is the CLI's refusal of a signed input, why saying what the
+// command does to it: an operational failure (exit 3), since the command could
+// not do what it was asked without a consent it was not given.
+func signedError(name, why string) error {
+	return fmt.Errorf("%s is signed: %s, and its signatures would no longer verify; nothing was written. Pass -invalidate-signatures to do it anyway", name, why)
 }
 
 // writeDoc serialises doc in full, then writes it with writeOutput: a

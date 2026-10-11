@@ -39,11 +39,12 @@ pdf0 — inspect, validate, repair, merge, and (de)encrypt PDF files
 usage:
   pdf0 info     [-password-file F] <file>
   pdf0 validate [-level LEVEL|declared] [-password-file F] <file>
-  pdf0 decrypt  [-force] [-password-file F] <in> <out>
-  pdf0 encrypt  [-force] [-user-password-file F] [-owner-password-file F] <in> <out>
+  pdf0 decrypt  [-force] [-invalidate-signatures] [-password-file F] <in> <out>
+  pdf0 encrypt  [-force] [-invalidate-signatures] [-user-password-file F]
+                [-owner-password-file F] <in> <out>
   pdf0 extract  [-password-file F] <file>
-  pdf0 repair   [-force] [-level LEVEL] [-password-file F] <in> <out>
-  pdf0 merge    [-force] <out> <in1> <in2> [in3 ...]
+  pdf0 repair   [-force] [-invalidate-signatures] [-level LEVEL] [-password-file F] <in> <out>
+  pdf0 merge    [-force] [-invalidate-signatures] <out> <in1> <in2> [in3 ...]
   pdf0 ua       [-password-file F] <file>
 
 LEVEL is a PDF/A level (default 2b):
@@ -53,14 +54,18 @@ validate also takes "declared": the level the file's own metadata claims.
 "-" is stdin as an input and stdout as an output. An existing output is
 replaced only with -force, and never when it is one of the inputs.
 
+decrypt, encrypt, repair and merge rewrite the whole file, which breaks every
+signature in it, so they refuse a signed input; -invalidate-signatures writes
+it anyway, and its signatures no longer verify.
+
 passwords are never taken on the command line. Each comes from, in order:
 its file flag ("-" reads stdin), the environment (PDF0_PASSWORD,
 PDF0_USER_PASSWORD, PDF0_OWNER_PASSWORD), or a no-echo prompt when stdin
 is a terminal.
 
 exit codes: 0 success, 1 violations reported, 2 usage error or refused
-overwrite, 3 read/write, parse, or encryption error, or checks that could
-not be completed (only "limit" or "internal" findings)
+overwrite, 3 read/write, parse, or encryption error, a refused signed input,
+or checks that could not be completed (only "limit" or "internal" findings)
 ```
 
 <!-- END GENERATED: cli help -->
@@ -81,7 +86,7 @@ The split between 1 and 3 is the point of the design: a conformance failure is a
 | 0 | Success — the run completed and no checks reported anything | all commands |
 | 1 | Checks reported violations; the file was read (and written) fine | `validate`, `ua`, `repair` |
 | 2 | Usage error: bad/missing operand, unknown command or flag, unknown `-level`, a password given on the command line, an output that exists (without `-force`) or is one of the inputs | all commands |
-| 3 | The run failed. An operational error: I/O, parse failure, missing or wrong password, encryption-state conflict, a result that could not be written to stdout. Or, from `validate`, `ua` and `repair`, checks that reported nothing but checker findings | all commands |
+| 3 | The run failed. An operational error: I/O, parse failure, missing or wrong password, encryption-state conflict, a result that could not be written to stdout. Or a [signed input](#signed-inputs) that `decrypt`, `encrypt`, `repair` or `merge` was not given `-invalidate-signatures` for. Or, from `validate`, `ua` and `repair`, checks that reported nothing but checker findings | all commands |
 
 A **checker finding** is a line whose rule is `limit` or `internal`. It says a check could
 not be completed — a resource limit was reached, a stream uses a filter pdf0 does not
@@ -236,8 +241,9 @@ command beside it in a checkout of this repository (`enc.pdf` and `unk.pdf` need
 `pdf0` built from it on `PATH`). `simple.pdf` and `simple17.pdf` are plain PDF 2.0 and
 1.7 pages set in an unembedded Helvetica, `a4.pdf` is a PDF/A-4 document, `clean2b.pdf`
 a PDF/A-2b one with an embedded font and an image, `enc.pdf` is `simple.pdf` encrypted with
-the password `secret`, and `unk.pdf` is `enc.pdf` naming a security handler pdf0 does not
-implement:
+the password `secret`, `unk.pdf` is `enc.pdf` naming a security handler pdf0 does not
+implement, and `signed.pdf` is `simple.pdf` signed with a throwaway self-signed key by a
+fixture maker kept with the command's tests:
 
 <!-- BEGIN GENERATED: cli fixtures. From the pdf0 command by TestCLIDocTranscripts; regenerate with `go test ./cmd/pdf0 -run TestCLIDocTranscripts -update`. -->
 
@@ -248,6 +254,7 @@ go run ./examples/simple_pdfa > a4.pdf
 go run ./examples/flavored -o fl > /dev/null && cp fl/flavored-PDFA-2b.pdf clean2b.pdf
 PDF0_USER_PASSWORD=secret pdf0 encrypt simple.pdf enc.pdf
 LC_ALL=C sed 's|/Filter /Standard|/Filter /Bespoke_|' enc.pdf > unk.pdf
+go run ./cmd/pdf0/testdata/signpdf < simple.pdf > signed.pdf
 ```
 
 <!-- END GENERATED: cli fixtures -->
@@ -364,9 +371,11 @@ file is 3, as for `validate`, and so is a run whose only findings are
 
 ## `decrypt`
 
-`pdf0 decrypt [-force] [-password-file F] <in> <out>` — the password may be the user or the
-owner password. Reads `<in>`, calls `RemoveEncryption`, writes plaintext to `<out>` with
-mode **0600**, and succeeds silently. The success first, then each way it fails:
+`pdf0 decrypt [-force] [-invalidate-signatures] [-password-file F] <in> <out>` — the
+password may be the user or the owner password. Reads `<in>`, calls `RemoveEncryption`,
+writes plaintext to `<out>` with mode **0600**, and succeeds silently. A signed `<in>` is
+refused unless `-invalidate-signatures` is given ([signed inputs](#signed-inputs)). The
+success first, then each way it fails:
 
 <!-- BEGIN GENERATED: cli decrypt. From the pdf0 command by TestCLIDocTranscripts; regenerate with `go test ./cmd/pdf0 -run TestCLIDocTranscripts -update`. -->
 
@@ -398,7 +407,7 @@ error: creating the output in /nonexistentdir: open /nonexistentdir/.out.pdf.pdf
 
 ## `encrypt`
 
-`pdf0 encrypt [-force] [-user-password-file F] [-owner-password-file F] <in> <out>`
+`pdf0 encrypt [-force] [-invalidate-signatures] [-user-password-file F] [-owner-password-file F] <in> <out>`
 
 Applies `SetEncryption` and writes `<out>`; silent on success, exit 0.
 
@@ -409,6 +418,9 @@ Applies `SetEncryption` and writes `<out>`; silent on success, exit 0.
 - The **owner password** comes from `-owner-password-file` or `PDF0_OWNER_PASSWORD`, and
   otherwise defaults to the user password. It is never prompted for.
 - `<in>` is always read without a password, so an already-encrypted input is rejected.
+- A **signed** `<in>` is refused, before any password prompt, unless
+  `-invalidate-signatures` is given: encryption rewrites the whole file
+  ([signed inputs](#signed-inputs)).
 
 A success, an encrypted input, and no password with no terminal:
 
@@ -455,8 +467,8 @@ the whole document.
 
 ## `repair`
 
-`pdf0 repair [-force] [-level LEVEL] [-password-file F] <in> <out>` — `-level`
-defaults to `2b` ("target PDF/A level").
+`pdf0 repair [-force] [-invalidate-signatures] [-level LEVEL] [-password-file F] <in> <out>` —
+`-level` defaults to `2b` ("target PDF/A level").
 
 Calls `Document.Repair(level)`, which fixes **document-level** problems only — it removes
 forbidden constructs (catalog `/AA`, encryption) and adds a missing file identifier; it is
@@ -502,12 +514,14 @@ written.
   `the repaired document does not read back (nothing written): …`) and no output is
   written — never "0 violation(s) remain".
 - **To stdout** (`<out>` is `-`), the `fixed:` lines and the summary go to stderr.
+- **A signed file is refused**, exit 3, before anything is repaired, unless
+  `-invalidate-signatures` is given ([signed inputs](#signed-inputs)).
 
 Bad `-level` is exit 2, as the last run above shows.
 
 ## `merge`
 
-`pdf0 merge [-force] <out> <in1> <in2> [in3 ...]` — the *first* operand is the output; the
+`pdf0 merge [-force] [-invalidate-signatures] <out> <in1> <in2> [in3 ...]` — the *first* operand is the output; the
 rest are inputs, read left to right and concatenated with `AppendPages`. At least **two**
 inputs are required: with one, `pdf0 merge a.pdf b.pdf` reads naturally as "merge a and b"
 but would replace `a.pdf`, so it is a usage error (exit 2).
@@ -553,6 +567,35 @@ error: enc.pdf is encrypted; decrypt it before merging   # stderr
 
 <!-- END GENERATED: cli merge-encrypted -->
 
+A signed input in any position is refused too, unless `-invalidate-signatures` is given:
+see [signed inputs](#signed-inputs).
+
+## Signed inputs
+
+`decrypt`, `encrypt`, `repair` and `merge` write a new file from the document, which
+moves every byte a signature covers, so a signature in the input never verifies in the
+output. They therefore **refuse a signed input**: exit 3, the input named, nothing
+written. `-invalidate-signatures` writes it anyway, and the signatures carried into the
+output no longer verify. "Signed" means the file holds a signature or document time-stamp
+dictionary, verified or not, as the library's `VerifySignatures` finds them; for `merge`,
+any input. The CLI has no command that keeps a signature (the library's incremental
+writers, such as `WriteIncremental`, do):
+
+<!-- BEGIN GENERATED: cli signed. From the pdf0 command by TestCLIDocTranscripts; regenerate with `go test ./cmd/pdf0 -run TestCLIDocTranscripts -update`. -->
+
+```
+$ PDF0_USER_PASSWORD=secret pdf0 encrypt signed.pdf encsigned.pdf
+error: signed.pdf is signed: encrypting rewrites the whole file, and its signatures would no longer verify; nothing was written. Pass -invalidate-signatures to do it anyway   # stderr
+# exit 3
+$ pdf0 merge msigned.pdf simple17.pdf signed.pdf
+error: signed.pdf is signed: merging writes its pages into a new file, and its signatures would no longer verify; nothing was written. Pass -invalidate-signatures to do it anyway   # stderr
+# exit 3
+$ PDF0_USER_PASSWORD=secret pdf0 encrypt -invalidate-signatures signed.pdf encsigned.pdf
+# exit 0
+```
+
+<!-- END GENERATED: cli signed -->
+
 ---
 
 ## What the CLI does not expose
@@ -582,8 +625,9 @@ Everything below is implemented in the library and has **no** CLI surface. Absen
 | Comparison, low-level parsing | `DocumentEqual`, `ParseXRefTable`, `ParseXRefStream`; `object.Equal`, `syntax.NewLexer`, `syntax.NewParser`, `syntax.NewSerializer` |
 
 Two encryption nuances the CLI flattens: `decrypt` is exactly `RemoveEncryption()` +
-`Write()` on a document unlocked at `Read` time — it cannot keep an `/Encrypt` dictionary
-while changing passwords; and `encrypt`'s `SetEncryption(user, owner)` exposes no
+`Write()` on a document unlocked at `Read` time (with `AllowInvalidatingSignatures()`
+first under `-invalidate-signatures`) — it cannot keep an `/Encrypt` dictionary while
+changing passwords; and `encrypt`'s `SetEncryption(user, owner)` exposes no
 permission bits, algorithm, or key-length choice (that is the library's full signature too).
 In short, the tool wraps eight entry points and none of the rest — which is why the README
 presents it as a development aid rather than the library's surface.
@@ -598,6 +642,10 @@ presents it as a development aid rather than the library's surface.
   differently from the tool's own `error: …` lines.
 - **Re-running a command that writes needs `-force`** the second time, because the first
   run's output now exists.
+- **A signed file cannot be decrypted, encrypted, repaired or merged without
+  `-invalidate-signatures`**, even when nothing in it changes: every one of them rewrites
+  the file. The refusal is exit 3 and comes before any password prompt or repair, so a
+  refused run writes and asks nothing. There is no flag that keeps the signatures.
 - **`info` never fails on encryption** and always reports `encrypted: true` for a file with
   an `/Encrypt` dictionary; `locked` is the line that says whether it could be read.
 - A non-PDF input fails at parse with exit 3 (`error: x.txt: PDF header not found`), so

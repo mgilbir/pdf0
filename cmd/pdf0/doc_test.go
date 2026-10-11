@@ -34,8 +34,9 @@ var update = flag.Bool("update", false, "rewrite the generated sections of docs/
 
 // cliDocFixtures are the files the transcripts read, each with the command
 // line that makes it, run in a checkout of this repository. `go run
-// ./examples/<name>` is run as written: the test builds that example and runs
-// it in the scratch directory, which is what `go run` does.
+// ./examples/<name>` and `go run ./cmd/pdf0/testdata/<name>` are run as
+// written: the test builds that program and runs it in the scratch directory,
+// which is what `go run` does.
 var cliDocFixtures = []string{
 	"go run ./examples/simple_pdf > simple.pdf",
 	"go run ./examples/simple_pdf17 > simple17.pdf",
@@ -45,6 +46,8 @@ var cliDocFixtures = []string{
 	// The same file with its security handler renamed, in place and at the
 	// same length, so that every offset in the file still holds.
 	"LC_ALL=C sed 's|/Filter /Standard|/Filter /Bespoke_|' enc.pdf > unk.pdf",
+	// Signed with a throwaway self-signed key.
+	"go run ./cmd/pdf0/testdata/signpdf < simple.pdf > signed.pdf",
 }
 
 // cliDocSections are the generated sections of docs/cli.md, in the order
@@ -91,6 +94,11 @@ var cliDocSections = []struct {
 		"pdf0 info merged3.pdf",
 	}},
 	{"merge-encrypted", []string{"pdf0 merge m2.pdf simple.pdf enc.pdf"}},
+	{"signed", []string{
+		"PDF0_USER_PASSWORD=secret pdf0 encrypt signed.pdf encsigned.pdf",
+		"pdf0 merge msigned.pdf simple17.pdf signed.pdf",
+		"PDF0_USER_PASSWORD=secret pdf0 encrypt -invalidate-signatures signed.pdf encsigned.pdf",
+	}},
 	// Last, because they destroy what they redirect onto (a copy).
 	{"redirect", []string{
 		"cp simple17.pdf same.pdf",
@@ -98,6 +106,10 @@ var cliDocSections = []struct {
 		"pdf0 repair same.pdf - > same.pdf",
 	}},
 }
+
+// goRunProgram finds the programs a fixture recipe runs with `go run`: an
+// example, or a fixture maker under cmd/pdf0/testdata.
+var goRunProgram = regexp.MustCompile(`go run \./((?:examples|cmd/pdf0/testdata)/\w+)`)
 
 // tempName is the random part of an output's temporary file, which differs
 // on every run.
@@ -230,7 +242,8 @@ func renderRun(line string, res cliResult) string {
 
 // docEnv is the environment the transcripts run in: no PDF0_* variable of
 // the developer's, the built command first on PATH, and `go run
-// ./examples/<name>` answered by the built example.
+// ./examples/<name>` or `go run ./cmd/pdf0/testdata/<name>` answered by the
+// built program.
 func docEnv(t *testing.T, root, dir string) []string {
 	t.Helper()
 	bin := filepath.Join(dir, ".bin")
@@ -248,27 +261,28 @@ func docEnv(t *testing.T, root, dir string) []string {
 	}
 	built := map[string]bool{}
 	for _, f := range cliDocFixtures {
-		for _, m := range regexp.MustCompile(`go run \./examples/(\w+)`).FindAllStringSubmatch(f, -1) {
+		for _, m := range goRunProgram.FindAllStringSubmatch(f, -1) {
 			if built[m[1]] {
 				continue
 			}
 			built[m[1]] = true
-			cmd := exec.Command(goTool, "build", "-o", filepath.Join(bin, "example-"+m[1]), "./examples/"+m[1])
+			cmd := exec.Command(goTool, "build", "-o", filepath.Join(bin, "prog-"+strings.ReplaceAll(m[1], "/", "-")), "./"+m[1])
 			cmd.Dir = root
 			if out, err := cmd.CombinedOutput(); err != nil {
-				t.Fatalf("building examples/%s: %v\n%s", m[1], err, out)
+				t.Fatalf("building %s: %v\n%s", m[1], err, out)
 			}
 		}
 	}
-	// A script in place of the go command: it runs only the examples
+	// A script in place of the go command: it runs only the programs
 	// built above, so a recipe that needs anything else fails here.
 	goFunc := filepath.Join(bin, "go")
 	script := "#!/bin/sh\n" +
-		"[ \"$1\" = run ] || { echo \"the transcripts' go runs examples only: $*\" >&2; exit 97; }\n" +
+		"[ \"$1\" = run ] || { echo \"the transcripts' go runs the built programs only: $*\" >&2; exit 97; }\n" +
 		"shift\n" +
-		"name=${1#./examples/}\n" +
+		"name=$(echo \"${1#./}\" | tr / -)\n" +
 		"shift\n" +
-		"exec \"" + bin + "/example-$name\" \"$@\"\n"
+		"[ -x \"" + bin + "/prog-$name\" ] || { echo \"the transcripts' go did not build $name\" >&2; exit 97; }\n" +
+		"exec \"" + bin + "/prog-$name\" \"$@\"\n"
 	if err := os.WriteFile(goFunc, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
