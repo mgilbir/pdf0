@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/finding"
 	"github.com/mgilbir/pdf0/internal/xmp"
 	"github.com/mgilbir/pdf0/object"
 )
@@ -146,20 +147,32 @@ func (r levelRules) describeIDs() string {
 	return strings.Join(parts, ", or ")
 }
 
-// pdfxCheckIdentification verifies the file identifies as the requested level
-// in the place that level puts it (C82, C85).
+// declaration is what a document says about its own PDF/X level: the
+// GTS_PDFXVersion and GTS_PDFXConformance of its XMP metadata and of its Info
+// dictionary. It is read here and nowhere else, for the identification rule
+// and for a LevelDeclared run, so the two cannot read different claims.
+type declaration struct {
+	xmpVersion, xmpConformance   string
+	infoVersion, infoConformance string
+	// xmp is how the XMP packet read: a packet over the XMP limit (XMPLimit)
+	// was not read, so what it declares is unknown.
+	xmp core.XMPStatus
+	// infoLocked: an Info identification string is still encrypted, so what
+	// the Info dictionary declares is unknown.
+	infoLocked bool
+}
+
+// readDeclaration reads the document's PDF/X identification.
 //
 // The XMP identification is read through the XMP model, by namespace URI, so a
 // comment, an attribute-form property or another prefix cannot hide or forge it
 // (audit C141). A property named GTS_PDFXVersion in no namespace at all is also
 // accepted, as the substring reader that model replaced accepted it.
-func pdfxCheckIdentification(doc core.View, level Level, add func(rule, msg string, obj int)) {
-	r, _ := level.rules()
-
-	var xmpVersion, xmpConformance string
-	unread := false
-	switch packet, status := doc.DocumentXMPPacket(); status {
-	case core.XMPParsed:
+func readDeclaration(doc core.View) declaration {
+	var d declaration
+	var packet *xmp.Packet
+	packet, d.xmp = doc.DocumentXMPPacket()
+	if d.xmp == core.XMPParsed {
 		get := func(name string) string {
 			if v, ok := packet.Text(xmp.NSPDFXID, name); ok {
 				return v
@@ -167,11 +180,8 @@ func pdfxCheckIdentification(doc core.View, level Level, add func(rule, msg stri
 			v, _ := packet.Text("", name)
 			return v
 		}
-		xmpVersion, xmpConformance = get("GTS_PDFXVersion"), get("GTS_PDFXConformance")
-	case core.XMPLimit:
-		unread = true
+		d.xmpVersion, d.xmpConformance = get("GTS_PDFXVersion"), get("GTS_PDFXConformance")
 	}
-	var infoVersion, infoConformance string
 	if info := doc.ResolveDict(doc.Trailer.Get("Info")); info != nil {
 		// Text strings: decoded, so a UTF-16 identifier reads as itself. A
 		// string still encrypted cannot be read, so the claim is unknown.
@@ -180,28 +190,123 @@ func pdfxCheckIdentification(doc core.View, level Level, add func(rule, msg stri
 			case core.ReasonOK:
 				return strings.TrimSpace(core.DecodePDFTextString(s.Value))
 			case core.ReasonLocked:
-				unread = true
+				d.infoLocked = true
 			}
 			return ""
 		}
-		infoVersion, infoConformance = text("GTS_PDFXVersion"), text("GTS_PDFXConformance")
+		d.infoVersion, d.infoConformance = text("GTS_PDFXVersion"), text("GTS_PDFXConformance")
 	}
+	return d
+}
 
-	version, conformance := xmpVersion, xmpConformance
-	if !r.xmpIdentification && infoVersion != "" {
+// levelFor maps an identification — a GTS_PDFXVersion and, where the part
+// uses one, a GTS_PDFXConformance — onto the level whose row accepts it. ok is
+// false for one no row accepts: a version pdf0 has no rules for (PDF/X-2,
+// PDF/X-5), PDF/X-1:2001 without the PDF/X-1a:2001 conformance, or none.
+func levelFor(version, conformance string) (Level, bool) {
+	for _, l := range []Level{PDFX1a, PDFX3, PDFX4, PDFX4p, PDFX6} {
+		if levels[l].accepts(version, conformance) {
+			return l, true
+		}
+	}
+	return LevelDeclared, false
+}
+
+// resolveTarget turns the level a caller asked for into the level a run
+// checks against, or into the one finding that says there is none, as
+// pdfa's resolveTarget does for PDF/A.
+//
+// LevelDeclared becomes the level the document declares: its XMP
+// identification when that names a level, otherwise its Info dictionary's.
+// XMP comes first because it is where PDF/X-4 and PDF/X-6 identify, and it
+// is consulted for the earlier parts too; the Info dictionary is where
+// PDF/X-1a and PDF/X-3 identify, and the only place PDF/X-1a:2001 carries the
+// conformance that names it. The declaration is taken as a claim, wherever it
+// sits: an Info-only "PDF/X-4" is held to PDF/X-4, whose identification rule
+// then reports that the claim is not in the XMP metadata.
+//
+// A document that declares no level pdf0 checks, or whose declaration cannot
+// be read — XMP over the packet limit, or an Info string still encrypted when
+// the XMP names nothing — is one finding under the "limit" rule and nothing
+// else: pdf0 was asked to check a claim it could not find, which is the
+// checker stopping short, not a verdict on the file. A level that names no
+// PDF/X level at all (an arbitrary integer converted to Level) is refused the
+// same way rather than validated as PDF/X-4 (audit 2026-09-22 C139, C85).
+func resolveTarget(doc core.View, level Level) (Level, []Violation) {
+	if level != LevelDeclared {
+		if !level.valid() {
+			return level, []Violation{{Rule: finding.LimitRule, Message: fmt.Sprintf("not validated: %s names no PDF/X level", level)}}
+		}
+		return level, nil
+	}
+	d := readDeclaration(doc)
+	var why string
+	if d.xmp == core.XMPLimit {
+		// The XMP identification, which comes first, is unknown.
+		why = "its XMP metadata is over the XMP packet limit and was not read"
+	} else if l, ok := levelFor(d.xmpVersion, d.xmpConformance); ok {
+		return l, nil
+	} else if l, ok := levelFor(d.infoVersion, d.infoConformance); ok {
+		return l, nil
+	} else {
+		var claims []string
+		if d.xmpVersion != "" {
+			claims = append(claims, describeClaim("XMP pdfxid:", d.xmpVersion, d.xmpConformance))
+		}
+		if d.infoVersion != "" {
+			claims = append(claims, describeClaim("Info /", d.infoVersion, d.infoConformance))
+		}
+		switch {
+		case len(claims) > 0:
+			verb := "names"
+			if len(claims) > 1 {
+				verb = "name"
+			}
+			why = fmt.Sprintf("its %s %s no PDF/X level pdf0 checks (PDF/X-1a, -3, -4, -4p or -6)", strings.Join(claims, " and its "), verb)
+		case d.infoLocked:
+			why = "its XMP metadata declares no PDF/X level and its Info dictionary's identification is encrypted and could not be read"
+		case d.xmp == core.XMPMalformed:
+			why = "it declares no PDF/X level: its Info dictionary has no /GTS_PDFXVersion and its XMP metadata is not well-formed"
+		default:
+			why = "it declares no PDF/X level (no XMP pdfxid:GTS_PDFXVersion or Info /GTS_PDFXVersion)"
+		}
+	}
+	return level, []Violation{{Rule: finding.LimitRule,
+		Message: "not validated: the level to validate against was to be taken from the document's own declaration, and " + why}}
+}
+
+// describeClaim renders one source's identification for a message, the keys
+// prefixed as that source spells them.
+func describeClaim(prefix, version, conformance string) string {
+	s := fmt.Sprintf("%sGTS_PDFXVersion %q", prefix, version)
+	if conformance != "" {
+		s += fmt.Sprintf(" with %sGTS_PDFXConformance %q", prefix, conformance)
+	}
+	return s
+}
+
+// pdfxCheckIdentification verifies the file identifies as the requested level
+// in the place that level puts it (C82, C85).
+func pdfxCheckIdentification(doc core.View, level Level, add func(rule, msg string, obj int)) {
+	r, _ := level.rules()
+	d := readDeclaration(doc)
+	// The XMP packet was not read (a limit, already on the run) or an Info
+	// string is ciphertext.
+	unread := d.xmp == core.XMPLimit || d.infoLocked
+
+	version, conformance := d.xmpVersion, d.xmpConformance
+	if !r.xmpIdentification && d.infoVersion != "" {
 		// The Info dictionary is where PDF/X-1a and PDF/X-3 identify.
-		version, conformance = infoVersion, infoConformance
+		version, conformance = d.infoVersion, d.infoConformance
 	}
 	if version == "" {
 		if unread {
-			// The XMP packet was not read (a limit, already on the run) or
-			// the Info string is ciphertext, so whether the file is
-			// identified is unknown.
+			// Whether the file is identified is unknown.
 			return
 		}
 		switch {
-		case r.xmpIdentification && infoVersion != "":
-			add("identification", fmt.Sprintf("%s is identified in the XMP metadata (pdfxid:GTS_PDFXVersion); the Info dictionary's GTS_PDFXVersion %q alone does not identify it", level, infoVersion), 0)
+		case r.xmpIdentification && d.infoVersion != "":
+			add("identification", fmt.Sprintf("%s is identified in the XMP metadata (pdfxid:GTS_PDFXVersion); the Info dictionary's GTS_PDFXVersion %q alone does not identify it", level, d.infoVersion), 0)
 		case r.xmpIdentification:
 			add("identification", "file is not identified as PDF/X (no XMP pdfxid:GTS_PDFXVersion)", 0)
 		default:

@@ -2,10 +2,13 @@ package pdf0
 
 import (
 	"bytes"
-	"github.com/mgilbir/pdf0/object"
-	"github.com/mgilbir/pdf0/pdfx"
+	"context"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/pdfx"
 )
 
 // buildPDFXDoc adapts the conformant PDF/X-4 fixture to another PDF/X level by
@@ -213,4 +216,142 @@ func hasPDFXRule(errs []pdfx.Violation, rule string) bool {
 		}
 	}
 	return false
+}
+
+// TestPDFXLevelDeclared: the zero pdfx.Level is LevelDeclared, which takes
+// the level to validate against from the document's own GTS_PDFXVersion, as
+// pdfa.LevelDeclared does from pdfaid (follow-up to docs audit 2026-10-11:
+// D66). Before, the zero Level was PDFX4, and a level left unset validated
+// PDF/X-4 whatever the file was.
+func TestPDFXLevelDeclared(t *testing.T) {
+	var unset pdfx.Level
+	if unset != pdfx.LevelDeclared {
+		t.Fatalf("the zero pdfx.Level is %v, want LevelDeclared", unset)
+	}
+
+	// A document declaring each level, carrying RGB content and a page
+	// transparency group: findings that differ between the levels, so a run
+	// at the wrong level does not give the same result.
+	discriminating := func(d *Document) *Document {
+		d.Objects[10].Value.(*object.Stream).Data = []byte("1 0 0 rg BT /F1 12 Tf 100 700 Td (hi) Tj ET")
+		grp := &object.Dictionary{}
+		grp.Set("S", object.Name("Transparency"))
+		d.Objects[3].Value.(*object.Dictionary).Set("Group", grp)
+		return d
+	}
+	declared := []struct {
+		name  string
+		build func() *Document
+		level pdfx.Level
+	}{
+		{"PDF/X-4", buildPDFX4Doc, pdfx.PDFX4},
+		{"PDF/X-4p", func() *Document { return buildPDFXDoc("1.6", "PDF/X-4p") }, pdfx.PDFX4p},
+		{"PDF/X-1a:2001", buildPDFX1a2001Doc, pdfx.PDFX1a},
+		{"PDF/X-1a:2003", func() *Document { return buildPDFXDoc("1.4", "PDF/X-1a:2003") }, pdfx.PDFX1a},
+		{"PDF/X-3:2002", func() *Document { return buildPDFXDoc("1.3", "PDF/X-3:2002") }, pdfx.PDFX3},
+		{"PDF/X-3:2003", func() *Document { return buildPDFXDoc("1.4", "PDF/X-3:2003") }, pdfx.PDFX3},
+		{"PDF/X-6", func() *Document { return buildPDFXDoc("2.0", "PDF/X-6") }, pdfx.PDFX6},
+	}
+	for _, tc := range declared {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, d := range []*Document{tc.build(), discriminating(tc.build())} {
+				want := ValidatePDFX(d, tc.level)
+				if hasPDFXRule(want, "identification") || hasPDFXRule(want, "limit") {
+					t.Fatalf("the fixture does not identify %v: %v", tc.level, want)
+				}
+				got := ValidatePDFX(d, unset)
+				if !reflect.DeepEqual(got, want) {
+					t.Errorf("as declared:\n%v\nwant, as %v:\n%v", got, tc.level, want)
+				}
+				if ctx := ValidatePDFXContext(context.Background(), d, pdfx.LevelDeclared); !reflect.DeepEqual(ctx, want) {
+					t.Errorf("ValidatePDFXContext as declared:\n%v\nwant:\n%v", ctx, want)
+				}
+			}
+		})
+	}
+
+	// A PDF/X-4 identification in the Info dictionary alone is a claim to be
+	// PDF/X-4, held to that level, whose identification rule then says the
+	// claim is in the wrong place.
+	infoOnly := buildPDFX4Doc()
+	infoOnly.Objects[6].Value.(*object.Stream).Data = []byte(`<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description/></rdf:RDF></x:xmpmeta>`)
+	if got, want := ValidatePDFX(infoOnly, unset), ValidatePDFX(infoOnly, pdfx.PDFX4); !reflect.DeepEqual(got, want) {
+		t.Errorf("Info-only PDF/X-4, as declared:\n%v\nwant:\n%v", got, want)
+	}
+
+	// A document that declares no level pdf0 checks is not validated: one
+	// checker finding, saying why, and none of the PDF/X-4 results.
+	undeclared := func(xmpVersion, infoVersion string) *Document {
+		d := buildPDFX4Doc()
+		ms := d.Objects[6].Value.(*object.Stream)
+		ms.Data = bytes.Replace(ms.Data, []byte("<pdfxid:GTS_PDFXVersion>PDF/X-4</pdfxid:GTS_PDFXVersion>"), nil, 1)
+		if xmpVersion != "" {
+			ms.Data = bytes.Replace(ms.Data, []byte("</rdf:Description>"),
+				[]byte("<pdfxid:GTS_PDFXVersion>"+xmpVersion+"</pdfxid:GTS_PDFXVersion></rdf:Description>"), 1)
+		}
+		info := d.Objects[11].Value.(*object.Dictionary)
+		info.Delete("GTS_PDFXVersion")
+		if infoVersion != "" {
+			info.Set("GTS_PDFXVersion", object.String{Value: []byte(infoVersion)})
+		}
+		// A PDF/X-4 finding a run at PDF/X-4 would report.
+		d.Objects[4].Value.(*object.Dictionary).Delete("DestOutputProfile")
+		return d
+	}
+	xmpOverLimit := buildPDFX4Doc()
+	xmpOverLimit.limits.XMPPacketBytes = 64
+	refused := []struct {
+		name string
+		doc  *Document
+		why  string
+	}{
+		{"nothing declared", undeclared("", ""), "declares no PDF/X level"},
+		{"an unknown XMP version", undeclared("PDF/X-5g", ""), `"PDF/X-5g"`},
+		{"an unknown Info version", undeclared("", "PDF/X-2:2003"), `"PDF/X-2:2003"`},
+		{"PDF/X-1:2001 without a conformance", undeclared("", "PDF/X-1:2001"), `"PDF/X-1:2001"`},
+		{"metadata over the XMP packet limit", xmpOverLimit, "XMP packet limit"},
+	}
+	for _, tc := range refused {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ValidatePDFX(tc.doc, unset)
+			var real []pdfx.Violation
+			var declaredFinding bool
+			for _, v := range got {
+				if !IsCheckerFinding(v) {
+					real = append(real, v)
+				}
+				if v.Rule == "limit" && strings.Contains(v.Message, "own declaration") && strings.Contains(v.Message, tc.why) {
+					declaredFinding = true
+				}
+			}
+			if len(real) != 0 || !declaredFinding {
+				t.Errorf("want only checker findings, one of them naming %s; got %v", tc.why, got)
+			}
+		})
+	}
+	if got := ValidatePDFX(undeclared("", ""), unset); len(got) != 1 {
+		t.Errorf("an undeclared document: want exactly one finding, got %v", got)
+	}
+}
+
+// TestPDFXLevelNames: every real level keeps its name across the renumbering
+// that made room for LevelDeclared as the zero value.
+func TestPDFXLevelNames(t *testing.T) {
+	for _, c := range []struct {
+		level pdfx.Level
+		want  string
+	}{
+		{pdfx.LevelDeclared, "PDF/X (as declared)"},
+		{pdfx.PDFX1a, "PDF/X-1a"},
+		{pdfx.PDFX3, "PDF/X-3"},
+		{pdfx.PDFX4, "PDF/X-4"},
+		{pdfx.PDFX4p, "PDF/X-4p"},
+		{pdfx.PDFX6, "PDF/X-6"},
+		{pdfx.Level(99), "PDFXLevel(99)"},
+	} {
+		level, want := c.level, c.want
+		if got := level.String(); got != want {
+			t.Errorf("Level(%d).String() = %q, want %q", int(level), got, want)
+		}
+	}
 }

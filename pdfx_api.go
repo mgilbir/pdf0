@@ -13,9 +13,13 @@ import (
 // guards that tripped while the file was read.
 
 // ValidatePDFX checks doc against the implemented rules for the given PDF/X
-// level. The level is required in fact as well as in the signature: the zero
-// pdfx.Level is pdfx.PDFX4, so a level left unset validates PDF/X-4 without
-// saying so.
+// level. pdfx.LevelDeclared, the zero pdfx.Level, takes the level from the
+// document's own GTS_PDFXVersion identification (XMP first, then the Info
+// dictionary) and validates that level exactly as if it had been named; a
+// document that declares no level pdf0 checks, or whose declaration cannot be
+// read, gets a "limit" finding saying so and is not validated (beside it, the
+// guard that stopped the read, if one did). A level that names no PDF/X level
+// is refused the same way.
 //
 // An empty result means none of the implemented checks fired, not a guarantee
 // of full conformance: the checks are structural (identification, the output
@@ -29,7 +33,8 @@ func ValidatePDFX(doc *Document, level pdfx.Level) []pdfx.Violation {
 }
 
 // ValidatePDFXContext is ValidatePDFX with cancellation; a cancelled run reports
-// itself under the rule "limit" (see cancel.go).
+// itself under the rule "limit" (see cancel.go). The level is read as
+// ValidatePDFX reads it, pdfx.LevelDeclared included.
 func ValidatePDFXContext(ctx context.Context, doc *Document, level pdfx.Level) []pdfx.Violation {
 	return validatePDFX(core.NewCanceler(ctx), doc, level)
 }

@@ -16,7 +16,7 @@ internals of each engine have their own docs: [pdfa.md](pdfa.md) for PDF/A,
 | PDF/A (ISO 19005) 1a/1b/2a/2b/2u/3a/3b/3u/4/4e/4f | `ValidatePDFA(doc, level)` | `[]pdfa.Violation` | `ValidatePDFAContext` | The zero `pdfa.Level`, `pdfa.LevelDeclared`, validates against the level the document declares ([pdfa.md](pdfa.md#level-differences)) |
 | PDF/UA-1 (ISO 14289-1) | `ValidatePDFUA(doc)` | `[]pdfua.Violation` | `ValidatePDFUAContext` | The finding names its rule in `Clause`, not `Rule` (see [Reading a result](#reading-a-result)) |
 | PDF/UA-2 (ISO 14289-2) | `ValidatePDFUA2(doc)` | `[]pdfua.Violation` | `ValidatePDFUA2Context` | Partial, mostly ISO 14289-1 clause numbers, not in the CLI: see [Checking for PDF/UA-2](#checking-for-pdfua-2) |
-| PDF/X-1a/3/4/4p/6 (ISO 15930) | `ValidatePDFX(doc, level)` | `[]pdfx.Violation` | `ValidatePDFXContext` | **The zero `pdfx.Level` is `pdfx.PDFX4`**: a level left unset validates PDF/X-4 and says nothing. Always name the level |
+| PDF/X-1a/3/4/4p/6 (ISO 15930) | `ValidatePDFX(doc, level)` | `[]pdfx.Violation` | `ValidatePDFXContext` | The zero `pdfx.Level`, `pdfx.LevelDeclared`, validates against the level the document's `GTS_PDFXVersion` declares (XMP first, then Info); a file that declares none gets a `limit` finding, not results |
 | PDF/VT-1 (ISO 16612-2) | `ValidatePDFVT(doc)` | `[]pdfvt.Violation` | `ValidatePDFVTContext` | Composes PDF/X-4 and DPart, and inherits how partial they are ([PDF/VT](#pdfvt)) |
 | PDF/VT-2 | `ValidatePDFVT2(doc)` | `[]pdfvt.Violation` | `ValidatePDFVT2Context` | The PDF/X-5 external-reference rules are not asserted |
 | PDF/R (ISO 23504-1) | `ValidatePDFR(doc)` | `[]pdfr.Violation` | `ValidatePDFRContext` | Written from knowledge of the standard, with no corpus to calibrate it |

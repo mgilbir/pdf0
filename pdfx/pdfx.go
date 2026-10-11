@@ -14,15 +14,26 @@ import (
 
 // Level identifies a PDF/X conformance level.
 //
-// The zero value is PDFX4, not a "no level" sentinel: a Level a caller never
-// set validates against PDF/X-4, silently. Always name the level. (pdfa.Level
-// avoids this: its zero value is LevelDeclared.)
+// The zero value is LevelDeclared, which is not a level but an instruction:
+// validate against the level the document itself declares. A level left
+// unset therefore checks the claim the file makes rather than, silently,
+// PDF/X-4. pdfa.Level's zero value, pdfa.LevelDeclared, works the same way
+// for PDF/A.
 type Level int
 
 const (
+	// LevelDeclared asks the validator to take the level from the document's
+	// own GTS_PDFXVersion (and GTS_PDFXConformance) identification: the XMP
+	// pdfxid:GTS_PDFXVersion when it names a level, and otherwise the Info
+	// dictionary's /GTS_PDFXVersion, where PDF/X-1a and PDF/X-3 identify. The
+	// level it names is then validated exactly as if the caller had named it,
+	// identification rule included. A document that declares no level pdf0
+	// checks, or whose declaration cannot be read, is reported with a
+	// finding under the "limit" rule and not validated (IsCheckerFinding in
+	// the root package). It is the zero Level.
+	LevelDeclared Level = iota
 	// PDFX4 is PDF/X-4 with an embedded ICC destination profile (ISO 15930-7).
-	// It is the zero Level.
-	PDFX4 Level = iota
+	PDFX4
 	// PDFX4p is PDF/X-4p, which permits an externally referenced destination
 	// profile instead of an embedded one.
 	PDFX4p
@@ -38,6 +49,8 @@ const (
 
 func (l Level) String() string {
 	switch l {
+	case LevelDeclared:
+		return "PDF/X (as declared)"
 	case PDFX4:
 		return "PDF/X-4"
 	case PDFX4p:
@@ -419,10 +432,11 @@ func rectContains(outer, inner [4]float64) bool {
 // validateView runs the PDF/X checks over a view. The caller starts the run,
 // builds the view, and reports the guards that tripped while the file was read.
 func validateView(v core.View, level Level) []Violation {
-	r, ok := level.rules()
-	if !ok {
-		return []Violation{{Rule: finding.LimitRule, Message: fmt.Sprintf("not validated: %s names no PDF/X level", level)}}
+	level, refused := resolveTarget(v, level)
+	if refused != nil {
+		return refused
 	}
+	r, _ := level.rules()
 	var out []Violation
 	add := func(rule, msg string, obj int) {
 		out = append(out, Violation{Rule: rule, Message: msg, Object: obj})

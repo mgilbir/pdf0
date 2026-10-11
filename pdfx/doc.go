@@ -4,8 +4,10 @@
 //
 // The entry point takes a *pdf0.Document, so it lives in the root package:
 // pdf0.ValidatePDFX (and pdf0.ValidatePDFXContext) checks a document against a
-// Level and returns Violation values. Always name the level: the zero Level is
-// PDFX4, so a level left unset validates PDF/X-4 without saying so.
+// Level and returns Violation values. Name the level the file must meet; the
+// zero Level, LevelDeclared, validates against the level the file itself
+// declares, and a file that declares none gets a "limit" finding instead of
+// results.
 //
 //	for _, v := range pdf0.ValidatePDFX(doc, pdfx.PDFX4) {
 //		fmt.Println(v)
