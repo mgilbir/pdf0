@@ -55,3 +55,12 @@ and hand it to formalis for the invoice rules.
   *container* rules change.
 - The oracle data (EN 16931 artefacts, code lists, national CIUS suites) is
   fetched by formalis' own Makefile, not this one.
+
+**Amended 2026-07-31 (recorded 2026-10-11):** this section was rewritten in
+place by fa0fd71, the adoption of formalis v0.3.0, before amendments were
+written down as notes (see the [README](README.md)). As first written, its
+first bullet called the seam "the one wart": the results carried
+`[]formalis.Violation`, which does not satisfy `pdf0.Violation`, so callers had
+to adapt them. fa0fd71 gave pdf0 finding types of its own and added the second
+and third bullets. On 2026-08-02, 4bce899 renamed the types to the names the
+first bullet now uses. The decision itself has not changed.
