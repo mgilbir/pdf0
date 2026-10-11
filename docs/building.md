@@ -347,11 +347,37 @@ _, err = doc.AddPage(pdf0.Page{
 })
 ```
 
-A pattern with `Uncolored` set carries shape without colour, and
-`pdf0.UncoloredPatternSpace` is the colour space a page selects it through. The
-builder cannot yet paint one: that takes the colour components and the pattern
-name in one `scn`, and `SetPattern` writes the name alone. Use a coloured
-pattern.
+A pattern with `Uncolored` set carries shape without colour, and is painted in
+whatever colour is given where it is used. Its cell may not set a colour. The
+page defines a `/Pattern` colour space over the space the colour is in, built by
+`pdf0.UncoloredPatternSpace`; the drawing selects it with
+`SetUncoloredPatternSpace`, naming the same underlying space, and paints with
+`SetUncoloredPattern`, which writes the colour and the pattern name in the one
+`scn` a reader needs. The builder refuses a colour with the wrong number of
+components for that space, and `SetPattern` or `SetColor` on their own there.
+
+```go
+var cell content.Builder
+cell.Rect(0, 0, 5, 5).Fill() // shape only
+dots, err := doc.AddTilingPattern(pdf0.TilingPattern{
+	BBox:      [4]float64{0, 0, 10, 10},
+	Uncolored: true,
+	Content:   &cell,
+})
+if err != nil {
+	return err
+}
+
+var b content.Builder
+b.SetUncoloredPatternSpace("CS0", "DeviceRGB").
+	SetUncoloredPattern("Dots", 0.15, 0.35, 0.75).Rect(72, 600, 200, 100).Fill()
+b.SetUncoloredPattern("Dots", 0.95, 0.55, 0.15).Rect(300, 600, 200, 100).Fill()
+_, err = doc.AddPage(pdf0.Page{
+	Width: 595, Height: 842, Content: &b,
+	ColorSpaces: map[object.Name]object.Object{"CS0": pdf0.UncoloredPatternSpace("DeviceRGB")},
+	Patterns:    map[object.Name]object.Object{"Dots": dots},
+})
+```
 
 ## Transparency and blending
 

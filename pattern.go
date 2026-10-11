@@ -219,6 +219,32 @@ func checkStep(name string, v float64) error {
 // expressed in. Getting this wrong produces a pattern painted in an
 // unpredictable colour rather than an error, which is why it is offered rather
 // than left to the caller to assemble.
+//
+// Define it in the page's ColorSpaces, select it with
+// content.Builder.SetUncoloredPatternSpace naming the same underlying space,
+// and paint with content.Builder.SetUncoloredPattern, which writes the colour
+// and the pattern name in the one scn the pattern needs:
+//
+//	var cell content.Builder
+//	cell.Rect(0, 0, 5, 5).Fill() // shape only: no colour in an uncoloured cell
+//	dots, err := doc.AddTilingPattern(pdf0.TilingPattern{
+//		BBox: [4]float64{0, 0, 10, 10}, Uncolored: true, Content: &cell,
+//	})
+//	if err != nil {
+//		return err
+//	}
+//	var b content.Builder
+//	b.SetUncoloredPatternSpace("CS0", "DeviceRGB").
+//		SetUncoloredPattern("P0", 0.8, 0.1, 0.1).
+//		Rect(72, 600, 200, 100).Fill()
+//	_, err = doc.AddPage(pdf0.Page{
+//		Width: 595, Height: 842, Content: &b,
+//		ColorSpaces: map[object.Name]object.Object{"CS0": pdf0.UncoloredPatternSpace("DeviceRGB")},
+//		Patterns:    map[object.Name]object.Object{"P0": dots},
+//	})
+//
+// The underlying space is DeviceGray, DeviceRGB or DeviceCMYK; the Builder
+// refuses any other.
 func UncoloredPatternSpace(underlying object.Name) object.Array {
 	return object.Array{object.Name("Pattern"), underlying}
 }
