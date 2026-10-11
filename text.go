@@ -336,11 +336,20 @@ func (d *Document) declinedError(c *declinedContent) error {
 			return e
 		}
 	}
+	// No trip against the stream: it was declined for the run's total, which
+	// is recorded against no object — unless the recorder dropped trips, when
+	// the stream's own may be among them and the guard is not known.
+	total := false
 	for _, t := range trips {
-		if t.Guard() == core.GuardContentTotal {
-			e.guard = core.GuardContentTotal
+		switch t.Guard() {
+		case core.GuardReportOverflow:
 			return e
+		case core.GuardContentTotal:
+			total = true
 		}
+	}
+	if total {
+		e.guard = core.GuardContentTotal
 	}
 	return e
 }
@@ -361,11 +370,10 @@ func (e *contentDeclinedError) Error() string {
 	}
 	switch e.reason {
 	case core.ReasonLimit:
-		guard := e.guard
-		if guard == "" {
-			guard = "a decoded-size limit"
+		if e.guard == "" {
+			return fmt.Sprintf("resource limit reached: %s was not decoded, being over a size limit whose trip the run did not keep", what)
 		}
-		return fmt.Sprintf("resource limit reached (%s): %s was not decoded", guard, what)
+		return fmt.Sprintf("resource limit reached (%s): %s was not decoded", e.guard, what)
 	case core.ReasonUnsupported:
 		return fmt.Sprintf("not implemented (%s): %s uses a filter pdf0 does not decode", core.GuardUnsupportedFilter, what)
 	}
