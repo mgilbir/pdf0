@@ -5,6 +5,7 @@ import (
 	"github.com/mgilbir/pdf0/internal/checked"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
+	"github.com/mgilbir/pdf0/internal/fontcheck"
 	"github.com/mgilbir/pdf0/internal/xmp"
 	"github.com/mgilbir/pdf0/object"
 	"math"
@@ -108,6 +109,7 @@ func validateView(doc core.View, part string) []Violation {
 	run(checkUAToUnicodeValues)
 	run(checkUAFontSubsetGlyphs)
 	run(checkUANotdefCID)
+	run(checkUAFontWidths)
 
 	// 7.2 — text must map to Unicode (Matterhorn 10-001).
 	run(checkUACharMapping)
@@ -1345,7 +1347,9 @@ func checkUACharMapping(d core.View) []Violation {
 // on the fonts actually used for rendering (executed-content model):
 //   - 7.21.3.2 an embedded CIDFontType2 must carry a /CIDToGIDMap;
 //   - 7.21.6   a symbolic TrueType font must not have an /Encoding entry, and a
-//     non-symbolic one must use MacRomanEncoding or WinAnsiEncoding.
+//     non-symbolic one must use MacRomanEncoding or WinAnsiEncoding, and may
+//     have a /Differences array only of Adobe Glyph List names, looked up
+//     through a (3,1) cmap subtable when its program is embedded.
 func checkUAFontDicts(d core.View) []Violation {
 	var v []Violation
 	for fontDict := range core.CollectFontTextUsage(d) {
@@ -1396,6 +1400,15 @@ func checkOneUAFontDict(d core.View, fontDict *object.Dictionary) []Violation {
 		}
 		if base != "MacRomanEncoding" && base != "WinAnsiEncoding" {
 			v = append(v, Violation{Clause: "7.21.6", Message: "non-symbolic TrueType font must use MacRomanEncoding or WinAnsiEncoding", Object: num})
+		}
+		// The rule's second half: a /Differences array names only Adobe Glyph
+		// List glyphs, and an embedded program can look them up through a
+		// (3,1) cmap subtable (fontcheck.DifferencesNotInAGL).
+		switch name, noCmap31 := fontcheck.DifferencesNotInAGL(d, fontDict); {
+		case noCmap31:
+			v = append(v, Violation{Clause: "7.21.6", Message: "non-symbolic TrueType font has a /Differences array, but its embedded program has no Microsoft Unicode (3,1) cmap subtable", Object: num})
+		case name != "":
+			v = append(v, Violation{Clause: "7.21.6", Message: "non-symbolic TrueType font's /Differences names glyph /" + name + ", which is not in the Adobe Glyph List", Object: num})
 		}
 	}
 	return v

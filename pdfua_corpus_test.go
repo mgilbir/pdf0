@@ -29,8 +29,8 @@ var uaCorpusBaselines = map[string]struct {
 	maxFalsePositives int // pass files reported
 	minCaught         int // fail files reported
 }{
-	"PDF_UA-1": {maxFalsePositives: 0, minCaught: 153},
-	"PDF_UA-2": {maxFalsePositives: 0, minCaught: 68},
+	"PDF_UA-1": {maxFalsePositives: 0, minCaught: 155},
+	"PDF_UA-2": {maxFalsePositives: 0, minCaught: 70},
 }
 
 func TestCorpusPDFUA(t *testing.T) {

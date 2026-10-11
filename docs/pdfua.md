@@ -129,7 +129,7 @@ rule, noted in the source comments.
 | Form fields | 7.18.1, 7.15 | `checkUAFieldDescription`, `checkUAXFA` (and the `Widget` arm of `checkUAAnnotations`) | a field with no `/TU` whose description sits on a pure-widget child, a `Widget` (PDF/UA-1, inside the crop box) with neither an effective `/TU` (inherited up `/Parent`, bounded to 32 hops) nor an `/Alt` on its enclosing structure element, and a dynamic XFA form (`dynamicRender` required, detected in the *decoded* packet) |
 | Link targets | UA-2 8.2.5.20 | `checkUA2LinkTargets` | **PDF/UA-2 only**: one structure element enclosing `Link` annotations whose structure destinations (`/SD`, else `/D`, of a GoTo action, or `/Dest`) are different structure elements |
 | Media clips | 7.18.6.2 | `checkUAMediaClips` | a `/Type /MediaClip` dictionary anywhere in the document (`core.View.ReachableDicts`, direct dictionaries included) missing `/CT`, missing `/Alt`, or with an `/Alt` carrying no non-empty string |
-| Fonts | 7.21.3.1–7.21.8, 7.21.4.1/.2, 7.21.6 | `checkUAFonts`, `checkUAFontDicts`, `checkUACMaps`, `checkUACMapWMode`, `checkUACIDSystemInfo`, `checkUAToUnicodeValues`, `checkUAFontSubsetGlyphs`, `checkUANotdefCID` | not embedded, `CIDFontType2` without `/CIDToGIDMap` or with a non-`Identity` name, symbolic TrueType with an `/Encoding`, non-symbolic TrueType not on MacRoman/WinAnsi, a CMap neither predefined nor embedded, an embedded CMap whose `/WMode` disagrees with the stream's own, a `CIDSystemInfo` Registry/Ordering/Supplement mismatch with the CMap, a `ToUnicode` mapping to U+0000/U+FEFF/U+FFFE, a subset `/CharSet` or `/CIDSet` disagreeing with the embedded program, and a shown CID 0 (`.notdef`) |
+| Fonts | 7.21.3.1–7.21.8, 7.21.4.1/.2, 7.21.5, 7.21.6 | `checkUAFonts`, `checkUAFontDicts`, `checkUACMaps`, `checkUACMapWMode`, `checkUACIDSystemInfo`, `checkUAToUnicodeValues`, `checkUAFontSubsetGlyphs`, `checkUANotdefCID`, `checkUAFontWidths` | not embedded, `CIDFontType2` without `/CIDToGIDMap` or with a non-`Identity` name, symbolic TrueType with an `/Encoding`, non-symbolic TrueType not on MacRoman/WinAnsi, or with a `/Differences` naming a glyph not in the Adobe Glyph List (`fontcheck.AGLListed`: the list's names and `.notdef`, not `uniXXXX`) or, its program embedded, with no (3,1) cmap subtable to look the names up in, a shown glyph whose declared width differs from the program's by more than 1/1000 (text in rendering mode 3 only is exempt), a CMap neither predefined nor embedded, an embedded CMap whose `/WMode` disagrees with the stream's own, a `CIDSystemInfo` Registry/Ordering/Supplement mismatch with the CMap, a `ToUnicode` mapping to U+0000/U+FEFF/U+FFFE, a subset `/CharSet` or `/CIDSet` disagreeing with the embedded program, and a shown CID 0 (`.notdef`) |
 | Character mapping | 7.2 | `checkUACharMapping` | text shown with a Type 0 Identity-encoded font that has no `ToUnicode` (Matterhorn 10-001), unless its descendant is in the Adobe-GB1, -CNS1, -Japan1 or -Korea1 collection, whose Unicode mapping Adobe publishes. A deliberately narrow case of 7.21.7, not all of it |
 | Real content vs artifacts | 7.1 | `checkUARealContent` | text, a painted path, an inline image, an image XObject, or what a form XObject paints, outside any marked-content sequence; see [Content-level checking](#content-level-checking) |
 | XObjects | 7.20 | `checkUAReferenceXObjects`, `checkUAFormXObjectMCID` | a Form XObject carrying `/Ref` (a reference XObject), or a form containing `/MCID` painted by more than one `Do` |
@@ -376,8 +376,8 @@ file's expected result in both suites.
 
 | Suite | Pass files reported | Fail files caught |
 |---|---|---|
-| `PDF_UA-1` | 0 of 141 | 153 of 155 |
-| `PDF_UA-2` | 0 of 54 | 68 of 84 |
+| `PDF_UA-1` | 0 of 141 | 155 of 155 |
+| `PDF_UA-2` | 0 of 54 | 70 of 84 |
 
 Until the docs audit of 2026-10-11 (D12) only the reference files were held,
 and nothing ratcheted the corpus. It had drifted both ways: 30 PDF/UA-1 and 8
@@ -387,8 +387,13 @@ in July 2026, was 150. The drop was not a regression. Five fail files
 (`7.1-t03-fail-a`, `7.7-t01-fail-a`, `-b`, `7.21.5-t01-fail-a`,
 `7.21.6-t02-fail-d`) were caught only by a false positive: their catalog
 `/Lang` is the UTF-16 text "EN-US", which `checkUALang` judged as raw bytes.
-Commit d0c9bde (2026-09-23) decoded it, and the five were honestly missed. Three
-are caught again now, by the rules they test.
+Commit d0c9bde (2026-09-23) decoded it, and the five were honestly missed. All
+five are caught again now, by the rules they test; the last two, with their
+PDF/UA-2 twins `8.4.5.6-t01-fail-a` and `8.4.5.7-t02-fail-d`, by the width and
+`/Differences` rules the PDF/A engine shares through `internal/fontcheck`. On
+both suites and the ten reference files pdf0 now reports 7.21.5 (8.4.5.6), and
+the base-encoding and `/Differences` half of 7.21.6 (8.4.5.7), on exactly the
+files veraPDF 1.30.3 does.
 
 The reported pass files were each the rule's fault, and each rule now reads as
 veraPDF's does:
@@ -408,8 +413,6 @@ The fail files still missed are rules pdf0 does not implement:
 
 | Fail files | Rule | Why not |
 |---|---|---|
-| `7.21.5-t01-fail-a`; UA-2 `8.4.5.6-t01-fail-a` | glyph widths match the font program | the width machinery is PDF/A's (`pdfa/fonts.go`, unexported) |
-| `7.21.6-t02-fail-d`; UA-2 `8.4.5.7-t02-fail-d` | a non-symbolic TrueType `/Differences` names only Adobe Glyph List glyphs | the glyph list is PDF/A's (`pdfa/fonts.go`, unexported) |
 | UA-2 `5-t04-fail-a`, `5-t05-fail-a`, `-b` | `pdfuaid:rev` prefix and value | PDF/UA-2's own rules, not implemented |
 | UA-2 `8.2.5.2-t01-fail-a`, `-t02-fail-a`; `8.2.5.12-t01-fail-a`; `8.2.5.25-t01-fail-a` | one `Document` root in the PDF 2.0 namespace; no `H`; a ListNumbering attribute with `Lbl` | likewise |
 | UA-2 `8.8-t01-fail-a`, `-t02-fail-a` | intra-document destinations are structure destinations | likewise |
@@ -446,6 +449,7 @@ tabulated in [testing.md](testing.md).
 |---|---|---|
 | `pdfua/pdfua.go` | `pdfua.Violation`, the `validateView(doc, part)` dispatch (reached from the root's `ValidatePDFUA` and `ValidatePDFUA2` in `pdfua_api.go`), and most rules: identification, title, fonts and CMaps, annotations, form fields, media clips, optional content, embedded files, headings, figures and formulas, PDF/UA-2 link targets | 5, 6.1, 7.1–7.4, 7.7, 7.10, 7.11, 7.15, 7.16, 7.18.x, 7.20, 7.21.x, UA-2 8.2.5.20 |
 | `pdfua/pdfua_lang.go` | natural language: `/Lang` syntax, the PDF/UA-2 catalog `/Lang`, and PDF/UA-1's per-object determinability with its content replay (`langScope`) | 7.2, UA-2 8.4.4 |
+| `pdfua/pdfua_fontprog.go` | the glyph-width rule, over `internal/fontcheck`, and its rendering-mode exemption | 7.21.5 (UA-2 8.4.5.6) |
 | `pdfua/pdfua_annotctx.go` | `annotContext`: each page annotation's enclosing structure element and its page's crop box | 7.18.1, 7.18.5 |
 | `pdfua/pdfua_struct.go` | Its names for `core.StructTree` and `walkStructElems`, element nesting tables, container well-formedness, heading strength, `Note` IDs, `/Suspects`, UA-1 header version, the two PDF/UA-2 namespace rules | 7.1, 7.2, 7.4.4, 7.9, 6.1, UA-2 8.2.4 and 8.2.5.29 (and ISO 32000-1 14.8.4.3) |
 | `pdfua/pdfua_content.go` | `streamContentFacts`, real-content vs artifact analysis, the form-XObject paint count, OBJR annotation placement | 7.1, 7.18.1, 7.20 |
@@ -455,7 +459,10 @@ tabulated in [testing.md](testing.md).
 Shared machinery lives outside these files, in `internal/core`: the content
 interpreter behind `core.CollectFontTextUsage`, the run and its memos
 (`core.Run`), the content lexer (`core.ContentLexer`), `core.DecodeXMPToUTF8`,
-and `core.LoadFontProgram` over forme's font parsers.
+and `core.LoadFontProgram` over forme's font parsers. The font checks PDF/A
+states in the same words — the width comparison, a CIDFont's `/W`, the Adobe
+Glyph List — are `internal/fontcheck`'s, which both engines call
+([fonts.md](fonts.md#encodings-and-character-mapping)).
 
 ## Confirmed limitations
 
@@ -475,6 +482,18 @@ and `core.LoadFontProgram` over forme's font parsers.
   skipped unless `CIDToGIDMap` is `Identity`, and the simple-font `.notdef` case
   of 7.21.8 is unimplemented — both documented in-source as false-positive
   avoidance, not oversights.
+- **The width rule (7.21.5) is narrower than veraPDF's in three places.**
+  Rendering modes are recorded per font, not per glyph
+  (`core.FontTextUsage.Modes`), so a font is exempt only when all its text is
+  in mode 3; one that mixes mode 3 with another has every glyph compared, where
+  veraPDF exempts the mode-3 glyphs. A TrueType code pdf0 reads as `.notdef` is
+  not compared: when the encoding's glyph name finds nothing, veraPDF looks the
+  code itself up in the cmap and compares that glyph, a fallback pdf0 does not
+  model (corpus `7.21.6-t02-fail-a`, whose `/BaseEncoding /Identity` names
+  nothing, is no 7.21.5 failure to veraPDF). And a font program pdf0 cannot
+  read is not compared. The `/Differences` half of 7.21.6 likewise says
+  nothing of a program it cannot read, where veraPDF fails a program it could
+  not parse.
 - **A clean result is not conformance.** Matterhorn checkpoints covering reading
   order, colour-as-sole-meaning and most semantic judgements are outside what a
   static checker can assert.
