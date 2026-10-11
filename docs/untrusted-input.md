@@ -67,10 +67,10 @@ The options, generated from their documentation in `limits.go`:
 
 | Option | Caps | Default |
 |---|---|---|
-| `WithMaxDecodedStreamBytes` | the decompressed size of any single stream | 100 MB |
-| `WithMaxDecodedContentBytes` | the total decoded content one validation run will materialize | 512 MB |
-| `WithMaxObjectStreamBytes` | the memory Read may spend on the objects it unpacks from object streams in one document: the parser's estimate of every object it builds (syntax.MaterialCost, twice the measured live cost), plus the decoded bytes of the container being unpacked | 512 MB |
-| `WithMaxContentStreamBytes` | the decoded size of a single content stream or image sample buffer that will be scanned | 64 MB |
+| `WithMaxDecodedStreamBytes` | the decompressed size of any single stream | 100 MiB |
+| `WithMaxDecodedContentBytes` | the total decoded content one validation run will materialize | 512 MiB |
+| `WithMaxObjectStreamBytes` | the memory Read may spend on the objects it unpacks from object streams in one document: the parser's estimate of every object it builds (syntax.MaterialCost, twice the measured live cost), plus the decoded bytes of the container being unpacked | 512 MiB |
+| `WithMaxContentStreamBytes` | the decoded size of a single content stream or image sample buffer that will be scanned | 64 MiB |
 | `WithMaxICCProfileBytes` | the decoded size of an ICC profile | 8 MiB |
 | `WithMaxXMPPacketBytes` | the size of an XMP packet that the property checks will build a node tree for | 4 MiB |
 | `WithMaxTableGridFills` | the number of grid slots the PDF/UA table checks will fill for one table, bounding a cell whose /RowSpan and /ColSpan claim a multi-million-slot area | 1<<24 |
@@ -79,9 +79,6 @@ The options, generated from their documentation in `limits.go`:
 | `WithMaxImagePixels` | the size of an image that extraction will decode | 1<<26 |
 
 <!-- END GENERATED: options -->
-
-The byte sizes are binary: "100 MB" is 100 × 2^20 bytes, as the constant
-behind it (`core.DefaultMaxDecodedStreamBytes`, `100 << 20`) is written.
 
 **Every value must be positive.** `Read` (and `ParseXRefStream`) refuses 0 or a
 negative value, before reading anything, with an error wrapping

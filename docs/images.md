@@ -15,33 +15,46 @@ the [README](../README.md) and [architecture.md](architecture.md).
 
 ## Reading images
 
-Two entry points, both on `*Document`:
+Three entry points, all on `*Document`. Reach for `ImagesContext` first: it
+decodes one image at a time and tells you when it stopped early.
 
+<!-- snippet
+var ctx context.Context
+-->
 ```go
-imgs := doc.ExtractImages()     // []images.ExtractedImage — every image at once
-for img := range doc.Images() { // iter.Seq[images.ExtractedImage] — one at a time
+for img, err := range doc.ImagesContext(ctx) { // iter.Seq2 — one image live at a time
+	if err != nil {
+		return err // stopped early: cancelled, out of budget, or a Locked document
+	}
 	_ = img
 }
+for img := range doc.Images() { // iter.Seq — the same, with no error to report a stop
+	_ = img
+}
+imgs, err := doc.ExtractImagesContext(ctx) // every image at once, and why it stopped
+_, _ = imgs, err
 ```
 
-They yield the same images in the same order. The difference is the memory
-contract, and it is the whole reason both exist. `ExtractImages` holds every
-decoded image in the returned slice simultaneously; on a large scan document
-that is hundreds of full-page bitmaps live at once — unbounded memory. `Images`
-decodes each image only as it is yielded, so unless you retain them at most one
-decoded image is live, and breaking out of the loop skips the remaining decode
-work entirely (`TestImagesIteratorLazy` pins that). Prefer `Images` for any file
-you did not produce yourself.
+They yield the same images in the same order. They differ in two contracts.
 
-Under a deadline, `ExtractImagesContext(ctx)` returns the images gathered before
-the cancellation **and** an error wrapping `ctx.Err()` — both, because a short
-slice returned bare is indistinguishable from a document with fewer images, and
-extraction has no finding channel to say otherwise. The error is nil exactly when
-every image was reached; the check is between images, so a single very large
-image is not interruptible. There is deliberately no context variant of `Images`:
-an iterator is already cancellable by `break`, and since each image is decoded
-only as it is yielded, breaking after image N skips exactly what a context check
-between images would have. See
+**Memory.** `ExtractImagesContext` (and the deprecated `ExtractImages`) hold
+every decoded image in the returned slice simultaneously; on a large scan
+document that is hundreds of full-page bitmaps live at once — unbounded memory.
+`ImagesContext` and `Images` decode each image only as it is yielded, so unless
+you retain them at most one decoded image is live, and breaking out of the loop
+skips the remaining decode work entirely (`TestImagesIteratorLazy` pins that).
+Prefer an iterator for any file you did not produce yourself.
+
+**Knowing it stopped.** A short result is indistinguishable from a document with
+fewer images unless something says otherwise, and extraction has no finding
+channel. `ImagesContext` yields one final zero image with a non-nil error when it
+stops before every image was reached: the error wraps `ctx.Err()` for a cancelled
+or expired context, matches `ErrResourceLimit` when the work budget
+(`WithMaxWork`) ran out, and wraps `LockReason()` for a Locked document, which
+yields no images. `ExtractImagesContext` returns the images gathered before the
+stop **and** that error. `Images` and the deprecated `ExtractImages` truncate
+silently: a budget stop or a Locked document just ends the sequence. The check
+is between images, so a single very large image is not interruptible. See
 [untrusted-input.md](untrusted-input.md#bounding-time-the-context-variants).
 
 Each yielded value is an `ExtractedImage`:
@@ -182,7 +195,7 @@ back pixel for pixel (`TestEmbeddedImageRoundTripsPixelForPixel`), and
 
 ```mermaid
 flowchart TD
-    E["ExtractImages() → []ExtractedImage<br/>Images() → iter.Seq (one image live at a time)"] --> W["walk pages → inherited /Resources → /XObject<br/>form XObjects recursed (depth ≤ 16);<br/>annotation /AP appearance streams too;<br/>each object number yielded once"]
+    E["ImagesContext() / Images() → one image live at a time<br/>ExtractImagesContext() → []ExtractedImage, error"] --> W["walk pages → inherited /Resources → /XObject<br/>form XObjects recursed (depth ≤ 16);<br/>annotation /AP appearance streams too;<br/>each object number yielded once"]
     W --> F{"img.Filter = LAST name in the /Filter chain"}
     F -->|DCTDecode| J["image/jpeg on Stream.Data<br/>then imagejpeg.go applies /Decode<br/>(CMYK stays *image.CMYK)"]
     F -->|CCITTFaxDecode| CC["preceding general-purpose filters reversed,<br/>internal/ccitt decodes T.4/T.6 → 1-bpp samples"]

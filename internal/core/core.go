@@ -38,10 +38,10 @@ import (
 // far less — the heaviest measured across the veraPDF corpus and a Common Crawl
 // sample needs 218 MB — so only pathologically amplified input reaches it.
 const (
-	DefaultMaxDecodedStreamBytes  = 100 << 20 // 100 MB
-	DefaultMaxDecodedContentBytes = 512 << 20 // 512 MB
-	DefaultMaxObjectStreamBytes   = 512 << 20 // 512 MB
-	DefaultMaxContentStreamBytes  = 64 << 20  // 64 MB
+	DefaultMaxDecodedStreamBytes  = 100 << 20 // 100 MiB
+	DefaultMaxDecodedContentBytes = 512 << 20 // 512 MiB
+	DefaultMaxObjectStreamBytes   = 512 << 20 // 512 MiB
+	DefaultMaxContentStreamBytes  = 64 << 20  // 64 MiB
 	DefaultMaxICCProfileBytes     = 8 << 20   // 8 MiB
 	DefaultMaxXMPPacketBytes      = 4 << 20   // 4 MiB
 	DefaultMaxTableGridFills      = 1 << 24

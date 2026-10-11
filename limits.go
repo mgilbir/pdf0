@@ -172,7 +172,7 @@ func (d *Document) lim() core.Limits {
 }
 
 // WithMaxDecodedStreamBytes caps the decompressed size of any single stream
-// (default 100 MB). This is the decompression-bomb ceiling and applies to every
+// (default 100 MiB). This is the decompression-bomb ceiling and applies to every
 // FlateDecode and LZWDecode stream in the file; lowering it is the main lever
 // for a service accepting untrusted uploads. The largest legitimate stream
 // measured across the veraPDF corpus and a 978-file Common Crawl sample is
@@ -188,7 +188,7 @@ func WithMaxDecodedStreamBytes(n int) Option {
 }
 
 // WithMaxDecodedContentBytes caps the total decoded content one validation run
-// will materialize (default 512 MB). The per-stream cap stops a single stream
+// will materialize (default 512 MiB). The per-stream cap stops a single stream
 // exploding; this is the only bound on a whole run, and so the knob for "one
 // upload must not exhaust my process". The heaviest real document measured
 // needs 218 MB.
@@ -199,7 +199,7 @@ func WithMaxDecodedContentBytes(n int64) Option {
 }
 
 // WithMaxObjectStreamBytes caps the memory Read may spend on the objects it
-// unpacks from object streams in one document (default 512 MB): the parser's
+// unpacks from object streams in one document (default 512 MiB): the parser's
 // estimate of every object it builds (syntax.MaterialCost, twice the measured
 // live cost), plus the decoded bytes of the container being unpacked. Object
 // streams are the other compression-amplification path into a document: a
@@ -220,7 +220,7 @@ func WithMaxObjectStreamBytes(n int64) Option {
 }
 
 // WithMaxContentStreamBytes caps the decoded size of a single content stream or
-// image sample buffer that will be scanned (default 64 MB). Larger streams are
+// image sample buffer that will be scanned (default 64 MiB). Larger streams are
 // skipped. The largest real content stream measured is 29 MB.
 //
 // A value of zero or less is refused with ErrInvalidOption (see Option).
