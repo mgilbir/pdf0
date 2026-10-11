@@ -13,7 +13,8 @@ never mutated and the same document can be validated concurrently
 These further properties hold across the family:
 
 - **Panic safety.** Every check runs behind a `recover()` boundary — `runCheck`
-  for PDF/A, `finding.Guarded` and `pdfua.RunCheck` for the rest. A check that
+  for PDF/A, `finding.Guarded` for the rest (PDF/UA through its own wrapper of
+  it). A check that
   panics on hostile input is reported as a finding with the rule `internal`
   rather than crashing the caller, and findings collected before the panic
   survive. The honest limit, the same one `runCheck` has always carried: a stack
