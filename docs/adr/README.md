@@ -35,3 +35,4 @@ this rule was written down; its amendment note says what changed.)
 | [0016](0016-readcontext-returns-nil.md) | A cancelled `ReadContext` returns nil, never a partial `Document` |
 | [0017](0017-shaping-and-layout-in-forme.md) | Shaping, font programs and the HTML/CSS layout engine live in forme |
 | [0018](0018-retract-v0.2.0-v0.3.1.md) | v0.2.0 through v0.3.1 are retracted, not deleted |
+| [0019](0019-signature-consent-on-the-document.md) | Consent to invalidate signatures is held by the `Document`, not given per call |

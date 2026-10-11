@@ -204,6 +204,12 @@ stateDiagram-v2
     Plain --> [*]: Write, Save, WriteIncremental, WriteSigned
     Enc --> [*]: Write re-encrypts with the key
     Locked --> [*]: Write carries the ciphertext
+    note left of Enc
+        Read from a signed file, a document leaves
+        by Write, Save or SetEncryption only with
+        AllowInvalidatingSignatures; the incremental
+        writers keep its signatures.
+    end note
     note right of Plain
         Built in memory, it has no source file:
         PDF/A validation reports no-source-file,
@@ -223,11 +229,16 @@ run at once. Each ends by appending the run's limit trips
 ([limits.md](limits.md#how-a-trip-reaches-the-caller)).
 
 Leaving a state is writing it. `Write` regenerates the file in any state
-(below); `Save` is `Write` that refuses a document failing the PDF/A level it
-claims;
+(below) — unless the document was read from a file that carries signatures or
+document time-stamps, which regenerating it would invalidate: `Write`, `Save`
+and `SetEncryption` then refuse (`ErrWouldInvalidateSignatures`) until the
+caller consents with `AllowInvalidatingSignatures`
+([ADR 0019](adr/0019-signature-consent-on-the-document.md)). `Save` is `Write`
+that refuses a document failing the PDF/A level it claims;
 `WriteIncremental` appends to the file a document was read from, so it refuses
-one built in memory, one whose table was rebuilt, and any encrypted one; and the
-signing writers refuse an encrypted document. A Locked `Write` keeps the
+one built in memory, one whose table was rebuilt, any encrypted one, and one
+read from an encrypted file even after `RemoveEncryption`; and the signing
+writers refuse an encrypted document. A Locked `Write` keeps the
 ciphertext under the file's own `/Encrypt` and `/ID`, regenerating the layout
 ([ADR 0014](adr/0014-read-never-fails-on-encrypt.md)).
 
@@ -380,8 +391,10 @@ cannot tell you why it is broken.
 
 ## Write
 
-`Document.Write` (`document.go`) regenerates a clean file. It refuses documents
-it cannot faithfully serialize, re-encrypts a document decrypted on Read, writes
+`Document.Write` (`document.go`) regenerates a clean file. It refuses first a
+document whose source file carries signatures, unless the caller consented with
+`AllowInvalidatingSignatures` (the rewrite would invalidate them), then documents
+it cannot faithfully serialize; it re-encrypts a document decrypted on Read, writes
 a Locked one's ciphertext back unchanged under its original `/Encrypt` and `/ID`
 (so the result opens with the right password, and `Write` returns nil), and
 regenerates the cross-reference section in the same form the source used — a
@@ -390,7 +403,9 @@ anything is written; its godoc lists them.
 
 ```mermaid
 flowchart TD
-    A[Document.Write] --> L{Locked?}
+    A[Document.Write] --> SIG{"the source file carries signatures,<br/>and no AllowInvalidatingSignatures?"}
+    SIG -->|"yes: ErrWouldInvalidateSignatures"| X
+    SIG -->|no| L{Locked?}
     L -->|"yes, and /Encrypt does not resolve,<br/>or Read left objects missing"| X[return an error,<br/>nothing written]
     L --> B{"an entry under object 0,<br/>a nil entry, a negative number,<br/>Read left objects missing<br/>(broken or skipped ObjStms),<br/>or DecryptFailures?"}
     B -->|yes| X

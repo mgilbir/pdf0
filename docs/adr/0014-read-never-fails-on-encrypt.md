@@ -35,3 +35,9 @@ decode, so objects would be dropped.
   cannot open is never blamed on the password.
 - Round-tripping a file pdf0 cannot decrypt is lossless in content, not in
   bytes: the layout is pdf0's.
+
+**Amended 2026-10-11:** `Write` also refuses a Locked document read from a file
+that carries signatures, as it refuses any such document, unless the caller
+consents with `AllowInvalidatingSignatures`: carrying the ciphertext through
+still regenerates the layout, which invalidates them
+([0019](0019-signature-consent-on-the-document.md)).
