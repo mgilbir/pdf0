@@ -70,6 +70,27 @@ a pass:
 - a named fixture missing from a present data set fails: the sets are pinned,
   so that is a layout change, not a missing download.
 
+How `internal/testfiles` decides, for a test that asks for a data set
+(`Dataset.Path`; `Lookup` returns false where `Path` would skip):
+
+```mermaid
+flowchart TD
+    A["a test asks for a data set"] --> E{"its override variable set?<br/>(VERAPDF_CORPUS, ARLINGTON_MODEL, VERAPDF_PROFILES)"}
+    E -->|no| D{"a directory at the default location?"}
+    E -->|yes| C{"a directory where it points?"}
+    D -->|no| SKIP1["SKIP: never fetched or placed<br/>(the message says how to fetch or place it)"]
+    C -->|no| FAIL1["FAIL: the override names nothing"]
+    D -->|yes| S1{"a fetched set: is its .ok stamp there?"}
+    C -->|yes| S2{"a fetched set: is its .ok stamp there?"}
+    S1 -->|no| SKIP2["SKIP: the fetch did not complete"]
+    S2 -->|no| FAIL2["FAIL: the override names an incomplete fetch"]
+    S1 -->|"yes, or a hand-placed set"| USE["data set present"]
+    S2 -->|"yes, or a hand-placed set"| USE
+    USE --> W{"does the test find what it asks for?<br/>(Files, PDFs, Glob, File)"}
+    W -->|"no files, or a named fixture missing"| FAIL3["FAIL: present but empty, or the layout changed"]
+    W -->|yes| RUN["the test runs"]
+```
+
 Data placed by hand (the Cal Poly suite, the PDF/UA reference files, the
 Order-X examples, the ISO PDFs) has no stamp; the directory's presence is the
 signal, and present-but-empty fails. That is the point of the tier, and skipping
