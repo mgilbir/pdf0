@@ -86,7 +86,8 @@ func Entries() []*Entry {
 		FacturXFindAttachment, FacturXSetPDFAChecker,
 		ImagesWalk,
 		PDFAValidateView, PDFAResolveTarget, PDFASetEmbeddedChecker,
-		PDFRValidateView, PDFUAValidateView, PDFVTValidateView, PDFXValidateView,
+		PDFRValidateView, PDFUAValidateView, PDFUARunCheck, PDFUAWithPart,
+		PDFVTValidateView, PDFXValidateView,
 		SignVerifySignatures, SignValidatePAdES, SignDSSCerts, SignDSSRevocationMaterial,
 		SignQualifiedFieldName, SignFieldPartialName,
 		SignBuildSignedData, SignBuildTimestampToken, SignJoinFieldName, SignVerifyCMS,
@@ -110,6 +111,8 @@ var (
 	PDFASetEmbeddedChecker      = &Entry{name: "pdfa.setEmbeddedChecker"}
 	PDFRValidateView            = &Entry{name: "pdfr.validateView"}
 	PDFUAValidateView           = &Entry{name: "pdfua.validateView"}
+	PDFUARunCheck               = &Entry{name: "pdfua.runCheck"}
+	PDFUAWithPart               = &Entry{name: "pdfua.withPart"}
 	PDFVTValidateView           = &Entry{name: "pdfvt.validateView"}
 	PDFXValidateView            = &Entry{name: "pdfx.validateView"}
 	SignVerifySignatures        = &Entry{name: "sign.verifySignatures"}

@@ -106,11 +106,11 @@ func TestUALinkAltText(t *testing.T) {
 // yields one internal finding carrying the panic value, rather than taking the
 // run down or vanishing.
 func TestRunCheckReportsPanics(t *testing.T) {
-	ua := RunCheck(func() []Violation { panic("bang") })
+	ua := runCheck(func() []Violation { panic("bang") })
 	if len(ua) != 1 || ua[0].Clause != finding.InternalRule {
-		t.Fatalf("RunCheck: got %v, want one %q finding", ua, finding.InternalRule)
+		t.Fatalf("runCheck: got %v, want one %q finding", ua, finding.InternalRule)
 	}
 	if !strings.Contains(ua[0].Message, "bang") {
-		t.Errorf("RunCheck: message %q does not carry the panic value", ua[0].Message)
+		t.Errorf("runCheck: message %q does not carry the panic value", ua[0].Message)
 	}
 }

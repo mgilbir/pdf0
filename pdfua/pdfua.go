@@ -41,8 +41,9 @@ func (v Violation) Error() string {
 	return fmt.Sprintf("[PDF/UA-%s %s] %s", part, v.Clause, v.Message)
 }
 
-// WithPart sets the part on every finding and returns them.
-func WithPart(vs []Violation, part string) []Violation {
+// withPart sets the part on every finding and returns them. The root package
+// calls it through internal/bridge, for the findings it adds at the boundary.
+func withPart(vs []Violation, part string) []Violation {
 	for i := range vs {
 		vs[i].Part = part
 	}
@@ -74,7 +75,7 @@ func validateView(doc core.View, part string) []Violation {
 		if doc.Cancel.Stopped() {
 			return
 		}
-		v = append(v, RunCheck(func() []Violation { return check(doc) })...)
+		v = append(v, runCheck(func() []Violation { return check(doc) })...)
 	}
 	runCat := func(check func(core.View, *object.Dictionary) []Violation) {
 		run(func(d core.View) []Violation { return check(d, cat) })
@@ -174,7 +175,7 @@ func validateView(doc core.View, part string) []Violation {
 	runCat(checkFigureAlt)
 
 	// The caller sorts.
-	return WithPart(v, part)
+	return withPart(v, part)
 }
 
 // checkUACatalogBasics covers the catalog-level PDF/UA requirements: the file
@@ -1340,10 +1341,12 @@ func checkFigureAlt(d core.View, cat *object.Dictionary) []Violation {
 	return v
 }
 
-// RunCheck runs one check behind a recover boundary: a panic becomes an
-// "internal" finding, and a check the run's work meter stopped reports nothing
-// (see pdfa's runCheck).
-func RunCheck(check func() []Violation) (out []Violation) {
+// runCheck runs one check behind a recover boundary: a panic becomes a single
+// "internal" finding in place of whatever the check would have returned, and a
+// check the run's work meter stopped (core.IsAbort) reports nothing, its trip
+// being reported with the run's others. The root package calls it through
+// internal/bridge, for the PDF/UA-2 rule it runs at the boundary.
+func runCheck(check func() []Violation) (out []Violation) {
 	defer func() {
 		if r := recover(); r != nil {
 			out = nil
