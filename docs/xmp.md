@@ -11,7 +11,7 @@ the streaming well-formedness check), `pdfa/xmp_schemas.go` (schema tables,
 property and extension-schema checks) and `pdfa/identification.go` (the pdfaid
 reader). Open this doc before touching a schema table, before adding a rule
 that reads metadata, before writing metadata, or when a metadata finding looks
-wrong; for how the PDF/A validator runs, see [validators.md](validators.md).
+wrong; for how the PDF/A validator runs, see [pdfa.md](pdfa.md#how-validatepdfa-runs).
 
 ## The pipeline
 
@@ -138,7 +138,8 @@ UTF-8 with a BOM in PDF 2.0, or PDFDocEncoding (ISO 32000-2 Annex D.3, via
 without it every UTF-16 Info entry looked "inconsistent" with its metadata
 counterpart, and until audit C77 a PDFDocEncoded `(Caf\351)` read as the
 invalid UTF-8 `"Caf\xe9"` and mismatched `Café`. The Info↔XMP consistency check
-(`checkInfoXMPConsistency`, ISO 19005-1 6.7.3, **PDF/A-1b only**) uses it on
+(`checkInfoXMPConsistency`, ISO 19005-1 6.7.3, **PDF/A-1 only**, 1a and 1b
+alike: it gates on `level.Part()`) uses it on
 eight pairs (Title/`dc:title`, Author/`dc:creator`, …), each XMP side read
 through the model — a language alternative at its `x-default` item, a sequence
 at its first — and the two dates compared through `normalizePDFDate` /
@@ -148,7 +149,7 @@ at its first — and the two dates compared through `normalizePDFDate` /
 
 | Standard | Property read | Notes |
 |---|---|---|
-| PDF/A | `pdfaid:part`, `pdfaid:conformance`, `pdfaid:rev` | ns `http://www.aiim.org/pdfa/ns/id/`, read by `readPDFAIdentification` (`pdfa/identification.go`) for the identification rule (`checkIdentification`) and for `LevelDeclared` runs, and by `Document.Conformance`/`Save` and the embedded-PDF/A rule through `pdfa.LevelFor`. The rule compares the declaration with the target: the part must match; the conformance must be one the target accepts (`B`, `U` or `A` at 2b/3b; `U` or `A` at 2u/3u; `B` or `A` at 1b; only `A` at an a level; none at plain A-4, `E` at 4e, `F` at 4f); at A-4 `rev` must be `2020`. The prefix must be `pdfaid` (ISO 19005-1 Table 3, -2/-3 6.6.4), and a `pdfaid:` prefix bound to another namespace is reported. The schema table also knows `amd` and `corr` (`corr` is dropped at 1b). |
+| PDF/A | `pdfaid:part`, `pdfaid:conformance`, `pdfaid:rev` | ns `http://www.aiim.org/pdfa/ns/id/`, read by `readPDFAIdentification` (`pdfa/identification.go`) for the identification rule (`checkIdentification`) and for `LevelDeclared` runs, and by `Document.Conformance`/`Save` and the embedded-PDF/A rule through `pdfa.LevelFor`. The rule compares the declaration with the target: the part must match; the conformance must be one the target accepts (`B`, `U` or `A` at 2b/3b; `U` or `A` at 2u/3u; `B` or `A` at 1b; only `A` at an a level; none at plain A-4, `E` at 4e, `F` at 4f); at A-4 `rev` must be `2020`. The prefix must be `pdfaid` (ISO 19005-1 Table 3, -2/-3 6.6.4), and a `pdfaid:` prefix bound to another namespace is reported. The schema table also knows `amd` and `corr` (`corr` is dropped at part 1). |
 | PDF/UA | `pdfuaid:part` | ns `http://www.aiim.org/pdfua/ns/id/`. Clause 5 also requires the prefix itself to be `pdfuaid` for `part`, `amd` and `corr`. |
 | PDF/X | `pdfxid:GTS_PDFXVersion` | ns `http://www.npes.org/pdfx/ns/id/`; a no-namespace `GTS_PDFXVersion` property is accepted as a fallback, and Info `/GTS_PDFXVersion` (decoded as a text string) for the older parts. |
 | PDF/VT | `pdfvtid:GTS_PDFVTVersion` | ns `http://www.npes.org/pdfvt/ns/id/`. XMP only — no Info fallback. |
@@ -167,12 +168,12 @@ its value form; a property in any other namespace must be declared by an
 embedded PDF/A extension schema. `predefinedXMPSchemas(level)` returns the
 table set, and which XMP edition applies depends on the level:
 
-- **PDF/A-1b — XMP 2004.** dc, xmp (Basic), xmpRights, xmpMM, xmpBJ, xmpTPg,
+- **PDF/A-1 (1a and 1b) — XMP 2004.** dc, xmp (Basic), xmpRights, xmpMM, xmpBJ, xmpTPg,
   pdf, photoshop, tiff, exif, pdfaid, with the 2005-only entries removed:
   `pdfaid:corr` dropped, `xmpTPg` only `MaxPageSize`/`NPages`, `pdf` only
   `Keywords`/`PDFVersion`/`Producer`, photoshop without
   `ColorMode`/`ICCProfile`/`TextLayers`, `SupplementalCategories` simple Text.
-- **PDF/A-2b and -3b — XMP 2005.** Adds the exif-aux, xmpDM (Dynamic Media),
+- **PDF/A-2 and -3, every conformance level — XMP 2005.** Adds the exif-aux, xmpDM (Dynamic Media),
   Camera Raw and `xmpidq` schemas plus `xmp:Label` and `xmp:Rating`, and takes
   `SupplementalCategories` as a Bag. `TestValidatePDFA_XMPLevelDependentSchemas`
   pins the split: a `crs:` property fails at 1b and passes at 2b.
@@ -183,8 +184,8 @@ Integer, Real, Rational (`int/int`), Boolean (strictly `True`/`False`), Date
 (`YYYY`, `YYYY-MM`, `YYYY-MM-DD`, or a full date-time with optional seconds and
 fraction and a `Z` or `±hh:mm` zone). Array items must be simple (or structures
 for the struct-array types), and a language alternative requires `xml:lang` on
-every item. Rule IDs come from `metadataClause`: properties are `6.7.2` at 1b
-and `6.6.2.3.1` at 2b/3b, extension-schema structure `6.7.8` / `6.6.2.3.3`, an
+every item. Rule IDs come from `metadataClause`: properties are `6.7.2` at part 1
+and `6.6.2.3.1` at parts 2 and 3, extension-schema structure `6.7.8` / `6.6.2.3.3`, an
 undefined field on an extension-schema object `6.7.8` / `6.6.2.3.2`.
 
 **Extension schemas.** `extensionDeclared` collects `pdfaExtension:schemas` →
@@ -216,7 +217,8 @@ declarations are now read as XML declares them, in any spelling.
 
 ## PDF/A-4 deliberately skips property-value validation
 
-`checkXMPProperties` returns `nil` immediately when `level == PDFA4`, and the
+`checkXMPProperties` returns `nil` immediately when `level.Part() == 4` (plain
+PDF/A-4, 4e and 4f alike), and the
 comment at the top of the function explains why: this is deliberate, not a TODO
 — the veraPDF corpus proves A-4 tolerates non-conforming XMP property values.
 The file it names, `PDF_A-4/6.1.5/…6-1-5-t02-pass-a.pdf`, carries
