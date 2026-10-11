@@ -6,6 +6,7 @@ import (
 	"github.com/mgilbir/pdf0/internal/hostile"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/pdfa"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -227,8 +228,26 @@ func TestXRefStreamHonoursConfiguredDecodeLimit(t *testing.T) {
 		if _, err := Read(bytes.NewReader(data), int64(len(data))); err != nil {
 			t.Fatalf("default limits should read this document: %v", err)
 		}
-		if _, err := Read(bytes.NewReader(data), int64(len(data)), WithMaxDecodedStreamBytes(4)); err == nil {
-			t.Error("a 4-byte decoded-stream cap must not be bypassed for the file's own cross-reference stream")
+		// Under the cap the stream is declined, so Read rebuilds the table by
+		// scanning and says why. (It used to fail outright: the catalog is in an
+		// object stream, which the rebuild could not reach before docs audit
+		// 2026-10-11 D4. Now the 4-byte cap declines that container too, so the
+		// catalog is missing and recorded as not unpacked.)
+		capped, err := Read(bytes.NewReader(data), int64(len(data)), WithMaxDecodedStreamBytes(4))
+		if err != nil {
+			t.Fatalf("Read under a 4-byte cap: %v", err)
+		}
+		if !capped.Source().Rebuilt() {
+			t.Fatal("a 4-byte decoded-stream cap must not be bypassed for the file's own cross-reference stream")
+		}
+		var xrefTrip bool
+		for _, tr := range capped.readLimits.Snapshot() {
+			if strings.Contains(tr.Message(), core.GuardDecodedStream) && strings.Contains(tr.Message(), "the cross-reference stream decodes to more than") {
+				xrefTrip = true
+			}
+		}
+		if !xrefTrip {
+			t.Errorf("no read trip says the cross-reference stream was over the cap: %v", capped.readLimits.Snapshot())
 		}
 	})
 }

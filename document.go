@@ -220,12 +220,14 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 	// either fails — no startxref in the file, one that points outside it, or a
 	// newest section that does not parse — the table is rebuilt by scanning for
 	// object headers (the long-standing reader practice for damaged files; see
-	// rebuildXRefByScan). The trailer then comes from a scan too; an
-	// xref-stream file whose trailer IS the broken stream dictionary gets /Root
-	// synthesized from the catalog after the objects load.
+	// rebuildXRefByScan). The trailer then comes from a scan too (step 4.1),
+	// and a file with no trailer left at all gets /Root synthesized from its
+	// catalog once every object, compressed ones included, is loaded (step 5.1).
 	var xrefTable *XRefTable
 	rebuilt := false // the table was reconstructed by scanning (load leniently)
 	var firstErr error
+	trailerScanned := false // doc.Trailer came from findTrailerByScan, not a parsed section
+	trailerAt := int64(-1)  // where that trailer was found; -1 for none
 	budget := newFileInUseBudget(size)
 	chainBroken := false
 	xrefOffset, adjust, err := locateXRef(data, headerOffset)
@@ -264,8 +266,10 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 		case core.ReasonUnsupported:
 			doc.noteReadLimit(core.GuardUnsupportedFilter, "the cross-reference stream is encoded in a way pdf0 does not implement ("+err.Error()+"), so the table was rebuilt by scanning the file; an object only that stream located may be missing", 0)
 		}
-		if tr := findTrailerByScan(data); tr != nil {
+		trailerScanned = true
+		if tr, at := findTrailerByScan(data); tr != nil {
 			doc.Trailer = *tr // dictcopy: a fresh parse of the scanned trailer; nothing else holds it
+			trailerAt = at
 		}
 	}
 
@@ -295,29 +299,15 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 	}
 	src.rebuilt = rebuilt
 	src.merged = xrefTable
-	// A rebuilt file may have no parseable trailer at all (an xref-stream
-	// file's trailer IS its broken stream dictionary). The document catalog is
-	// the root of the object hierarchy (ISO 32000-2, 7.7.2), so synthesize the
-	// /Root the trailer exists to provide from the first catalog object.
-	if rebuilt && doc.Trailer.Get("Root") == nil {
-		nums := make([]int, 0, len(doc.Objects))
-		for num := range doc.Objects {
-			nums = append(nums, num)
-		}
-		sort.Ints(nums)
-		for _, num := range nums {
-			if d, ok := doc.Objects[num].Value.(*object.Dictionary); ok {
-				if t, _ := d.Get("Type").(object.Name); t == "Catalog" {
-					doc.Trailer.Set("Root", object.IndirectRef{Number: num})
-					break
-				}
-			}
-		}
-		if doc.Trailer.Get("Root") == nil {
-			if firstErr != nil {
-				return nil, firstErr
-			}
-			return nil, fmt.Errorf("rebuilt cross-reference table found no document catalog")
+	// 4.1. A scanned trailer saw only "trailer" keywords. An xref-stream file
+	// has none: its trailer is the cross-reference stream's dictionary (ISO
+	// 32000-2 7.5.8.2), which the scan loaded as an ordinary object, and it is
+	// the only place its /Encrypt and /ID are recorded. The newest trailer in
+	// the file wins, whichever form it takes (7.5.6). This must precede
+	// decryption, which needs /Encrypt but not /Root.
+	if trailerScanned {
+		if tr, at := doc.newestXRefStreamTrailer(); tr != nil && at > trailerAt {
+			doc.Trailer = *tr.Clone() // dictcopy: a fresh clone; the stream keeps its own dictionary
 		}
 	}
 
@@ -375,6 +365,23 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 	}
 	doc.objStmCiphertext = nil // Read's working state (see the field)
 
+	// 5.1. A rebuilt file may have no trailer at all, or one without /Root.
+	// The document catalog is the root of the object hierarchy (ISO 32000-2,
+	// 7.7.2), so synthesize the /Root the trailer exists to provide from the
+	// catalog with the lowest object number. It runs only now, once object
+	// streams are unpacked, because the catalog may be a compressed object
+	// (docs audit 2026-10-11 D4); finding none is fatal.
+	if rebuilt && doc.Trailer.Get("Root") == nil {
+		if num := doc.firstCatalog(); num > 0 {
+			doc.Trailer.Set("Root", object.IndirectRef{Number: num})
+		} else {
+			if firstErr != nil {
+				return nil, firstErr
+			}
+			return nil, fmt.Errorf("rebuilt cross-reference table found no document catalog")
+		}
+	}
+
 	// 5.5. Decrypt the remaining streams, now that every object is loaded.
 	if pending != nil {
 		doc.decryptFailures = pending.Finish(doc.graph())
@@ -388,6 +395,25 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 	doc.Encrypted = doc.Trailer.Get("Encrypt") != nil
 
 	return doc, nil
+}
+
+// firstCatalog returns the lowest object number whose object is a /Type
+// /Catalog dictionary, or 0. Lowest-number-first makes the choice among several
+// catalogs the same on every read, whether each is stored compressed or not.
+func (d *Document) firstCatalog() int {
+	nums := make([]int, 0, len(d.Objects))
+	for num := range d.Objects {
+		nums = append(nums, num)
+	}
+	sort.Ints(nums)
+	for _, num := range nums {
+		if dict, ok := d.Objects[num].Value.(*object.Dictionary); ok {
+			if t, _ := dict.Get("Type").(object.Name); t == "Catalog" {
+				return num
+			}
+		}
+	}
+	return 0
 }
 
 // locateXRef finds the offset of the newest cross-reference section: the value

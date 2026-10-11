@@ -20,8 +20,9 @@ import (
 //
 // It also holds the last-resort recovery for a file whose own cross-reference
 // data is unusable: rebuildXRefByScan reconstructs the table from "N G obj"
-// headers found in the raw bytes (7.3.10), and findTrailerByScan recovers the
-// newest trailer carrying /Root (7.5.6). A scanned table has no authority
+// headers found in the raw bytes (7.3.10), and findTrailerByScan and
+// newestXRefStreamTrailer recover the newest trailer carrying /Root (7.5.6),
+// whether a trailer keyword's dictionary or a cross-reference stream's. A scanned table has no authority
 // beyond the bytes it points at — a header-shaped run inside a stream body
 // fabricates entries — so callers must load it leniently.
 
@@ -631,10 +632,15 @@ func rebuildXRefByScan(data []byte) *XRefTable {
 // findTrailerByScan locates the file's trailer dictionary when the
 // cross-reference chain could not provide one: it scans for every delimited
 // "trailer" keyword and returns the last dictionary that parses and carries
-// /Root — the trailer of the newest update (7.5.6). It returns nil if none
-// qualifies.
-func findTrailerByScan(data []byte) *object.Dictionary {
+// /Root — the trailer of the newest update (7.5.6) — with the keyword's
+// offset. It returns nil and -1 if none qualifies.
+//
+// An xref-stream file has no trailer keyword; its trailers are the
+// dictionaries of its cross-reference streams, which newestXRefStreamTrailer
+// finds among the loaded objects.
+func findTrailerByScan(data []byte) (*object.Dictionary, int64) {
 	var best *object.Dictionary
+	bestAt := int64(-1)
 	for i := 0; ; {
 		j := bytes.Index(data[i:], []byte("trailer"))
 		if j < 0 {
@@ -655,8 +661,35 @@ func findTrailerByScan(data []byte) *object.Dictionary {
 			continue
 		}
 		if d, ok := dict.(*object.Dictionary); ok && d.Get("Root") != nil {
-			best = d
+			best, bestAt = d, int64(pos)
 		}
 	}
-	return best
+	return best, bestAt
+}
+
+// newestXRefStreamTrailer returns the dictionary of the loaded /Type /XRef
+// stream found latest in the file that carries /Root, with its offset, or nil
+// and -1. It is findTrailerByScan's counterpart for cross-reference streams,
+// whose dictionary is the trailer (ISO 32000-2 7.5.8.2): with the same /Root
+// test, so a stream that is not a usable trailer is not taken for one, and the
+// same newest-wins rule (7.5.6). It reads only what the load put in Objects and
+// the source record's offsets, so it runs after a scan-rebuilt table loads.
+func (d *Document) newestXRefStreamTrailer() (*object.Dictionary, int64) {
+	var best *object.Dictionary
+	bestAt := int64(-1)
+	for num, iobj := range d.Objects {
+		st, ok := iobj.Value.(*object.Stream)
+		if !ok {
+			continue
+		}
+		if t, _ := st.Dict.Get("Type").(object.Name); t != "XRef" || st.Dict.Get("Root") == nil {
+			continue
+		}
+		// Distinct objects sit at distinct offsets, so the choice does not
+		// depend on map order.
+		if at, ok := d.source.offsets[num]; ok && at > bestAt {
+			best, bestAt = &st.Dict, at
+		}
+	}
+	return best, bestAt
 }
