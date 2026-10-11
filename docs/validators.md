@@ -34,7 +34,8 @@ PDF/UA-1 (`pdf0 ua`). Everything else in the table is library-only
 ### Checking for PDF/UA-2
 
 `ValidatePDFUA2` runs the PDF/UA-1 checks with part 2's identification, and
-adds the few rules only part 2 has. Before you report its result as "PDF/UA-2":
+adds the rules only part 2 has ([pdfua.md](pdfua.md#pdfua-2) lists them).
+Before you report its result as "PDF/UA-2":
 
 - **The clause numbers are mostly ISO 14289-1's.** Only part 2's own rules
   carry ISO 14289-2 numbers. The shared checks keep their ISO 14289-1 clauses,
