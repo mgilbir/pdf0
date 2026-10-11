@@ -66,13 +66,12 @@ var errEmbedBeforeUse = errors.New(
 // The font's own licence, its OS/2 fsType, is honoured:
 //
 //   - Restricted License embedding is refused with ErrRestrictedLicense.
-//   - Bitmap embedding only is honoured by writing a composite face that has
-//     bitmap strikes as Type 3 fonts painting them, as a face with no outlines
-//     is written anyway. A face with no strikes, and a simple face, are
-//     refused with ErrBitmapEmbeddingOnly, and so is drawing a glyph whose
-//     only ink is its outline. A face drawn in its COLR colour glyphs is not
-//     yet held to this bit: it is written as its paintings, outlines
-//     included, whatever the bit says.
+//   - Bitmap embedding only permits the font's bitmaps and no outline data.
+//     A composite face that has bitmap strikes is written as Type 3 fonts
+//     painting them, as a face with no outlines is written anyway, and never
+//     as its COLR colour glyphs, which are painted from outlines. A face with
+//     no strikes, and a simple face, are refused with ErrBitmapEmbeddingOnly,
+//     and so is drawing a glyph whose only ink is its outline.
 //   - No subsetting embeds the program whole, as it was loaded, without a
 //     subset tag; a face written as Type 3 fonts carries only the glyphs
 //     drawn and is refused with ErrBitmapNoSubsetting.

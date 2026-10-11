@@ -65,14 +65,23 @@ func (f *Face) hasBitmaps() bool { return f.BitmapOnly() || f.bitmapLicensed() }
 // before, its outlines embedded as a font program and shown in the text
 // colour. It has to be said before the face draws anything, since the two
 // write different codes, and it changes nothing for a face without COLR
-// glyphs.
+// glyphs. A face whose licence permits embedding only its bitmaps is never
+// drawn in colour, since the colour glyphs are painted from its outlines.
 func (f *Face) SetColourGlyphs(on bool) {
 	f.Horizontal().noColour = !on
 	f.Horizontal().coloured = 0
 }
 
 // colourFace reports whether the face is drawn as its COLR colour glyphs:
-// it has one, and SetColourGlyphs has not said otherwise. Asked once.
+// it has one, SetColourGlyphs has not said otherwise, and its licence does not
+// permit embedding only bitmaps. Asked once.
+//
+// A COLR glyph is painted from glyph outlines — its layers and its clips are
+// glyphs — and OS/2 fsType bit 9 says "No outline data may be embedded". So a
+// face with that bit is never drawn in colour: with strikes it is drawn from
+// them, as any face with outlines and that licence is (bitmapLicensed), and
+// without them it is a face with outlines and nothing else, which embedding
+// refuses with ErrBitmapEmbeddingOnly.
 func (f *Face) colourFace() bool {
 	h := f.Horizontal()
 	if h.noColour {
@@ -82,6 +91,9 @@ func (f *Face) colourFace() bool {
 		return h.coloured > 0
 	}
 	h.coloured = -1
+	if fsType, stated := f.EmbeddingPermissions(); stated && fsType&shape.FSTypeBitmapOnly != 0 {
+		return false
+	}
 	for gid := range f.NumGlyphs() {
 		if k := f.GlyphColour(gid, 0); k == shape.ColourLayers || k == shape.ColourPaint {
 			h.coloured = 1
