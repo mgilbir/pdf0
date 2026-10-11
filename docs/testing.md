@@ -272,7 +272,7 @@ which fetches it again and writes the stamp.
 | `make test-arlington` | `make arlington refpdfs`, then `ARLINGTON_MODEL=…/tsv/2.0 go test -v -run TestArlington -count=1 ./...`; with the corpus also present it additionally sweeps the conformant corpus files |
 | `make rule-coverage` | `make profiles corpus`, then `VERAPDF_PROFILES=… VERAPDF_CORPUS=… go run -tags devtools ./internal/cmd/rulecoverage` |
 | `make fuzz` | Fuzz every target in `FUZZ_TARGETS` in turn, for `FUZZTIME` each (see [Fuzzing](#fuzzing)) |
-| `make check-docs` | `make check-links check-mermaid check-doc-code`: every relative link and anchor resolves, every Mermaid diagram renders, and the documentation says what the code does — every Go snippet type-checks, every code span, command and quoted message resolves, no prose states a count of the code, and the generated sections (CI, data sets, tools and environment, options) are current. `check-mermaid` needs node and npx, and network the first time |
+| `make check-docs` | `make check-links check-mermaid check-doc-code`: every relative link and anchor resolves, every Mermaid diagram renders, and the documentation says what the code does — every Go snippet type-checks, every code span, command and quoted message resolves, no prose states a count of the code, and the generated sections (CI, data sets, tools and environment, options, and the CLI transcripts in [cli.md](cli.md)) are current. `check-mermaid` needs node and npx, and network the first time |
 
 **Clean**
 

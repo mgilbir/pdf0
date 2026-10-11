@@ -188,7 +188,11 @@ rest of `go test`). They hold the docs to the tree as it is:
   (`TestDocsQuoteNoDriftingCounts`): a count that matters is generated;
 - the sections between `BEGIN GENERATED` and `END GENERATED` markers are
   written by `go test ./internal/lint -run TestGeneratedDocSections -update`
-  and checked against their sources.
+  and checked against their sources — except the command transcripts in
+  [docs/cli.md](docs/cli.md), which are written by running the command:
+  `go test ./cmd/pdf0 -run TestCLIDocTranscripts -update`;
+- every environment variable a test reads and every program it runs is
+  described in the testing guide (`TestTestEnvironmentIsDocumented`).
 
 The audit reports and the design records under `docs/proposals/`, and an ADR
 once it is superseded, describe the past, and are not checked.
