@@ -12,6 +12,12 @@ walks that tree, or walks page content in order to correlate it back to the
 tree. [validators.md](validators.md) owns the family view and the entry-point
 table; this doc is the inside of the two UA cells.
 
+What a clean result is measured against, in short: the PDF Association's ten
+conformant reference files report nothing, and over the veraPDF corpus pdf0
+reports none of the PDF/UA-1 pass files and 153 of the 155 fail files, and none
+of the PDF/UA-2 pass files and 68 of the 84 fail files. [The
+oracles](#the-oracles) has the files on the wrong side of the line and why.
+
 ## The structure tree comes first
 
 Everything below depends on one traversal. `Catalog /StructTreeRoot` roots a
@@ -54,7 +60,7 @@ than descending the tree again.
 
 Guards on untrusted input, all verified in source. **Cycles:** every walk
 (`buildStructTree`, `collectTableRows`, `checkUAFieldDescription`) dedupes on
-`IndirectRef.Number`,
+`IndirectRef.Number`, and `forEachField` on the field dictionary,
 so a `/K` pointing back at an ancestor terminates —
 `TestStructTreeFlatten` builds exactly that and asserts the visit list.
 **`/RoleMap` chains:** a role map may reach a standard type through intermediate
@@ -97,14 +103,14 @@ flowchart TD
 
 ## The rule families
 
-Every family below is dispatched from the single `validatePDFUA(doc, part)`
+Every family below is dispatched from the single `validateView(doc, part)`
 function in `pdfua/pdfua.go`. The clause column is the string the finding carries in
 `pdfua.Violation.Clause`; a few cite the Matterhorn Protocol checkpoint that pins the
 rule, noted in the source comments.
 
 | Family | Clause(s) | Checks | What actually fires |
 |---|---|---|---|
-| Tagging and document setup | 7.1, 7.2 | inline in `validatePDFUA`, `checkUASuspects` | `/MarkInfo << /Marked true >>` absent, no `/StructTreeRoot`, `/ViewerPreferences /DisplayDocTitle` not true, catalog `/Lang` empty, `/MarkInfo /Suspects` true |
+| Tagging and document setup | 7.1 | `checkUACatalogBasics`, `checkUASuspects` | `/MarkInfo << /Marked true >>` absent, no `/StructTreeRoot`, `/ViewerPreferences /DisplayDocTitle` not true, `/MarkInfo /Suspects` true |
 | PDF/UA declaration | 5 | `checkUAIdentifier`, `checkUAIdentifierPrefix` | no XMP, no `pdfuaid:part`, a `part` that disagrees with the requested part, or a `part`/`amd`/`corr` element written with a prefix other than `pdfuaid` while bound to the PDF/UA-id namespace URI |
 | Document title | 7.1 | `checkUATitle` | XMP has no `dc:title` (Matterhorn 06) — the companion to `DisplayDocTitle` |
 | Header version | 6.1 | `checkUAHeaderVersion` | header is not `1.x`. **UA-1 only** — selected by the `part` parameter, not filtered afterwards |
@@ -112,19 +118,20 @@ rule, noted in the source comments.
 | Element nesting | 7.2 | `checkUAStructNesting` | violates the `uaAllowedParents` / `uaAllowedChildren` tables: `TD`/`TH` outside `TR`, `TR` outside `Table`/`THead`/`TBody`/`TFoot`, `LI` outside `L`, `LBody` outside `LI`, `TOCI` outside `TOC`, and the mirror child constraints |
 | Container well-formedness | 7.2 | `checkUATableListStructure` | more than one `Caption`/`THead`/`TFoot` on a `Table`, a `THead`/`TFoot` with no `TBody`, a `Table` `Caption` that is neither first nor last child, an `L`/`TOC` `Caption` that is not first |
 | Table grid | 7.2 | `checkUATableGrid` | see [Table grids](#table-grids) |
-| Table headers | 7.5 | `checkUATableTHScope` | a `TH` with neither a `Scope` in a `/O /Table` attribute dictionary **nor** an `/ID` |
+| Table headers | 7.5 | `checkUATableGrid` (`tableHeaderDefects`) | in a table laid out without defects where some `TH` has no `Scope`, a `TD` whose headers cannot be determined: no `/Headers`, or one naming an `/ID` no `TH` carries — see [Table grids](#table-grids) |
 | Headings | 7.4, 7.4.2, 7.4.4 | `checkUAHeadings`, `checkUAOneHPerNode`, `checkUAStrongWeak` | a skipped level (`H1` then `H3`), a first numbered heading that is not `H1`, more than one child `<H>` under one node, a document mixing `<H>` with `<H1>`–`<H6>` |
-| Figures | 7.3 | `checkFigureAlt` | a `Figure` with neither `/Alt` nor `/ActualText` non-empty |
+| Figures and formulas | 7.3, 7.7 | `checkFigureAlt` | a `Figure` — and, in PDF/UA-1, a `Formula` — with neither a non-empty `/Alt` nor an `/ActualText`. Any `/ActualText` counts, the empty string included: it is replacement text, and veraPDF reads it so (`ActualText != null`) |
 | Notes | 7.9 | `checkUANotes` | a `Note` with no `/ID`, or two `Note`s sharing one |
-| Language | 7.2 | `checkUALang` | a *present* `/Lang` (catalog or structure element) that is not syntactically valid BCP 47 (`core.ValidBCP47`). An absent `/Lang` on an element is fine — it defers to an ancestor |
-| Annotations | 7.18.1, 7.18.2, 7.18.5, 7.18.8 | `checkUAAnnotations` | `TrapNet` present, a `Link` with no `/Contents`, any other visible non-`Widget` annotation with neither `/Contents` nor `/Alt`, a visible annotation with no `/StructParent`, a `PrinterMark` that *has* a `/StructParent`. Hidden (`/F` bit 2) and `Popup` annotations are exempt throughout |
+| Language | 7.2 | `checkUALang`, `checkUA1LangDeterminable`, `checkUA2CatalogLang` | a *present* `/Lang` — catalog, structure element or marked-content property list — that is not an RFC 3066 Language-Tag (`uaLanguageTag`: `1*8ALPHA *("-" 1*8alphanum)`; the empty string is not one); for PDF/UA-2, no catalog `/Lang`; for PDF/UA-1 without a catalog `/Lang`, each piece of text whose language cannot be determined another way — see [Natural language](#natural-language) |
+| Annotations | 7.18.1, 7.18.2, 7.18.5, 7.18.8 | `checkUAAnnotations` | `TrapNet` present, a visible annotation with no `/StructParent`, a `PrinterMark` that *has* a `/StructParent`; and, **PDF/UA-1 only**, a `Link` with no `/Contents`, or any other non-`Widget` annotation with neither `/Contents` nor an `/Alt` on its enclosing structure element. Hidden (`/F` bit 2) and `Popup` annotations are exempt throughout, and an annotation whose `/Rect` lies outside its page's crop box from the description rules |
 | Annotation placement | 7.18.1 | `checkUAAnnotStructType` | an OBJR-reached annotation under the wrong structure type: `Widget` wants `<Form>`, `Link` wants `<Link>`, everything else `<Annot>` |
 | Tab order | 7.18.3 | `checkUATabOrder` | a page carrying `/Annots` without `/Tabs /S` |
-| Form fields | 7.18.1, 7.15 | `checkUAFieldDescription`, `checkUAXFA` (and the `Widget` arm of `checkUAAnnotations`) | a field with no `/TU` whose description sits on a pure-widget child, a `Widget` with neither an effective `/TU` (inherited up `/Parent`, bounded to 32 hops) nor an `/Alt`, and a dynamic XFA form (`dynamicRender` required, detected in the *decoded* packet) |
+| Form fields | 7.18.1, 7.15 | `checkUAFieldDescription`, `checkUAXFA` (and the `Widget` arm of `checkUAAnnotations`) | a field with no `/TU` whose description sits on a pure-widget child, a `Widget` (PDF/UA-1, inside the crop box) with neither an effective `/TU` (inherited up `/Parent`, bounded to 32 hops) nor an `/Alt` on its enclosing structure element, and a dynamic XFA form (`dynamicRender` required, detected in the *decoded* packet) |
+| Link targets | UA-2 8.2.5.20 | `checkUA2LinkTargets` | **PDF/UA-2 only**: one structure element enclosing `Link` annotations whose structure destinations (`/SD`, else `/D`, of a GoTo action, or `/Dest`) are different structure elements |
 | Media clips | 7.18.6.2 | `checkUAMediaClips` | a `/Type /MediaClip` dictionary anywhere in the document (`core.View.ReachableDicts`, direct dictionaries included) missing `/CT`, missing `/Alt`, or with an `/Alt` carrying no non-empty string |
 | Fonts | 7.21.3.1–7.21.8, 7.21.4.1/.2, 7.21.6 | `checkUAFonts`, `checkUAFontDicts`, `checkUACMaps`, `checkUACMapWMode`, `checkUACIDSystemInfo`, `checkUAToUnicodeValues`, `checkUAFontSubsetGlyphs`, `checkUANotdefCID` | not embedded, `CIDFontType2` without `/CIDToGIDMap` or with a non-`Identity` name, symbolic TrueType with an `/Encoding`, non-symbolic TrueType not on MacRoman/WinAnsi, a CMap neither predefined nor embedded, an embedded CMap whose `/WMode` disagrees with the stream's own, a `CIDSystemInfo` Registry/Ordering/Supplement mismatch with the CMap, a `ToUnicode` mapping to U+0000/U+FEFF/U+FFFE, a subset `/CharSet` or `/CIDSet` disagreeing with the embedded program, and a shown CID 0 (`.notdef`) |
-| Character mapping | 7.2 | `checkUACharMapping` | text shown with a Type 0 Identity-encoded font that has no `ToUnicode` (Matterhorn 10-001) — the deliberately narrow, false-positive-free case |
-| Real content vs artifacts | 7.1 | `checkUARealContent` | see [Content-level checking](#content-level-checking) |
+| Character mapping | 7.2 | `checkUACharMapping` | text shown with a Type 0 Identity-encoded font that has no `ToUnicode` (Matterhorn 10-001), unless its descendant is in the Adobe-GB1, -CNS1, -Japan1 or -Korea1 collection, whose Unicode mapping Adobe publishes. A deliberately narrow case of 7.21.7, not all of it |
+| Real content vs artifacts | 7.1 | `checkUARealContent` | text, a painted path, an inline image, an image XObject, or what a form XObject paints, outside any marked-content sequence; see [Content-level checking](#content-level-checking) |
 | XObjects | 7.20 | `checkUAReferenceXObjects`, `checkUAFormXObjectMCID` | a Form XObject carrying `/Ref` (a reference XObject), or a form containing `/MCID` painted by more than one `Do` |
 | Security | 7.16 | `checkUASecurity` | an encrypted document with no `/P`, or `/P` with permission bit 10 (extract for accessibility) clear |
 | Optional content | 7.10 | `checkUAOptionalContent` | an OC configuration (`/D` or an entry of `/Configs`) with an empty `/Name`, or carrying `/AS` |
@@ -138,26 +145,43 @@ reads the same answer and the content is executed once.
 
 ## Content-level checking
 
-`pdfua/pdfua_content.go` is the only place UA validation reads page content streams.
-It tokenizes each stream once, with the one content lexer (`core.ContentLexer`),
+`pdfua/pdfua_content.go` and, for language, `pdfua/pdfua_lang.go` are where UA
+validation reads content streams. The first tokenizes each stream once, with the
+one content lexer (`core.ContentLexer`),
 and derives a `streamContentFacts` — memoized per `*Stream` in the run's PDF/UA
 slot (`core.Slot`) — holding
-the distinct real-content violation messages and the sequence of XObject names in
-effect at each `Do`. The real-content model (Matterhorn checkpoint 01) classifies
+the distinct real-content violation messages, the sequence of XObject names in
+effect at each `Do` (and those painted outside any marked content), and the
+property lists' `/Lang` values. The real-content model (Matterhorn checkpoint 01) classifies
 each marked-content sequence as `BDC`/`BMC` opens it: **artifact** (first operand
 `/Artifact`), **tagged** (the property list carries an `/MCID`), or
 **transparent** — anything else, notably `/OC` optional content and
 property-less `BMC`, which participates in nesting balance but in no rule.
 
-Three conditions then fire: a text-showing operator (`Tj`, `TJ`, `'`, `"`) with
-an empty marked-content stack is untagged real content (01-005), an artifact
-opened inside a tagged ancestor is 01-003, and tagged content opened inside an
-artifact ancestor is 01-004. `TestUARealContent` pins all three plus the
-`/OC`-wrapping case that must stay clean.
+Three conditions then fire. Content with an empty marked-content stack is
+untagged real content (01-005; veraPDF 7.1-t03): a text-showing operator (`Tj`,
+`TJ`, `'`, `"`), a path-painting operator (not `n`, so a clipping path is not
+content), an inline image, an image XObject painted by `Do`, and the content of
+a form XObject painted by `Do`, which `checkUARealContent` enters and judges as
+if it stood outside any sequence, as veraPDF does. An artifact opened inside a
+tagged ancestor is 01-003, and tagged content opened inside an artifact
+ancestor is 01-004. `TestUARealContent` pins all three plus the `/OC`-wrapping
+case that must stay clean; `TestUARealContentImage` pins the content kinds.
+
+A shading painted by `sh` outside marked content is content too, and veraPDF
+reports it, but pdf0 does not: the PDF Association's PDFUA-Reference-06 paints
+its page backgrounds that way, and the reference files are the oracle that wins
+(see [The oracles](#the-oracles)).
+
+A form XObject painted outside marked content is judged once for the run when
+it has resources of its own, however many pages or forms paint it: forms
+painting forms are a graph whose paths multiply, and
+`TestFormFanOutIsWalkedOnce` builds 210 forms with 30^7 paths through them.
 
 The lexer yields tokens one at a time into a reused token rather than returning
-a slice of them, and the analysis keeps no operand buffer — only the
-three facts a `BDC`/`BMC` actually consults. The two are the same point: a real
+a slice of them, and the analysis keeps no operand buffer — only the few
+facts a `BDC`/`BMC` actually consults (its tag, an `/MCID`, a `/Lang`, a named
+property list; `mcOperands`). The two are the same point: a real
 document's page can hold millions of operands, none of which any rule reads back,
 and materializing them cost more than the whole scan. On a 117 MB file the token
 slice alone was 45 GB of allocation, about 94% of the run's total;
@@ -172,9 +196,54 @@ invoke a form. `TestRealContentSharedStreamMemo` builds 20 000 pages sharing one
 stream and requires one cache entry but 20 000 findings, one per page object:
 the memo must collapse the *analysis*, never the *reports*.
 
-Note what this does **not** do: it never resolves an `/MCID` integer back through
-`/ParentTree` to the structure element that owns it. Marked-content sequences are
-classified by shape, not matched to the tree.
+Note what the real-content model does **not** do: it never resolves an `/MCID`
+integer to the structure element that owns it. Marked-content sequences are
+classified by shape, not matched to the tree. The language rules below are the
+one place an `/MCID` is resolved, and they resolve it through the structure
+tree's `/K` entries (an integer kid on the element's `/Pg` page, or an MCR),
+not through `/ParentTree`.
+
+## Natural language
+
+ISO 14289-2 8.4.4 requires the catalog `/Lang`, and `checkUA2CatalogLang`
+reports a PDF/UA-2 file without one. ISO 14289-1 7.2 requires less: that the
+natural language be declared, which the catalog `/Lang` does for everything at
+once and `/Lang` entries on structure elements and marked content do piece by
+piece. Requiring the catalog entry reported 21 veraPDF PDF/UA-1 pass files that
+declare the language only piecewise (`7.2-t21-pass-b` … `7.2-t34-pass-d`).
+
+So for PDF/UA-1, `checkUA1LangDeterminable` does what the veraPDF profile does:
+when the catalog has no `/Lang` string (any string settles it — an empty or
+malformed one is `checkUALang`'s to report), it asks each text-bearing object
+whether its language can be determined another way.
+
+| veraPDF rule | Object | Determined by |
+|---|---|---|
+| 7.2-t02 | outline entries | nothing but the catalog: an outline with a `/First` entry is reported |
+| 7.2-t21, t22, t23 | a structure element's `/ActualText`, `/Alt`, `/E` | a `/Lang` on the element or an ancestor |
+| 7.2-t24 | an annotation's `/Contents` | a `/Lang` on its enclosing structure element |
+| 7.2-t25 | a form field's `/TU` | likewise |
+| 7.2-t30, t31, t32 | a `Span` marked-content sequence's `/ActualText`, `/Alt`, `/E` | a `/Lang` in scope (below) |
+| 7.2-t33 | an XMP language alternative | reported when its only item is `x-default` |
+| 7.2-t34 | text shown in content | a `/Lang` in scope (below) |
+
+A language is in scope for a marked-content sequence when its property list
+has a `/Lang`, when its `/MCID` belongs to a structure element that has one or
+whose ancestor does, or when an enclosing sequence's language is in scope. A
+form XObject's content inherits the scope it is painted in, and an
+annotation's appearance stream the `/Lang` of the annotation's enclosing
+structure element (`langScope`). Each content stream is tokenized once for
+this (`langEvents`, memoized per stream) and replayed per page, charged to the
+work meter. `TestUA1LanguageDeterminable` holds each row, and that a catalog
+`/Lang` clears all of them.
+
+The syntax rule applies to both parts. A `/Lang` must match RFC 3066's
+Language-Tag, as ISO 32000-1 14.9.2 cites it and the veraPDF CosLang rule
+reads it: a primary subtag of one to eight letters, then subtags of one to
+eight letters or digits. BCP 47's stricter shape is not the rule — the corpus
+passes `p` and `p-pt` (`7.2-t29-pass-b`, `-d`, `-f`) — and the empty string is
+not a language identifier (`7.2-t29-fail-n`, `-o`, `-p`), though ISO 32000 lets
+it mean "unknown": an unknown language is not a declared one.
 
 ## Table grids
 
@@ -190,7 +259,8 @@ two-dimensional fact and needs a two-dimensional model.
 laid out separately, on its own pass through the flattened tree).
 `collectRowCells` reduces each `TR` to `TH`/`TD` cells with their spans, read by
 `cellSpan` from an attribute dictionary whose owner `/O` is `Table`; a missing or
-non-positive value becomes 1. `gridDefects` then places the cells:
+non-positive value becomes 1. `layoutTable` then places the cells, recording
+each cell's slot (`gridDefects` is its defects alone):
 
 ```mermaid
 flowchart TD
@@ -223,24 +293,52 @@ return within 25 s. `TestGridDefectsSparseHuge` builds 60 000 × 30 000 and
 requires O(rows) — which is why the hole test compares `len(occupied[r])` against
 the max width instead of scanning the grid.
 
-`checkUATableTHScope` (7.5) is separate and much simpler: each `TH` must be
-individually identifiable, satisfied by *either* a `Scope` attribute *or* an
-`/ID`. The source records why: diffing veraPDF fail files against their pass
-siblings showed some conformant files give every `TH` a `Scope` and others give
-every `TH` an `/ID`, so an earlier `Scope`-only rule was raising false positives.
-Only the *presence* of `Scope` is checked, not its value.
+A table laid out without defects is then asked about its headers (7.5,
+`tableHeaderDefects`), the way veraPDF's GFSETable asks. When every `TH` has a
+`Scope` the table is determinable. Otherwise every `TD` must name its headers in
+a `/Headers` table attribute, each name the `/ID` of a `TH` in the table; in
+PDF/UA-2 a `TD` that does not may instead find a header by position
+(`positionalHeaders`): going up a column or left along a row, a `TH` whose
+`Scope` points that way, or — without a `Scope` — whose slot does (`Column` in
+the first row, `Row` in the first column, `Both` elsewhere). veraPDF 1.30.3
+does not search by position for PDF/UA-1, and neither does pdf0. A `Scope` is
+read as written: one of the empty name is present, and points nowhere
+(`8.2.5.26-t05-fail-a`). The positional search walks each column and row once,
+carrying its state, so it costs the slots the layout already paid for.
+
+The `TD` at the top-left slot is exempt: it is the stub head, where the header
+row and the header column cross, and no header pertains to it. veraPDF knows
+only that position. pdf0 exempts a stub head wherever the crossing is
+(`stubHeads`: a `TD` every other slot of whose rows and columns is a `TH`),
+because PDFUA-Reference-08 has two, blank cells starting a column-header row in
+the middle of a table whose first column is all row headers, and veraPDF 1.30.3
+reports both.
+
+The rule is about the data cells. The rule it replaced asked every `TH` for a
+`Scope` or an `/ID`; a conforming table need not give one to a header no data
+cell refers to (`7.5-t01-pass-e`, `8.2.5.26-t05-pass-e`).
+`TestUATableHeaderAssociation` holds the boundaries.
 
 ## PDF/UA-2
 
-`ValidatePDFUA2` runs the same checks with `part` "2" (`pdfua/pdfua2.go` holds
-only the package comment that says so). Parameterizing by `part` (rather than
+`ValidatePDFUA2` runs the same checks with `part` "2" (`pdfua/pdfua2.go` holds no
+code, only a comment, after its package clause, describing what part 2 shares
+and what it changes). Parameterizing by `part` (rather than
 post-filtering findings by message text, as an earlier version did — audit C39)
 is what makes the identification rule demand `pdfuaid:part 2`, makes the UA-1
 `1.x`-header rule not run at all, and adds the rules only part 2 has: the
 declared version (the header, or a later catalog `/Version`) must be 2.0 — one
 that cannot be read is not; a type in an explicit namespace must not be
-role-mapped back into that namespace (ISO 14289-2 8.2.4); and MathML's `math`
-must sit in a `Formula` (8.2.5.29). Every finding carries `Part`, and `Error()`
+role-mapped back into that namespace (ISO 14289-2 8.2.4); MathML's `math`
+must sit in a `Formula` (8.2.5.29); and `Link` annotations targeting different
+locations must sit in different structure elements (8.2.5.20). Where the two
+standards differ on a shared rule, the part selects that too: PDF/UA-2 requires
+the catalog `/Lang` where PDF/UA-1 asks only that languages be determinable;
+PDF/UA-1's annotation-description rules (7.18.1, 7.18.5) and `Formula` rule
+(7.7) are not PDF/UA-2's — ISO 14289-2 makes a `Link`'s `/Contents` a "should"
+(8.9.2.4.2) and lets markup annotations omit it (8.9.2.3), and the veraPDF
+PDF/UA-2 profile has none of them; and PDF/UA-2 finds table headers by
+position. Every finding carries `Part`, and `Error()`
 prints it: `[PDF/UA-2 …]`. The shared rules keep their ISO 14289-1 clause
 numbers; read the clause against the standard you invoked.
 
@@ -253,41 +351,106 @@ not assert full ISO 14289-2 conformance.
 `ValidatePDFUA2` is also unreachable from the CLI: `pdf0 ua` only ever calls
 `ValidatePDFUA` ([cli.md](cli.md)).
 
-## The false-positive oracle
+## The oracles
 
-The measured claim for these rules is not the test count — it is that
-**conformant documents stay clean**. `TestUAReferenceFilesNoFalsePositives`
-(`pdfua_reference_test.go`) globs `spec/pdfua/reference-files/*.pdf` — the PDF
-Association's PDFUA-Reference-Files suite — reads each file and fails on *any*
-violation, with the message "false positive on a conformant file". The files are
-not committed (`spec/` is gitignored in full) and there is no `make` target;
-place them by hand. The test self-skips when the directory is empty, so a fresh
-clone silently does not run it.
+A UA rule is held to two external sets of files, and a new or changed rule must
+leave both where they are. Neither is committed: `spec/` and `testdata/` are
+gitignored.
 
-**The rule for contributors: a new UA check must leave those documents clean.**
-That constraint shaped the `TH` Scope-or-`/ID` boundary, the narrow
-Identity-plus-no-`ToUnicode` character-mapping rule, and the "only unambiguous
-defects" stance in the grid analysis. When the spec as written would flag a
-reference file, the reference file wins — the same corpus-as-oracle discipline as
-PDF/A ([ADR 0001](adr/0001-corpus-as-oracle.md)).
+**The PDF Association reference files.** `TestUAReferenceFilesNoFalsePositives`
+(`pdfua_reference_test.go`) reads the ten conformant PDFUA-Reference-Files in
+`spec/pdfua/reference-files/` and fails on *any* violation, with the message
+"false positive on a conformant file". There is no `make` target; place them by
+hand. Like every hand-placed data set (`internal/testfiles`), the test skips when
+the directory is absent and fails when it is present but holds no PDF.
 
-A second external set backstops the *parser* rather than the validator:
+**The veraPDF corpus.** `TestCorpusPDFUA` (`pdfua_corpus_test.go`) runs
+`ValidatePDFUA` over the corpus's `PDF_UA-1` suite and `ValidatePDFUA2` over its
+`PDF_UA-2` suite (`make corpus`, at the pinned revision). A `-pass-` file is one
+veraPDF accepts, a `-fail-` file one it rejects; a finding about the checker
+rather than the document (`IsCheckerFinding`) counts neither way. It is a
+ratchet, like the PDF/A `TestCorpus`: it fails if more pass files are reported
+or fewer fail files caught than its baselines, and logs the numbers to update
+them with after an intended change. veraPDF 1.30.3 itself agrees with every
+file's expected result in both suites.
+
+| Suite | Pass files reported | Fail files caught |
+|---|---|---|
+| `PDF_UA-1` | 0 of 141 | 153 of 155 |
+| `PDF_UA-2` | 0 of 54 | 68 of 84 |
+
+Until the docs audit of 2026-10-11 (D12) only the reference files were held,
+and nothing ratcheted the corpus. It had drifted both ways: 30 PDF/UA-1 and 8
+PDF/UA-2 pass files were reported, while this doc called the character-mapping
+rule false-positive-free; and the PDF/UA-1 catch rate, recorded as 155 of 155
+in July 2026, was 150. The drop was not a regression. Five fail files
+(`7.1-t03-fail-a`, `7.7-t01-fail-a`, `-b`, `7.21.5-t01-fail-a`,
+`7.21.6-t02-fail-d`) were caught only by a false positive: their catalog
+`/Lang` is the UTF-16 text "EN-US", which `checkUALang` judged as raw bytes.
+Commit d0c9bde (2026-09-23) decoded it, and the five were honestly missed. Three
+are caught again now, by the rules they test.
+
+The reported pass files were each the rule's fault, and each rule now reads as
+veraPDF's does:
+
+| Pass files | Rule | What was wrong |
+|---|---|---|
+| `7.2-t21-pass-b` … `7.2-t34-pass-d` (21) | catalog `/Lang` | PDF/UA-1 does not require it (see [Natural language](#natural-language)) |
+| `7.2-t29-pass-b`, `-d`, `-f`; UA-2 `8.4.4-t02-pass-b`, `-d`, `-f` | `/Lang` syntax | BCP 47 is not the grammar; `p` is a Language-Tag |
+| `7.18.1-t02-pass-a`, `-e`; `7.18.1-t03-pass-b` | annotation description | the `/Alt` is on the enclosing structure element |
+| `7.18.1-t02-pass-d`, `-h`; `7.18.1-t03-pass-d` | annotation description | the annotation is outside the crop box |
+| UA-2 `8.2.5.20-t02-pass-a`, `-b` | `Link` `/Contents` | not a PDF/UA-2 requirement |
+| `7.21.7-t01-pass-a`; UA-2 `8.4.5.8-t01-pass-a` | character mapping | an Adobe-Japan1 font needs no `ToUnicode` |
+| `7.3-t01-pass-c`; UA-2 `8.2.5.28.2-t01-pass-c` | figure alternate text | an empty `/ActualText` is replacement text |
+| `7.5-t01-pass-e`; UA-2 `8.2.5.26-t05-pass-e` | table headers | the rule is about data cells naming their headers |
+
+The fail files still missed are rules pdf0 does not implement:
+
+| Fail files | Rule | Why not |
+|---|---|---|
+| `7.21.5-t01-fail-a`; UA-2 `8.4.5.6-t01-fail-a` | glyph widths match the font program | the width machinery is PDF/A's (`pdfa/fonts.go`, unexported) |
+| `7.21.6-t02-fail-d`; UA-2 `8.4.5.7-t02-fail-d` | a non-symbolic TrueType `/Differences` names only Adobe Glyph List glyphs | the glyph list is PDF/A's (`pdfa/fonts.go`, unexported) |
+| UA-2 `5-t04-fail-a`, `5-t05-fail-a`, `-b` | `pdfuaid:rev` prefix and value | PDF/UA-2's own rules, not implemented |
+| UA-2 `8.2.5.2-t01-fail-a`, `-t02-fail-a`; `8.2.5.12-t01-fail-a`; `8.2.5.25-t01-fail-a` | one `Document` root in the PDF 2.0 namespace; no `H`; a ListNumbering attribute with `Lbl` | likewise |
+| UA-2 `8.8-t01-fail-a`, `-t02-fail-a` | intra-document destinations are structure destinations | likewise |
+| UA-2 `8.9.2.2-t01-fail-a`, `8.9.2.4.10-t01-fail-a`, `8.10.1-t02-fail-a`, `8.10.2.3-t01-fail-a`, `8.14.1-t01-fail-a` | invisible annotations as artifacts; file attachment `AFRelationship`; one widget per `Form`; a widget's label or `/Contents`; embedded files' `/Desc` | likewise |
+
+**When the two oracles disagree, the reference files win.** veraPDF 1.30.3
+reports five of the ten reference files; pdf0 reports none. Two of veraPDF's
+findings are rules pdf0 applies and narrows on purpose, so the reference file
+stays clean:
+
+- PDFUA-Reference-06 paints its page backgrounds with `sh` outside marked
+  content (veraPDF 7.1-3). Untagged shadings are not reported.
+- PDFUA-Reference-08 has two blank stub-head data cells with no `/Headers`
+  (veraPDF 7.5-1). A stub head is exempt wherever it is ([Table
+  grids](#table-grids)).
+
+The rest are font rules pdf0 implements more narrowly or not at all: 7.21.4.2-2
+(`/CIDSet` completeness) on Reference-02, -06, -07, -08 and -10, and 7.21.4.1-1
+and 7.21.7-1 on Reference-10. When the spec as written would flag a reference
+file, the reference file wins — the same corpus-as-oracle discipline as PDF/A
+([ADR 0001](adr/0001-corpus-as-oracle.md)).
+
+A third external set backstops the *parser* rather than the validator:
 `TestWTPDFExamples` (`wtpdf_test.go`) runs the LaTeX Project's Well Tagged PDF /
 PDF/UA-2 examples — real PDF 2.0 files with structure trees, associated files,
 MathML and custom role maps — asserting each parses, reports version `2.0`, has
 pages, and survives Read → Write → Read. Fetch with `make wtpdf`
-(`testdata/wtpdf/`, also gitignored). Both datasets and their provenance are
+(`testdata/wtpdf/`, also gitignored). The data sets and their provenance are
 tabulated in [testing.md](testing.md).
 
 ## File map
 
 | File | Owns | Governing clauses |
 |---|---|---|
-| `pdfua/pdfua.go` | `pdfua.Violation`, the `validateView(doc, part)` dispatch (reached from the root's `ValidatePDFUA` and `ValidatePDFUA2` in `pdfua_api.go`), and most rules: identification, title, fonts and CMaps, annotations, form fields, media clips, optional content, embedded files, language, headings, figures | 5, 6.1, 7.1–7.4, 7.10, 7.11, 7.15, 7.16, 7.18.x, 7.20, 7.21.x |
+| `pdfua/pdfua.go` | `pdfua.Violation`, the `validateView(doc, part)` dispatch (reached from the root's `ValidatePDFUA` and `ValidatePDFUA2` in `pdfua_api.go`), and most rules: identification, title, fonts and CMaps, annotations, form fields, media clips, optional content, embedded files, headings, figures and formulas, PDF/UA-2 link targets | 5, 6.1, 7.1–7.4, 7.7, 7.10, 7.11, 7.15, 7.16, 7.18.x, 7.20, 7.21.x, UA-2 8.2.5.20 |
+| `pdfua/pdfua_lang.go` | natural language: `/Lang` syntax, the PDF/UA-2 catalog `/Lang`, and PDF/UA-1's per-object determinability with its content replay (`langScope`) | 7.2, UA-2 8.4.4 |
+| `pdfua/pdfua_annotctx.go` | `annotContext`: each page annotation's enclosing structure element and its page's crop box | 7.18.1, 7.18.5 |
 | `pdfua/pdfua_struct.go` | Its names for `core.StructTree` and `walkStructElems`, element nesting tables, container well-formedness, heading strength, `Note` IDs, `/Suspects`, UA-1 header version, the two PDF/UA-2 namespace rules | 7.1, 7.2, 7.4.4, 7.9, 6.1, UA-2 8.2.4 and 8.2.5.29 (and ISO 32000-1 14.8.4.3) |
 | `pdfua/pdfua_content.go` | `streamContentFacts`, real-content vs artifact analysis, the form-XObject paint count, OBJR annotation placement | 7.1, 7.18.1, 7.20 |
-| `pdfua/pdfua_tablegrid.go` | `TH` identifiability and the table grid reconstruction | 7.2, 7.5 |
-| `pdfua/pdfua2.go` | The PDF/UA-2 package comment: what part 2 adds over the shared checks (the rules themselves are in the files above, selected by `part`) | ISO 14289-2 clauses 4, 8.2.4, 8.2.5.29 and the shared clauses |
+| `pdfua/pdfua_tablegrid.go` | the table grid reconstruction and the data cells' header association | 7.2, 7.5 |
+| `pdfua/pdfua2.go` | No code: a comment (after the package clause, so not the package's doc comment) on what part 2 shares with part 1 and what it changes; the rules themselves are in the files above, selected by `part` | ISO 14289-2 clauses 4, 8.2.4, 8.2.5.20, 8.2.5.29, 8.4.4 and the shared clauses |
 
 Shared machinery lives outside these files, in `internal/core`: the content
 interpreter behind `core.CollectFontTextUsage`, the run and its memos
@@ -299,10 +462,11 @@ and `core.LoadFontProgram` over forme's font parsers.
 - **No `/ParentTree` validation.** The number tree mapping `/StructParents` and
   `/StructParent` keys back to structure elements is never read. Annotations are
   checked for the *presence* of `/StructParent` and correlated to the tree
-  through OBJR only; content-stream MCIDs are never resolved to their elements.
-- **`/Headers` is not checked at all** — the `TH`/`TD` association array has no
-  rule. `Scope` is checked for presence only, never for a valid value, and an
-  `/ID` exempts a `TH` from needing either.
+  through OBJR only, and content-stream MCIDs are resolved, for the language
+  rules only, through the structure tree's `/K` entries. veraPDF reads
+  `/ParentTree` for both; on a file whose two disagree, the answers can differ.
+- **A `Scope` value is read, not validated.** One other than `Row`, `Column` or
+  `Both` counts as a `Scope` and points nowhere; nothing reports it.
 - **A panic is contained, but a stack overflow is not.** Every UA check now runs
   behind a `recover()` boundary and a panic is reported as an `internal` finding
   (this closed C27). Unbounded recursion that overflows the stack remains fatal
