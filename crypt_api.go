@@ -137,11 +137,27 @@ func (d *Document) installEncryption(h *crypt.Handler, dict *object.Dictionary) 
 //
 // Encrypted alone does not distinguish this from a successfully decrypted file
 // (both keep Encrypted true). Callers that intend to read content, validate,
-// extract, or re-encrypt should check Locked first: on a locked document
-// RemoveEncryption is a no-op, ExtractText and the validators see ciphertext,
-// SetEncryption refuses, and Write writes the file back verbatim.
+// extract, or re-encrypt should check Locked first. On a locked document:
+//
+//   - ExtractText, ExtractTextContext, ExtractPageText, ExtractImagesContext,
+//     ImagesContext, StreamData and StreamDataContext return an error wrapping
+//     LockReason, and no content; ExtractImages and Images yield no images;
+//   - the validators skip every check that reads a string or stream and say
+//     so in a finding under the "limit" rule (guard "not-decrypted"), which
+//     IsCheckerFinding reports as a checker finding, not a verdict on the file;
+//   - SetEncryption and Repair refuse, and RemoveEncryption does nothing;
+//   - Write carries the ciphertext through unchanged under the file's own
+//     /Encrypt and /ID, but regenerates the file's layout rather than copying
+//     its bytes.
 func (d *Document) Locked() bool {
 	return (d.Encrypted || d.Trailer.Get("Encrypt") != nil) && d.security == nil
+}
+
+// lockedError is the error an extractor returns for a Locked document: what
+// was not done and why, wrapping LockReason so that errors.Is finds the
+// reason's sentinel (ErrWrongPassword and the others).
+func (d *Document) lockedError(what string) error {
+	return fmt.Errorf("pdf0: %s: the document is encrypted and was not decrypted, so its strings and streams are ciphertext: %w", what, d.LockReason())
 }
 
 // LockReason reports why the document is Locked, or nil when it is not. The

@@ -25,13 +25,15 @@ import (
 // right way to ask what a stream says.
 //
 // The document's resource limits apply. A stream that decompresses to more than
-// the configured ceiling is refused rather than expanded — decompression bombs
-// are the reason that ceiling exists, and a caller reading a stream out of an
-// untrusted file wants it enforced here as much as anywhere.
+// WithMaxDecodedStreamBytes is refused rather than expanded, with an error
+// matching ErrResourceLimit — decompression bombs are the reason that ceiling
+// exists, and a caller reading a stream out of an untrusted file wants it
+// enforced here as much as anywhere.
 //
 // An encrypted document whose contents could not be decrypted returns an error
 // rather than ciphertext: handing back bytes that look like data but are not is
-// worse than saying so.
+// worse than saying so. For a Locked document the error wraps LockReason; for
+// one of the streams DecryptFailures lists, it names the object.
 func (d *Document) StreamData(s *object.Stream) ([]byte, error) {
 	return d.streamData(d.canceler(), s)
 }
@@ -47,12 +49,13 @@ func (d *Document) streamData(cancel core.Canceler, s *object.Stream) ([]byte, e
 		return nil, errors.New("pdf0: cannot decode a nil stream")
 	}
 	if d.Locked() {
-		return nil, errors.New("pdf0: the document is encrypted and was not decrypted, so its streams are ciphertext")
+		return nil, d.lockedError("cannot decode the stream")
 	}
 	for _, num := range d.decryptFailures {
 		if iobj, ok := d.Objects[num]; ok && iobj.Value == object.Object(s) {
 			return nil, fmt.Errorf("pdf0: stream object %d did not decrypt under the document's key, so its data is unrecoverable", num)
 		}
 	}
-	return core.DecodeStreamData(cancel, s, d.lim(), d.Resolve)
+	data, err := core.DecodeStreamData(cancel, s, d.lim(), d.Resolve)
+	return data, markLimit(err)
 }
