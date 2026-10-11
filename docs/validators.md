@@ -20,7 +20,7 @@ internals of each engine have their own docs: [pdfa.md](pdfa.md) for PDF/A,
 | PDF/VT-1 (ISO 16612-2) | `ValidatePDFVT(doc)` | `[]pdfvt.Violation` | `ValidatePDFVTContext` | Composes PDF/X-4 and DPart, and inherits how partial they are ([PDF/VT](#pdfvt)) |
 | PDF/VT-2 | `ValidatePDFVT2(doc)` | `[]pdfvt.Violation` | `ValidatePDFVT2Context` | The PDF/X-5 external-reference rules are not asserted |
 | PDF/R (ISO 23504-1) | `ValidatePDFR(doc)` | `[]pdfr.Violation` | `ValidatePDFRContext` | Written from knowledge of the standard, with no corpus to calibrate it |
-| DPart hierarchy (ISO 32000-2 §14.12) | `ValidateDParts(doc)` | `[]dpart.Violation` | `ValidateDPartsContext` | A document with no `/DPartRoot` has no hierarchy, so the result is nil |
+| DPart hierarchy (ISO 32000-2 §14.12) | `ValidateDParts(doc)` | `[]dpart.Violation` | `ValidateDPartsContext` | A document with no `/DPartRoot` has no hierarchy and gets no DPart finding: the structure is optional |
 | Factur-X / ZUGFeRD container | `ValidateFacturX(doc)` | `facturx.Result` | `ValidateFacturXContext` | A result struct, not a slice: read three of its fields ([Factur-X and Order-X](#factur-x-and-order-x)) |
 | Order-X container | `ValidateOrderX(doc)` | `facturx.OrderXResult` | `ValidateOrderXContext` | As Factur-X, with `OrderWarnings` and `OrderNotEvaluated` / `OrderComplete` |
 
