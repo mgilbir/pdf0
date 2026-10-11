@@ -346,8 +346,8 @@ func EncodeUTF16BE(s string) []byte {
 // writes the Factur-X namespace; ORDER, ORDER_CHANGE and ORDER_RESPONSE write
 // the Order-X one, with order-x.xml as the file name.
 //
-// Embed does not use it: Embed edits the document's own packet. This is for a
-// caller assembling a container by hand.
+// pdf0.EmbedFacturX and pdf0.EmbedOrderX do not use it: they edit the
+// document's own packet. This is for a caller assembling a container by hand.
 func XMPPacket(profile formalis.Profile, docType, title string) ([]byte, error) {
 	f, fileName := invoiceFamily, facturxFileName
 	if strings.HasPrefix(docType, "ORDER") {

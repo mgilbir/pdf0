@@ -40,6 +40,8 @@ var ErrNotAProfile = errors.New("pdfa: not an ICC profile")
 //
 // Only the three PDF/A permits are recognised. A profile in Lab, or one of the
 // many-channel spaces, is a profile pdf0 has nothing correct to write for.
+// Bytes shorter than the 128-byte header, or whose header declares a length
+// other than theirs, are not a profile at all: that error wraps ErrNotAProfile.
 func ICCComponents(profile []byte) (int, error) {
 	if len(profile) < iccHeaderSize {
 		return 0, fmt.Errorf("%w: %d bytes, shorter than the 128-byte header",

@@ -37,7 +37,10 @@ import (
 // (audit 2026-09-22 C146); what ISO 23504 says about transparency could not be
 // confirmed here, so the claim is withdrawn rather than a rule invented.
 
-// NSPDFRID is the PDF/R identification schema's namespace (see above).
+// NSPDFRID is the namespace of the XMP schema whose pdfrid:part property
+// identifies a file as PDF/R. It follows the AIIM identification schemas of
+// the sibling standards (pdfaid, pdfuaid) and is from knowledge of ISO
+// 23504-1, not checked against its text, which this repository does not hold.
 const NSPDFRID = "http://www.aiim.org/pdfr/ns/id/"
 
 // Violation reports a departure from the PDF/R structural profile.

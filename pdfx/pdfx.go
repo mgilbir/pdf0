@@ -17,10 +17,15 @@ import (
 // Poly PDF/VT-1 test suite, whose files are conforming PDF/X-4.
 
 // Level identifies a PDF/X conformance level.
+//
+// The zero value is PDFX4, not a "no level" sentinel: a Level a caller never
+// set validates against PDF/X-4, silently. Always name the level. (pdfa.Level
+// avoids this: its zero value is LevelDeclared.)
 type Level int
 
 const (
 	// PDFX4 is PDF/X-4 with an embedded ICC destination profile (ISO 15930-7).
+	// It is the zero Level.
 	PDFX4 Level = iota
 	// PDFX4p is PDF/X-4p, which permits an externally referenced destination
 	// profile instead of an embedded one.

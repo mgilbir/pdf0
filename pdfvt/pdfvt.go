@@ -21,7 +21,8 @@ import (
 type Violation struct {
 	// Rule is the short rule identifier. A finding of the PDF/X base is
 	// prefixed with the base it came from — "pdfx-4/" for PDF/VT-1, "pdfx-5/"
-	// for PDF/VT-2 — and a DPart finding with "dpart/".
+	// for PDF/VT-2 — and a DPart finding with "dpart/". The checker findings
+	// "limit" and "internal" are never prefixed, wherever they arose.
 	Rule    string
 	Message string
 	Object  int // object number the violation anchors to, 0 if N/A

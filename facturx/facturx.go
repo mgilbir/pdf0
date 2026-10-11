@@ -17,9 +17,12 @@ import (
 // invoice (UN/CEFACT Cross Industry Invoice, EN 16931). This validator checks
 // the container — PDF/A-3 conformance, the embedded invoice XML attached as an
 // associated file, and the Factur-X XMP metadata that identifies it — and then
-// runs the invoice XML through the formalis EN 16931 rule engine at the declared
-// profile, mirroring ValidateOrderX. CIUS layers (XRechnung, Peppol, NLCIUS)
-// remain the caller's choice, via the returned XML.
+// runs the invoice XML through the formalis rule engine, mirroring
+// pdf0.ValidateOrderX: the EN 16931 core at the declared profile, or, when the
+// fx:ConformanceLevel names a CIUS (XRECHNUNG) instead, the rule set the
+// invoice itself declares in BT-24 (Result.ValidateInvoiceXML says which). A
+// CIUS the container does not declare is the caller's to run, over
+// Result.XML.
 //
 // The checks are calibrated against a corpus of conforming Factur-X / ZUGFeRD
 // invoices across all profiles (MINIMUM, BASIC WL, BASIC, EN 16931, EXTENDED).
@@ -40,8 +43,8 @@ var facturxRelationships = map[object.Name]bool{"Data": true, "Alternative": tru
 // anchor to a business term in an XML document and name the authority that wrote
 // the rule. Until formalis v0.2.0 this validator carried formalis.Violation
 // values directly, borrowing that type's Object field for PDF object numbers,
-// which made Factur-X and Order-X the only findings in this package that could
-// not satisfy Violation — the exception the package documentation had to keep
+// which made Factur-X and Order-X the only pdf0 findings that could not
+// satisfy pdf0.Violation — the exception the documentation had to keep
 // explaining. Both halves now arrive in a type pdf0 owns, so they combine with
 // every other validator's findings and IsCheckerFinding applies to them.
 type Violation struct {
@@ -51,7 +54,7 @@ type Violation struct {
 	// engine's are adopted verbatim (EN 16931's BR-*, and formalis's reserved
 	// "limit", "profile" and "root"). The reserved checker identifiers "limit"
 	// and "internal" keep their bare names whichever half reports them, so
-	// IsCheckerFinding recognises them — see adoptPDFAFindings.
+	// pdf0.IsCheckerFinding recognises them.
 	Rule string
 	// Message describes what is wrong.
 	Message string
@@ -101,15 +104,17 @@ func (v Violation) Error() string {
 // what the identifier says.
 const facturxXMLRule = "invoice-xml"
 
-// Result is the outcome of validating a Factur-X invoice: the container
-// and EN 16931 violations found and, when identifiable, the declared conformance
-// profile and the embedded invoice XML (returned for CIUS-layer validation).
+// Result is the outcome of validating a Factur-X invoice: the container and
+// invoice-rule violations found and, when identifiable, the declared
+// conformance profile or CIUS and the embedded invoice XML, over which
+// ValidateInvoiceXML reproduces the invoice half of the run.
 type Result struct {
 	// Violations is every non-conformance: pdf0's container findings, the PDF/A-3
 	// base's, and the invoice rule engine's fatal ones — the findings whose
 	// authority rejects a document for breaking them, plus that engine's
 	// statements about its own run. An empty slice is the clean answer, as it is
-	// for every other validator in this package.
+	// for every other pdf0 validator, with the same caveat: the PDF/A-3 base is
+	// a partial validator.
 	Violations []Violation
 
 	// InvoiceWarnings is the advisory findings of the invoice rule engine: rules
@@ -117,8 +122,10 @@ type Result struct {
 	// syntax-binding rules (CII-SR-*, CII-DT-*) that hold an invoice to the
 	// EN 16931 core subset of CII. A conforming Factur-X EXTENDED invoice trips
 	// those by design — carrying more than the core is what EXTENDED is for — so
-	// they are reported beside the verdict rather than inside it. See
-	// adoptInvoiceFindings for why they are neither dropped nor merged.
+	// they are reported beside the verdict rather than inside it. They are not
+	// merged into Violations because pdf0's Violation interface carries no
+	// severity, so a warning there could not be told from a failure; they are
+	// not dropped because they are the only reading anyone has of those rules.
 	InvoiceWarnings []Violation
 
 	Profile formalis.Profile // "" if not identifiable
@@ -297,10 +304,10 @@ func validateContext(ctx context.Context, doc core.View) (res Result) {
 
 // ValidateInvoiceXML runs the extracted invoice XML through the rule set the
 // container declared, and returns the rule engine's own report. It is a method
-// on the result rather than a step inside ValidateContext so that a caller —
-// or a test — reading res.XML can reproduce exactly the run whose findings
-// res.Violations holds, instead of guessing the entry point from res.Profile
-// and getting a different rule set.
+// on the result rather than a step inside pdf0.ValidateFacturXContext so that
+// a caller — or a test — reading res.XML can reproduce exactly the run whose
+// findings res.Violations holds, instead of guessing the entry point from
+// res.Profile and getting a different rule set.
 //
 // The findings are already in res.Violations and res.InvoiceWarnings; what the
 // report adds is everything the projection drops, such as which rule families
