@@ -111,3 +111,26 @@ func TestReportCancellationIsSilentWhenNotCancelled(t *testing.T) {
 		t.Errorf("an uncancelled run reported %+v", got)
 	}
 }
+
+// TestNamespacedKeepsReservedRulesBare pins the rule every composing validator
+// adopts a nested validator's findings under (docs audit 2026-10-11 D25): an
+// ordinary rule takes the namespace, the two reserved checker identifiers do
+// not, so IsCheckerFinding still recognises them after adoption.
+func TestNamespacedKeepsReservedRulesBare(t *testing.T) {
+	for _, tc := range []struct{ rule, want string }{
+		{"6.1.2", "pdfa-3/6.1.2"},
+		{"output-intent", "pdfa-3/output-intent"},
+		{InternalRule, InternalRule},
+		{LimitRule, LimitRule},
+		// Only the exact reserved names are exempt.
+		{"limits", "pdfa-3/limits"},
+	} {
+		got := Namespaced("pdfa-3/", tc.rule)
+		if got != tc.want {
+			t.Errorf("Namespaced(%q) = %q, want %q", tc.rule, got, tc.want)
+		}
+		if IsCheckerFinding(mk(got, "", 0)) != IsCheckerFinding(mk(tc.rule, "", 0)) {
+			t.Errorf("Namespaced(%q) = %q changed whether it is a checker finding", tc.rule, got)
+		}
+	}
+}

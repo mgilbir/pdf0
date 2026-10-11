@@ -96,11 +96,16 @@ func validateView(doc core.View, part string) []Violation {
 			}
 			if v.Rule == finding.LimitRule {
 				// The nested run shares this run's recorder, so its guard
-				// trips are reported once, by the flush below — not prefixed
-				// as if they were a PDF/X conformance finding.
+				// trips are reported once, by the flush at the boundary
+				// (pdfvt_api.go) — not twice, and not prefixed as if they
+				// were a PDF/X conformance finding.
 				continue
 			}
-			add(basePrefix+v.Rule, v.Message, v.Object)
+			// A recovered panic inside the nested run is seen by nothing
+			// else, so it is adopted, under its bare reserved name
+			// (finding.Namespaced): "pdfx-4/internal" is an identifier
+			// IsCheckerFinding does not recognise.
+			add(finding.Namespaced(basePrefix, v.Rule), v.Message, v.Object)
 		}
 	})
 
@@ -136,14 +141,15 @@ func validateView(doc core.View, part string) []Violation {
 		}
 		for _, v := range dpartValidateView(doc) {
 			if v.Rule == finding.LimitRule {
-				continue // reported once by the flush below
+				continue // shared recorder: reported once at the boundary
 			}
-			add("dpart/"+v.Rule, v.Message, v.Object)
+			add(finding.Namespaced("dpart/", v.Rule), v.Message, v.Object)
 		}
 	})
 
-	// Guard trips are reported under their own rule, not as conformance
-	// failures (see limits.go).
+	// Guard trips — this run's and the nested ones', which share its recorder
+	// — are reported under their own rule, not as conformance failures, by the
+	// caller at the boundary (pdfvt_api.go), which holds the recorder.
 
 	// The checks iterate map-ordered doc.Objects, so their concatenated output
 	// order is nondeterministic; sort for stable, diffable reports.

@@ -113,6 +113,30 @@ func ReportCancellation[T V](cancel core.Canceler, v []T, add func(rule, msg str
 	add(LimitRule, core.NewTrip(core.GuardCanceled, err.Error(), 0).Message(), 0)
 }
 
+// Namespaced returns the rule identifier under which a composing validator
+// reports a finding it adopted from a validator it nests: prefix+rule, except
+// for the two reserved checker identifiers, which keep their bare names.
+//
+// A composing validator namespaces what it adopts ("pdfx-4/", "dpart/",
+// "pdfa-3/") so that two rule spaces cannot collide. "internal" and "limit"
+// belong to neither: they say that pdf0 could not finish, and a caller keys on
+// the bare name through IsCheckerFinding. A recovered panic adopted as
+// "pdfx-4/internal" would read as a non-conformance of the document (docs audit
+// 2026-10-11 D25). Every place one validator adopts another's findings goes
+// through here, so none can spell it differently.
+//
+// Whether to adopt a nested "limit" finding at all is the caller's decision,
+// not this function's: a nested run that shares the caller's recorder has its
+// guard trips reported once by the caller's flush, and adopting them as well
+// would count each twice.
+func Namespaced(prefix, rule string) string {
+	switch rule {
+	case LimitRule, InternalRule:
+		return rule
+	}
+	return prefix + rule
+}
+
 // IsCheckerFinding reports whether a finding describes a problem in the checker
 // rather than a non-conformance of the document — a recovered panic, or a
 // resource guard that stopped a check short. A caller asking "is this file
