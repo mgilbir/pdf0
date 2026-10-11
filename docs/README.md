@@ -10,7 +10,9 @@ Start from the question you have.
 | Add or debug a PDF/A rule | [pdfa.md](pdfa.md) |
 | Work on accessibility (PDF/UA) checking | [pdfua.md](pdfua.md) |
 | Turn HTML and CSS into a PDF, or work on the backend that writes it | [htmlpdf.md](htmlpdf.md) |
-| Understand a font finding, or touch font parsing | [fonts.md](fonts.md) |
+| Set text with a font, or embed a font | [text.md](text.md) |
+| Know what the font writer puts in a file, or change it | [font-embedding.md](font-embedding.md) |
+| Understand a font finding, or touch font-program parsing | [fonts.md](fonts.md) |
 | Work on XMP metadata or a conformance declaration | [xmp.md](xmp.md) |
 | Read, write or debug encrypted files | [encryption.md](encryption.md) |
 | Sign a PDF, or decide whether a signature can be trusted | [signing.md](signing.md) |
@@ -55,8 +57,17 @@ families, table-grid reconstruction, and how much a clean result is worth.
 the one call, where the layout engine actually lives, the two ways a render can
 decline, and the findings worth knowing about before you meet them.
 
-**[fonts.md](fonts.md)** — explanation. Font types and what each requires,
-font-program parsing, encodings and CMaps, and the empty-vs-missing-glyph trap.
+**[text.md](text.md)** — how-to. Load a face, draw with it, embed it after
+the drawing, bound shaping of untrusted text, the font licence rule, PDF/A, and
+which PDF font each face becomes.
+
+**[font-embedding.md](font-embedding.md)** — reference plus explanation. What
+the font writer puts in a file and why: `/CIDSet`, CID-keyed CFF, variable
+fonts and CFF2, PDF/A-1, bitmap and colour glyphs as Type 3 fonts, cost.
+
+**[fonts.md](fonts.md)** — explanation. Font validation: font types and what
+each requires, font-program parsing, encodings and CMaps, the CIDSet and
+CharSet rules, and the empty-vs-missing-glyph trap.
 
 **[xmp.md](xmp.md)** — explanation. Packet parsing and encodings, the
 conformance declarations every standard writes there, and schema validation.

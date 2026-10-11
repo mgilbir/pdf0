@@ -201,7 +201,7 @@ What is drawn:
   used, so the page is the width layout placed. `letter-spacing` goes after
   each typographic character unit, not after each glyph. Every run extracts as
   the text it was set from — a ligature as its letters, a right-to-left word in
-  reading order; see [fonts.md](fonts.md#setting-text-and-getting-it-back).
+  reading order; see [text.md](text.md#getting-the-text-back).
 - **Sideways text.** A run a vertical writing mode lays along the line —
   Latin in `vertical-rl` or `vertical-lr`, everything in `sideways-rl` and
   `sideways-lr` — is a horizontal run turned a quarter, and is drawn as one:
@@ -222,7 +222,7 @@ What is drawn:
   from the top of its box, which centres its ink in the box. A standard face
   has no
   vertical font, and its glyphs are placed one by one in the horizontal one.
-  See [fonts.md](fonts.md#setting-text-and-getting-it-back).
+  See [text.md](text.md#upright-text-down-the-page).
 - **Rounded corners.** A rounded background or border is a `FillPath` and a
   box that clips to its rounded border a `ClipPath`: lines and arcs of
   axis-aligned ellipses, filled by the even-odd rule (`f*`) and clipped by it
@@ -303,7 +303,7 @@ What is drawn:
   the operator's character once, in one `/ActualText`; each piece's ToUnicode
   entry is the character it is a piece of. Each piece is recorded as used when
   it is drawn, so the face is still subset
-  (see [fonts.md](fonts.md#setting-text-and-getting-it-back)).
+  (see [text.md](text.md#glyphs-drawn-by-index)).
   A simple or standard face, whose codes are characters, cannot draw a glyph
   by index, and is refused.
 - **Squeezed text.** A `text-combine-upright` composition wider than its em,
