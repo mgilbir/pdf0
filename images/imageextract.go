@@ -17,7 +17,8 @@ import (
 	"github.com/mgilbir/pdf0/internal/jbig2"
 )
 
-// This file owns image extraction: the ExtractImages/Images API, the traversal
+// This file owns image extraction, the work behind the root package's
+// Document.ExtractImages and Document.Images (images_api.go): the traversal
 // that reaches image XObjects through page resources, form XObjects and
 // annotation appearance streams, and the dispatch from a stream's filter chain
 // to a decoder (ISO 32000-2 clause 8.9). The codecs live elsewhere —
@@ -232,12 +233,12 @@ func jpxComponentsToImage(lim core.Limits, img *gopenjpeg.Image, smaskInData int
 }
 
 // Per-codec support. For each image XObject the extractor reports the geometry
-// and, where the codec is one Go can decode without a large bespoke
-// implementation, the decoded pixels:
+// and, where the codec is one this package decodes, the decoded pixels:
 //
 //   - DCTDecode (JPEG)                  -> decoded via image/jpeg (stdlib)
-//   - raw, FlateDecode, LZWDecode,
-//     ASCIIHexDecode                     -> decoded from the sample bytes
+//   - raw, or only general-purpose      -> decoded from the sample bytes
+//     filters (Flate, LZW, ASCIIHex,
+//     ASCII85, RunLength)
 //   - CCITTFaxDecode (Group 3/4 fax)    -> decoded by the built-in internal/ccitt
 //     codec
 //   - JBIG2Decode                       -> generic, symbol/text, refinement and
@@ -635,10 +636,11 @@ func renderBilevelSamples(d core.View, st *object.Stream, img *ExtractedImage, s
 }
 
 // ccittEncodedAndParams returns the CCITT-encoded bytes for an image XObject —
-// reversing any general-purpose filters (Flate/LZW/ASCIIHex) that precede the
-// CCITTFaxDecode codec in the filter chain — together with the /DecodeParms that
-// steer the fax decoder, and the Reason when a preceding filter cannot be
-// reversed (a declined one is recorded by the producer).
+// reversing any general-purpose filters (Flate, LZW, ASCIIHex, ASCII85,
+// RunLength) that precede the CCITTFaxDecode codec in the filter chain —
+// together with the /DecodeParms that steer the fax decoder, and the Reason
+// when a preceding filter cannot be reversed (a declined one is recorded by
+// the producer).
 func ccittEncodedAndParams(d core.View, st *object.Stream, width, height int) (encoded []byte, params ccitt.Params, r core.Reason) {
 	filters := d.StreamFilters(st)
 	if len(filters) == 0 {
