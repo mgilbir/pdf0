@@ -15,7 +15,7 @@ table; this doc is the inside of the two UA cells.
 What a clean result is measured against, in short: the PDF Association's ten
 conformant reference files report nothing, and over the veraPDF corpus pdf0
 reports none of the PDF/UA-1 pass files and 153 of the 155 fail files, and none
-of the PDF/UA-2 pass files and 68 of the 84 fail files. [The
+of the PDF/UA-2 pass files and 82 of the 84 fail files. [The
 oracles](#the-oracles) has the files on the wrong side of the line and why.
 
 ## The structure tree comes first
@@ -128,6 +128,7 @@ rule, noted in the source comments.
 | Tab order | 7.18.3 | `checkUATabOrder` | a page carrying `/Annots` without `/Tabs /S` |
 | Form fields | 7.18.1, 7.15 | `checkUAFieldDescription`, `checkUAXFA` (and the `Widget` arm of `checkUAAnnotations`) | a field with no `/TU` whose description sits on a pure-widget child, a `Widget` (PDF/UA-1, inside the crop box) with neither an effective `/TU` (inherited up `/Parent`, bounded to 32 hops) nor an `/Alt` on its enclosing structure element, and a dynamic XFA form (`dynamicRender` required, detected in the *decoded* packet) |
 | Link targets | UA-2 8.2.5.20 | `checkUA2LinkTargets` | **PDF/UA-2 only**: one structure element enclosing `Link` annotations whose structure destinations (`/SD`, else `/D`, of a GoTo action, or `/Dest`) are different structure elements |
+| Part 2's own rules | UA-2 5, 8.2.5.2, 8.2.5.12, 8.2.5.25, 8.8, 8.9.2.2, 8.9.2.4.10, 8.10.1, 8.10.2.3, 8.14.1 | `checkUA2Revision`, `checkUA2DocumentRoot`, `checkUA2NoH`, `checkUA2ListNumbering`, `checkUA2StructDestinations`, `checkUA2InvisibleAnnots`, `checkUA2FileAttachments`, `checkUA2FormOneWidget`, `checkUA2WidgetDescription`, `checkUA2EmbeddedFileDesc` | **PDF/UA-2 only**: `pdfuaid:rev`, the `Document` root, no `H`, `ListNumbering`, structure destinations, invisible annotations, `AFRelationship`, one widget per `Form`, a widget's label, an embedded file's `/Desc` — see [PDF/UA-2](#pdfua-2) |
 | Media clips | 7.18.6.2 | `checkUAMediaClips` | a `/Type /MediaClip` dictionary anywhere in the document (`core.View.ReachableDicts`, direct dictionaries included) missing `/CT`, missing `/Alt`, or with an `/Alt` carrying no non-empty string |
 | Fonts | 7.21.3.1–7.21.8, 7.21.4.1/.2, 7.21.5, 7.21.6 | `checkUAFonts`, `checkUAFontDicts`, `checkUACMaps`, `checkUACMapWMode`, `checkUACIDSystemInfo`, `checkUAToUnicodeValues`, `checkUAFontSubsetGlyphs`, `checkUANotdefCID`, `checkUAFontWidths` | not embedded, `CIDFontType2` without `/CIDToGIDMap` or with a non-`Identity` name, symbolic TrueType with an `/Encoding`, non-symbolic TrueType not on MacRoman/WinAnsi, or with a `/Differences` naming a glyph not in the Adobe Glyph List (`fontcheck.AGLListed`: the list's names and `.notdef`, not `uniXXXX`) or, its program embedded, with no (3,1) cmap subtable to look the names up in, a shown glyph whose declared width differs from the program's by more than 1/1000 (text in rendering mode 3 only is exempt), a CMap neither predefined nor embedded, an embedded CMap whose `/WMode` disagrees with the stream's own, a `CIDSystemInfo` Registry/Ordering/Supplement mismatch with the CMap, a `ToUnicode` mapping to U+0000/U+FEFF/U+FFFE, a subset `/CharSet` or `/CIDSet` disagreeing with the embedded program, and a shown CID 0 (`.notdef`) |
 | Character mapping | 7.2 | `checkUACharMapping` | text shown with a Type 0 Identity-encoded font that has no `ToUnicode` (Matterhorn 10-001), unless its descendant is in the Adobe-GB1, -CNS1, -Japan1 or -Korea1 collection, whose Unicode mapping Adobe publishes. A deliberately narrow case of 7.21.7, not all of it |
@@ -330,8 +331,9 @@ is what makes the identification rule demand `pdfuaid:part 2`, makes the UA-1
 declared version (the header, or a later catalog `/Version`) must be 2.0 — one
 that cannot be read is not; a type in an explicit namespace must not be
 role-mapped back into that namespace (ISO 14289-2 8.2.4); MathML's `math`
-must sit in a `Formula` (8.2.5.29); and `Link` annotations targeting different
-locations must sit in different structure elements (8.2.5.20). Where the two
+must sit in a `Formula` (8.2.5.29); `Link` annotations targeting different
+locations must sit in different structure elements (8.2.5.20); and the rules
+in the table below. Where the two
 standards differ on a shared rule, the part selects that too: PDF/UA-2 requires
 the catalog `/Lang` where PDF/UA-1 asks only that languages be determinable;
 PDF/UA-1's annotation-description rules (7.18.1, 7.18.5) and `Formula` rule
@@ -342,11 +344,53 @@ position. Every finding carries `Part`, and `Error()`
 prints it: `[PDF/UA-2 …]`. The shared rules keep their ISO 14289-1 clause
 numbers; read the clause against the standard you invoked.
 
+The rest of part 2's own rules are in `pdfua/pdfua2_ident.go`,
+`pdfua/pdfua2_struct.go` and `pdfua/pdfua2_interactive.go`, and
+`pdfua/pdfua2_rules_test.go` holds each one's boundaries. The veraPDF
+PDF/UA-2 profile states each rule; what its properties read — which children
+of the root count, what a widget's label is — is veraPDF 1.30.3's model code,
+and each check reads the same:
+
+| Clause | Check | Reports |
+|---|---|---|
+| 5 | `checkUA2Revision` | a packet declaring a PDF/UA part whose `pdfuaid:rev` is absent, is not `2024`, or is written with a prefix other than `pdfuaid` |
+| 8.2.5.2 | `checkUA2DocumentRoot` | a structure tree root whose children are not exactly one `Document`, or whose `Document` is not in the PDF 2.0 namespace. Children are read through `NonStruct`, `Div` and `Part`, and only types that resolve count, as veraPDF reads them. A `Part` holding the `Document` passes this rule; veraPDF reports it under ISO/TS 32005's containment rules, which pdf0 does not implement |
+| 8.2.5.12 | `checkUA2NoH` | an element whose type resolves to `H` |
+| 8.2.5.25 | `checkUA2ListNumbering` | an `L` with an `LI` that has an `Lbl` (both through grouping elements) and whose `ListNumbering` is absent or `None`. The attribute is the first one owned by `List` in `/A`, else in the `/ClassMap` classes `/C` names, else the parent element's |
+| 8.8 | `checkUA2StructDestinations` | an outline item's or a `Link` annotation's `/Dest` (when the dictionary has no `/A`), or an array `/OpenAction`, that is not a structure destination; a GoTo action with no `/SD` whose `/D` is not a name or string naming one. The actions are those of outline items and annotations, the open action, the `/AA` of the catalog, the pages, the annotations and the form fields, and their `/Next` chains |
+| 8.9.2.2 | `checkUA2InvisibleAnnots` | an annotation with the Invisible flag (bit 1) enclosed by a structure element that neither is nor sits inside an `Artifact` |
+| 8.9.2.4.10 | `checkUA2FileAttachments` | a `FileAttachment` annotation whose `/FS` is not a dictionary with an `/AFRelationship` name; a string `/FS` is reported, as veraPDF reports it |
+| 8.10.1 | `checkUA2FormOneWidget` | a `Form` element with more than one OBJR child naming a `Widget` |
+| 8.10.2.3 | `checkUA2WidgetDescription` | a field's widget (it has `/T` or a `/Parent`) in the structure tree, outside any `Artifact`, with no `/Contents` string and no `Lbl` with content beside it in its enclosing element. An empty `/Contents` is one |
+| 8.14.1 | `checkUA2EmbeddedFileDesc` | a file specification in the `EmbeddedFiles` name tree with no `/Desc` |
+
+Two walks here follow what the file says without a bound of their own, and are
+made safe instead: an action's `/Next` chain is followed iteratively, each
+indirect object once, so an array that holds itself ends
+(`TestUA2ActionChainTerminates`); and a list's inherited `ListNumbering` is
+memoised per element, so nested lists each asking their whole ancestry cost
+linear time, not quadratic (`TestUA2ListNumberingDeepNesting`). Both, and the
+outline walk, are charged to the run's work meter.
+
+Validated as PDF/UA-2, every file of both corpus suites and the ten reference
+files draws each of these rules exactly when veraPDF 1.30.3's `-f ua2` does,
+and the same number of times, with one exception: 8.10.2.3 reads an
+annotation's enclosing element through the OBJR that names it
+(`annotContext`), where veraPDF looks its `/StructParent` up in `/ParentTree`
+([Confirmed limitations](#confirmed-limitations)), and `8.10.2.3-t01-fail-a`
+has a second widget that only its `/ParentTree` entry places in a `Form`.
+
 Structure types are resolved in the element's namespace (above), so a `/Title`
-in the PDF 2.0 namespace is a standard type. What is not done: PDF/UA-2's own
-rules for the 2.0-only types (FENote, Title, Artifact elements) beyond those
-two, and no PDF/UA-2 corpus beyond the veraPDF suite is bundled, so this does
-not assert full ISO 14289-2 conformance.
+in the PDF 2.0 namespace is a standard type. What is not done: rules of the
+veraPDF PDF/UA-2 profile that no corpus file fails, among them 8.2.5.25-t02
+(real content directly in an `LI`), 8.9.2.2-t02 (an annotation with NoView
+set), 8.10.1-t03 (an XFA form of any kind) and 8.10.2.3-t02 (a widget with
+`/AA` needs `/Contents`), and PDF/UA-2's rules for the 2.0-only types (FENote,
+Title). The WTPDF examples, real PDF/UA-2 documents that veraPDF passes, are
+not held to `ValidatePDFUA2` by any test, and four of them are reported, for
+rules shared with part 1: a first heading that is not `H1`, table headers, an
+untagged annotation, and an XMP packet pdf0 cannot parse. This does not assert
+full ISO 14289-2 conformance.
 
 `ValidatePDFUA2` is also unreachable from the CLI: `pdf0 ua` only ever calls
 `ValidatePDFUA` ([cli.md](cli.md)).
@@ -377,7 +421,7 @@ file's expected result in both suites.
 | Suite | Pass files reported | Fail files caught |
 |---|---|---|
 | `PDF_UA-1` | 0 of 141 | 155 of 155 |
-| `PDF_UA-2` | 0 of 54 | 70 of 84 |
+| `PDF_UA-2` | 0 of 54 | 84 of 84 |
 
 Until the docs audit of 2026-10-11 (D12) only the reference files were held,
 and nothing ratcheted the corpus. It had drifted both ways: 30 PDF/UA-1 and 8
@@ -409,14 +453,13 @@ veraPDF's does:
 | `7.3-t01-pass-c`; UA-2 `8.2.5.28.2-t01-pass-c` | figure alternate text | an empty `/ActualText` is replacement text |
 | `7.5-t01-pass-e`; UA-2 `8.2.5.26-t05-pass-e` | table headers | the rule is about data cells naming their headers |
 
-The fail files still missed are rules pdf0 does not implement:
-
-| Fail files | Rule | Why not |
-|---|---|---|
-| UA-2 `5-t04-fail-a`, `5-t05-fail-a`, `-b` | `pdfuaid:rev` prefix and value | PDF/UA-2's own rules, not implemented |
-| UA-2 `8.2.5.2-t01-fail-a`, `-t02-fail-a`; `8.2.5.12-t01-fail-a`; `8.2.5.25-t01-fail-a` | one `Document` root in the PDF 2.0 namespace; no `H`; a ListNumbering attribute with `Lbl` | likewise |
-| UA-2 `8.8-t01-fail-a`, `-t02-fail-a` | intra-document destinations are structure destinations | likewise |
-| UA-2 `8.9.2.2-t01-fail-a`, `8.9.2.4.10-t01-fail-a`, `8.10.1-t02-fail-a`, `8.10.2.3-t01-fail-a`, `8.14.1-t01-fail-a` | invisible annotations as artifacts; file attachment `AFRelationship`; one widget per `Form`; a widget's label or `/Contents`; embedded files' `/Desc` | likewise |
+No fail file in either suite is missed. The last ones were the four font fail
+files — `7.21.5-t01-fail-a` and `7.21.6-t02-fail-d`, and their PDF/UA-2 twins
+`8.4.5.6-t01-fail-a` and `8.4.5.7-t02-fail-d` — caught by the width and
+`/Differences` rules above, and the fourteen PDF/UA-2 fail files of part 2's
+own rules — `5-t04` and `5-t05`, `8.2.5.2`, `8.2.5.12`, `8.2.5.25`, `8.8`,
+`8.9.2.2`, `8.9.2.4.10`, `8.10.1-t02`, `8.10.2.3` and `8.14.1` — each caught by
+the rule it tests ([PDF/UA-2](#pdfua-2)).
 
 **When the two oracles disagree, the reference files win.** veraPDF 1.30.3
 reports five of the ten reference files; pdf0 reports none. Two of veraPDF's
@@ -454,7 +497,10 @@ tabulated in [testing.md](testing.md).
 | `pdfua/pdfua_struct.go` | Its names for `core.StructTree` and `walkStructElems`, element nesting tables, container well-formedness, heading strength, `Note` IDs, `/Suspects`, UA-1 header version, the two PDF/UA-2 namespace rules | 7.1, 7.2, 7.4.4, 7.9, 6.1, UA-2 8.2.4 and 8.2.5.29 (and ISO 32000-1 14.8.4.3) |
 | `pdfua/pdfua_content.go` | `streamContentFacts`, real-content vs artifact analysis, the form-XObject paint count, OBJR annotation placement | 7.1, 7.18.1, 7.20 |
 | `pdfua/pdfua_tablegrid.go` | the table grid reconstruction and the data cells' header association | 7.2, 7.5 |
-| `pdfua/pdfua2.go` | No code: a comment (after the package clause, so not the package's doc comment) on what part 2 shares with part 1 and what it changes; the rules themselves are in the files above, selected by `part` | ISO 14289-2 clauses 4, 8.2.4, 8.2.5.20, 8.2.5.29, 8.4.4 and the shared clauses |
+| `pdfua/pdfua2_ident.go` | `pdfuaid:rev`, PDF/UA-2's half of the identification | UA-2 5 |
+| `pdfua/pdfua2_struct.go` | part 2's structure rules: the `Document` root, no `H`, `ListNumbering`, one widget per `Form`; the grouping-element view of an element's children they share (`semanticParents`) | UA-2 8.2.5.2, 8.2.5.12, 8.2.5.25, 8.10.1 |
+| `pdfua/pdfua2_interactive.go` | part 2's navigation, annotation, widget and embedded-file rules: structure destinations and the actions that hold them, invisible annotations, `AFRelationship`, a widget's label, an embedded file's `/Desc` | UA-2 8.8, 8.9.2.2, 8.9.2.4.10, 8.10.2.3, 8.14.1 |
+| `pdfua/pdfua2.go` | No code: a comment (after the package clause, so not the package's doc comment) on what part 2 shares with part 1 and what it changes; the rules themselves are in the files above, selected by `part` | ISO 14289-2 clauses 4, 8.2.4, 8.2.5.20, 8.2.5.29, 8.4.4, the part-2 files' clauses and the shared clauses |
 
 Shared machinery lives outside these files, in `internal/core`: the content
 interpreter behind `core.CollectFontTextUsage`, the run and its memos
@@ -471,7 +517,9 @@ Glyph List — are `internal/fontcheck`'s, which both engines call
   checked for the *presence* of `/StructParent` and correlated to the tree
   through OBJR only, and content-stream MCIDs are resolved, for the language
   rules only, through the structure tree's `/K` entries. veraPDF reads
-  `/ParentTree` for both; on a file whose two disagree, the answers can differ.
+  `/ParentTree` for both; on a file whose two disagree, the answers can differ
+  — and do on `8.10.2.3-t01-fail-a`, where PDF/UA-2's widget-label rule
+  reports one widget to veraPDF's two ([PDF/UA-2](#pdfua-2)).
 - **A `Scope` value is read, not validated.** One other than `Row`, `Column` or
   `Both` counts as a `Scope` and points nowhere; nothing reports it.
 - **A panic is contained, but a stack overflow is not.** Every UA check now runs
