@@ -116,7 +116,7 @@ preference:
 
 1. the structure is made self-describing (partial), and the consumer declines
    the dependent check — forme's cmap subtable reader's nil-vs-empty contract is this
-   idea, and `font.Program.CmapPartial` / `parseCIDWidths`' second result extend
+   idea, and `font.Program.CmapPartial` / `fontcheck.ParseCIDWidths`' second result extend
    it;
 2. the consumer skips the dependent check because the input is known-partial;
 3. the trip is reported as its own finding rather than the downstream one.

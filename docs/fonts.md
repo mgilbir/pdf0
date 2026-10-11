@@ -1,7 +1,8 @@
 # Font validation
 
 This doc is about reading the fonts in a PDF to validate them: the PDF/A font
-rules in `pdfa/fonts.go`, the shared font-usage walk in
+rules in `pdfa/fonts.go`, the checks PDF/A and PDF/UA share in
+`internal/fontcheck`, the shared font-usage walk in
 `internal/core/fontuse.go`, and the font program reader they lean on, which is
 `font/fontprog.go` in [github.com/mgilbir/forme](https://github.com/mgilbir/forme)
 along with the generated tables `font/font_encodings.go` and
@@ -190,7 +191,13 @@ missing from a font that defines it (`TestType1CharStringsEndTerminator`).
 **Widths are always normalised to 1/1000 text-space units**, because that is
 what `/Widths` and `/W` are in: sfnt scales by `1000 / unitsPerEm`, CFF and
 Type 1 by `FontMatrix[0] * 1000` (the default 0.001 matrix giving a factor of
-1). The tolerance is `glyphWidthTolerance = 1.0`, one thousandth of an em. If a
+1). The tolerance is `fontcheck.WidthTolerance = 1.0`, one thousandth of an
+em, and the comparison is `internal/fontcheck`'s, the same for PDF/A (6.2.11.5)
+and PDF/UA (7.21.5): `fontcheck.Simple`, `fontcheck.CID` and
+`fontcheck.Type3WidthDiffers`. The engines differ in which glyphs they ask
+about: PDF/A exempts text in rendering modes 3 and 7, PDF/UA mode 3 only, as
+veraPDF's test reads, and PDF/UA does not compare a TrueType code pdf0 reads
+as `.notdef` (see [pdfua.md](pdfua.md#the-rule-families)). If a
 descriptor carries a `FontFile*` stream no parser accepts and the font renders
 visibly, `damagedFontProgramError` reports it under the `embed` clause rather
 than silently exempting the font — across the corpus every valid embedded
@@ -201,13 +208,25 @@ program parses, so this raises no false positive.
 Two generated tables in forme back the encoding machinery, and their headers
 name their provenance: `font/font_encodings.go` ("generated from ISO 32000-1
 Annex D.2") holds `font.StandardEncodingNames`, `font.MacRomanEncodingNames` and
-`font.WinAnsiEncodingNames`, consumed by `simpleFontCodeToName`, which layers a
+`font.WinAnsiEncodingNames`, consumed by `fontcheck.SimpleFontCodeToName`, which layers a
 base encoding (named, or `StandardEncoding` implicitly for a non-symbolic font)
 with `/Differences` to produce `map[byte]string`; `font/cff_strings.go` holds
-the 391 predefined CFF strings (Adobe Technical Note #5176, Appendix A). A
-third table, `aglNames` in `pdfa/fonts.go`, is a hand-maintained Adobe Glyph
-List subset validating `/Differences` names on non-symbolic TrueType fonts;
-`aglGlyphName` also accepts the algorithmic `uniXXXX`/`uXXXX` forms.
+the 391 predefined CFF strings (Adobe Technical Note #5176, Appendix A).
+
+Two Adobe Glyph List tables validate the `/Differences` names of a
+non-symbolic TrueType font, and they do not agree. PDF/UA's is
+`fontcheck.AGLListed`, over Adobe's `glyphlist.txt` embedded verbatim
+(`internal/fontcheck/glyphlist.txt`, pinned by SHA-256): exactly the list's
+4,281 names plus `.notdef`, which is how veraPDF reads "listed in the Adobe
+Glyph List" — a `uniXXXX` name is not listed. PDF/A's is `aglNames` in
+`pdfa/fonts.go`, a hand-maintained table of 964 names — 762 of the list's,
+the 200 ZapfDingbats names `a1`…`a205` from Adobe's separate ZapfDingbats
+list, and `bracket` and `isinferior`, which are in neither — read through
+`aglGlyphName`, which also accepts the algorithmic `uniXXXX`/`uXXXX` forms and
+rejects `.notdef`. PDF/A keeps its own until switching is decided: on the
+veraPDF corpus the switch changes the findings on one file, Isartor
+`6-3-7-t01-fail-a`, whose `/.notdef` in `/Differences` is no longer reported;
+the file is still reported at every level, for its missing `/BaseEncoding`.
 
 For a Type 0 font the path from bytes to glyph is longer:
 
@@ -354,11 +373,11 @@ but a hang or an OOM is not something `recover` catches.
 One of these is configurable per document; see
 [untrusted-input.md](untrusted-input.md#capping-what-one-document-costs).
 
-- **`/W` is not expanded** — `parseCIDWidths` resolves the entries once into
-  disjoint CID segments and `width` looks a CID up by binary search, so
+- **`/W` is not expanded** — `fontcheck.ParseCIDWidths` resolves the entries once into
+  disjoint CID segments and `Width` looks a CID up by binary search, so
   `[0 2000000000 500]` costs one entry, not two billion map inserts, and 2,000
   overlapping full-space ranges cost 2,000 (audit 2026-07-26 C1, 2026-09-22
-  C10; `pdfa/fonts_wrange_test.go`). It runs *before* the visible-render gate, so
+  C10; `internal/fontcheck/cidwidths_test.go`). It runs *before* the visible-render gate, so
   merely selecting a Type 0 font with `Tf` reaches it. A `/W` named by
   reference is read once per run however many fonts share it.
 - **cmap format 4 total work** (`WithMaxCmapWork`, default `1 << 18`) — a valid
@@ -436,9 +455,13 @@ with its source, its pin and its licence, in
 [THIRD_PARTY_NOTICES](../THIRD_PARTY_NOTICES); this section says which of them
 font validation reads.
 
+- `internal/fontcheck/glyphlist.txt` is Adobe's Glyph List, verbatim, under the
+  BSD-style licence at its head, from
+  [adobe-type-tools/agl-aglfn](https://github.com/adobe-type-tools/agl-aglfn) at
+  commit `4036a9ca`. The PDF/UA /Differences rule reads it.
 - `aglNames` in `pdfa/fonts.go` holds glyph names from the Adobe Glyph List and
-  the ITC Zapf Dingbats Glyph List (BSD 3-Clause). Two of its 964 names,
-  `bracket` and `isinferior`, are in neither list.
+  the ITC Zapf Dingbats Glyph List (BSD 3-Clause), for the PDF/A rule. Two of
+  its 964 names, `bracket` and `isinferior`, are in neither list.
 - The predefined-CMap codespaces in `internal/core/cmap_predefined.go` are
   transcribed from Adobe's published CMaps (BSD 3-Clause).
 - `font/font_encodings.go` and `font/cff_strings.go` are forme's, transcribed
@@ -453,7 +476,8 @@ are in [font-embedding.md](font-embedding.md#fonts-and-font-data-from-elsewhere)
 
 | File | Owns | Governing spec |
 |------|------|----------------|
-| `pdfa/fonts.go`, `internal/core/fontuse.go`, `internal/core/interp.go`, `internal/core/cmap.go`, `internal/core/cmapparse.go`, `internal/core/cmap_predefined.go`, `internal/core/tounicode.go` | Content execution (`core.CollectFontTextUsage`), the font rule functions, the predefined-CMap codespace table, encoding/AGL validation, CID width parsing, CIDSet/CharSet, CMap and ToUnicode reading | ISO 32000-2 clause 9 (9.6 simple fonts, 9.7 composite, 9.10 Unicode mapping)<br/>ISO 19005-1 6.3, -2/-3 6.2.11, -4 6.2.10 |
+| `pdfa/fonts.go`, `internal/core/fontuse.go`, `internal/core/interp.go`, `internal/core/cmap.go`, `internal/core/cmapparse.go`, `internal/core/cmap_predefined.go`, `internal/core/tounicode.go` | Content execution (`core.CollectFontTextUsage`), the PDF/A font rule functions, the predefined-CMap codespace table, PDF/A's encoding/AGL validation, CIDSet/CharSet, CMap and ToUnicode reading | ISO 32000-2 clause 9 (9.6 simple fonts, 9.7 composite, 9.10 Unicode mapping)<br/>ISO 19005-1 6.3, -2/-3 6.2.11, -4 6.2.10 |
+| `internal/fontcheck/` | What PDF/A and PDF/UA both check: a simple font's code→name table and widths, a CIDFont's `/W` (`fontcheck.ParseCIDWidths`) and the glyph a shown code selects, Type 3 `d0`/`d1` widths, the per-glyph width comparison, and the Adobe Glyph List with the `/Differences` rule (`fontcheck.DifferencesNotInAGL`) | ISO 32000-2 9.6.5, 9.7.4.3; ISO 19005-2 6.2.11.5–6; ISO 14289-1 7.21.5–6 |
 | `simplefont/` | The standard Latin encodings and character sets, and the code→glyph rule of a simple TrueType font (`simplefont.TrueTypeGlyph`); shared with the font writer and text extraction | ISO 32000-2 9.6.5, 9.6.6.4, Annex D |
 | forme `font/fontprog.go` | `font.Program` plus `font.ParseSFNT`, `font.ParseCFF`, `font.ParseType1` | OpenType/sfnt spec (`head`, `maxp`, `hhea`, `hmtx`, `loca`, `glyf`, `cmap`)<br/>Adobe TN #5176 (CFF), TN #5177 (Type 2 charstrings), TN #5015 (Type 1) |
 | forme `font/font_encodings.go` | Generated: `font.StandardEncodingNames`, `font.MacRomanEncodingNames`, `font.WinAnsiEncodingNames` | ISO 32000-1 Annex D.2 |
@@ -462,5 +486,5 @@ are in [font-embedding.md](font-embedding.md#fonts-and-font-data-from-elsewhere)
 Font findings are also produced outside these files: `checkFontsEmbedded` and
 `checkFontSubsets` live in `pdfa/pdfa.go`, the Level A Unicode rules over fonts
 in `pdfa/pdfa_levela_fonts.go`, the clause-7.21 PDF/UA font family in
-`pdfua/pdfua.go`, and `pdfxCheckFontsEmbedded` in `pdfx/pdfx.go`. The font
+`pdfua/pdfua.go` and `pdfua/pdfua_fontprog.go`, and `pdfxCheckFontsEmbedded` in `pdfx/pdfx.go`. The font
 writer's files are mapped in [font-embedding.md](font-embedding.md#file-map).
