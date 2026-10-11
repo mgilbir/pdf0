@@ -314,8 +314,10 @@ func WithMaxWork(n int64) Option {
 }
 
 // WithMaxImagePixels caps the size of an image that extraction will decode
-// (default 1<<26, 67 megapixels — the same bound images.EmbedImage applies to
-// an image a caller embeds, so pdf0 reads back anything it writes). An A4 page
+// (default 1<<26, 67 megapixels — images.MaxPixels, the bound images.Embed and
+// images.EmbedStencil apply to an image a caller embeds, so pdf0 reads back
+// anything it encodes; images.EmbedJPEG stores the caller's JPEG as it is and
+// is not held to it). An A4 page
 // scanned at 600 dpi is 35 megapixels; no real-world maximum has been
 // measured.
 //

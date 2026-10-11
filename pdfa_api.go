@@ -89,13 +89,10 @@ func NewPDFADocumentWith(opts pdfa.SkeletonOptions) (*Document, error) {
 // rules do not run, and the result says so with a checker finding under the
 // rule "limit" (IsCheckerFinding) rather than passing in silence.
 //
-// There is no variant that takes the file's bytes. There used to be
-// (ValidatePDFABytes), and it trusted them: bytes that were not the ones doc
-// was read from — a rewritten file, a truncated buffer — were measured against
-// doc's offsets, producing findings about neither, or an out-of-range slice
-// that collapsed every byte rule into one "internal" finding (audit 2026-09-22
-// C69). The only bytes that can be right are the ones the document already
-// holds.
+// There is no variant that takes the file's bytes: bytes other than the ones
+// doc was read from — a rewritten file, a truncated buffer — cannot be measured
+// against doc's offsets, so the only bytes that can be right are the ones the
+// document already holds.
 func ValidatePDFA(doc *Document, level pdfa.Level) []pdfa.Violation {
 	return validatePDFA(core.Canceler{}, doc, level)
 }
