@@ -52,9 +52,11 @@ var errNoVerticalForm = errors.New("fonts: only a composite face has a vertical 
 // for, the subset. A document naming both writes one font program for them.
 // Asking again returns the same form, and a vertical form is its own.
 //
-// Only a composite face has one. A simple or standard face's codes are
-// characters, not CIDs, and writing mode belongs to a CIDFont's CMap; its
-// DrawUpright places each glyph in the horizontal font instead.
+// Only a composite face has one, and not one written as Type 3 fonts (see
+// SubfontName). A simple or standard face's codes are characters, not CIDs,
+// a Type 3 font is a simple font, and writing mode belongs to a CIDFont's
+// CMap; such a face's DrawUpright places each glyph in the horizontal font
+// instead.
 func (f *Face) Vertical() (*Face, error) {
 	if f.horizontal != nil {
 		return f, nil

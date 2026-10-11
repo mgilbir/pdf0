@@ -12,15 +12,19 @@ import (
 	"github.com/mgilbir/pdf0/simplefont"
 )
 
-// Embedding a face as the PDF object graph a reader needs: a Type0 font, its
-// CIDFontType2 descendant, a font descriptor, the program itself, a CIDSet and
-// a ToUnicode CMap (ISO 32000-2 9.7).
+// Embedding a face as the PDF object graph a reader needs: for a composite
+// face a Type0 font, its CIDFontType2 or CIDFontType0 descendant, a font
+// descriptor, the program itself, a CIDSet where one is written (see cidSet)
+// and a ToUnicode CMap (ISO 32000-2 9.7); for a simple face a TrueType font
+// dictionary, descriptor, program and ToUnicode CMap; for a standard face the
+// name alone. A face written as Type 3 fonts is type3embed.go's.
 //
 // What each of these must contain is not a matter of taste here. This module's
 // PDF/A validator already checks the lot — that /W agrees with the embedded
-// program's own metrics, that /CIDSet lists exactly the glyphs the program has,
-// that a Type0 font carries a ToUnicode CMap — so the specification of this
-// writer is executable and the tests aim it back at the output.
+// program's own metrics, that /CIDSet lists the CIDs the program has as
+// veraPDF reads them, that a Type0 font carries a ToUnicode CMap — so the
+// specification of this writer is executable and the tests aim it back at the
+// output.
 //
 // The facts come from the face in the font's own units and are put into PDF's
 // form here: lengths scaled to a thousandth of an em, flags as the bits
@@ -47,19 +51,33 @@ var errEmbedBeforeUse = errors.New(
 // Embed writes the face into doc and returns the reference to put in a page's
 // /Resources /Font.
 //
-// Only the glyphs the face has encoded are embedded, so Embed comes after the
-// drawing that uses the font, not before it. A face embedded before anything is
-// drawn carries .notdef alone, which is correct and useless; the ordering is
-// the caller's to get right and there is no way for this package to check it.
+// Only the glyphs the face has drawn or encoded so far are embedded, so Embed
+// comes after the drawing that uses the font, not before it. A face that has
+// drawn nothing is refused with an error rather than written as a font
+// carrying .notdef alone; a standard face, which embeds nothing, is the
+// exception. A glyph drawn after Embed is not in the font it wrote, and
+// nothing here can notice: the page shows a glyph the font lacks. The root
+// package's Page.Faces embeds once the page is drawn, and keeps one font per
+// face current as later pages add glyphs.
 //
 // The name written to /BaseFont carries the six-letter subset tag ISO 32000-2
 // 9.6.4 requires, so a reader can tell two subsets of one face apart.
 //
-// The font's own licence is honoured (see embedding.go): a font whose OS/2
-// fsType forbids embedding, or permits only its bitmaps, is refused with
-// ErrRestrictedLicense or ErrBitmapEmbeddingOnly, and one that forbids
-// subsetting is embedded whole, without a subset tag. Every stream is
-// Flate-compressed.
+// The font's own licence, its OS/2 fsType, is honoured:
+//
+//   - Restricted License embedding is refused with ErrRestrictedLicense.
+//   - Bitmap embedding only is honoured by writing a composite face that has
+//     bitmap strikes as Type 3 fonts painting them, as a face with no outlines
+//     is written anyway. A face with no strikes, and a simple face, are
+//     refused with ErrBitmapEmbeddingOnly, and so is drawing a glyph whose
+//     only ink is its outline. A face drawn in its COLR colour glyphs is not
+//     yet held to this bit: it is written as its paintings, outlines
+//     included, whatever the bit says.
+//   - No subsetting embeds the program whole, as it was loaded, without a
+//     subset tag; a face written as Type 3 fonts carries only the glyphs
+//     drawn and is refused with ErrBitmapNoSubsetting.
+//
+// Every stream is Flate-compressed.
 //
 // A vertical form (see Vertical) embeds as its Identity-V font. A caller
 // naming both forms of a face uses EmbedForms, which writes them over one
@@ -85,18 +103,20 @@ type Forms struct {
 	// which only a composite face has.
 	Vertical bool
 	// PDFA1 writes a face for a document that claims PDF/A-1, whose base is
-	// PDF 1.4 (ISO 19005-1 6.3.2): a CFF program is written bare, as
-	// /CIDFontType0C, rather than in the OpenType wrapper PDF 1.6 added, and
-	// a CFF that is not CID-keyed carries the /CIDSet a subset must have
-	// there (see cidSet).
+	// PDF 1.4 (ISO 19005-1 6.3.2): a CFF program — CFF2 included, which is
+	// embedded as the CFF it draws — is written bare, as /CIDFontType0C,
+	// rather than in the OpenType wrapper PDF 1.6 added, and a CFF that is
+	// not CID-keyed carries a /CIDSet listing every glyph of its program,
+	// which a subset must have there and which it carries at no other level.
 	PDFA1 bool
-	// Opaque writes a face whose glyphs are only bitmaps without
+	// Opaque writes a face that is written as Type 3 fonts without
 	// transparency, for a document that may not use it (PDF/A-1, ISO
 	// 19005-1 6.4): a greyscale glyph is a stencil of its coverage, in the
-	// colour it was drawn in, and a colour bitmap is its image with a 1-bit
-	// /Mask cut from its alpha rather than an /SMask. Both lose their
-	// anti-aliased edges and keep their colours. Every other face is
-	// written as it is either way.
+	// colour it was drawn in, a colour bitmap is its image with a 1-bit
+	// /Mask cut from its alpha rather than an /SMask, and a COLR colour glyph
+	// is its outline in the text colour, or refused when it has none. The
+	// bitmaps lose their anti-aliased edges and keep their colours. Every
+	// other face is written as it is either way.
 	Opaque bool
 }
 
@@ -497,7 +517,9 @@ func (f *Face) collection() (registry, ordering string, supplement int, err erro
 }
 
 // errNoBareCFF is a CFF face for a PDF/A-1 document whose program has no CFF
-// table to write bare: a CFF2 program, which PDF 1.4 has no way to carry.
+// table to write bare, which PDF 1.4 has no way to carry. It is a guard: forme
+// gives a CFF2 face a CFF program, whole (shape.Face.Program) or subset, so a
+// face it loaded does not reach it.
 var errNoBareCFF = errors.New("fonts: the face's program has no CFF table, which a PDF/A-1 " +
 	"document, based on PDF 1.4, needs: PDF 1.4 cannot carry an OpenType or CFF2 program")
 

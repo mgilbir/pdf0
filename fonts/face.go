@@ -1,4 +1,5 @@
-// Package fonts sets text on a PDF page with a font.
+// Package fonts sets text on a PDF page with a font, and writes the font into
+// the document.
 //
 // Shaping — turning characters into positioned glyphs, with the ligatures,
 // kerning, reordering and mark attachment the font's own tables call for — is
@@ -10,9 +11,30 @@
 // decide. One is writing positioned glyphs into a content stream, where the only
 // instructions available are "show these codes" and "move the pen", so
 // everything shaping worked out has to be expressed as displacements around the
-// glyphs. The other is writing the font itself into the document — a Type0
-// font, a descendant, a descriptor, the subsetted program, a CIDSet and a
-// ToUnicode CMap — so that a reader can show the page and extract its text.
+// glyphs. The other is writing the font itself into the document, so that a
+// reader can show the page and extract its text. What that font is depends on
+// the face:
+//
+//   - A face from Load, NotoSans or Adopt is a composite font: a Type 0 font
+//     over a CIDFontType2 descendant for TrueType outlines, or a CIDFontType0
+//     one for CFF and CFF2 outlines, with a descriptor, the subsetted program
+//     and a ToUnicode CMap.
+//   - A face from LoadSimple or NotoSansSimple is a simple TrueType font in
+//     WinAnsiEncoding.
+//   - A face from Standard is one of the fourteen standard fonts: named, and
+//     not embedded.
+//   - A composite face whose glyphs are pictures — bitmap strikes with no
+//     outlines beside them, or with a licence that permits embedding only the
+//     bitmaps, or COLR colour glyphs (SetColourGlyphs) — is a set of Type 3
+//     fonts whose glyphs paint them (see SubfontName).
+//
+// Embedding subsets a face to the glyphs it has drawn, so it comes after the
+// drawing; naming the face in the root package's Page.Faces gets that order
+// right without thinking about it. A font's licence is honoured
+// (ErrRestrictedLicense, ErrBitmapEmbeddingOnly, ErrBitmapNoSubsetting).
+//
+// The repository's docs/text.md is the how-to for setting text, and
+// docs/font-embedding.md says what each kind of face is written as, and why.
 package fonts
 
 import (
@@ -206,14 +228,28 @@ type Descriptor = shape.Descriptor
 // the font. Every one of these is a metric this engine would otherwise guess.
 type Metric = shape.Metric
 
+// The metrics Descriptor.Declared can say a font stated, each a bit of it;
+// Descriptor.Has asks for one.
 const (
-	MetricLineGap     = shape.MetricLineGap
+	// MetricLineGap is Descriptor.LineGap, from hhea.
+	MetricLineGap = shape.MetricLineGap
+	// MetricTypoMetrics is OS/2's typographic trio: Descriptor.TypoAscent,
+	// TypoDescent and TypoLineGap.
 	MetricTypoMetrics = shape.MetricTypoMetrics
-	MetricXHeight     = shape.MetricXHeight
-	MetricCapHeight   = shape.MetricCapHeight
-	MetricUnderline   = shape.MetricUnderline
-	MetricStrikeout   = shape.MetricStrikeout
-	MetricWeight      = shape.MetricWeight
+	// MetricXHeight is Descriptor.XHeight, from OS/2 version 2 and later, or
+	// from a standard face's AFM.
+	MetricXHeight = shape.MetricXHeight
+	// MetricCapHeight is Descriptor.CapHeight, from OS/2 version 2 and later.
+	MetricCapHeight = shape.MetricCapHeight
+	// MetricUnderline is Descriptor.UnderlinePosition and
+	// UnderlineThickness, from post, or from a standard face's AFM.
+	MetricUnderline = shape.MetricUnderline
+	// MetricStrikeout is Descriptor.StrikeoutPosition and StrikeoutSize,
+	// from OS/2.
+	MetricStrikeout = shape.MetricStrikeout
+	// MetricWeight is Descriptor.Weight: the weight class OS/2 states, or 400
+	// or 700 from the bold bit of a font whose OS/2 table cannot state it.
+	MetricWeight = shape.MetricWeight
 )
 
 // MeasureGlyphs is the width a shaped run occupies at a given size.

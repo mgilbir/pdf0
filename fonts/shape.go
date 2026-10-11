@@ -29,7 +29,8 @@ import "github.com/mgilbir/pdf0/content"
 // happens to register the glyph under — and so is a conjunct's or a positional
 // form's; a stretch no per-glyph entry can say, such as a right-to-left word
 // or a glyph already mapped to other text, is wrapped in an /ActualText
-// between ActualTextStart and ActualTextEnd spans. See plan in draw.go.
+// between ActualTextStart and ActualTextEnd spans. Draw decides both the
+// same way.
 //
 // # What a text operator cannot say
 //

@@ -46,11 +46,12 @@ func SubfontName(base object.Name, k int) object.Name {
 }
 
 // isType3 reports whether the face is written as Type 3 fonts: a face whose
-// glyphs are only bitmaps, or one whose licence permits embedding only its
-// bitmaps and that has bitmaps forme paints (bitmapLicensed). Such a face is
-// loaded composite — LoadSimple refuses one with only bitmaps — and shapes
-// and records as one, and only the codes it writes and the fonts it embeds
-// differ.
+// glyphs are only bitmaps, one whose licence permits embedding only its
+// bitmaps and that has bitmaps forme paints (bitmapLicensed), or one drawn in
+// its COLR colour glyphs (colourFace). Such a face is loaded composite —
+// LoadSimple refuses one with only bitmaps, and a simple face is never drawn
+// in colour — and shapes and records as one, and only the codes it writes and
+// the fonts it embeds differ.
 func (f *Face) isType3() bool {
 	return f.composite() && (f.hasBitmaps() || f.colourFace())
 }

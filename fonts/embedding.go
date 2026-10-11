@@ -25,10 +25,15 @@ import (
 //     A face with bitmap strikes — whether or not it also has outlines — is
 //     embedded as images of them, in Type 3 fonts (type3.go), which is what
 //     the bit permits; a glyph whose only ink is its outline is refused. A
-//     face with no strikes is refused.
+//     face with no strikes is refused — unless it is drawn in its COLR
+//     colour glyphs, which isType3 decides before the bit is read, so its
+//     paintings, outlines included, are written as Type 3 fonts. That is a
+//     gap in honouring the bit, not a reading of it.
 //   - No subsetting (0x0100): the font may be embedded only whole. Embed then
 //     writes the program it was loaded from, untouched, and names it without a
-//     subset tag, because it is not one. That includes a face from Adopt.
+//     subset tag, because it is not one. That includes a face from Adopt. A
+//     face written as Type 3 fonts carries only the glyphs drawn, which is a
+//     subset, and is refused (type3Allowed).
 //
 // Preview & Print (0x0004) and Editable (0x0008) permit what a PDF does with
 // a font, and Installable (no usage bit) permits everything. Where more than
@@ -45,9 +50,11 @@ var ErrRestrictedLicense = errors.New("fonts: the font's licence forbids embeddi
 var ErrBitmapEmbeddingOnly = errors.New("fonts: the font's licence permits embedding " +
 	"only its bitmaps (OS/2 fsType 0x0200), and it has none for what is drawn")
 
-// ErrBitmapNoSubsetting is a face whose glyphs are only bitmaps and whose
-// licence forbids subsetting it. Its Type 3 fonts carry images of the glyphs a
-// document drew, which is a subset, and they are not written.
+// ErrBitmapNoSubsetting is a face written as Type 3 fonts — its glyphs only
+// bitmaps, its licence permitting only its bitmaps, or drawn in its COLR
+// colour glyphs — whose licence forbids subsetting it. Its Type 3 fonts carry
+// the glyphs a document drew and no others, which is a subset, and they are
+// not written.
 var ErrBitmapNoSubsetting = errors.New("fonts: the font's licence forbids subsetting it " +
 	"(OS/2 fsType 0x0100), and a face whose glyphs are only bitmaps is embedded as images of the glyphs drawn")
 
