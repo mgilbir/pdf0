@@ -45,7 +45,7 @@ func main() {
 	// Somewhere the caller named, or somewhere that is nobody's working
 	// directory. This example writes one document per flavour, so it cannot
 	// write to stdout the way the single-document examples do — but it should
-	// not leave four files wherever it happened to be run either.
+	// not leave its files wherever it happened to be run either.
 	dir := *outDir
 	if dir == "" {
 		var err error

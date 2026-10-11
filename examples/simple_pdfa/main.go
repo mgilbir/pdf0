@@ -2,10 +2,10 @@
 // which checks the bytes it is about to emit against the level the document
 // claims and refuses to write them if they do not conform.
 //
-// It draws vector graphics rather than text, deliberately. PDF/A requires every
-// font a document shows to be embedded in it, and this repository ships no font
-// to embed — see the fonts package, whose Load and Embed put a real face into a
-// document, and examples in fonts_embed_test.go that set text conformantly.
+// It sets one line of text in the bundled Noto Sans, which is embedded: PDF/A
+// requires every font a document shows to be in the file. examples/text sets a
+// whole paragraph, and examples/flavored draws one page at several levels.
+// docs/building.md walks through this API.
 package main
 
 import (
@@ -15,6 +15,8 @@ import (
 
 	pdf "github.com/mgilbir/pdf0"
 	"github.com/mgilbir/pdf0/content"
+	"github.com/mgilbir/pdf0/fonts"
+	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/pdfa"
 )
 
@@ -24,9 +26,18 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// The bundled face: no font file is needed from the machine this runs on.
+	face, err := fonts.NotoSans()
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	// Draw. The builder emits the operators and records which resources the
 	// drawing named; AddPage checks that every one of them is defined.
 	var page content.Builder
+	page.BeginText().SetFont("F1", 24).MoveText(72, 740)
+	face.DrawShaped(&page, "Hello, PDF/A-4", 24)
+	page.EndText()
 	page.Save().
 		SetRGB(0.15, 0.35, 0.75).
 		Rect(72, 600, 200, 120).Fill().
@@ -44,7 +55,12 @@ func main() {
 		FillStroke().
 		Restore()
 
-	if _, err := doc.AddPage(pdf.Page{Width: 612, Height: 792, Content: &page}); err != nil {
+	// The face is named, not embedded: AddPage embeds it once the drawing is
+	// final, subset to the glyphs the page set.
+	if _, err := doc.AddPage(pdf.Page{
+		Width: 612, Height: 792, Content: &page,
+		Faces: map[object.Name]*fonts.Face{"F1": face},
+	}); err != nil {
 		fmt.Fprintf(os.Stderr, "adding the page: %v\n", err)
 		os.Exit(1)
 	}

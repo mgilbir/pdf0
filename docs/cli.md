@@ -459,8 +459,7 @@ passes:
 
 ```
 $ pdf0 repair -level 2b simple.pdf rep.pdf
-fixed: added a missing file identifier (/ID)
-rep.pdf: 1 fix(es) applied, 5 violation(s) remain
+rep.pdf: 0 fix(es) applied, 5 violation(s) remain
 error: 5 violation(s) remain after repair (run: pdf0 validate -level 2b rep.pdf)   # stderr
 # exit 1
 $ PDF0_PASSWORD=secret pdf0 repair enc2b.pdf rep2b.pdf
@@ -508,7 +507,7 @@ a4.pdf: not carried: OutputIntents: the target's own output intents apply to the
 # exit 0
 $ pdf0 info merged3.pdf
 version:   2.0
-objects:   10
+objects:   16
 pages:     3
 encrypted: false
 locked:    false

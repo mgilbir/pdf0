@@ -5,9 +5,10 @@
 // runs on and the font it shows is embedded — which is what a conforming PDF/A
 // requires. Load another with fonts.Load to swap it: the metrics, the drawing
 // and the line breaking below are identical either way, because Face answers
-// the same questions whichever face it is.
+// the same questions whichever face it is. docs/text.md is the guide to this
+// API.
 //
-//	go run ./examples/text
+//	go run ./examples/text > out.pdf
 package main
 
 import (
@@ -56,16 +57,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	doc := &pdf.Document{Version: "1.7", Objects: map[int]*object.IndirectObject{}}
-	pages := &object.Dictionary{}
-	pages.Set("Type", object.Name("Pages"))
-	pages.Set("Kids", object.Array{})
-	pages.Set("Count", object.Integer(0))
-	pagesRef := doc.Add(pages)
-	catalog := &object.Dictionary{}
-	catalog.Set("Type", object.Name("Catalog"))
-	catalog.Set("Pages", pagesRef)
-	doc.Trailer.Set("Root", doc.Add(catalog))
+	doc := pdf.NewDocument()
 
 	var page content.Builder
 	y := pageH - margin
@@ -74,31 +66,23 @@ func main() {
 	// means different widths, which is why measurement belongs to the face and
 	// not to the string.
 	const heading = "Measuring, breaking, drawing"
-	headingCodes, missing := bold.Encode(heading)
-	if missing != 0 {
-		fmt.Fprintf(os.Stderr, "%d characters of the heading are outside the encoding\n", missing)
+	page.BeginText().SetFont("HB", 18).MoveText(margin, y)
+	if missing := bold.DrawShaped(&page, heading, 18); missing != 0 {
+		fmt.Fprintf(os.Stderr, "%d characters of the heading have no glyph in the face\n", missing)
 	}
-	page.BeginText().
-		SetFont("HB", 18).
-		MoveText(margin, y).
-		ShowText(headingCodes).
-		EndText()
+	page.EndText()
 	y -= 2 * leading
 
 	// The body, wrapped to the column.
 	column := pageW - 2*margin
 	lines := wrap(face, body, bodySize, column)
 	for _, line := range lines {
-		// The face turns characters into the codes this font's encoding uses;
-		// the builder writes them. Keeping the two steps apart is what lets the
-		// same drawing code serve a standard face and an embedded one, whose
-		// codes are entirely different kinds of number.
-		codes, _ := face.Encode(line)
-		page.BeginText().
-			SetFont("H", bodySize).
-			MoveText(margin, y).
-			ShowText(codes).
-			EndText()
+		// The face shapes the line and draws its glyphs, recording each one for
+		// the subset and for the ToUnicode map that gives the text back to a
+		// reader who extracts it.
+		page.BeginText().SetFont("H", bodySize).MoveText(margin, y)
+		face.DrawShaped(&page, line, bodySize)
+		page.EndText()
 		y -= leading
 	}
 
@@ -108,13 +92,13 @@ func main() {
 		MoveTo(margin+column, pageH-margin+6).LineTo(margin+column, y+leading-4).Stroke().
 		Restore()
 
+	// The faces are named, not embedded: AddPage embeds each once the drawing
+	// is final, subset to the glyphs it set. Embedding one before drawing with
+	// it would leave those glyphs out.
 	if _, err := doc.AddPage(pdf.Page{
 		Width: pageW, Height: pageH,
 		Content: &page,
-		Fonts: map[object.Name]object.Object{
-			"H":  mustEmbed(doc, face),
-			"HB": mustEmbed(doc, bold),
-		},
+		Faces:   map[object.Name]*fonts.Face{"H": face, "HB": bold},
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "adding the page: %v\n", err)
 		os.Exit(1)
@@ -160,13 +144,4 @@ func wrap(face *fonts.Face, text string, size, width float64) []string {
 		lines = append(lines, line)
 	}
 	return lines
-}
-
-func mustEmbed(doc *pdf.Document, face *fonts.Face) object.IndirectRef {
-	ref, err := face.Embed(doc)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "embedding %s: %v\n", face.Name(), err)
-		os.Exit(1)
-	}
-	return ref
 }
