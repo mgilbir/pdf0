@@ -33,9 +33,7 @@ return doc.Write(w)
 
 That is the whole of it for most documents: load a face, draw with it inside a
 text object whose font is selected under some name, and name the face on the
-page under that name. `examples/text` does the same with line breaking, and
-embeds by hand with `Face.Embed` instead (see [Embed after drawing, or let the
-page do it](#embed-after-drawing-or-let-the-page-do-it)).
+page under that name. `examples/text` does the same with line breaking.
 
 ## Pick a face
 

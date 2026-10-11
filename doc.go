@@ -212,5 +212,6 @@
 // https://github.com/mgilbir/pdf0/blob/main/docs/README.md indexes the
 // documentation: architecture.md for how bytes flow through Read and Write,
 // validators.md for the validator family, signing.md for signing and
-// verification, and text.md for setting text.
+// verification, building.md for making a document from nothing, and text.md
+// for setting text.
 package pdf0

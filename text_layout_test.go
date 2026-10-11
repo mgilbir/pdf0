@@ -11,9 +11,10 @@ import (
 	"github.com/mgilbir/pdf0/pdfa"
 )
 
-// Laying text out with a standard face: the flow examples/text demonstrates,
-// pinned here so a change to measurement or encoding is caught by a test rather
-// than by looking at a rendered page.
+// Laying text out: the flow examples/text demonstrates — measure, break, draw —
+// pinned here with a standard face, so a change to measurement or encoding is
+// caught by a test rather than by looking at a rendered page. (The example
+// itself sets the bundled Noto Sans.)
 
 // wrapGreedy fills lines to a width, measuring with the face they will be set
 // in. It is the example's line breaker, kept here so the property below is
