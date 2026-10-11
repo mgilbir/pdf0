@@ -362,8 +362,10 @@ func TestSuccessiveApprovalSignaturesAreAllIntact(t *testing.T) {
 
 // fieldMDPSigned signs a document whose form holds, besides the signature, an
 // empty signature field "Witness", with a FieldMDP transform (ISO 32000-2
-// Table 258) of the given action and field list on the signature.
-func fieldMDPSigned(t *testing.T, action string, fields []string) []byte {
+// Table 258) of the given action and field list on the signature. witness,
+// when not nil, returns further entries for the Witness field, built in the
+// document being signed.
+func fieldMDPSigned(t *testing.T, action string, fields []string, witness func(*Document) []object.Entry) []byte {
 	t.Helper()
 	cert, key := signtest.CertKey(t)
 	d := readBytes(t, buildMinimalPDF())
@@ -396,13 +398,17 @@ func fieldMDPSigned(t *testing.T, action string, fields []string) []byte {
 			object.Entry{Key: "V", Value: object.Name("1.2")},
 		)},
 	)})
-	witness := clone.Add(object.NewDictionary(
-		object.Entry{Key: "FT", Value: object.Name("Sig")},
-		object.Entry{Key: "T", Value: object.String{Value: []byte("Witness")}},
-	))
+	entries := []object.Entry{
+		{Key: "FT", Value: object.Name("Sig")},
+		{Key: "T", Value: object.String{Value: []byte("Witness")}},
+	}
+	if witness != nil {
+		entries = append(entries, witness(clone)...)
+	}
+	witnessRef := clone.Add(object.NewDictionary(entries...))
 	form := clone.Objects[formNum].Value.(*object.Dictionary)
 	fl, _ := form.Get("Fields").(object.Array)
-	form.Set("Fields", append(fl, witness))
+	form.Set("Fields", append(fl, witnessRef))
 	var buf bytes.Buffer
 	if err := clone.Write(&buf); err != nil {
 		t.Fatal(err)
@@ -415,8 +421,10 @@ func fieldMDPSigned(t *testing.T, action string, fields []string) []byte {
 }
 
 // fillWitness appends an update giving the empty "Witness" field a signature
-// value — signing a field the signed revision left empty.
-func fillWitness(t *testing.T, data []byte) []byte {
+// value — signing a field the signed revision left empty. With valid the value
+// is a real signature over the update; without, a /ByteRange and /Contents
+// that are present and do not verify.
+func fillWitness(t *testing.T, data []byte, valid bool) []byte {
 	t.Helper()
 	d := readBytes(t, data)
 	num := -1
@@ -430,19 +438,32 @@ func fillWitness(t *testing.T, data []byte) []byte {
 	if num < 0 {
 		t.Fatal("no Witness field")
 	}
+	byteRange := object.Array{object.Integer(0), object.Integer(1), object.Integer(2), object.Integer(1)}
+	contents := object.String{Value: []byte{0}, IsHex: true}
+	if valid {
+		byteRange = object.Array{object.Integer(0), object.Integer(9999999999), object.Integer(9999999999), object.Integer(9999999999)}
+		contents = object.String{Value: make([]byte, sigContentsBytes), IsHex: true}
+	}
 	sig := d.Add(object.NewDictionary(
 		object.Entry{Key: "Type", Value: object.Name("Sig")},
-		object.Entry{Key: "ByteRange", Value: object.Array{object.Integer(0), object.Integer(1), object.Integer(2), object.Integer(1)}},
-		object.Entry{Key: "Contents", Value: object.String{Value: []byte{0}, IsHex: true}},
+		object.Entry{Key: "SubFilter", Value: object.Name("ETSI.CAdES.detached")},
+		object.Entry{Key: "ByteRange", Value: byteRange},
+		object.Entry{Key: "Contents", Value: contents},
 	))
 	fd := d.Objects[num].Value.(*object.Dictionary).Clone()
 	fd.Set("V", sig)
 	d.Objects[num] = &object.IndirectObject{Number: num, Value: fd}
-	var out bytes.Buffer
-	if err := d.WriteIncremental(&out, []int{num, sig.Number}); err != nil {
+	out, err := d.incrementalBytes([]int{num, sig.Number})
+	if err != nil {
 		t.Fatal(err)
 	}
-	return out.Bytes()
+	if valid {
+		cert, key := signtest.CertKey(t)
+		if out, err = patchSignature(out, cert, key, nil, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return out
 }
 
 // TestFieldMDPLocksFields: a signature whose FieldMDP transform locks a field
@@ -460,11 +481,11 @@ func TestFieldMDPLocksFields(t *testing.T) {
 		{"Exclude", []string{"Other"}, false},
 	} {
 		t.Run(fmt.Sprintf("%s%v", tc.action, tc.fields), func(t *testing.T) {
-			base := fieldMDPSigned(t, tc.action, tc.fields)
+			base := fieldMDPSigned(t, tc.action, tc.fields, nil)
 			if r := firstSignature(t, base); !r.DocumentUnmodified() {
 				t.Fatalf("the signature must verify over its own file: %+v", r)
 			}
-			r := firstSignature(t, fillWitness(t, base))
+			r := firstSignature(t, fillWitness(t, base, true))
 			if r.ChangesAllowed != tc.allowed {
 				t.Errorf("ChangesAllowed = %v, want %v: %v", r.ChangesAllowed, tc.allowed, r.DisallowedChanges)
 			}

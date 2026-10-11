@@ -45,7 +45,12 @@ type PAdESResult struct {
 	// reports verifies, and every change made after the signature is
 	// permitted — the Issues list is empty. A time-stamp never excuses a
 	// change: it proves when bytes existed, not that a change was allowed.
-	// Trust is reported separately (TrustedChain, TimestampTrusted).
+	// Trust is reported separately (TrustedChain, Revocation,
+	// TimestampTrusted), and does not affect it: conformance is the
+	// signature's form and the material it carries (ETSI EN 319 142-1),
+	// whether the signer is trusted and unrevoked is validation (ETSI EN 319
+	// 102-1). Accept a signature on Conformant, TrustedChain and a Revocation
+	// that is not RevocationRevoked together.
 	Conformant bool
 	// Valid: the CMS signature cryptographically verifies (Result.Valid).
 	Valid bool
@@ -58,10 +63,22 @@ type PAdESResult struct {
 	// after the signature is permitted, and each one that is not.
 	ChangesAllowed    bool
 	DisallowedChanges []string
-	SignerCommonName  string
+	// LaterVisibleSignatures is Result.LaterVisibleSignatures: the permitted
+	// later signatures whose widgets a reader can see, drawn over the pages
+	// this signature covers. They do not affect Conformant; who signed each
+	// is that signature's own Result's question (VerifySignatures).
+	LaterVisibleSignatures []string
+	SignerCommonName       string
 	// TrustedChain is Result.TrustedChain: the signer chains to your roots
-	// for document signing.
+	// for document signing, at the validation time, through no revoked
+	// intermediate. It does not include the signer certificate's own
+	// revocation: read Revocation for that.
 	TrustedChain bool
+	// Revocation is Result.Revocation: the signer certificate's status at the
+	// validation time, from the authenticated CRLs and OCSP responses in the
+	// document's Document Security Store. A revoked signer is reported here,
+	// and changes neither TrustedChain nor Conformant.
+	Revocation RevocationInfo
 	// TimestampValid: the signature time-stamp verifies — its authority's
 	// signature, the time-stamping purpose, and an imprint of this signature.
 	TimestampValid bool
@@ -98,15 +115,17 @@ func validatePAdES(d core.View, file core.SignedFile, opts VerifyOptions) []PAdE
 
 func assessPAdES(v *Result, all []Result, hasDSS bool) PAdESResult {
 	res := PAdESResult{
-		Field:             v.Field,
-		SubFilter:         string(v.subFilter),
-		Valid:             v.Valid,
-		CoversDocument:    v.CoversWholeDocument,
-		ChangesAllowed:    v.ChangesAllowed,
-		DisallowedChanges: v.DisallowedChanges,
-		SignerCommonName:  v.SignerCommonName,
-		TrustedChain:      v.TrustedChain,
-		TimestampTrusted:  v.TimestampTrusted,
+		Field:                  v.Field,
+		SubFilter:              string(v.subFilter),
+		Valid:                  v.Valid,
+		CoversDocument:         v.CoversWholeDocument,
+		ChangesAllowed:         v.ChangesAllowed,
+		DisallowedChanges:      v.DisallowedChanges,
+		LaterVisibleSignatures: v.LaterVisibleSignatures,
+		SignerCommonName:       v.SignerCommonName,
+		TrustedChain:           v.TrustedChain,
+		Revocation:             v.Revocation,
+		TimestampTrusted:       v.TimestampTrusted,
 	}
 	if v.subFilter != "ETSI.CAdES.detached" {
 		// A legacy (adbe.*) or timestamp sub-filter is not a PAdES approval

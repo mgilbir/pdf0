@@ -55,7 +55,10 @@ func (d *Document) VerifySignatures(opts sign.VerifyOptions) (res []sign.Result,
 // ValidatePAdES reports, for each approval signature, the PAdES baseline level
 // its material reaches and whether it conforms (sign.PAdESResult), against the
 // file the document was read from. opts decides trust exactly as for
-// VerifySignatures. The error has the same meaning as VerifySignatures's.
+// VerifySignatures, and each result carries the same TrustedChain,
+// Revocation and LaterVisibleSignatures as that signature's sign.Result;
+// none of them affects Conformant. The error has the same meaning as
+// VerifySignatures's.
 func (d *Document) ValidatePAdES(opts sign.VerifyOptions) (res []sign.PAdESResult, err error) {
 	defer func() {
 		if r := recover(); r != nil {

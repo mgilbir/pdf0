@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 	"time"
 
@@ -56,12 +57,21 @@ func (o VerifyOptions) tsaRoots() *x509.CertPool {
 //     nothing at all was changed after signing.
 //   - Intact(): Valid, and every change made after signing is a permitted one
 //     (ChangesAllowed): a Document Security Store or document time-stamp added
-//     for long-term validation, say. A timestamp never makes a change
-//     permitted; it proves only when bytes existed.
+//     for long-term validation, say, or a later signature that is itself
+//     intact. A timestamp never makes a change permitted; it proves only when
+//     bytes existed.
+//   - LaterVisibleSignatures: the later signatures Intact accepted whose
+//     widgets a reader can see, drawn over the pages this signature covers.
 //   - TrustedChain: the signer chains to your roots for a document-signing
-//     purpose, at ValidationTime.
+//     purpose, at ValidationTime, through no revoked intermediate. It does not
+//     include the signer's own revocation status.
 //   - Revocation: what authenticated revocation data in the document says about
 //     the signer at ValidationTime.
+//
+// A signature you accept therefore needs Intact() (or DocumentUnmodified()),
+// TrustedChain, and a Revocation status that is not RevocationRevoked; and
+// every other result the document carries needs the same scrutiny, since a
+// later signature can draw anything it likes over the page.
 type Result struct {
 	// Field is the FULLY QUALIFIED name of the signature field whose /V
 	// references this signature dictionary: the field's own /T partial name
@@ -137,10 +147,30 @@ type Result struct {
 	// is permitted. It is set when there are none. It is false when the
 	// changes could not be established, and for a signature that is not
 	// Valid, whose signed revision nothing vouches for.
+	//
+	// A signature field added later, or a value given later to an empty
+	// signature field, is permitted only when that later signature is itself
+	// intact: it verifies, and every change after it is permitted. A later
+	// "signature" that does not verify, or whose field or appearance changed
+	// after it was signed, is a change like any other. Who made a later
+	// signature is not judged here: read its own Result.
 	ChangesAllowed bool
 	// DisallowedChanges describes each change after the signature that is not
 	// permitted, or why the changes could not be established.
 	DisallowedChanges []string
+	// LaterVisibleSignatures names, by their Result.Field, the signatures
+	// added after this one — new signature fields, or values given to empty
+	// ones — that ChangesAllowed permitted and that a reader can see: a
+	// widget of the field has a /Rect of non-zero area, neither its Hidden
+	// nor its NoView flag set, and a normal appearance (/AP /N). Such a widget
+	// draws over the page this signature covers, and nothing limits what it
+	// draws: a second party's signature box, or a full-page overlay that
+	// changes what the page appears to say. The later signature is only as
+	// trustworthy as its own Result's TrustedChain and Revocation; a later
+	// signer you do not trust may have drawn anything. A field with no name is
+	// listed as "". It is empty when there are none, and for a signature that
+	// is not Valid.
+	LaterVisibleSignatures []string
 	// Err says why the signature did not verify.
 	Err error
 
@@ -294,17 +324,65 @@ func verifyAll(d core.View, file core.SignedFile, opts VerifyOptions) []Result {
 	trustTimestamps(results, m, opts.tsaRoots(), now)
 	for i := range results {
 		r := &results[i]
-		if !r.Valid {
-			r.DisallowedChanges = nil
-			continue
-		}
-		if !r.DocTimestamp {
+		if r.Valid && !r.DocTimestamp {
 			r.ValidationTime = validationTime(r, results, now)
 			establishTrust(r, m, opts)
 		}
-		r.ChangesAllowed, r.DisallowedChanges = changesAfter(file, ends, r)
 	}
+	judgeChanges(file, ends, results)
 	return results
+}
+
+// judgeChanges establishes, for every valid signature and time-stamp, whether
+// the changes made after it are permitted. A signature added later is a
+// permitted change only when it is intact itself (see Result.ChangesAllowed),
+// so the results are judged from the latest signed revision back: by the time
+// a signature is judged, every signature over a later revision has been.
+func judgeChanges(file core.SignedFile, ends []int64, results []Result) {
+	byNum := make(map[int]int, len(results))
+	var order []int
+	for i := range results {
+		byNum[results[i].num] = i
+		if results[i].Valid {
+			order = append(order, i)
+		} else {
+			results[i].DisallowedChanges = nil
+		}
+	}
+	// latest ranks a result by the revision it covers; one covering the whole
+	// file is the latest of all.
+	latest := func(r *Result) int {
+		if r.CoversWholeDocument {
+			return math.MaxInt
+		}
+		return r.Revision
+	}
+	sort.SliceStable(order, func(a, b int) bool { return latest(&results[order[a]]) > latest(&results[order[b]]) })
+	for _, i := range order {
+		r := &results[i]
+		// vouch says whether the signature dictionary num, added after r,
+		// holds an intact signature, or why not. A signature not yet judged —
+		// one covering no later revision than r, r itself included — still
+		// has ChangesAllowed false, so it vouches for nothing.
+		vouch := func(num int) error {
+			j, ok := byNum[num]
+			if !ok {
+				return errors.New("is not a signature dictionary this verifier reads")
+			}
+			switch s := &results[j]; {
+			case !s.Valid:
+				return errors.New("does not verify")
+			case !s.ChangesAllowed:
+				return errors.New("is not intact: it covers no later revision, or a change made after it is not permitted")
+			}
+			return nil
+		}
+		var visible []int
+		r.ChangesAllowed, r.DisallowedChanges, visible = changesAfter(file, ends, r, vouch)
+		for _, num := range visible {
+			r.LaterVisibleSignatures = append(r.LaterVisibleSignatures, results[byNum[num]].Field)
+		}
+	}
 }
 
 // revisionOf finds the revision a signed range covers: the one whose %%EOF
@@ -467,13 +545,15 @@ func tsaTrust(tok *timestampToken, m revocationMaterial, roots *x509.CertPool, a
 }
 
 // changesAfter judges the changes made to the file after the revision a valid
-// signature covers.
-func changesAfter(file core.SignedFile, ends []int64, r *Result) (bool, []string) {
+// signature covers. vouch says whether a signature dictionary added after it
+// is an intact signature (see disallowedChanges). It also returns the
+// signature dictionaries of the permitted later signatures a reader can see.
+func changesAfter(file core.SignedFile, ends []int64, r *Result, vouch func(sigNum int) error) (bool, []string, []int) {
 	if r.CoversWholeDocument {
-		return true, nil
+		return true, nil, nil
 	}
 	if r.Revision < 0 {
-		return false, []string{"the signed bytes do not end at a revision of the file"}
+		return false, []string{"the signed bytes do not end at a revision of the file"}, nil
 	}
 	var bad []string
 	if n := len(ends); n > 0 && ends[n-1] < file.Len() {
@@ -483,10 +563,11 @@ func changesAfter(file core.SignedFile, ends []int64, r *Result) (bool, []string
 	}
 	diff, err := file.Diff(r.Revision)
 	if err != nil {
-		return false, append(bad, "the changes after the signature could not be established: "+err.Error())
+		return false, append(bad, "the changes after the signature could not be established: "+err.Error()), nil
 	}
-	bad = append(bad, disallowedChanges(diff)...)
-	return len(bad) == 0, bad
+	disallowed, visible := disallowedChanges(diff, vouch)
+	bad = append(bad, disallowed...)
+	return len(bad) == 0, bad, visible
 }
 
 // trailingBytes describes bytes after the file's last %%EOF that are not
