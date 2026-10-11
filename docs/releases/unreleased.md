@@ -128,6 +128,13 @@ v0.6.0.
   reported** (#334). One over the decoded-stream limit, or under a filter pdf0
   does not implement, used to cut the chain of updates silently; it is now a
   read-time trip, reported by every validator as a `limit` finding.
+- **`ValidatePDFUA` and `ValidatePDFUA2` check two more font rules**, so a
+  document that passed may now get findings: 7.21.5 (part 2: 8.4.5.6), a shown
+  glyph whose declared width differs from the embedded program's by more than
+  1/1000 (only text in rendering mode 3 is exempt); and 7.21.6, a non-symbolic
+  TrueType font whose `/Differences` names a glyph outside the Adobe Glyph
+  List, or whose embedded program has no (3,1) cmap subtable. Both read the
+  font as veraPDF does. PDF/A behaviour is unchanged.
 
 ### Signatures
 
