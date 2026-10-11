@@ -241,6 +241,13 @@ v0.6.0.
   ([ADR 0019](../adr/0019-signature-consent-on-the-document.md)).
 - **`pdf0`'s `-invalidate-signatures` flag** on `decrypt`, `encrypt`, `repair`
   and `merge`: the same consent, from the command line.
+- **`THIRD_PARTY_NOTICES`** at the module root lists everything the repository
+  keeps that came from elsewhere — its source, pin and licence — and carries
+  the notices those licences require; it ships in the module zip, and a test
+  holds it to the tree. The XMP RelaxNG schemas' MIT licence text, which was
+  not shipped before, is now included, and `internal/saslprep/tables.go`
+  carries RFC 3454's copyright notice and permission paragraph, as the RFC
+  requires of derivative works.
 
 ## Fixed
 
