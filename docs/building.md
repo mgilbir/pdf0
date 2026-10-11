@@ -175,6 +175,8 @@ _, err = doc.AddPage(pdf0.Page{
 information dictionary and the XMP metadata, from one `pdf0.DocumentInfo`, so
 the two cannot disagree; a field left empty is left as the document has it. A
 document claiming PDF/A-4 is described in XMP alone, as that level requires.
+`Language`, a tag such as `en-GB`, is the language of the document's text and
+goes in the catalog's `/Lang` instead, which is where a screen reader looks.
 
 ```go
 err := doc.SetDocumentInfo(pdf0.DocumentInfo{
@@ -277,11 +279,91 @@ argument; nil is fine when every tag is standard. Give a `Figure` its `Alt`
 text. `SetStructureTree` marks the document as tagged and builds the index from
 each page back into the tree.
 
-A structure tree is most of PDF/UA, not all of it. pdf0 has no call for the
-rest — the catalog's `/Lang`, `/ViewerPreferences` with `/DisplayDocTitle`, and
-the `pdfuaid` identification in XMP — so a document built this way still
-fails `pdf0.ValidatePDFUA` on those document-level rules until you add them.
-Check with the validator; [pdfua.md](pdfua.md) says what it reads.
+A structure tree is most of PDF/UA, not all of it: [the next
+section](#an-accessible-document-pdfua) adds the rest.
+
+## An accessible document (PDF/UA)
+
+PDF/UA is the standard for a PDF a screen reader can read. Beyond the structure
+tree it asks three things of the document as a whole: the language its text is
+in, a title for a reader to announce in place of the file name, and the claim
+itself. `DocumentInfo.Language` writes the first, as the catalog's `/Lang`;
+`DocumentInfo.Title` the second; and `Document.DeclarePDFUA` the third — the
+`pdfuaid` identification in the XMP metadata, and `/ViewerPreferences` with
+`/DisplayDocTitle` so that the title is what a reader shows. Describe the
+document, then declare it:
+
+```go
+doc := pdf0.NewDocument()
+doc.Version = "1.7" // PDF/UA-1 is defined for PDF 1.x; NewDocument starts at 2.0
+
+face, err := fonts.NotoSans() // PDF/UA, like PDF/A, needs every font embedded
+if err != nil {
+	return err
+}
+var b content.Builder
+b.BeginTagged("H1", 0).
+	BeginText().SetFont("F1", 20).MoveText(72, 760)
+face.DrawShaped(&b, "Annual report", 20)
+b.EndText().EndMarked()
+b.BeginTagged("P", 1).
+	BeginText().SetFont("F1", 11).MoveText(72, 730)
+face.DrawShaped(&b, "Revenue grew in every quarter.", 11)
+b.EndText().EndMarked()
+
+pageRef, err := doc.AddPage(pdf0.Page{
+	Width: 595, Height: 842, Content: &b,
+	Faces: map[object.Name]*fonts.Face{"F1": face},
+})
+if err != nil {
+	return err
+}
+err = doc.SetStructureTree([]pdf0.StructElem{{
+	Tag: "Document", Page: &pageRef,
+	Children: []pdf0.StructElem{
+		{Tag: "H1", Content: []int{0}},
+		{Tag: "P", Content: []int{1}},
+	},
+}}, nil)
+if err != nil {
+	return err
+}
+
+err = doc.SetDocumentInfo(pdf0.DocumentInfo{Title: "Annual report", Language: "en-GB"})
+if err != nil {
+	return err
+}
+if err := doc.DeclarePDFUA(1); err != nil {
+	return err
+}
+return doc.Write(w)
+```
+
+Written and read back, that document gets no findings from
+`pdf0.ValidatePDFUA`, and veraPDF passes it as PDF/UA-1. The declaration is a
+claim, not a check: what the content does — a `Figure` without `Alt`, text
+outside any tag — is the validator's to report, and [pdfua.md](pdfua.md) says
+what it reads.
+
+- **PDF/UA-2** is defined for PDF 2.0, so keep the version `NewDocument` gives
+  and call `DeclarePDFUA(2)`; check with `pdf0.ValidatePDFUA2`. Part 2 also
+  writes `pdfuaid:rev` and puts the tree's top-level `Document` element in the
+  PDF 2.0 structure namespace, as ISO 14289-2 requires — whether the tree is
+  set before the declaration or after.
+- **With PDF/A**, start from `pdf0.NewPDFADocument` and write with `Save`. The
+  PDF/A level decides the part: PDF/A-1, -2 and -3 are PDF 1.x documents and take
+  part 1, PDF/A-4 is PDF 2.0 and takes part 2. The declaration describes
+  `pdfuaid` in the extension schema PDF/A requires of a namespace it does not
+  predefine, so the file passes both. `Save` checks the PDF/A level only; run
+  the PDF/UA validator yourself.
+- **What it refuses**, changing nothing: a document with no title, since
+  `/DisplayDocTitle` would show nothing (call `SetDocumentInfo` first); a
+  version the part is not defined for; part 2 without a `Language`; and, like
+  every metadata writer, a `Locked` document. `SetDocumentInfo` refuses a
+  `Language` that is not a language tag — the grammar the validators judge
+  `/Lang` by.
+- Declaring again is harmless, and a later `SetDocumentInfo` keeps the
+  declaration: both edit the metadata rather than replacing it.
 
 ## Gradients and patterns
 

@@ -10,7 +10,8 @@ transparency, file structure — while PDF/UA mostly validates the tagged
 structure tree hanging off the catalog.** Almost every UA check in pdf0 either
 walks that tree, or walks page content in order to correlate it back to the
 tree. [validators.md](validators.md) owns the family view and the entry-point
-table; this doc is the inside of the two UA cells.
+table; this doc is the inside of the two UA cells. To build a document that
+passes them, see [building.md](building.md#an-accessible-document-pdfua).
 
 What a clean result is measured against, in short: the PDF Association's ten
 conformant reference files report nothing, and over the veraPDF corpus pdf0

@@ -80,7 +80,7 @@ subtle cases, each pinned by `TestParseXMPPropertyForms`:
 
 ### Writing: edit, don't regenerate
 
-Every metadata writer — `SetDocumentInfo`, `NewPDFADocument…` /
+Every metadata writer — `SetDocumentInfo`, `DeclarePDFUA`, `NewPDFADocument…` /
 `pdfa.GenerateXMPMetadata`, `EmbedFacturX` / `EmbedOrderX` / `facturx.XMPPacket` —
 edits a packet through the model (`core.EditableXMP` parses the document's own).
 `SetText`, `SetAltText` (one language item; the others are kept), `SetSeq`,
@@ -150,7 +150,7 @@ at its first — and the two dates compared through `normalizePDFDate` /
 | Standard | Property read | Notes |
 |---|---|---|
 | PDF/A | `pdfaid:part`, `pdfaid:conformance`, `pdfaid:rev` | ns `http://www.aiim.org/pdfa/ns/id/`, read by `readPDFAIdentification` (`pdfa/identification.go`) for the identification rule (`checkIdentification`) and for `LevelDeclared` runs, and by `Document.Conformance`/`Save` and the embedded-PDF/A rule through `pdfa.LevelFor`. The rule compares the declaration with the target: the part must match; the conformance must be one the target accepts (`B`, `U` or `A` at 2b/3b; `U` or `A` at 2u/3u; `B` or `A` at 1b; only `A` at an a level; none at plain A-4, `E` at 4e, `F` at 4f); at A-4 `rev` must be `2020`. The prefix must be `pdfaid` (ISO 19005-1 Table 3, -2/-3 6.6.4), and a `pdfaid:` prefix bound to another namespace is reported. The schema table also knows `amd` and `corr` (`corr` is dropped at part 1). |
-| PDF/UA | `pdfuaid:part` | ns `http://www.aiim.org/pdfua/ns/id/`. Clause 5 also requires the prefix itself to be `pdfuaid` for `part`, `amd` and `corr`. |
+| PDF/UA | `pdfuaid:part` | ns `http://www.aiim.org/pdfua/ns/id/`. Clause 5 also requires the prefix itself to be `pdfuaid` for `part`, `amd` and `corr`. Written by `Document.DeclarePDFUA`, with `pdfuaid:rev` for part 2. |
 | PDF/X | `pdfxid:GTS_PDFXVersion` | ns `http://www.npes.org/pdfx/ns/id/`; a no-namespace `GTS_PDFXVersion` property is accepted as a fallback, and Info `/GTS_PDFXVersion` (decoded as a text string) for the older parts. |
 | PDF/VT | `pdfvtid:GTS_PDFVTVersion` | ns `http://www.npes.org/pdfvt/ns/id/`. XMP only — no Info fallback. |
 | Factur-X / ZUGFeRD | `DocumentType`, `Version`, `DocumentFileName`, `ConformanceLevel` | in `urn:factur-x:pdfa:CrossIndustryDocument:invoice:1p0#`, or the ZUGFeRD 2.0 / 1.0 invoice namespaces. |
@@ -325,7 +325,21 @@ Confirmed limitations:
   checks, and says so with a limit finding; only well-formedness and the
   packet-header rules still apply.
 
-On the writing side, `GenerateXMPMetadata` (`pdfa/create.go`) builds the
+On the writing side, two writers put an identification into the packet.
+
+`Document.DeclarePDFUA` (`pdfua_declare.go`) edits the document's packet:
+`pdfuaid:part`, and `pdfuaid:rev` `2024` for part 2 (removed again by a part-1
+declaration), with the prefix `pdfuaid` that clause 5 requires. It also writes
+an extension schema describing the `pdfuaid` namespace — `part`, `amd`, `corr`
+and `rev` — through `SetExtensionSchema`. pdf0 has no predefined `pdfuaid`
+table, and neither has PDF/A: a PDF/A-2b file carrying `pdfuaid:part` without
+the description fails 6.6.2.3.1 in pdf0 and in veraPDF alike. The description is
+written whether or not the document claims PDF/A when it is declared, since
+the claim can come later (`EmbedFacturX` adds PDF/A-3) and outside PDF/A it is
+inert; `SetExtensionSchema` replaces it, so declaring twice leaves one. Its
+`dc:title` comes from `SetDocumentInfo`, which `DeclarePDFUA` requires first.
+
+`GenerateXMPMetadata` (`pdfa/create.go`) builds the
 packet pdf0's PDF/A builder embeds, through the model: the wrapper `xmp.New`
 writes (a BOM as the `begin` value, and an `<?xpacket?>` header with neither a
 `bytes` nor an `encoding` attribute, both forbidden by 6.7.5 / 6.6.2.1 /
