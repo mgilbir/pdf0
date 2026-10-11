@@ -1,8 +1,53 @@
 # Configurable resource limits — design record
 
-**Status:** implemented. This document records the design and the measurements
-behind it; the code is in `limits.go`, and `docs/architecture.md#resource-limits`
-is the user-facing description.
+**Status:** implemented, and frozen as history. This document records the
+design and the measurements behind it as they stood when it was built; it is
+not updated as the code moves. The code is in `limits.go`, the user-facing
+description is [docs/untrusted-input.md](../untrusted-input.md), whose tables of
+options and `…Context` variants are generated from the code, and the live
+decisions are carried by ADRs:
+[0009](../adr/0009-functional-options.md) (functional options, no context as a
+config carrier), [0010](../adr/0010-context-variants.md) (`…Context` variants,
+not an option), [0013](../adr/0013-reserved-rule-identifiers.md) (the reserved
+`limit` rule, shared with formalis) and
+[0016](../adr/0016-readcontext-returns-nil.md) (a cancelled read returns nil).
+
+> **Drift since (as of 2026-10-11).** Read the rest of this record with these
+> corrections:
+>
+> - **Ten options, not eleven.** Three this record lists no longer exist:
+>   `WithMaxCIDRangeSpan`, `WithMaxRoleMapSteps` and `WithMaxPostScriptSteps`
+>   were folded into the run's work meter (docs/limits.md, "The work meter").
+>   Two were added that it does not mention: `WithMaxWork`, the budget for a
+>   whole run, and `WithMaxImagePixels`, one pixel budget for every image
+>   codec.
+> - **Factur-X and Order-X do have `…Context` variants**
+>   (`ValidateFacturXContext`, `ValidateOrderXContext`), since formalis v0.2.0;
+>   §8's "one entry-point asymmetry" is gone.
+> - **Not "fourteen" variants:** eighteen in the root package (`SaveContext`,
+>   `StreamDataContext` and `ImagesContext` among them) and five more in
+>   `fonts`, `htmlpdf` and `facturx`. The generated table in
+>   [untrusted-input.md](../untrusted-input.md#bounding-time-the-context-variants)
+>   is the current list.
+> - **Renamed symbols.** The resolved struct `limits` is `core.Limits`;
+>   `defaultLimits` is `core.DefaultLimits`; `objStmMaxRaw` is
+>   `core.Limits.ObjStmMaxRaw`; `limitBound` is `core.LimitBound`;
+>   `cancelScanBytes` is `core.CancelScanBytes`. The per-run
+>   `validationCache` is declared in `runcache.go`, not `limits_report.go`.
+> - **Moved files.** The root files this record names were split into
+>   packages: `filters.go` and `function_ps.go` are in `internal/core`,
+>   `lexer.go` in `syntax`, `pdfa.go`, `fonts.go`, `final_rules.go` and
+>   `xmp_schemas.go` in `pdfa`, `pdfua.go` and `pdfua_tablegrid.go` in
+>   `pdfua`, `imageextract.go` in `images`; `xmp.go` became
+>   `internal/xmp`, `internal/core/xmp.go` and `pdfa/xmp.go`; and
+>   `fontprog.go` moved to [forme](https://github.com/mgilbir/forme) as
+>   `font/fontprog.go`.
+> - **JBIG2 is no longer wholly internal.** §5 Group D and §9 leave the JBIG2
+>   budgets out on cost. `WithMaxImagePixels` now sets JBIG2's per-bitmap
+>   bound, and four times as much per stream, but only up to the decoder's
+>   own ceilings of 2^26 and 2^28 pixels: it lowers JBIG2's bound and cannot
+>   raise it — the lower-only knob §5 calls a documentation trap, documented
+>   on the option.
 
 Two pieces of work this document scoped *out* have since been built, and both
 sections are updated to record what exists rather than what was proposed:
@@ -796,7 +841,7 @@ The one entry-point asymmetry it left: `ValidateFacturX` and `ValidateOrderX`
 have no variant, because their findings are `formalis.Violation` values that
 `IsCheckerFinding` cannot classify, so there is nowhere honest to report the
 cancellation. Recorded in
-[architecture.md](../architecture.md#which-entry-points-have-one).
+[untrusted-input.md](../untrusted-input.md#bounding-time-the-context-variants).
 
 ---
 
