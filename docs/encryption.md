@@ -93,7 +93,21 @@ apply.
 - `RemoveEncryption()` drops the handler, removes the trailer key, the `/Encrypt`
   object, the objects only it referenced and every per-stream `/Crypt` filter,
   and clears `Encrypted`, so `Write` emits plaintext. It is a **no-op on a
-  locked document** (`TestLockedDocumentState`).
+  locked document** (`TestLockedDocumentState`). It decrypts the document, not
+  the file: `WriteIncremental` and the signing writers still refuse a document
+  read from an encrypted file, since an update would keep that file's
+  ciphertext under a trailer that no longer names `/Encrypt`
+  (`TestIncrementalRefusesEncryptedFileAfterRemoveEncryption`).
+- **A signed document is not encrypted, decrypted or re-keyed by a rewrite
+  unasked.** Encryption cannot be added or changed by an incremental update,
+  and every whole-file rewrite breaks the signatures the file carries, so
+  `SetEncryption` refuses a document whose file carries a signature or
+  document time-stamp, and `Write` refuses one after `RemoveEncryption` or on
+  a decrypted or locked signed file, all with an error wrapping
+  `ErrWouldInvalidateSignatures`. Calling `AllowInvalidatingSignatures()`
+  first consents to losing the signatures; see
+  [signing.md](signing.md#signing) for the whole set of writers and
+  [troubleshooting.md](troubleshooting.md#signatures) for the messages.
 - **PDF/A forbids encryption outright**: `checkNoEncrypt` reports
   `trailer must not contain /Encrypt` at clause 6.1.3 for every level, and
   `Repair` calls `RemoveEncryption` (only when `d.security != nil` — never on a

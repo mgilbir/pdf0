@@ -223,6 +223,30 @@ that verifier's `TSARoots`. Then verify the result as
 `examples/sign_verify` is a runnable sign-then-verify program. What each
 writer produces, and what it refuses, is under [Signing](#signing).
 
+**Once a file is signed, change it only by appending.** `Write`,
+`WriteContext`, `Save`, `SaveContext` and `SetEncryption` rewrite the whole
+file, which breaks every signature in it, so they refuse a document whose file
+carries a signature or document time-stamp, with an error wrapping
+`ErrWouldInvalidateSignatures` — even when nothing was changed. Write the
+change as an incremental update instead, or, to discard the signatures on
+purpose, call `AllowInvalidatingSignatures()` first:
+
+<!-- snippet
+var out bytes.Buffer
+var changed []int
+-->
+```go
+err := doc.Write(&out)
+if errors.Is(err, pdf0.ErrWouldInvalidateSignatures) {
+	out.Reset()
+	// Keep the signatures: append the changed objects to the signed file.
+	err = doc.WriteIncremental(&out, changed)
+}
+```
+
+An update appended this way keeps every signature valid, but a verifier still
+judges what it changed: see [Allowed changes](#allowed-changes).
+
 ## Verifying
 
 `VerifySignatures(opts)` and `ValidatePAdES(opts)` read the file the document
@@ -380,8 +404,17 @@ pdf0: <op>: cannot sign an encrypted document      # decrypted on Read, or marke
 ```
 
 pdf0 cannot produce an encrypted signed file. Sign the plaintext document, and
-do not encrypt it afterwards: `SetEncryption` then `Write` succeeds, but it
-rewrites the bytes the signature covers, and the signature no longer verifies.
+do not encrypt it afterwards: encryption rewrites every byte the signature
+covers and cannot be added by an incremental update, so `SetEncryption`
+refuses a signed document, and changes nothing:
+
+<!-- messages -->
+```
+cannot encrypt: the file the document was read from carries signatures or document time-stamps (N), which rewriting the whole file would invalidate; encryption cannot be added by an incremental update, so call AllowInvalidatingSignatures first to encrypt it anyway
+```
+
+Calling `AllowInvalidatingSignatures()` first lets it, and the `Write` after
+it, proceed; the result is encrypted and its signatures no longer verify.
 
 | Call | Produces | Level |
 | --- | --- | --- |
@@ -395,7 +428,35 @@ rewrites the bytes the signature covers, and the signature no longer verifies.
 possibly different object-stream packing — which moves every byte an existing
 signature committed to and invalidates it. Add a signature to a signed
 document with `WriteSignedIncremental`; pass `InvalidatingExistingSignatures()`
-only to replace the file and discard the old signatures on purpose.
+(or call `AllowInvalidatingSignatures()` first) only to replace the file and
+discard the old signatures on purpose.
+
+**Every other whole-file writer refuses it too.** Which calls keep a
+signature, and what each does with a signed document:
+
+| Call | Signed document | Without the consent |
+| --- | --- | --- |
+| `Write`, `WriteContext`, `Save`, `SaveContext` | rewrites the whole file; every signature stops verifying | refused, wrapping `ErrWouldInvalidateSignatures` |
+| `SetEncryption` | marks the document for a rewrite that encrypts it | refused up front, wrapping `ErrWouldInvalidateSignatures`; nothing changes |
+| `WriteSigned` | rewrites the whole file, plus a new signature | refused with `ErrAlreadySigned` |
+| `WriteIncremental`, `WriteSignedIncremental`, `WriteArchivalTimestamp` | appends; every earlier signature keeps verifying | allowed (refused for an encrypted file, even after `RemoveEncryption`) |
+| `RemoveEncryption`, `Repair`, object edits | change the model only | allowed; the `Write` after them is what is refused |
+
+The consent is `AllowInvalidatingSignatures()`, called on the document; it
+lasts as long as the `Document`, and a document read back from the output does
+not inherit it. "Signed" means the file the document was read from carries a
+signature dictionary or document time-stamp, found by the same test
+`VerifySignatures` uses (a dictionary with `/ByteRange` and `/Contents` whose
+`/Type` is absent, `/Sig` or `/DocTimeStamp`), whether or not it verifies: a
+signature pdf0 cannot verify may still verify for someone else. A document
+built in memory has no file, so nothing can be invalidated and none of this
+applies. The writers' refusal reads, for an unencrypted file:
+
+<!-- messages -->
+```
+cannot write: the file the document was read from carries signatures or document time-stamps (N), which rewriting the whole file would invalidate; write the changes with WriteIncremental to keep them, or call AllowInvalidatingSignatures first to rewrite the file anyway
+cannot write: the file the document was read from carries signatures or document time-stamps (N), which rewriting the whole file would invalidate; an encrypted file cannot be updated incrementally, so call AllowInvalidatingSignatures first to rewrite it anyway
+```
 
 Adding to a signed file is always an *append*: `WriteSignedIncremental` and
 `WriteArchivalTimestamp` copy the bytes the document was read from (its source
@@ -431,7 +492,7 @@ sequenceDiagram
     C->>D: WriteSigned(w, cert, key, opts)
     Note over D: refuse an encrypted document,<br/>and ErrAlreadySigned
     D->>D: on a clone, add a /Sig dictionary: /ByteRange placeholder,<br/>/Contents of 8192 zero bytes<br/>add the field, a zero-area widget on the first page,<br/>and extend /AcroForm
-    D->>B: Write, a full rewrite
+    D->>B: serialize, a full rewrite<br/>(Write without its signature guard)
     B->>B: find the last /ByteRange placeholder,<br/>then the /Contents after it
     B->>B: patch the real /ByteRange in place: all bytes<br/>except the /Contents hex string
     B->>S: the covered bytes
@@ -596,7 +657,11 @@ yourself and call `sign.CheckCertRevocation` directly.
   exist.
 - **Encrypted documents** cannot be signed or incrementally updated at all
   (see [Signing](#signing) for the two refusals), and encrypting a signed
-  document invalidates its signatures.
+  document invalidates its signatures, so `SetEncryption` refuses one without
+  `AllowInvalidatingSignatures()`. A document read from an encrypted file
+  stays out of reach of the incremental writers after `RemoveEncryption`:
+  the update would keep the file's ciphertext under a trailer with no
+  `/Encrypt`, and every reader would take that ciphertext for content.
 
 ## For contributors
 

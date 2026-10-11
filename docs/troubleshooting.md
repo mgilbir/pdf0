@@ -157,7 +157,9 @@ opens the file for anyone, and `SetEncryption` grants every permission), and
 refuses a password SASLprep prohibits — control characters, private-use or
 Unicode-3.2-unassigned code points, mixed right-to-left and left-to-right text —
 because no conforming reader could reproduce it. An empty *owner* password is
-replaced by a random one. See [encryption.md](encryption.md#passwords).
+replaced by a random one. See [encryption.md](encryption.md#passwords). It also
+refuses a signed document, whose signatures encryption would break: see
+[Signatures](#signatures).
 
 Two related refusals that are not about encryption:
 
@@ -438,12 +440,33 @@ pdf0: <op>: the document is encrypted and was not decrypted (Locked); …
 pdf0: <op>: cannot sign an encrypted document
 ```
 
-**A signature that verified stopped verifying after `SetEncryption` and
-`Write`.** Encrypting rewrites every byte the signature covers, so it no longer
-verifies; `Write` does not refuse. Do not encrypt a signed document, and do not
-re-`Write` one at all (see [below](#round-trip-surprises-the-bytes-changed)):
-add signatures and time-stamps with `WriteSignedIncremental` and
-`WriteArchivalTimestamp`, which append to the signed file.
+**`Write`, `Save` or `SetEncryption` refused a signed document.** The file
+the document was read from carries a signature or document time-stamp, and
+every one of these rewrites the whole file — `Write` even with nothing
+changed — which would break it. The error wraps
+`ErrWouldInvalidateSignatures` (test with `errors.Is`), and nothing was
+written or changed. To keep the signatures, append your changes with
+`WriteIncremental` (and add signatures and time-stamps with
+`WriteSignedIncremental` and `WriteArchivalTimestamp`), all of which leave the
+signed bytes as they were. To discard them on purpose — to encrypt the
+document, say — call `AllowInvalidatingSignatures()` on the document first;
+the output then carries the old signature dictionaries, and none of them
+verifies. An encrypted signed file cannot be updated incrementally at all,
+even after `RemoveEncryption`, so for it the consent is the only way to
+write:
+
+<!-- messages -->
+```
+cannot write: the file the document was read from carries signatures or document time-stamps (N), which rewriting the whole file would invalidate; write the changes with WriteIncremental to keep them, or call AllowInvalidatingSignatures first to rewrite the file anyway
+cannot write: the file the document was read from carries signatures or document time-stamps (N), which rewriting the whole file would invalidate; an encrypted file cannot be updated incrementally, so call AllowInvalidatingSignatures first to rewrite it anyway
+cannot encrypt: the file the document was read from carries signatures or document time-stamps (N), which rewriting the whole file would invalidate; encryption cannot be added by an incremental update, so call AllowInvalidatingSignatures first to encrypt it anyway
+incremental update of an encrypted file is not supported, even after RemoveEncryption: the update keeps the file's bytes, which stay encrypted; write the decrypted document whole with Write instead
+```
+
+The last is `WriteIncremental`, `WriteSignedIncremental` or
+`WriteArchivalTimestamp` after `RemoveEncryption` on a document read from an
+encrypted file. Earlier versions wrote the update, and every reader then took
+the file's ciphertext for its content.
 
 ## An image came back with `Decoded=false`
 
@@ -487,9 +510,11 @@ Byte-for-byte comparison of input and output will fail, and that is by design.
 
 Consequences worth knowing:
 
-- **Do not re-`Write` a signed document.** Regenerating the layout invalidates
+- **`Write` refuses a signed document.** Regenerating the layout invalidates
   every signature over the original bytes, and so does encrypting it with
-  `SetEncryption` first; `Write` refuses neither.
+  `SetEncryption` first, so both refuse a document whose file carries one
+  unless `AllowInvalidatingSignatures()` was called (see
+  [Signatures](#signatures)).
 - **To amend a file, use `WriteIncremental`.** It writes the bytes of the file
   the document was read from verbatim, followed by only the objects listed in
   changed, a new cross-reference section whose /Prev chains back to the file's
@@ -498,7 +523,8 @@ Consequences worth knowing:
   truncation. The document must have been read from a file: a document built in
   memory is refused (`this document was built in memory, so use Write`), as is
   one whose cross-reference data was rebuilt by scanning, an encrypted one
-  (`incremental update of an encrypted document is not supported`) and an empty
+  (`incremental update of an encrypted document is not supported`), one read
+  from an encrypted file even after `RemoveEncryption`, and an empty
   change list (`incremental update with no changed objects`). Number new objects
   with `Add`, which never reuses a number the file uses.
 - **`Read` normalizes structure.** It drops `/XRef` and `/ObjStm` objects and
