@@ -217,7 +217,7 @@ func TestManyRevisionSignaturesHashOnce(t *testing.T) {
 			NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature}
 		der, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 		cert, _ := x509.ParseCertificate(der)
-		cms, err := sign.BuildSignedDataFull(cert, key, []byte("anything"), nil, nil)
+		cms, err := signBuildSignedData(cert, key, []byte("anything"), nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

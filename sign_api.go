@@ -1,9 +1,12 @@
 package pdf0
 
 import (
+	"crypto"
 	"crypto/x509"
 	"fmt"
+	"time"
 
+	"github.com/mgilbir/pdf0/internal/bridge"
 	"github.com/mgilbir/pdf0/sign"
 )
 
@@ -13,6 +16,17 @@ import (
 // Document. Signature *production* stays in this package (sign.go,
 // doctimestamp.go): writing a signed file means laying out a whole new
 // document, which is the writer's job, not the verifier's.
+
+// The sign package's plumbing that signature production shares with it,
+// reached through internal/bridge rather than exported (docs audit
+// 2026-10-11 D60): the detached CMS SignedData builder (with an optional
+// signature time-stamp), the RFC 3161 token builder, and the join of a
+// qualified field name.
+var (
+	signBuildSignedData     = bridge.Resolve[func(cert *x509.Certificate, key crypto.Signer, content []byte, tsaCert *x509.Certificate, tsaKey crypto.Signer) ([]byte, error)](bridge.SignBuildSignedData)
+	signBuildTimestampToken = bridge.Resolve[func(imprint []byte, tsaCert *x509.Certificate, tsaKey crypto.Signer, genTime time.Time) ([]byte, error)](bridge.SignBuildTimestampToken)
+	signJoinFieldName       = bridge.Resolve[func(prefix, part string) string](bridge.SignJoinFieldName)
+)
 
 // VerifySignatures verifies every signature and document time-stamp in the
 // document against the file it was read from (Document.Source): a signature

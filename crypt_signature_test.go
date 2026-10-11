@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/mgilbir/pdf0/internal/bridge"
 	"github.com/mgilbir/pdf0/internal/crypt"
 	"github.com/mgilbir/pdf0/internal/signtest"
 	"github.com/mgilbir/pdf0/object"
@@ -158,6 +160,12 @@ func appendClearSignature(t *testing.T, enc []byte, cert *x509.Certificate, key 
 	return data
 }
 
+// signVerifyCMS is sign's bare CMS check over bytes — the signature is
+// cryptographically sound, nothing about trust — which the tests below use as
+// a control that does not go through the object model. It is not API; it
+// crosses through internal/bridge (docs audit 2026-10-11 D60).
+var signVerifyCMS = bridge.Resolve[func(der, content []byte) (*x509.Certificate, []*x509.Certificate, time.Time, error)](bridge.SignVerifyCMS)
+
 // rawContentsWindow returns the bytes the file's /Contents hex window decodes to.
 func rawContentsWindow(t *testing.T, file []byte) []byte {
 	t.Helper()
@@ -200,7 +208,7 @@ func TestEncryptedSignedFileVerifies(t *testing.T) {
 	// signature and are not in the way either. Trimming them is what a reader
 	// must not do: a DER that happens to end in 0x00 loses a byte and stops
 	// parsing, which is one signature in 256 and was this test's own flake.
-	if _, _, _, err := sign.VerifyCMS(rawContents, signedBytes); err != nil {
+	if _, _, _, err := signVerifyCMS(rawContents, signedBytes); err != nil {
 		t.Fatalf("control: the raw file bytes should carry a valid signature: %v", err)
 	}
 

@@ -21,6 +21,11 @@
 // read-only, so the bridge holds no mutable global state; the per-run hooks
 // (pdfa's embedded-file checker, facturx's PDF/A-3 checker) are still
 // installed on each run's core.Run, as before.
+//
+// A few entries name no internal type: sign's CMS and time-stamp builders,
+// its field-name join and its bare CMS check. They are the root package's
+// signing plumbing (and, for the CMS check, its tests'), not API, and were
+// exported only so the root could call them (docs audit 2026-10-11 D60).
 package bridge
 
 import "fmt"
@@ -84,6 +89,7 @@ func Entries() []*Entry {
 		PDFRValidateView, PDFUAValidateView, PDFVTValidateView, PDFXValidateView,
 		SignVerifySignatures, SignValidatePAdES, SignDSSCerts, SignDSSRevocationMaterial,
 		SignQualifiedFieldName, SignFieldPartialName,
+		SignBuildSignedData, SignBuildTimestampToken, SignJoinFieldName, SignVerifyCMS,
 	}
 }
 
@@ -112,4 +118,8 @@ var (
 	SignDSSRevocationMaterial   = &Entry{name: "sign.dssRevocationMaterial"}
 	SignQualifiedFieldName      = &Entry{name: "sign.qualifiedFieldName"}
 	SignFieldPartialName        = &Entry{name: "sign.fieldPartialName"}
+	SignBuildSignedData         = &Entry{name: "sign.buildSignedDataFull"}
+	SignBuildTimestampToken     = &Entry{name: "sign.buildTimestampToken"}
+	SignJoinFieldName           = &Entry{name: "sign.joinFieldName"}
+	SignVerifyCMS               = &Entry{name: "sign.verifyCMS"}
 )

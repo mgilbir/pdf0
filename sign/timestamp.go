@@ -44,8 +44,10 @@ var oidSHA256 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 1}
 
 // buildTimestampToken issues a time-stamp token over imprint (the bytes to be
 // time-stamped, typically a signature value) signed by the TSA key, asserting
-// genTime. It is the local-TSA path used for B-T/B-LTA signing and tests.
-func BuildTimestampToken(imprint []byte, tsaCert *x509.Certificate, tsaKey crypto.Signer, genTime time.Time) ([]byte, error) {
+// genTime. It is the local-TSA path used for B-T/B-LTA signing and tests; the
+// root package's document time-stamp writer reaches it through
+// internal/bridge.
+func buildTimestampToken(imprint []byte, tsaCert *x509.Certificate, tsaKey crypto.Signer, genTime time.Time) ([]byte, error) {
 	h := crypto.SHA256.New()
 	h.Write(imprint)
 	info := tstInfo{

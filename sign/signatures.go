@@ -180,7 +180,7 @@ func collectFieldNames(d core.View, node object.Object, prefix string, seen map[
 	if fd == nil {
 		return
 	}
-	name := JoinFieldName(prefix, fieldPartialName(d, fd))
+	name := joinFieldName(prefix, fieldPartialName(d, fd))
 	if v := fd.Get("V"); v != nil {
 		if target := refObjNum(d, v); want[target] {
 			if _, done := names[target]; !done {
@@ -226,9 +226,10 @@ func fieldPartialName(d core.View, field *object.Dictionary) string {
 	return core.DecodePDFTextString(t.Value)
 }
 
-// JoinFieldName appends a partial name to a qualified-name prefix. A field with
-// no /T contributes nothing to the name of its descendants.
-func JoinFieldName(prefix, part string) string {
+// joinFieldName appends a partial name to a qualified-name prefix. A field with
+// no /T contributes nothing to the name of its descendants. The root package's
+// field-naming walk reaches it through internal/bridge.
+func joinFieldName(prefix, part string) string {
 	switch {
 	case part == "":
 		return prefix
@@ -373,14 +374,15 @@ func signatureAlgorithm(pubAlgo string, hash crypto.Hash) (x509.SignatureAlgorit
 // over content, signed by key with cert embedded. SHA-256 with the key's
 // algorithm.
 func buildSignedData(cert *x509.Certificate, key crypto.Signer, content []byte) ([]byte, error) {
-	return BuildSignedDataFull(cert, key, content, nil, nil)
+	return buildSignedDataFull(cert, key, content, nil, nil)
 }
 
-// BuildSignedDataFull builds a detached CMS SignedData over content. When a TSA
-// certificate and key are supplied it also embeds an RFC 3161 signature time-
-// stamp over the signature value as an unsigned attribute, producing a PAdES-B-T
-// signature.
-func BuildSignedDataFull(cert *x509.Certificate, key crypto.Signer, content []byte, tsaCert *x509.Certificate, tsaKey crypto.Signer) ([]byte, error) {
+// buildSignedDataFull builds a detached CMS SignedData over content. When a TSA
+// certificate and key are supplied it also embeds an RFC 3161 signature
+// time-stamp over the signature value as an unsigned attribute, producing a
+// PAdES-B-T signature. The root package's signing writers reach it through
+// internal/bridge: it is plumbing of theirs, not API.
+func buildSignedDataFull(cert *x509.Certificate, key crypto.Signer, content []byte, tsaCert *x509.Certificate, tsaKey crypto.Signer) ([]byte, error) {
 	hashFn := crypto.SHA256
 	h := hashFn.New()
 	h.Write(content)
@@ -438,7 +440,7 @@ func BuildSignedDataFull(cert *x509.Certificate, key crypto.Signer, content []by
 	// attribute.
 	var unsignedAttrs asn1.RawValue
 	if tsaCert != nil && tsaKey != nil {
-		token, err := BuildTimestampToken(sig, tsaCert, tsaKey, time.Now())
+		token, err := buildTimestampToken(sig, tsaCert, tsaKey, time.Now())
 		if err != nil {
 			return nil, err
 		}

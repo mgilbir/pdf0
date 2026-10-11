@@ -276,7 +276,7 @@ func patchSignature(data []byte, cert *x509.Certificate, key crypto.Signer, tsaC
 	if err != nil {
 		return nil, err
 	}
-	cms, err := sign.BuildSignedDataFull(cert, key, signed, tsaCert, tsaKey)
+	cms, err := signBuildSignedData(cert, key, signed, tsaCert, tsaKey)
 	if err != nil {
 		return nil, err
 	}
@@ -446,7 +446,7 @@ func collectUsedFieldNames(d *Document, node object.Object, prefix string, seen 
 	if fd == nil {
 		return
 	}
-	name := sign.JoinFieldName(prefix, signFieldPartialName(d.view(), fd))
+	name := signJoinFieldName(prefix, signFieldPartialName(d.view(), fd))
 	if name != "" {
 		used[name] = true
 	}

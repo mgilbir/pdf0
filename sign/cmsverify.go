@@ -166,13 +166,15 @@ func (sd *signedData) verify(digest contentDigest) (signingTime time.Time, err e
 	return signingTime, nil
 }
 
-// VerifyCMS verifies a CMS SignedData blob over content: for a detached
+// verifyCMS verifies a CMS SignedData blob over content: for a detached
 // signature, content is what was signed; for one that encapsulates its
 // content, content must equal it. It returns the signer certificate, every
 // certificate the blob carried (for chain building) and the claimed signing
 // time. A nil error means only that the signature is cryptographically sound;
-// it establishes no trust (see VerifyOptions).
-func VerifyCMS(der, content []byte) (cert *x509.Certificate, certs []*x509.Certificate, signingTime time.Time, err error) {
+// it establishes no trust (see VerifyOptions). Verification of a document goes
+// through verifyAll; this is the bare check over bytes the tests use, reached
+// from the root package's through internal/bridge.
+func verifyCMS(der, content []byte) (cert *x509.Certificate, certs []*x509.Certificate, signingTime time.Time, err error) {
 	sd, err := parseSignedData(der)
 	if sd == nil {
 		return nil, nil, signingTime, err

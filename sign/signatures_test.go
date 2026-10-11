@@ -23,15 +23,15 @@ func TestCMSRoundTrip(t *testing.T) {
 	if info := core.ParseCMSSignedData(cms); !info.Parsed || !info.HasCertificate || info.SignerInfoCount != 1 {
 		t.Fatalf("built CMS is malformed: %+v", info)
 	}
-	signer, _, _, err := VerifyCMS(cms, content)
+	signer, _, _, err := verifyCMS(cms, content)
 	if err != nil {
-		t.Fatalf("VerifyCMS: %v", err)
+		t.Fatalf("verifyCMS: %v", err)
 	}
 	if signer.Subject.CommonName != "pdf0 test signer" {
 		t.Errorf("common name = %q", signer.Subject.CommonName)
 	}
 	tampered := append(append([]byte(nil), content...), '!')
-	if _, _, _, err := VerifyCMS(cms, tampered); err == nil {
+	if _, _, _, err := verifyCMS(cms, tampered); err == nil {
 		t.Error("verification succeeded on modified content")
 	}
 }
@@ -95,7 +95,7 @@ func TestVerifySignatures(t *testing.T) {
 }
 
 // TestCMSSurvivesTheZeroPaddingItIsWrittenWith pins the reason /Contents may be
-// passed to VerifyCMS exactly as the file holds it.
+// passed to verifyCMS exactly as the file holds it.
 //
 // A signature value is a hole reserved in the file *before* the bytes that go
 // in it exist, so it is sized generously and the DER is zero-filled to the end.
@@ -113,7 +113,7 @@ func TestVerifySignatures(t *testing.T) {
 // ending in 0x00, which is the only kind that can tell a verifier that reads
 // the DER length from one that trims first. Both then have to hold: padding
 // must not break verification, and a blob genuinely one byte short must not
-// verify, or this would pass for a VerifyCMS that had stopped looking at the
+// verify, or this would pass for a verifyCMS that had stopped looking at the
 // end of the signature.
 func TestCMSSurvivesTheZeroPaddingItIsWrittenWith(t *testing.T) {
 	cert, key := signtest.CertKey(t)
@@ -135,12 +135,12 @@ func TestCMSSurvivesTheZeroPaddingItIsWrittenWith(t *testing.T) {
 		t.Fatal("no signature ending in 0x00 in 4000 tries; that is a one-in-256 event, so something is wrong")
 	}
 
-	if _, _, _, err := VerifyCMS(cms, content); err != nil {
+	if _, _, _, err := verifyCMS(cms, content); err != nil {
 		t.Fatalf("the unpadded signature does not verify: %v", err)
 	}
 	for _, pad := range []int{1, 2, 64, 8192 - len(cms)} {
 		padded := append(append([]byte(nil), cms...), make([]byte, pad)...)
-		if _, _, _, err := VerifyCMS(padded, content); err != nil {
+		if _, _, _, err := verifyCMS(padded, content); err != nil {
 			t.Errorf("padded with %d zero bytes: %v\n"+
 				"The signature ends in 0x00, so something between here and the parser "+
 				"is stripping trailing zeros and taking a byte of it with them.", pad, err)
@@ -148,7 +148,7 @@ func TestCMSSurvivesTheZeroPaddingItIsWrittenWith(t *testing.T) {
 	}
 
 	// And the end of the DER is genuinely being read, rather than ignored.
-	if _, _, _, err := VerifyCMS(cms[:len(cms)-1], content); err == nil {
+	if _, _, _, err := verifyCMS(cms[:len(cms)-1], content); err == nil {
 		t.Error("a signature one byte short verified, so its length is not being read")
 	}
 }

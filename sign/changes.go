@@ -814,7 +814,7 @@ func (c *changeClassifier) collectFieldLocks(cat *object.Dictionary) {
 		if t, ok := c.old.resolve(fd.Get("T")).(object.String); ok {
 			part = core.DecodePDFTextString(t.Value)
 		}
-		name := JoinFieldName(prefix, part)
+		name := joinFieldName(prefix, part)
 		if n != 0 {
 			c.names[n] = name
 		}
