@@ -158,6 +158,31 @@ finding types are declared in their own packages and satisfy it structurally, by
 carrying `Error`, `RuleID` and `ObjectNum` — so no validator package imports its
 own caller.
 
+### Where the code is
+
+Each subsystem, the files that hold it, and the doc that maps it. The root
+package's files are named one by one, except `doc.go`, which holds the package
+documentation; a subpackage is named whole.
+
+| Subsystem | Where | Map |
+|-----------|-------|-----|
+| Core object model, parser, serializer | `object/`, `syntax/`, `document.go`, `xref.go`, `objstm.go`, `objstm_write.go`, `source.go`, `incremental.go`, `compare.go`, `object_api.go` (the object-model aliases), `streamdata.go` (decoding a stream for a caller), `internal/core/filters.go` | this doc |
+| Resource limits and cancellation | `limits.go` (the options), `limits_report.go` (a trip reported as a finding), `cancel.go`, `internal/core/meter.go` (the work meter) | [untrusted-input.md](untrusted-input.md), [limits.md](limits.md) |
+| What every validator shares | `violations.go`, `validator_guard.go` (the answer to a nil document), `runcache.go` (the per-run cache), `bridge.go` (the root's side of `internal/bridge`), `internal/finding` | [validators.md](validators.md) |
+| PDF/A validation | `pdfa/` (rules in `pdfa/pdfa.go`, `pdfa/final_rules.go`, `pdfa/fonts.go`, `pdfa/content_operators.go`, `pdfa/filestructure.go`, `pdfa/pdfa_levela.go`; the builder in `pdfa/create.go`), with `pdfa_api.go`, `embedded.go`, `preflight.go` and `save.go` in the root | [pdfa.md](pdfa.md) |
+| The other validators | `pdfua/`, `pdfx/`, `pdfvt/`, `pdfr/`, `dpart/`, `facturx/`, with `pdfua_api.go`, `pdfx_api.go`, `pdfvt_api.go`, `pdfr_api.go`, `dpart_api.go` and `facturx_api.go` in the root | [validators.md](validators.md), [pdfua.md](pdfua.md) |
+| Building documents | `content/`, `create.go`, `page_add.go`, `builderinput.go` (the input checks every builder shares), `form.go`, `pattern.go`, `pattern_uncolored.go`, `shading.go`, `softmask.go`, `outline.go`, `annotation.go`, `structure.go` | [building.md](building.md) |
+| Pages: listing, extracting, appending | `pages.go`, `pagetree.go`, `pageimport.go` | the godoc of `Document.ExtractPages` and `Document.AppendPages` |
+| Setting text and embedding fonts | `fonts/`, `simplefont/`, `faceembed.go`, with shaping and program parsing in [forme](https://github.com/mgilbir/forme) | [text.md](text.md), [font-embedding.md](font-embedding.md) |
+| Font validation | `pdfa/fonts.go`, `internal/core/fontuse.go` (which fonts the content shows text in) | [fonts.md](fonts.md) |
+| HTML and CSS to PDF | `htmlpdf/`, with the whole layout engine in [forme](https://github.com/mgilbir/forme) | [htmlpdf.md](htmlpdf.md), [htmlpdf-backend.md](htmlpdf-backend.md) |
+| XMP metadata | `internal/xmp` (the model every writer edits), `pdfa/xmp.go`, `pdfa/xmp_schemas.go` (the validator's reading) | [xmp.md](xmp.md) |
+| Signatures and PAdES | `sign/`, with `sign.go`, `sign_api.go`, `signedfile.go` and `doctimestamp.go` in the root | [signing.md](signing.md) |
+| Encryption (standard security handler) | `crypt_api.go`, `internal/crypt`, `internal/saslprep`, `internal/pdfdoc` | [encryption.md](encryption.md) |
+| Images and codecs | `images/`, `images_api.go`, `internal/ccitt`, `internal/jbig2`, `internal/core/function.go` (PDF functions) | [images.md](images.md) |
+| Text extraction | `text.go`, `internal/core/tounicode.go`, `internal/core/cmap.go` | [text.md](text.md#getting-the-text-back) |
+| Command-line front end (dev aid, not the supported surface) | `cmd/pdf0` | [cli.md](cli.md) |
+
 ## Document lifecycle
 
 A `Document` is in one of three encryption states, and that state — not
