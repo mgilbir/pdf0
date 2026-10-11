@@ -52,8 +52,19 @@ func newDocWithPageTree(version string) *Document {
 // page tree (/Resources, /MediaBox, /CropBox, /Rotate) are written on it, and
 // nothing of the source is copied beyond what the pages use. Links between
 // extracted pages are rewritten to the copies; links to pages left behind are
-// removed. The report says what else was carried and what was not — see
-// ImportReport and the policy described in pageimport.go.
+// removed and counted. Beyond the pages:
+//
+//   - form fields with a widget on an extracted page are carried, renamed when
+//     the target already has a field of that name (an /XFA form is not);
+//   - optional content (/OCProperties) is carried, so hidden layers stay
+//     hidden, and so are /OutputIntents and /Lang;
+//   - the logical structure tree is not: the copies are untagged;
+//   - everything else in the source's catalog (outline, named destinations,
+//     page labels, articles, open action, metadata, …) and its /Info is
+//     omitted.
+//
+// The ImportReport counts what was rewritten, dropped and renamed, and names
+// every part omitted.
 //
 // A Locked source (encrypted, not decrypted) is refused: its pages are
 // ciphertext, and the extract would be written in the clear.

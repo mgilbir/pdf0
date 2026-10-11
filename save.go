@@ -172,8 +172,16 @@ type ConformanceError struct {
 // a check failed internally. Nothing was written, because Save writes only a
 // document it has verified; the document is not known to be non-conformant
 // either. Findings are the checker findings (IsCheckerFinding), which say what
-// was not checked. A caller who accepts that can raise the limit on the
-// Document, or write it with Write.
+// was not checked.
+//
+// A Document's limits are fixed when it is made: the With* options given to
+// Read, or pdf0's defaults for a Document from NewDocument or NewPDFADocument
+// and for one read without options. Save checks under them. So a caller can
+// write the document with Write, Read the bytes back with the limit the
+// finding names raised, and Save that Document; or accept the document
+// unchecked and keep what Write wrote. A finding that names no configurable
+// limit — an internal error, a structural bound — will recur whatever is
+// raised.
 type IncompleteCheckError struct {
 	Level    pdfa.Level
 	Findings []pdfa.Violation
