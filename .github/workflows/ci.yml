@@ -76,37 +76,15 @@ jobs:
         run: ./scripts/check-no-binaries.sh
 
       - name: example runs
-        # Every example runs, and every one that writes a PDF writes one. The
-        # README's headline example must produce a file (audit C9).
-        # extract_images and sign_verify check their own results and exit
-        # non-zero when the images or signatures they wrote do not come back,
-        # so they guard the APIs the docs describe (docs audit 2026-07-27 D13).
-        # Running only half of them let simple_pdf drift from what the docs
+        # Every example runs, and every PDF one writes is a PDF; the list is
+        # the Makefile's, so `make check` runs the same. The README's headline
+        # example must produce a file (audit C9). extract_images and
+        # sign_verify check their own results and exit non-zero when the
+        # images or signatures they wrote do not come back, so they guard the
+        # APIs the docs describe (docs audit 2026-07-27 D13). Running only
+        # half of the examples let simple_pdf drift from what the docs
         # recommend unnoticed (docs audit 2026-10-11 D18).
-        run: |
-          # The single-document examples write to stdout, so a non-empty file
-          # with a PDF header is the assertion; flavored writes one file per
-          # level into the directory -o names. Everything goes to a temporary
-          # directory, so nothing is left in the working tree.
-          out=$(mktemp -d)
-          is_pdf() { test -s "$1" && head -c 8 "$1" | grep -q '%PDF-'; }
-          go run ./examples/simple_pdf > "$out/simple.pdf"
-          is_pdf "$out/simple.pdf"
-          go run ./examples/simple_pdf17 > "$out/simple17.pdf"
-          is_pdf "$out/simple17.pdf"
-          go run ./examples/simple_pdfa > "$out/pdfa.pdf"
-          is_pdf "$out/pdfa.pdf"
-          go run ./examples/text > "$out/text.pdf"
-          is_pdf "$out/text.pdf"
-          # HTML + CSS + a page size -> a PDF, which is what the layout half of
-          # this project exists for.
-          go run ./examples/html_to_pdf > "$out/html.pdf"
-          is_pdf "$out/html.pdf"
-          go run ./examples/flavored -o "$out/flavored"
-          for f in "$out"/flavored/*.pdf; do is_pdf "$f"; done
-          go run ./examples/extract_images
-          go run ./examples/sign_verify
-          rm -r "$out"
+        run: make check-examples
 
   # The oracles: corpus FP=0/missed=0, Isartor, Level A, the whole-corpus parse
   # sweep, the Arlington structural oracle, the Factur-X container oracle, the
