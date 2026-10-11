@@ -16,7 +16,9 @@ import (
 
 // ValidatePDFUA checks a document against PDF/UA-1 (ISO 14289-1). The checks
 // cover the catalog and identification (tagged, a structure tree, a displayed
-// title, a default language, the pdfuaid:part declaration and a 1.x header),
+// title, the pdfuaid:part declaration and a 1.x header), the natural language
+// of every piece of text being determinable (from the catalog /Lang or a /Lang
+// nearer the text — PDF/UA-1 does not require the catalog entry itself),
 // the structure tree (standard or role-mapped types, nesting, tables, lists,
 // headings, notes, figure alternate text, real content tagged or marked as an
 // artifact), fonts and Unicode mapping, annotations, form fields and tab
@@ -97,10 +99,11 @@ func validatePDFUA2(cancel core.Canceler, d *Document) []pdfua.Violation {
 	if d == nil {
 		return validatePDFUA(cancel, d, "2")
 	}
-	// The shared checks (tagging, structure tree, default language, displayed
-	// title, Unicode mapping, artifacts, headings), parameterized for part 2 so
-	// the identification rule requires pdfuaid:part 2 and the UA-1 header rule
-	// is not run at all.
+	// The shared checks (tagging, structure tree, displayed title, Unicode
+	// mapping, artifacts, headings), parameterized for part 2 so the
+	// identification rule requires pdfuaid:part 2, the language rule requires the
+	// catalog /Lang (ISO 14289-2 8.4.4) rather than UA-1's determinable language,
+	// and the UA-1 header rule is not run at all.
 	out := validatePDFUA(cancel, d, "2")
 
 	// PDF/UA-2 is defined against PDF 2.0: the declared version (the header,
