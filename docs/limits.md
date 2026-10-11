@@ -1,21 +1,87 @@
 # Resource limits and what a trip means
 
-Three documents cover resource limits, because there are three questions, and
-each has exactly one home:
+The reference for every resource guard in pdf0: what it bounds, what a trip
+used to get wrong, and the one mechanism that reports a trip. To *set* a limit
+or a deadline, read [untrusted-input.md](untrusted-input.md); the design record
+behind the options is [proposals/configurable-limits.md](proposals/configurable-limits.md).
 
-| Question | Read | Code |
-| --- | --- | --- |
-| *How do I cap what a document costs?* — the `With*` options, the defaults, which entry points take them | [architecture.md](architecture.md#resource-limits) | `limits.go` |
-| *What happens when a limit trips?* — the `limit` rule, `IsCheckerFinding`, the per-guard classification | this document | `limits_report.go` |
-| *Why is it shaped this way?* — the measurements, the rejected alternatives, which limits were deliberately left internal | [proposals/configurable-limits.md](proposals/configurable-limits.md) | — |
+## What a `limit` finding tells you
 
-The defaults are stated in `limits.go`, which is the source of truth; the tables
-elsewhere restate them for a reader who is already there.
+A finding under the rule `limit` says that pdf0 could not complete a check, and
+names the guard that stopped it. It is never a statement about the file: the
+file is neither confirmed conformant nor non-conformant in that respect, so
+read it as **unknown**, not *failed*. `IsCheckerFinding` reports it, and the
+`internal` finding of a recovered panic, as a checker finding; filter with it
+before deciding whether a file conforms.
 
-The two meet in one place. Some of the guards below are configurable, so a
-trip may be pdf0's own ceiling or the caller's; the trip message says which
-(`core.LimitBound`), because "you hit the cap you set" and "you hit our default"
-call for different responses.
+A `limit` finding is not, on its own, a sign of a hostile file. The guards are
+of two kinds, and the message's opening words say which:
+
+- **Resource budgets** — the work meter, size and depth caps, the content and
+  object-stream budgets. Under the defaults one trips on adversarial or
+  unusually large input; it also trips whenever the caller lowered the bound
+  (`WithMaxWork` and the other `With*` options), and the message then says the
+  bound was configured by the caller. Its message begins *resource limit
+  reached*.
+- **Coverage gaps**, which ordinary documents and callers produce:
+  - `no-source-file`: a document built or edited in memory and validated
+    before it was written has no file for the byte-level rules to read;
+  - `not-decrypted`: a document that was not decrypted is ciphertext;
+  - `predefined-cmap`: a font using a predefined CJK CMap has no code-to-CID
+    data in this module, as one file of the veraPDF Isartor suite does;
+  - `embedded-cmap`: an embedded CMap builds on one that is neither predefined
+    nor embedded;
+  - `unsupported-filter`: a stream uses a filter pdf0 does not implement;
+  - `context-canceled`: the run's context ended.
+
+  No option moves these, and their messages say so in their own words (*no
+  file to check*, *not decrypted*, *data not carried*, *data could not be
+  read*, *not implemented*, *the run was cancelled*).
+
+The extractors have no finding channel: a trip there is an error, matching
+`ErrResourceLimit` when a budget caused it
+([untrusted-input.md](untrusted-input.md#extraction-errors-not-findings)).
+
+## How a trip reaches the caller
+
+```mermaid
+flowchart LR
+    subgraph ReadTime["During Read"]
+        XR["an xref stream declined<br/>decoded-stream-size, unsupported-filter"] --> RL["Document.readLimits"]
+        OS["an object stream not unpacked<br/>objstm-decompressed-total, not-decrypted, ..."] --> RL
+    end
+    subgraph RunTime["One validation run: a shallow copy with its own core.Run"]
+        G["a guard trips<br/>size, depth, cmap, grid, XMP, ..."] --> REC
+        W["the work meter is spent<br/>the check is unwound, later checks refused"] --> REC
+        FP["a font program read in part<br/>font.Program.CmapPartial, forwarded"] --> REC
+        NS["PDF/A of a document with no file<br/>no-source-file"] --> REC
+        EMB["an embedded PDF/A not checked to the end<br/>embedded-pdfa"] --> REC
+        REC["core.Recorder<br/>at most core.MaxRecordedTrips,<br/>the rest counted under limit-report"]
+    end
+    LK["Locked, or DecryptFailures<br/>not-decrypted, up front"] --> FLUSH
+    CTX["the context ended<br/>context-canceled"] --> FLUSH
+    RL --> FLUSH["runLimitTrips"]
+    REC --> FLUSH
+    FLUSH --> F["one finding per trip<br/>under the rule limit,<br/>its message names the guard"]
+    PANIC["a check panics, recovered"] --> I["a finding under the rule internal"]
+    RULES["the rules' own findings"] --> ADOPT
+    F --> ADOPT{"adopted by PDF/VT,<br/>Factur-X or Order-X?"}
+    I --> ADOPT
+    ADOPT -->|"other rules prefixed: pdfx-4/..., pdfa-3/...<br/>limit and internal kept bare"| ICF
+    ADOPT -->|no| ICF{"IsCheckerFinding"}
+    ICF -->|true| UNK["unknown: the check did not finish"]
+    ICF -->|false| REAL["a non-conformance"]
+```
+
+Two composition details the picture compresses. PDF/VT's nested PDF/X and DPart
+runs share its recorder, so their trips are reported once, by PDF/VT's own
+flush, and their `limit` findings are not adopted a second time; a nested
+`internal` finding is seen by nothing else, so it is adopted, under its bare
+name (`finding.Namespaced`). Factur-X and Order-X adopt the PDF/A-3 findings
+the same way, and formalis' invoice findings verbatim, including its `limit`
+(`formalis.RuleLimit`, the same string).
+
+## Why a trip is a finding
 
 pdf0 reads untrusted files, so roughly seventy places in the package cap the
 work a document can force: work budgets, depth caps, size ceilings, hop
@@ -65,22 +131,25 @@ loads that value forwards it. Read-time trips live on `Document.readLimits`,
 written only during `Read`, so validation stays non-mutating for the caller.
 
 Every validator flushes the recorder into its own finding type under the rule
-identifier `"limit"` — a sibling of the existing `"internal"` used for a
-recovered panic. Both mean *the checker had a problem*, never *the file is
-non-conforming*; `IsCheckerFinding` tells them apart from real findings.
-
-A `limit` finding fires on no file in the veraPDF corpus. If you see one, the
-input is adversarial or a budget needs revisiting — it is never a statement
-about conformance.
+identifier `"limit"` — a sibling of `"internal"`, used for a recovered panic.
+Both mean *the checker had a problem*, never *the file is non-conforming*;
+`IsCheckerFinding` tells them apart from real findings, and
+[ADR 0013](adr/0013-reserved-rule-identifiers.md) records why the two are
+reserved and shared with formalis.
 
 Each finding names the guard that tripped, in a stable lower-case identifier a
-caller can key on — the `limit*` constants in `limits_report.go`, named after
-the bound rather than after the rule that was skipped, since one guard can cost
-several rules. The recorder is itself bounded (`core.MaxRecordedTrips`), so
-a file crafted to trip a guard once per object cannot turn the *report* into the
-exhaustion the guards prevent; distinct trips past the cap are counted and
-reported in aggregate under `limit-report`, which is a guard identifier like the
-rest so that nothing has to special-case it.
+caller can key on, named after the bound rather than after the rule that was
+skipped, since one guard can cost several rules. Every identifier is a
+`core.Guard*` constant, declared in `internal/core` beside the guard that
+raises it; `limits_report.go` gives four of them a local alias, and the
+comment on those aliases lists them all by kind. The recorder is itself bounded
+(`core.MaxRecordedTrips`), so a file crafted to trip a guard once per object
+cannot turn the *report* into the exhaustion the guards prevent; distinct trips
+past the cap are counted and reported in aggregate under `limit-report`, which
+is a guard identifier like the rest so that nothing has to special-case it.
+[The inventory](#the-inventory) lists every identifier, and
+`TestLimitsDocNamesEveryGuard` (`internal/lint`) fails when a `core.Guard*`
+identifier is missing from it.
 
 ### The one non-guard that reports here: cancellation
 
@@ -106,21 +175,22 @@ gets "not conformant"; a caller filtering with `IsCheckerFinding` gets
 "unknown". Neither gets a clean bill of health from a run that did not look.
 
 The reach table below extends: `Read` and `Write` report cancellation as a
-returned error (the loud class), and `ExtractTextContext` /
-`ExtractImagesContext` return their partial result alongside one — which is why
-they exist as separate signatures rather than as `Context` variants returning
-the bare value. `docs/architecture.md` covers the API shape and the check
-granularity; `cancel.go` carries the design record.
+returned error (the loud class), and `ExtractTextContext`,
+`ExtractImagesContext` and `ImagesContext` return their partial result
+alongside one — which is why they exist as separate signatures rather than as
+`Context` variants returning the bare value.
+[untrusted-input.md](untrusted-input.md#bounding-time-the-context-variants)
+lists every variant, and `cancel.go` carries the design record.
 
 ### What the mechanism reaches, honestly
 
 | Reached | Not reached |
 | --- | --- |
 | All PDF/A, PDF/UA, PDF/UA-2, PDF/X, PDF/VT, PDF/R and DPart checks (each installs or joins a run). | The lexer and parser (`maxTokenGap`, `maxParseDepth`): they take bytes, not a `*Document`, and threading state through them for a guard that already surfaces as a parse error would be ceremony, not reach. |
-| Read-time object-stream budget trips, via `Document.readLimits`. | `ExtractImages` / `ExtractText`: they return no finding channel. Image decode failures, budget refusals (`image-pixels`) and recovered panics surface per image in `ExtractedImage.Note`; a page whose text is left out — the work budget ran out, or a recovered panic — is a `*PageTextError` in `ExtractText`'s error, never missing text alone. |
+| Read-time trips, via `Document.readLimits`: an object stream not unpacked, and a cross-reference stream pdf0 declined to decode. | The extractors: they have no finding channel, so a trip is an error. A page whose text is left out — a limit, content pdf0 declined to read (over a size limit, an unimplemented filter, data that did not decrypt), or a recovered panic — is a `*PageTextError` in `ExtractText`'s error, whose message names the guard; a spent work budget also stops `ImagesContext` and `ExtractImagesContext` with an error. Each matches `ErrResourceLimit` when a limit caused it. A Locked document is an error wrapping `LockReason`. Per image, an image-pixel refusal (`image-pixels`), a decode failure or a recovered panic is not an error but `ExtractedImage.Note`. `ExtractImages` and `Images`, which have no error result, stop silently. |
 | Font-program guards, forwarded from the parsed program. | `Write` / `WriteIncremental`: these return errors, which is the loud class already. |
 | Nested embedded-PDF/A validation (6.9), as `embedded-pdfa`. | `object.Equal` / `DocumentEqual`: they return a `bool`, so there is nowhere to say "too deep to tell". `maxCompareDepth` is *silently wrong by construction* (see the parsing table) and stays that way; no validator rule compares structures that deep. |
-| Cancellation of any validation run, derived in `runLimitTrips`. | `ReadContext` / `WriteContext`: loud, an error wrapping `ctx.Err()`. `ExtractTextContext` / `ExtractImagesContext`: partial result plus that error. |
+| Cancellation of any validation run, derived in `runLimitTrips`. | `ReadContext` / `WriteContext`: loud, an error wrapping `ctx.Err()`. `ExtractTextContext` / `ExtractImagesContext`: partial result plus that error; `ImagesContext`: a final yield of that error. |
 | `ValidateFacturXContext` / `ValidateOrderXContext`, on **both** sides of the module seam — see below. | The `Is*` detection predicates in `formalis`: they return a `bool`, which has no room to say "the run stopped", so a context there could only lie. They are bounded by that module's own limits instead. |
 
 ### Across the `formalis` seam
@@ -138,6 +208,11 @@ but a reserved checker identifier is passed through **unprefixed** either way. A
 `limit`, which is the one failure the reserved identifier exists to prevent.
 `TestAdoptPDFAFindingsKeepsReservedRulesBare` and
 `TestAdoptedLimitFindingIsACheckerFinding` pin each half.
+
+The two halves each report a cancellation they saw, in their own words.
+Neither covers the container checks between them, nor a container with no
+embedded XML to hand over, so the entry point polls once on the way out and
+speaks only when neither half has (`finding.ReportCancellation`).
 
 `formalis.RuleProfile` (`"profile"`) is *not* folded into `IsCheckerFinding`,
 although that module's own predicate covers it. pdf0 only ever passes a profile
@@ -175,8 +250,10 @@ progress**, and every check after it is refused. The unwound check reports
 nothing — what it had found so far it found on a partial walk, which is the
 "silently wrong" class this document exists to prevent — and the run reports
 the trip once, under `limit` with the guard `work`. Extraction stops with an
-error that matches `ErrWorkLimit`: a page left out is a `*PageTextError`, and an
-image an `ExtractedImage` with `Decoded` false and a `Note`. A cancelled context
+error that matches `ErrResourceLimit` and names the guard: text extraction
+reports the page it stopped in as a `*PageTextError` and the pages after it in
+one more error, and `ImagesContext` and `ExtractImagesContext` end with the
+error after the images they reached. A cancelled context
 stops a run the same way and is reported as it always was
 (`context-canceled`).
 
@@ -239,8 +316,37 @@ listed with the reason.
 
 ## The inventory
 
-Guards are grouped by subsystem. "Consumer" names the rule that reads the
-truncated value; the message quoted is the one a trip could wrongly emit.
+Every identifier a `limit` finding can name, each a `core.Guard*` constant:
+
+| Identifier | Constant | Kind | Bound, or what it means |
+| --- | --- | --- | --- |
+| `work` | `core.GuardWork` | budget | `WithMaxWork` |
+| `content-stream-size` | `core.GuardContentStream` | budget | `WithMaxContentStreamBytes` |
+| `decoded-content-total` | `core.GuardContentTotal` | budget | `WithMaxDecodedContentBytes` |
+| `decoded-stream-size` | `core.GuardDecodedStream` | budget | `WithMaxDecodedStreamBytes` |
+| `objstm-decompressed-total` | `core.GuardObjStmTotal` | budget | `WithMaxObjectStreamBytes` |
+| `cmap-work` | `core.GuardCmapWork` | budget | `WithMaxCmapWork` |
+| `table-grid-fills` | `core.GuardGridFills` | budget | `WithMaxTableGridFills` |
+| `image-pixels` | `core.GuardImagePixels` | budget | `WithMaxImagePixels` |
+| `icc-profile-size` | `core.GuardICCProfile` | budget | `WithMaxICCProfileBytes` |
+| `xmp-packet-size` | `core.GuardXMPPacket` | budget | `WithMaxXMPPacketBytes` |
+| `walk-depth` | `core.GuardWalkDepth` | fixed bound | `core.MaxWalkDepth`, the depth of any walk over the object graph |
+| `graph-nesting` | `core.GuardGraphNesting` | fixed bound | direct objects nested past the reachability walk's bound (`maxDirectNesting`) |
+| `xmp-depth` | `core.GuardXMPDepth` | fixed bound | `xmp.MaxDepth`, XMP element nesting |
+| `cmap-size` | `core.GuardCMapSize` | fixed bound | the code ranges an embedded CMap may declare, and their width (`maxCMapEntries`, `maxCMapRangeSpan`) |
+| `content-state-work` | `core.GuardContentState` | fixed bound | the content interpreter's depth (`maxExecDepth`) |
+| `embedded-pdfa` | `core.GuardEmbeddedPDFA` | composite | an embedded PDF nested too deep, past the shared embedded-file budget, or whose own validation did not complete |
+| `no-source-file` | `core.GuardNoSourceFile` | coverage gap | no file behind the document |
+| `not-decrypted` | `core.GuardLocked` | coverage gap | ciphertext |
+| `predefined-cmap` | `core.GuardPredefinedCMap` | coverage gap | CMap data not carried |
+| `embedded-cmap` | `core.GuardEmbeddedCMap` | coverage gap | a base CMap neither predefined nor embedded |
+| `unsupported-filter` | `core.GuardUnsupportedFilter` | coverage gap | a filter pdf0 does not implement |
+| `context-canceled` | `core.GuardCanceled` | coverage gap | the caller's context |
+| `limit-report` | `core.GuardReportOverflow` | the recorder | distinct trips dropped past `core.MaxRecordedTrips` |
+
+Below, the guards themselves are grouped by subsystem. "Consumer" names the
+rule that reads the truncated value; the message quoted is the one a trip could
+wrongly emit.
 
 ### Fonts and font programs
 
@@ -271,7 +377,7 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 | embedded PDF/A validation (no bound of its own) | `pdfa/final_rules.go` | Was **silently wrong** | `checkEmbeddedPDFA` treated *any* non-empty result from the nested validation as non-conformance, so a guard trip or a recovered panic inside the embedded document became *"an embedded PDF file is not compliant with PDF/A"* (6.9). | Fixed. `embeddedPDFACompliant` returns completeness alongside the verdict; a nested `IsCheckerFinding` declines the 6.9 finding and reports `embedded-pdfa` instead. The nested read and validation now also inherit the outer document's resolved limits rather than the defaults — the one place a hostile file could otherwise spend a whole second document's budget unconfigured. Because that makes a *lowered* ceiling a possible cause of "did not read" and "declares no level", those two exits also withhold the verdict whenever the limits in force are not the defaults, which is fail-open (a missed finding, never a manufactured one). Under the defaults nothing changes. |
 | Device-colour and executed-content seen-sets | `internal/core/interp.go`, `pdfa/content_operators.go` | Silently lossy | A second visit can only add usage, so dropping it hides findings. | Device colour and font usage: replaced by the content interpreter's memo (`internal/core/interp.go`), keyed by (stream, resources, inherited graphics state), so a second visit in a different state is executed, not dropped; a result computed while a caller was still in progress (a cycle) is not memoised. The resources in the key are interned by value, so pages that each write their own copy of the same `/Font` dictionary share an entry. `pdfa/content_operators.go`: the containers walked keep their seen-set; each stream's tokens are read once and judged once per distinct resources value, which reports what a scan per container reported. |
 | content interpreter depth (`maxExecDepth` 64) | `internal/core/interp.go` | Loud | Device-colour and font-usage rules over content not executed. | Reported as `content-state-work`. It bounds the stack; the interpreter's work — its executions and the bytes they read, which had bounds of their own — is charged to the run's work meter. The q/Q stack is capped at 256 entries with deeper pushes counted, so it costs a counter rather than memory. |
-| embedded CMap building on a CMap that is neither predefined nor embedded | `internal/core/cmap.go` | Was **silently skipped** | Glyph coverage, `.notdef`, widths, CIDSet for the codes left to that CMap. | Reported as `embedded-cmap` when a check first meets such a code. A CMap past its bounds is `cmap-size` (above); one with no codespace is malformed, the file's fault, and not a skip. |
+| embedded CMap building on a CMap that is neither predefined nor embedded | `internal/core/cmap.go` | Was **silently skipped** | Glyph coverage, `.notdef`, widths, CIDSet for the codes left to that CMap. | Reported as `embedded-cmap` when a check first meets such a code. A CMap past its bounds (`maxCMapEntries`, `maxCMapRangeSpan`) is reported as `cmap-size`; one with no codespace is malformed, the file's fault, and not a skip. |
 
 ### Structure and PDF/UA
 
@@ -288,7 +394,7 @@ truncated value; the message quoted is the one a trip could wrongly emit.
 | Guard | File | Class | Notes |
 | --- | --- | --- | --- |
 | `maxParseDepth` (1000) | `syntax/parser.go` | Loud | A hard error. In lenient (rebuilt-xref) mode the caller drops the object instead — see the objstm row. |
-| decoded-stream cap (`WithMaxDecodedStreamBytes`, default 100 MB) | `internal/core/filters.go` | Loud to a caller, reported to a validator | A hard error (`ErrDecodeLimit`) out of every filter, `StreamData` included. A check that meets it gets `ReasonLimit` and the producer reports `decoded-stream-size`; a cross-reference stream over it makes Read rebuild the table by scanning, and that is reported too. The write-side object-stream cap (`core.Limits.ObjStmMaxRaw`) derives from it so a container pdf0 writes is one the same configuration can read back. |
+| decoded-stream cap (`WithMaxDecodedStreamBytes`, default 100 MB) | `internal/core/filters.go` | Loud to a caller, reported to a validator | A hard error (`ErrDecodeLimit`) out of every filter, `StreamData` included. A check that meets it gets `ReasonLimit` and the producer reports `decoded-stream-size`; a cross-reference stream over it is reported too, as `decoded-stream-size`: the newest section's makes Read rebuild the table by scanning, and an older section's cuts the chain of updates there, so an object only that section or an older one located may be missing. The write-side object-stream cap (`core.Limits.ObjStmMaxRaw`) derives from it so a container pdf0 writes is one the same configuration can read back. |
 | `maxSerializeDepth` (1000) | `syntax/serializer.go` | Loud | A hard error; guards an unrecoverable stack overflow. |
 | `maxCompareDepth` (1000) | `compare.go` | Silently wrong *by construction* | Beyond the cap two objects are declared **not equal**. Documented as such; no validator rule compares structures that deep. |
 | `maxTokenGap` (1 MiB) | `syntax/lexer.go` | Loud-ish | The lexer parks and the parser fails on the next token. Not reachable by the recorder (see *reach*, above). |
