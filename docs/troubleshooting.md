@@ -13,25 +13,50 @@ Most defects are *recovered*, not fatal — see the recovery ladder in
 cross-reference is probed absolute-vs-header-relative; a damaged cross-reference
 table is reparsed from the nearest preceding `xref` keyword and, failing that,
 rebuilt by scanning the file for `N G obj` headers; a missing `/Root` in a
-rebuilt document is synthesized from the first `/Type /Catalog` object. So an
-error out of `Read` means the ladder was exhausted: **the file is genuinely
-unusable, not merely malformed.** In practice you will see one of:
+rebuilt document is synthesized from the lowest-numbered `/Type /Catalog`
+object, one inside an object stream included. So an error out of `Read` means
+the ladder was exhausted, or the call itself was refused: **the file is
+genuinely unusable, not merely malformed** — or one of the first three rows
+below. In practice you will see one of:
 
 | Message | Meaning |
 |---|---|
-| `PDF header not found` | No `%PDF-` marker anywhere in the input. Not a PDF, or the wrong bytes were passed. |
-| `startxref not found` / `no offset after startxref` / `invalid startxref offset: …` | The trailer's `startxref` pointer is missing or unparseable, and there is nothing to start the ladder from. |
-| `startxref offset N outside file (size M)` | The pointer lands past the end of the file — usually a truncated download. |
-| `rebuilt cross-reference table found no document catalog` | The scan-rebuild ran and recovered objects, but none is a `/Type /Catalog`, so there is no document to hand back. |
-| `parsing object N at offset M: …` | An individual object failed to parse *and* the scan-rebuild retry also failed. |
+| `pdf0: invalid option: WithMax…(0): a limit must be positive; …` | An option value of zero or less; nothing was read. Pass a positive value, or the type's maximum for no practical limit (`ErrInvalidOption`). |
+| `reading PDF: context deadline exceeded` (or `… context canceled`, or another step named in place of `reading PDF`) | The context of `ReadContext` ended. No `Document` comes back with it; read again with a longer deadline. |
+| `short read: …`, `invalid input size …`, `reading input: …` | The size you passed is wrong, or `r` failed; see [below](#short-read-got-n-of-m-bytes). |
+| `PDF header not found` | No `%PDF-` marker in the first 1024 bytes. Not a PDF, or the wrong bytes were passed. |
+| `startxref not found` / `no offset after startxref` / `invalid startxref offset: …` / `startxref offset N outside file (size M)` | The `startxref` pointer is missing, unparseable or past the end of the file — often a truncated download — *and* the scan that rebuilds the table found no object header anywhere in the file. |
+| `parsing object N at offset M: …` / `object N xref offset M outside file (size S)` | The file's own table names an object that is not where it says, *and* the scan-rebuild retry found no object header. |
+| `rebuilt cross-reference table found no document catalog` | The scan-rebuild ran and recovered objects, but none is a `/Type /Catalog`, compressed objects included, so there is no document to hand back. When the rebuild was caused by a broken cross-reference section, that section's error is returned instead. |
 | `recovered from panic while reading PDF: …` | A bug. `Read` converts panics into errors so a hostile file cannot crash your process, but please report it (and see [testing.md](testing.md#fuzzing) — the fuzzers exist for exactly this). |
+
+An object stream whose index disagrees with the cross-reference table about
+which object it holds also fails the read, by design
+([ADR 0015](adr/0015-objstm-index-mismatch-is-fatal.md)). An `/Encrypt`
+dictionary never does: see [Encrypted files](#encrypted-files).
+
+**`Read` succeeded, but the file was damaged.** A nil error means the file was
+parsed, not that it is well formed. `doc.Source().Rebuilt()` reports a file
+whose cross-reference table pdf0 had to rebuild by scanning; such a document
+cannot take `WriteIncremental`, and a cross-reference stream pdf0 declined to
+decode (over `WithMaxDecodedStreamBytes`, or in a filter it does not implement)
+is reported by every validator as a `limit` finding, because objects only that
+stream located may be missing. The validators report the file's defects.
 
 ## `short read: got N of M bytes`
 
 `Read(r io.ReaderAt, size int64)` takes the size you claim the file is, and
 refuses to proceed if `r` yields fewer bytes than that. The check is deliberate:
 the unfilled tail of the buffer is zero bytes, which count as PDF whitespace and
-would silently mask truncated input.
+would silently mask truncated input. When `r` can report its own length, the
+claim is checked before anything is allocated:
+
+<!-- messages -->
+```
+short read: got N of M bytes
+short read: the source holds N of the M bytes claimed
+invalid input size N
+```
 
 **What to do:** pass the real size. From a file, `fi, _ := f.Stat(); pdf0.Read(f,
 fi.Size())`. From a `[]byte`, `pdf0.Read(bytes.NewReader(b), int64(len(b)))` —
@@ -206,8 +231,13 @@ for _, e := range pdf0.ValidatePDFA(doc, pdfa.PDFA4) {
 }
 ```
 
-Each checker finding names its guard in parentheses; [limits.md](limits.md)
-says which guard is which and how to raise its bound.
+Each checker finding names its guard in parentheses. A `limit` finding is not
+on its own a sign of a hostile file: besides resource budgets, the guards
+include coverage gaps that ordinary documents produce — `no-source-file`,
+`not-decrypted`, `predefined-cmap`, `unsupported-filter`. What each means and
+what to do about it is in
+[untrusted-input.md](untrusted-input.md#reading-a-limit-finding); every guard
+is in [limits.md](limits.md#the-inventory).
 
 Finally: validating a `Locked()` document checks almost nothing — every check
 that reads content is skipped, and the result carries a `limit` finding
@@ -221,21 +251,78 @@ longer. Two independent levers, and they answer different questions.
 
 - **"This must not cost more than X."** Lower the limits at `Read` time —
   `pdf0.Read(r, size, pdf0.WithMaxDecodedStreamBytes(48<<20))` and the other
-  `With*` options, keeping each above the largest real value its documentation
-  gives. The resolved values are stored on the `Document`, so every later
-  validation and extraction inherits them. See
-  [architecture.md](architecture.md#resource-limits).
+  `With*` options, or `WithMaxWork` for the run as a whole. Where an option's
+  godoc gives the largest real value measured, stay above it; where it says
+  none has been measured, lower it only against your own documents. The resolved values are stored on the `Document`, so every
+  later validation and extraction inherits them, and a check they stop is
+  reported as a `limit` finding saying the bound was yours.
 - **"I need an answer within X seconds, whatever it costs."** Use the `…Context`
   variants: `ValidatePDFAContext`, `ReadContext`, `ExtractTextContext` and the
   rest. A cancelled validation returns the findings it had gathered plus a
   `limit` finding recording the cancellation, so it can never be mistaken for a
   clean result; `Read`, `Write` and the extractors return an error wrapping
   `ctx.Err()`. Cancellation takes effect within about 60 ms on that 71 MB file.
-  See [architecture.md](architecture.md#cancellation).
+
+Both, with the generated tables of options and of `…Context` variants, are in
+[untrusted-input.md](untrusted-input.md).
 
 Abandoning the goroutine is not a third option — the work carries on burning a
 core and holding its memory until it finishes by itself. That case is exactly
 what the context variants exist for.
+
+## Extraction returned an error
+
+The extractors have no finding channel, so whatever left their result short is
+an error, beside the partial result; the result is complete exactly when the
+error is nil. Test it with `errors.Is` and `errors.As`, not by its text.
+
+**`errors.Is(err, pdf0.ErrResourceLimit)`.** A resource limit stopped the
+work: the run's work budget (`WithMaxWork`) or a decode size limit. The message
+names the guard and says whether its bound was pdf0's default or yours, so
+raise the option if it was yours and you trust the file:
+
+<!-- messages -->
+```
+resource limit reached (<guard>): <what> exceeds the bound of N <unit> (<whose>)
+resource limit reached (<guard>): <what> needs N <unit>, over the bound of M (<whose>)
+```
+
+`<whose>` is `pdf0's default` or `configured by the caller`.
+
+**A `*PageTextError` from `ExtractText` or `ExtractTextContext`.** The page it
+names is left out of the text, and the text of the others is returned, still
+separated by form feeds. Its `Err` says why: a limit, as above; content pdf0
+declined to read — the page's or a form's content stream, or a font's CMap,
+over a size limit, in a filter pdf0 does not decode, or not decrypted; or a
+recovered panic, which is a bug in pdf0. When the work budget runs out, one
+more error covers every page after the one it stopped in:
+
+<!-- messages -->
+```
+text of page N not extracted: <reason>
+text of the pages after page N not extracted: <reason>
+resource limit reached (<guard>): <what> was not decoded
+not implemented (<guard>): <what> uses a filter pdf0 does not decode  # unsupported-filter
+not decrypted (<guard>): <what> did not decrypt under the document's key  # not-decrypted
+internal error in text extraction: …
+```
+
+`<what>` is the page's content, a form XObject's or a font's CMap, with its
+object number when it has one. A stream that decodes but holds corrupt data is
+not an error: the page contributes what could be read.
+
+**`ImagesContext` yielded an error.** The iteration stopped before it reached
+every image, and that last yield carries a zero image: the images before it are
+all that were reached. The error wraps `ctx.Err()` for a context that ended,
+matches `ErrResourceLimit` for a spent work budget, and wraps `LockReason()`
+for a Locked document, which yields no images. `ExtractImagesContext` returns
+the same error beside the images it reached. `ExtractImages` (deprecated) and
+`Images` stop silently in the same cases, so prefer the `…Context` forms
+wherever a missing image matters.
+
+**An error wrapping `LockReason()`** from any extractor: the document is
+Locked, so its content is ciphertext and nothing was extracted. See
+[Encrypted files](#encrypted-files).
 
 ## `0 fix(es) applied` / violations remain after repair
 
@@ -385,8 +472,9 @@ colour space / bit-depth combination has no renderer — the samples are there,
 just not turned into an `image.Image`. See [docs/images.md](images.md).
 
 Unrelated but easy to hit: `ExtractImages` holds every decoded image in memory at
-once, which is unbounded on a large scan document. Use the `Images` iterator to
-keep at most one decoded image live.
+once, which is unbounded on a large scan document. Use the `ImagesContext`
+iterator to keep at most one decoded image live, and to be told when it stopped
+short.
 
 ## Round-trip surprises: the bytes changed
 
