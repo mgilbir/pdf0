@@ -407,6 +407,11 @@ func aglGlyphName(name string) bool {
 
 // aglNames is the Adobe Glyph List subset covering the standard Latin,
 // Greek, Symbol, and ZapfDingbats glyph names used by the base encodings.
+//
+// The names are Adobe's, from glyphlist.txt and zapfdingbats.txt of
+// github.com/adobe-type-tools/agl-aglfn, under the BSD 3-Clause licence whose
+// notice THIRD_PARTY_NOTICES carries. Two names here, bracket and isinferior,
+// are in neither list.
 var aglNames = map[string]bool{
 	"A": true, "AE": true, "AEacute": true, "AEsmall": true, "Aacute": true, "Aacutesmall": true,
 	"Abreve": true, "Acircumflex": true, "Acircumflexsmall": true, "Acute": true, "Acutesmall": true, "Adieresis": true,

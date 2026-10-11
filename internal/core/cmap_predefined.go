@@ -13,7 +13,8 @@ package core
 // cmap-resources, as poppler-data 0.4.12 ships them in /usr/share/poppler/cMap),
 // following usecmap to the CMap that declares the ranges.
 // TestPredefinedCodespacesMatchAdobe checks the table against those files when
-// they are installed.
+// they are installed. The CMaps are under the BSD 3-Clause licence, whose
+// notice THIRD_PARTY_NOTICES carries.
 var predefinedCodespaces = func() map[string][]codespaceRange {
 	m := map[string][]codespaceRange{}
 	for _, name := range []string{"GB-EUC-H", "GB-EUC-V", "KSC-EUC-H", "KSC-EUC-V"} {

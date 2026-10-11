@@ -48,7 +48,7 @@ var testEnvironment = []struct {
 	{name: "PATH", what: "where the programs below are found; the CLI transcripts put the command they built first", without: "—"},
 	{name: "CORPUSPROBE", readBy: "testdata/cc/sweep.sh", what: "the built `corpusprobe` the Common Crawl sweep runs; `make cc-sweep-limited` sets it", without: "the sweep runs `testdata/cc/run/corpusprobe`, which `make cc-sweep` builds"},
 	{name: "go", tool: true, what: "the Go command: it builds what the CLI, example and developer-tool tests execute, and lists the packages the lints read", without: "those tests fail"},
-	{name: "git", tool: true, what: "checks that no binary is committed and that `.gitignore` covers every command's output", without: "those tests fail"},
+	{name: "git", tool: true, what: "checks that no binary is committed, that `.gitignore` covers every command's output, and that THIRD_PARTY_NOTICES names every committed file that may be someone else's", without: "those tests fail"},
 	{name: "bash", tool: true, what: "runs `scripts/check-no-binaries.sh` under its test", without: "that test fails"},
 	{name: "/bin/sh", tool: true, what: "runs the CLI transcripts in `docs/cli.md` and the CLI tests that need a redirect or a limit", without: "those tests fail; the transcript test skips on Windows"},
 	{name: "gs", tool: true, what: "Ghostscript: renders the pages the bitmap-font, colour-glyph and htmlpdf tests compare with what should be there", without: "the comparisons run with whichever of gs and pdftoppm is present, and skip with neither; htmlpdf's vertical-text ink check needs gs itself and skips"},

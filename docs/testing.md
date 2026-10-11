@@ -185,14 +185,21 @@ serves genuinely broken PDFs, and roughly 0.7% is normal. A **panic or a hang**
 is the failure, and the file is quarantined as the reproduction. See
 [testdata/cc/README.md](../testdata/cc/README.md).
 
-A few data sets are the exception and *are* committed:
+A few data sets are the exception and *are* committed. Their sources, pins
+and licences are in [THIRD_PARTY_NOTICES](../THIRD_PARTY_NOTICES), and
+`TestEveryThirdPartyFileHasANotice` (`internal/lint`) fails when a committed
+file under `testdata/` is named neither there nor on the test's own list of
+the repository's scripts and manifests:
 
-- `testdata/xmp-rng/` — ISO 16684 RelaxNG schemas, MIT, used by
-  `TestXMPTablesMatchRNG`;
-- the spec-example JSON;
-- `testdata/shaping/corpus.txt` — 12,475 strings over which `Shape`, `Draw`
-  and `MeasureShaped` have to agree with each other, which is a
-  self-consistency check and needs no oracle beside it;
+- `testdata/xmp-rng/` — ISO 16684 RelaxNG schemas, MIT or the ISO 16684-2
+  schema terms, used by `TestXMPTablesMatchRNG`;
+- the spec-example JSON (`testdata/spec_examples.json`,
+  `testdata/spec_examples_17.json`) — the examples of ISO 32000-2 and
+  ISO 32000-1. No licence to redistribute them has been established; the
+  notice says so;
+- `testdata/shaping/corpus.txt` — 12,475 strings, a copy of forme's shaping
+  corpus, over which `Shape`, `Draw` and `MeasureShaped` have to agree with
+  each other, which is a self-consistency check and needs no oracle beside it;
 - `testdata/fontinstance/oracle.txt` — what HarfBuzz and fontTools say two
   variable fonts' instances advance and ink (forme's bundled Noto Sans and its
   CFF2 fixture, both in the forme module), which
@@ -243,7 +250,7 @@ program the list does not describe.
 | Program | What for | Without it | Run by |
 |---|---|---|---|
 | `go` | the Go command: it builds what the CLI, example and developer-tool tests execute, and lists the packages the lints read | those tests fail | tests in `cmd/pdf0`, `htmlpdf`, `internal/cmd`, `internal/cmd/corpusprobe`, `internal/cmd/corpustime`, `internal/lint` |
-| `git` | checks that no binary is committed and that `.gitignore` covers every command's output | those tests fail | `internal/lint: TestGitignoreCoversEveryCommand`, `scripts: TestCheckNoBinariesReadsTheIndex` |
+| `git` | checks that no binary is committed, that `.gitignore` covers every command's output, and that THIRD_PARTY_NOTICES names every committed file that may be someone else's | those tests fail | `internal/lint: TestEveryNoticeQuotedFromHereIsWhatTheFileSays`, `internal/lint: TestEveryThirdPartyFileHasANotice`, `internal/lint: TestGitignoreCoversEveryCommand`, `scripts: TestCheckNoBinariesReadsTheIndex` |
 | `bash` | runs `scripts/check-no-binaries.sh` under its test | that test fails | `scripts: TestCheckNoBinariesReadsTheIndex` |
 | `/bin/sh` | runs the CLI transcripts in `docs/cli.md` and the CLI tests that need a redirect or a limit | those tests fail; the transcript test skips on Windows | tests in `cmd/pdf0` |
 | `gs` | Ghostscript: renders the pages the bitmap-font, colour-glyph and htmlpdf tests compare with what should be there | the comparisons run with whichever of gs and pdftoppm is present, and skip with neither; htmlpdf's vertical-text ink check needs gs itself and skips | tests in the root package, `htmlpdf` |
