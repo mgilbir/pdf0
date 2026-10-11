@@ -173,6 +173,26 @@ func validateView(doc core.View, part string) []Violation {
 		runCat(checkUA2LinkTargets)
 	}
 
+	// The rest of what only PDF/UA-2 asks (pdfua2_ident.go, pdfua2_struct.go,
+	// pdfua2_interactive.go): pdfuaid:rev (5); one Document root in the PDF
+	// 2.0 namespace (8.2.5.2); no H (8.2.5.12); ListNumbering on a labelled
+	// list (8.2.5.25); structure destinations (8.8); invisible annotations as
+	// artifacts (8.9.2.2); a file attachment's AFRelationship (8.9.2.4.10);
+	// one widget per Form (8.10.1) and a widget's label or /Contents
+	// (8.10.2.3); an embedded file's /Desc (8.14.1).
+	if part == "2" {
+		runCat(checkUA2Revision)
+		runCat(checkUA2DocumentRoot)
+		runCat(checkUA2NoH)
+		runCat(checkUA2ListNumbering)
+		runCat(checkUA2StructDestinations)
+		runCat(checkUA2InvisibleAnnots)
+		runCat(checkUA2FileAttachments)
+		runCat(checkUA2FormOneWidget)
+		runCat(checkUA2WidgetDescription)
+		runCat(checkUA2EmbeddedFileDesc)
+	}
+
 	// 7.1 — Suspects must not be true; 7.4.4 strong/weak; 7.9 Note IDs.
 	runCat(checkUASuspects)
 	runCat(checkUAStrongWeak)

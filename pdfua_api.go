@@ -76,12 +76,21 @@ func validatePDFUA(cancel core.Canceler, doc *Document, part string) []pdfua.Vio
 // ValidatePDFUA2 checks a document against PDF/UA-2 (ISO 14289-2). It runs the
 // checks ValidatePDFUA does, with the identification rule requiring
 // pdfuaid:part 2 and without the 1.x-header rule, and adds the rules only part
-// 2 has: the declared PDF version must be 2.0 (clause "4"), a type in an
-// explicit namespace must not be role-mapped back into that namespace
-// ("8.2.4"), and MathML's math must sit in a Formula ("8.2.5.29").
+// 2 has: the declared PDF version must be 2.0 (clause "4"), pdfuaid:rev must
+// be 2024 ("5"), a type in an explicit namespace must not be role-mapped back
+// into that namespace ("8.2.4"), the structure tree root holds one Document
+// element in the PDF 2.0 namespace ("8.2.5.2"), H is not used ("8.2.5.12"),
+// Link annotations with different targets sit in different elements
+// ("8.2.5.20"), a labelled list has a ListNumbering ("8.2.5.25"), MathML's
+// math sits in a Formula ("8.2.5.29"), destinations within the document are
+// structure destinations ("8.8"), invisible annotations are artifacts
+// ("8.9.2.2"), a file attachment's file specification has an AFRelationship
+// ("8.9.2.4.10"), a Form element encloses at most one widget ("8.10.1"), a
+// widget has a label or /Contents ("8.10.2.3"), and an embedded file has a
+// /Desc ("8.14.1").
 //
 // Findings reuse the pdfua.Violation type, with Part "2", and Error prints
-// "[PDF/UA-2 …]". Only those three rules carry ISO 14289-2 clause numbers: the
+// "[PDF/UA-2 …]". Only those rules carry ISO 14289-2 clause numbers: the
 // shared checks keep their ISO 14289-1 numbers, so read a clause against the
 // standard that numbers it (docs/pdfua.md, "PDF/UA-2"). The caveats of
 // ValidatePDFUA apply: it is a partial validator, and the result may include

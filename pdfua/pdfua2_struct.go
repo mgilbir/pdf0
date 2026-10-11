@@ -1,0 +1,295 @@
+package pdfua
+
+import (
+	"strconv"
+	"strings"
+
+	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/object"
+)
+
+// This file holds the structure-tree rules only PDF/UA-2 has (ISO 14289-2
+// 8.2.5.2, 8.2.5.12, 8.2.5.25 and 8.10.1's one widget per Form). Each reads
+// the flattened tree (core.StructTree) and compares resolved types, as every
+// structure check does, and each follows what the veraPDF 1.30.3 model reads
+// for the property its PDFUA-2 profile tests; where the model is narrower or
+// wider than the clause's prose, the comment says so.
+
+// isGroupingType reports whether a node is one of the types veraPDF looks
+// through when it asks for an element's children (PDStructElem.isPassThroughTag):
+// NonStruct, Div and Part, by resolved type. An element whose type resolves
+// to nothing standard is not one.
+func isGroupingType(n structNode) bool {
+	if !n.HasS || !n.Mapped {
+		return false
+	}
+	switch n.StdType {
+	case "NonStruct", "Div", "Part":
+		return true
+	}
+	return false
+}
+
+// semanticParents returns, for each node of the flattened tree, the index of
+// the nearest ancestor that is not a grouping element (isGroupingType), or -1
+// for the structure tree root. veraPDF answers "the children of X" through
+// grouping elements this way (GFPDStructTreeNode.getChildrenStandardTypes and
+// its structural-significance children): the children of an L are its LIs,
+// whether written under the L or under a Div inside it. The tree is
+// pre-order, so a parent's answer is known before its children's, and the
+// whole list costs one pass.
+func semanticParents(d core.View, nodes []structNode) []int {
+	sp := make([]int, len(nodes))
+	for i, n := range nodes {
+		d.Charge(1)
+		p := n.Parent
+		if p >= 0 && isGroupingType(nodes[p]) {
+			p = sp[p]
+		}
+		sp[i] = p
+	}
+	return sp
+}
+
+// isStdType reports whether a node is a structure element whose type resolves
+// to the standard type t. StdType alone is not enough: an element whose type
+// resolves to nothing carries its own /S there.
+func isStdType(n structNode, t object.Name) bool {
+	return n.HasS && n.Mapped && n.NS != core.NSMathML && n.StdType == t
+}
+
+// checkUA2DocumentRoot is ISO 14289-2 8.2.5.2: the structure tree root holds a
+// single Document element as its only child, and that element is in the PDF
+// 2.0 namespace (ISO 32000-2 14.8.6).
+//
+// It reads the root's children as veraPDF does (the properties 8.2.5.2-t01
+// and -t02 test, PDStructTreeRoot.kidsStandardTypes and
+// PDStructTreeRoot.firstChildStandardTypeNamespaceURL): through the grouping
+// types NonStruct, Div and Part; counting, for the single Document, only the
+// children whose type resolves to a standard one; and asking the namespace of
+// the first child, whatever its type. So a Part holding the Document passes
+// this rule, as it passes veraPDF's, though the clause's prose says "only
+// child"; veraPDF reports that file under ISO/TS 32005's containment rules
+// instead (StructTreeRoot-Part), which pdf0 does not implement. An element
+// listed twice in the root's /K is one element: the flattened tree visits
+// each object once.
+func checkUA2DocumentRoot(d core.View, cat *object.Dictionary) []Violation {
+	if d.ResolveDict(cat.Get("StructTreeRoot")) == nil {
+		return nil // 7.1 reports the missing tree
+	}
+	nodes := structTree(d, cat)
+	sp := semanticParents(d, nodes)
+	var kids []int     // the root's children, through grouping elements
+	var types []string // the standard types among them
+	for i, n := range nodes {
+		if sp[i] != -1 || !n.HasS || isGroupingType(n) {
+			continue
+		}
+		kids = append(kids, i)
+		if n.Mapped {
+			types = append(types, string(n.StdType))
+		}
+	}
+	if len(types) != 1 || types[0] != "Document" {
+		what := "no structure element"
+		if len(types) > 0 {
+			what = strings.Join(types, ", ")
+		}
+		return []Violation{{Clause: "8.2.5.2", Message: "the structure tree root must contain a single Document structure element as its only child; it contains " + what}}
+	}
+	first := nodes[kids[0]]
+	if !first.Mapped {
+		return []Violation{{Clause: "8.2.5.2", Message: "the structure tree root's first child, before its Document element, resolves to no standard type, so it is not in the PDF 2.0 namespace (" + core.NSPDF20 + ")", Object: d.ObjNumOf(first.Elem)}}
+	}
+	if first.NS != core.NSPDF20 {
+		return []Violation{{Clause: "8.2.5.2", Message: "the Document structure element is not in the PDF 2.0 namespace (" + core.NSPDF20 + "); its namespace is " + first.NS, Object: d.ObjNumOf(first.Elem)}}
+	}
+	return nil
+}
+
+// checkUA2NoH is ISO 14289-2 8.2.5.12: a conforming file uses the numbered
+// headings H1–Hn and not H (veraPDF 8.2.5.12-t01, every SEH object). An
+// element whose type resolves to H through a role map is an H.
+func checkUA2NoH(d core.View, cat *object.Dictionary) []Violation {
+	var v []Violation
+	for _, n := range structTree(d, cat) {
+		if isStdType(n, "H") {
+			v = append(v, Violation{Clause: "8.2.5.12", Message: "the H structure type is used; PDF/UA-2 requires the numbered headings H1-Hn", Object: d.ObjNumOf(n.Elem)})
+		}
+	}
+	return v
+}
+
+// checkUA2ListNumbering is ISO 14289-2 8.2.5.25: when a list's items carry Lbl
+// elements, the L element has a ListNumbering attribute, and not the value
+// None (veraPDF 8.2.5.25-t01).
+//
+// "Carries labels" is veraPDF's SEL.containsLabels: some LI child of the L —
+// through grouping elements — has an Lbl child, again through grouping
+// elements. The attribute is read as listNumbering says.
+func checkUA2ListNumbering(d core.View, cat *object.Dictionary) []Violation {
+	nodes := structTree(d, cat)
+	sp := semanticParents(d, nodes)
+	labelled := map[int]bool{} // LI index -> it has an Lbl child
+	for i, n := range nodes {
+		if p := sp[i]; p >= 0 && isStdType(n, "Lbl") && isStdType(nodes[p], "LI") {
+			labelled[p] = true
+		}
+	}
+	lists := map[int]bool{} // L index -> one of its LIs is labelled
+	for li := range labelled {
+		if p := sp[li]; p >= 0 && isStdType(nodes[p], "L") {
+			lists[p] = true
+		}
+	}
+	ln := newListNumbering(d, cat)
+	var v []Violation
+	for i, n := range nodes {
+		if !lists[i] {
+			continue
+		}
+		if ln.of(n.Elem) == "None" {
+			v = append(v, Violation{Clause: "8.2.5.25", Message: "a list whose items have Lbl elements has no ListNumbering attribute, or ListNumbering None", Object: d.ObjNumOf(n.Elem)})
+		}
+	}
+	return v
+}
+
+// listNumbering reads a list element's ListNumbering attribute as veraPDF does
+// (AttributeHelper.getListNumbering): the first attribute object owned by List
+// (/O /List) in the element's /A — a dictionary, or an array of them and their
+// revision numbers — whose ListNumbering is a name; failing that, the same in
+// the attribute objects its /C names in the structure tree root's /ClassMap;
+// failing that, the parent element's (/P), and so on up. A list with none
+// anywhere is None, the attribute's default (ISO 32000-2 Table 383).
+//
+// An element without an attribute of its own has its parent's value, so each
+// element's answer is memoised, and the elements on a /P chain are each read
+// once however many lists share the chain: nested lists, each asking its whole
+// ancestry, would otherwise cost the depth squared. The chain is the file's to
+// make, so a /P loop is ended where it closes (with None), and every element
+// read is charged to the run's work meter.
+type listNumbering struct {
+	d        core.View
+	classMap *object.Dictionary
+	memo     map[*object.Dictionary]string
+}
+
+func newListNumbering(d core.View, cat *object.Dictionary) *listNumbering {
+	ln := &listNumbering{d: d, memo: map[*object.Dictionary]string{}}
+	if root := d.ResolveDict(cat.Get("StructTreeRoot")); root != nil {
+		ln.classMap = d.ResolveDict(root.Get("ClassMap"))
+	}
+	return ln
+}
+
+// of returns elem's ListNumbering.
+func (ln *listNumbering) of(elem *object.Dictionary) string {
+	d := ln.d
+	answer := "None"
+	var path []*object.Dictionary
+	onPath := map[*object.Dictionary]bool{}
+	for e := elem; e != nil && !onPath[e]; e = d.ResolveDict(e.Get("P")) {
+		if v, ok := ln.memo[e]; ok {
+			answer = v
+			break
+		}
+		d.Charge(1)
+		onPath[e] = true
+		path = append(path, e)
+		if v, ok := ln.own(e); ok {
+			answer = v
+			break
+		}
+	}
+	for _, e := range path {
+		ln.memo[e] = answer
+	}
+	return answer
+}
+
+// own is the ListNumbering an element gives itself, through /A or /C.
+func (ln *listNumbering) own(e *object.Dictionary) (string, bool) {
+	d := ln.d
+	if v, ok := ownedName(d, e.Get("A"), "List", "ListNumbering"); ok {
+		return v, true
+	}
+	if ln.classMap == nil {
+		return "", false
+	}
+	var classes []object.Object
+	switch c := d.Resolve(e.Get("C")).(type) {
+	case object.Name:
+		classes = []object.Object{c}
+	case object.Array:
+		classes = c
+	}
+	for _, c := range classes {
+		d.Charge(1)
+		name, ok := d.Resolve(c).(object.Name)
+		if !ok {
+			continue
+		}
+		if v, ok := ownedName(d, ln.classMap.Get(name), "List", "ListNumbering"); ok {
+			return v, true
+		}
+	}
+	return "", false
+}
+
+// ownedName reads key as a name from an attribute object whose owner (/O) is
+// owner: attrs is one attribute dictionary, or an array of them (with the
+// revision numbers ISO 32000-2 14.7.6 interleaves, which are skipped). The
+// first owned dictionary whose key holds a name answers.
+func ownedName(d core.View, attrs object.Object, owner object.Name, key object.Name) (string, bool) {
+	one := func(o object.Object) (string, bool) {
+		a := d.ResolveDict(o)
+		if a == nil {
+			return "", false
+		}
+		if o, _ := d.ResolveName(a.Get("O")); o != owner {
+			return "", false
+		}
+		v, ok := d.ResolveName(a.Get(key))
+		return string(v), ok
+	}
+	if arr, ok := d.Resolve(attrs).(object.Array); ok {
+		for _, e := range arr {
+			d.Charge(1)
+			if v, ok := one(e); ok {
+				return v, true
+			}
+		}
+		return "", false
+	}
+	return one(attrs)
+}
+
+// checkUA2FormOneWidget is ISO 14289-2 8.10.1: a Form structure element
+// encloses at most one widget annotation (veraPDF 8.10.1-t02,
+// SEForm.widgetAnnotsCount: the element's own OBJR children whose object is a
+// /Widget annotation).
+func checkUA2FormOneWidget(d core.View, cat *object.Dictionary) []Violation {
+	nodes := structTree(d, cat)
+	widgets := map[int]int{} // Form index -> its widget OBJR children
+	for _, n := range nodes {
+		if n.HasS || n.Parent < 0 || !isStdType(nodes[n.Parent], "Form") {
+			continue
+		}
+		if t, _ := d.ResolveName(n.Elem.Get("Type")); t != "OBJR" {
+			continue
+		}
+		if obj := d.ResolveDict(n.Elem.Get("Obj")); obj != nil {
+			if st, _ := d.ResolveName(obj.Get("Subtype")); st == "Widget" {
+				widgets[n.Parent]++
+			}
+		}
+	}
+	var v []Violation
+	for i, n := range nodes {
+		if c := widgets[i]; c > 1 {
+			v = append(v, Violation{Clause: "8.10.1", Message: "a Form structure element encloses " + strconv.Itoa(c) + " widget annotations; it may enclose at most one", Object: d.ObjNumOf(n.Elem)})
+		}
+	}
+	return v
+}

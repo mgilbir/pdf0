@@ -30,7 +30,7 @@ var uaCorpusBaselines = map[string]struct {
 	minCaught         int // fail files reported
 }{
 	"PDF_UA-1": {maxFalsePositives: 0, minCaught: 155},
-	"PDF_UA-2": {maxFalsePositives: 0, minCaught: 70},
+	"PDF_UA-2": {maxFalsePositives: 0, minCaught: 84},
 }
 
 func TestCorpusPDFUA(t *testing.T) {
