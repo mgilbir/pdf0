@@ -34,20 +34,20 @@ func TestUAAnnotDescription(t *testing.T) {
 		}
 		return false
 	}
-	if !hasDesc(checkUAAnnotations(mk("Highlight", "", ""))) {
+	if !hasDesc(checkUAAnnotations(mk("Highlight", "", ""), nil, "1")) {
 		t.Error("Highlight without Contents/Alt not flagged")
 	}
-	if hasDesc(checkUAAnnotations(mk("Highlight", "a note", ""))) {
+	if hasDesc(checkUAAnnotations(mk("Highlight", "a note", ""), nil, "1")) {
 		t.Error("Highlight with Contents wrongly flagged")
 	}
-	if hasDesc(checkUAAnnotations(mk("Highlight", "", "alt"))) {
+	if hasDesc(checkUAAnnotations(mk("Highlight", "", "alt"), nil, "1")) {
 		t.Error("Highlight with Alt wrongly flagged")
 	}
 	// Widget and PrinterMark are exempt from this particular rule.
-	if hasDesc(checkUAAnnotations(mk("Widget", "", ""))) {
+	if hasDesc(checkUAAnnotations(mk("Widget", "", ""), nil, "1")) {
 		t.Error("Widget wrongly subjected to Contents/Alt rule")
 	}
-	if hasDesc(checkUAAnnotations(mk("PrinterMark", "", ""))) {
+	if hasDesc(checkUAAnnotations(mk("PrinterMark", "", ""), nil, "1")) {
 		t.Error("PrinterMark wrongly subjected to Contents/Alt rule")
 	}
 }

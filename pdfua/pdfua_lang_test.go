@@ -6,16 +6,21 @@ import (
 	"testing"
 )
 
-func TestValidBCP47(t *testing.T) {
-	valid := []string{"en", "en-US", "pt-PT", "zh-Hans-CN", "de-DE-1901", "x-klingon", "es-419"}
+// TestUALanguageTag pins the language-identifier grammar PDF/UA holds /Lang to:
+// RFC 3066's Language-Tag, as ISO 32000-1 14.9.2 cites it and the veraPDF
+// CosLang rule reads it (/^[a-zA-Z]{1,8}(-[a-zA-Z0-9]{1,8})*$/). BCP 47's
+// stricter shape (a two-letter-or-longer primary subtag) is not the rule: the
+// corpus passes "p" and "p-pt" (PDF_UA-1 7.2-t29-pass-b, -d, -f).
+func TestUALanguageTag(t *testing.T) {
+	valid := []string{"en", "en-US", "pt-PT", "zh-Hans-CN", "de-DE-1901", "x-klingon", "es-419", "p", "p-pt", "portugue-pt"}
 	for _, tag := range valid {
-		if !core.ValidBCP47(tag) {
+		if !uaLanguageTag(tag) {
 			t.Errorf("%q should be valid", tag)
 		}
 	}
-	invalid := []string{"", "portugues-pt", "1-pt", "-pt", "en-", "nl-1234abcde", "e", "en--US"}
+	invalid := []string{"", "portugues-pt", "1-pt", "-pt", "en-", "nl-1234abcde", "en--US", "en US"}
 	for _, tag := range invalid {
-		if core.ValidBCP47(tag) {
+		if uaLanguageTag(tag) {
 			t.Errorf("%q should be invalid", tag)
 		}
 	}
@@ -37,8 +42,9 @@ func TestUALang(t *testing.T) {
 	if d := mk("en-US"); len(checkUALang(d, d.ResolveDict(object.IndirectRef{Number: 1}))) != 0 {
 		t.Error("valid catalog /Lang wrongly flagged")
 	}
-	// Absent /Lang is not this check's concern (a separate rule requires it).
+	// Absent /Lang is not this check's concern (the language rules are
+	// checkUA1LangDeterminable's and checkUA2CatalogLang's).
 	if d := mk(""); len(checkUALang(d, d.ResolveDict(object.IndirectRef{Number: 1}))) != 0 {
-		t.Error("absent /Lang wrongly flagged by BCP-47 check")
+		t.Error("absent /Lang wrongly flagged by the language-tag check")
 	}
 }
