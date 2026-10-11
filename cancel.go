@@ -10,7 +10,7 @@ import (
 // validating a 71 MB, 1256-page file takes about ten seconds, and a hostile
 // file can sit at the resource ceilings for longer still. A caller with a
 // deadline — an HTTP handler, a batch worker, this repository's own
-// cmd/corpusprobe — needs to be able to stop that work, not merely to stop
+// internal/cmd/corpusprobe — needs to be able to stop that work, not merely to stop
 // waiting for it. Abandoning the goroutine keeps the CPU and the memory busy
 // until the work finishes on its own; with several workers and a 25-second
 // file that is real leakage, and it was the concrete motivation for this file.
@@ -44,7 +44,7 @@ import (
 // # Where the signal lives
 //
 // A validation run already carries per-run state on a shallow copy of the
-// Document (validationCache, see limits_report.go), and that state's lifetime is
+// Document (validationCache, see runcache.go), and that state's lifetime is
 // exactly the run's. The canceler rides there, so the caller's Document never
 // holds a context. Read and Write have no run, so they thread a canceler down
 // their loops as an ordinary parameter.
@@ -61,6 +61,22 @@ import (
 //   - per core.CancelReadChunk inside flate (core.CancelReader) and LZW decoding, which is
 //     the longest single uninterruptible step there is;
 //   - per object in Read's load loops and Write's emit loop.
+//
+// The scanner check is gated on the scan position, not on a token counter:
+// one comparison of the loop index against a local int per token, with the
+// poll itself once per core.CancelScanBytes. The scanners do not branch on "is
+// this cancellable" to skip that bookkeeping, deliberately. The obvious
+// version — set the gate past the end of the data when the signal can never
+// fire — added two statements to the then content tokenizer's loop and pushed
+// its inline cost from under the compiler's 800-node budget to 805. The
+// range-over-func closure then stopped being inlined into its consumers, and
+// PDF/UA validation of a 71 MB file slowed by 5%, far more than the one
+// nil-channel poll per megabyte it was avoiding. In these loops, check
+// `go build -gcflags=-m=2` for "function too complex" before trusting a
+// wall-clock measurement. With the smaller version, PDF/A and PDF/UA on that
+// file are indistinguishable from the code before cancellation existed (PDF/A
+// 10.24 s against 10.57 s, PDF/UA 2.70 s against 2.76 s; medians of six runs,
+// the difference within run-to-run noise).
 //
 // On a 71 MB, 1256-page file whose full PDF/A validation takes 10.7 s,
 // cancellation takes effect in about 60 ms, and an already-cancelled context
@@ -84,7 +100,9 @@ import (
 // already in the "loud" class docs/limits.md describes: they have no finding
 // channel, and a truncated document or a truncated file must never be handed
 // back as if it were whole. ExtractTextContext and ExtractImagesContext return
-// an error alongside the partial result for the same reason.
+// an error alongside the partial result for the same reason, and ImagesContext
+// yields one after the images it reached. Every …Context entry point is listed
+// in docs/untrusted-input.md, generated from the API.
 
 // core.Canceler is one operation's cancellation signal.
 //
