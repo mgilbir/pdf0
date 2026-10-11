@@ -2,24 +2,16 @@
 
 ## Build and test
 
-```
-go build ./...
-go test ./...     # unit + spec-example tests; corpus/round-trip tests skip if their data is absent
-go vet ./...
-gofmt -l .        # must print nothing
-```
+Before you push, run `make check`, which is exactly what CI's build-test job
+runs, and what your change also needs from the table in
+[docs/testing.md, "Before you push"](docs/testing.md#before-you-push) — a
+validator change, for one, needs `make test-corpus`, which is CI's corpus job.
 
-`go test ./...` on a fresh clone stays green — but that is not the same as being
-covered. Every test whose (uncommitted) data is absent skips, including the
-whole PDF/A conformance ratchet, the Arlington structural oracle, every
-round-trip test against real PDFs, and the image-codec decode oracles.
-`go test -v ./... 2>&1 | grep SKIP` shows what you are not running.
-
+`go test ./...` on a fresh clone stays green, but that is not the same as being
+covered: every test whose (uncommitted) data or tool is absent skips.
 [docs/testing.md](docs/testing.md) is the reference for the test tiers, every
-external dataset and how to fetch it, all the make targets, the fuzzers, and the
-`cmd/` developer aids. In short: touched a validator, run `make test-corpus`;
-touched the parser or serializer, run `make refpdfs && make test-arlington`;
-touched an image codec, fetch that codec's sample set.
+external data set and tool and how to get it, the make targets, the fuzzers,
+and the developer aids under `internal/cmd/`.
 
 ## What CI checks
 
@@ -113,12 +105,15 @@ correct on paper but raises a false positive on a pass-file is wrong.
 
 Workflow when your change moves the counts:
 
-1. Run `make test-corpus` and read the logged line:
+1. Run `make test-corpus` — every test that reads the corpus, as CI runs them
+   — and read the line it prints last:
    `corpus results: pass=… fail=… | falsePositives=… missed=… parseErrors=…`
 2. If `falsePositives` rose, your rule is too strict — fix the rule, do **not**
    raise the baseline.
-3. If `missed` dropped (you caught more), lower `corpusMaxMissed` (or
-   `corpusMaxIsartorMissed`) to the new value to lock in the gain.
+3. Every baseline here is 0, so these counts can only be held, not improved: a
+   rule that catches a file for the right reason shows up in
+   `TestRuleCoverage` instead, whose per-level `ruleCoverageBaselines` you
+   tighten to lock the gain in (see [Checking rule coverage](#checking-rule-coverage)).
 4. Never raise a baseline to make a red test green.
 
 ## Adding a validation rule
@@ -131,14 +126,20 @@ Workflow when your change moves the counts:
    [docs/validators.md](docs/validators.md#where-the-rules-live).
 2. Resolve indirect references before type-asserting (`doc.Resolve` /
    `resolveName`): a value behind an indirect reference must not evade the rule.
-3. Guard every recursion with a visited-set and every `arr[0]` with a length
-   check — the validator processes untrusted files and must not panic or hang.
+3. Bound every recursion over the object graph by depth: call
+   `core.View.Descend`, or take a depth parameter and compare it to a bound,
+   or iterate instead. A visited set alone does not do it — a chain of a
+   hundred thousand distinct objects has no cycle to find, and overflows the
+   stack — so use one only beside the bound, against cycles and shared nodes.
+   `TestRecursiveWalkersAreBounded` (`internal/lint`) fails on a recursion
+   with neither. Guard every `arr[0]` with a length check too: the validator
+   processes untrusted files and must not panic or hang.
 4. Respect the executed-content model where the rule is about *used* resources
    (see [validators.md](docs/validators.md) and [ADR 0004](docs/adr/0004-executed-content-model.md)).
 5. Add a unit test, then run `make test-corpus` and follow the ratchet workflow
    above.
 
-For validators other than PDF/A (PDF/UA, PDF/X, PDF/VT, DPart, Factur-X) see
+For validators other than PDF/A (PDF/UA, PDF/X, PDF/VT, PDF/R, DPart, Factur-X) see
 [docs/validators.md](docs/validators.md); for signatures see
 [docs/signing.md](docs/signing.md), for image codecs
 [docs/images.md](docs/images.md), and for the CLI [docs/cli.md](docs/cli.md).

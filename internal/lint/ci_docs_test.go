@@ -52,8 +52,14 @@ var generatedSections = []struct {
 		source: "internal/testfiles/datasets.go and the tests that read each data set",
 		files:  []string{"docs/testing.md"},
 		render: func(t *testing.T, root string) string {
-			return renderDatasetDoc(parseDatasets(t, root), datasetReaders(t, root))
+			return renderDatasetDoc(t, parseDatasets(t, root), datasetReaders(t, root))
 		},
+	},
+	{
+		name:   "testenv",
+		source: "testEnvironment in internal/lint/testenv_test.go and the tests that use each entry",
+		files:  []string{"docs/testing.md"},
+		render: renderTestEnvironmentDoc,
 	},
 }
 
@@ -331,6 +337,7 @@ func parseWorkflow(t *testing.T, root string) *workflow {
 
 type dataset struct {
 	varName, name, dir, sub, env, fetch, target string
+	proves, source                              string
 }
 
 func (d dataset) dataDir() string {
@@ -385,6 +392,10 @@ func parseDatasets(t *testing.T, root string) []dataset {
 					ds.env = v
 				case "Fetch":
 					ds.fetch = v
+				case "Proves":
+					ds.proves = v
+				case "Source":
+					ds.source = v
 				}
 			}
 			if m := target.FindStringSubmatch(ds.fetch); m != nil {
@@ -570,10 +581,16 @@ func datasetReaders(t *testing.T, root string) map[string][]string {
 	return out
 }
 
-func renderDatasetDoc(sets []dataset, readers map[string][]string) string {
+func renderDatasetDoc(t *testing.T, sets []dataset, readers map[string][]string) string {
+	t.Helper()
 	var b strings.Builder
-	b.WriteString("\n\n| Data set | Location | Override | How it arrives | Read by |\n|---|---|---|---|---|\n")
+	b.WriteString("\n\n| Data set | What it proves | Source / licence | Location | Override | How it arrives | Read by |\n|---|---|---|---|---|---|---|\n")
 	for _, d := range sets {
+		if d.proves == "" || d.source == "" {
+			// The table is where a contributor learns why a data set is
+			// worth fetching; one without the reason is half a row.
+			t.Errorf("internal/testfiles/datasets.go: %s has no Proves or no Source", d.varName)
+		}
 		how := "`make " + d.target + "`"
 		if d.target == "" {
 			how = "by hand"
@@ -587,7 +604,7 @@ func renderDatasetDoc(sets []dataset, readers map[string][]string) string {
 		if len(rs) > 0 {
 			read = joinCode(rs)
 		}
-		fmt.Fprintf(&b, "| %s | `%s` | %s | %s | %s |\n", d.name, d.dataDir(), env, how, read)
+		fmt.Fprintf(&b, "| %s | %s | %s | `%s` | %s | %s | %s |\n", d.name, d.proves, d.source, d.dataDir(), env, how, read)
 	}
 	b.WriteString("\n")
 	return b.String()

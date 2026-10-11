@@ -129,6 +129,10 @@ type Dataset struct {
 	Sub string
 	// Fetch is the command that fetches it, or a note on where to place it.
 	Fetch string
+	// Proves is what the tests over it establish, and Source where it comes
+	// from and under what licence, both as the testing guide's data set table
+	// shows them (Markdown, links relative to docs/).
+	Proves, Source string
 }
 
 // Path returns the data set's directory (its Sub directory, if it has one)
