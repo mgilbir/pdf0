@@ -335,6 +335,11 @@ well as by pdf0's own validator.
 
 ## Fonts and font data from elsewhere
 
+Everything this repository keeps that came from elsewhere, fonts or not, is
+listed with its source, pin and licence in
+[THIRD_PARTY_NOTICES](../THIRD_PARTY_NOTICES), and a test holds that list to
+the tree. This section says what of it concerns fonts.
+
 - **The bundled face** (`fonts.NotoSans`) is forme's, in its
   `fonts/notosans` package, under the SIL Open Font License with its licence
   file beside it. `fonts.NotoSansLicense` returns the text, for a program that
@@ -359,7 +364,7 @@ well as by pdf0's own validator.
   (`make notocjk`) and Noto Color Emoji (`make notoemoji`); see
   [testing.md](testing.md). forme's own fixtures are read from the module cache.
 
-forme's notices for everything it carries are its
+forme's notices for everything it carries are its own
 [THIRD_PARTY_NOTICES](https://github.com/mgilbir/forme/blob/main/THIRD_PARTY_NOTICES).
 
 ## File map

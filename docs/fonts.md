@@ -431,15 +431,23 @@ a second field and a second option; nothing here forecloses it.
 
 ## Third-party data
 
-The tables validation reads that come from elsewhere say where from:
-`font/font_encodings.go` and `font/cff_strings.go` in forme are generated from
-ISO 32000-1 Annex D.2 and Adobe Technical Note #5176; `aglNames` in
-`pdfa/fonts.go` is a hand-maintained subset of the Adobe Glyph List; and the
-predefined-CMap codespaces in `internal/core/cmap_predefined.go` are
-transcribed from Adobe's published CMaps. No font is read by validation but
-the ones a document embeds. The fonts and font data the writer uses, and the
-one typeface committed to this repository, are listed in
-[font-embedding.md](font-embedding.md#fonts-and-font-data-from-elsewhere).
+Every table or file this repository keeps that came from elsewhere is listed,
+with its source, its pin and its licence, in
+[THIRD_PARTY_NOTICES](../THIRD_PARTY_NOTICES); this section says which of them
+font validation reads.
+
+- `aglNames` in `pdfa/fonts.go` holds glyph names from the Adobe Glyph List and
+  the ITC Zapf Dingbats Glyph List (BSD 3-Clause). Two of its 964 names,
+  `bracket` and `isinferior`, are in neither list.
+- The predefined-CMap codespaces in `internal/core/cmap_predefined.go` are
+  transcribed from Adobe's published CMaps (BSD 3-Clause).
+- `font/font_encodings.go` and `font/cff_strings.go` are forme's, transcribed
+  by hand from ISO 32000-1 Annex D.2 and Adobe Technical Note #5176, and
+  listed in forme's own notices.
+
+No font is read by validation but the ones a document embeds. The fonts and
+font data the writer uses, and the one typeface committed to this repository,
+are in [font-embedding.md](font-embedding.md#fonts-and-font-data-from-elsewhere).
 
 ## File map
 

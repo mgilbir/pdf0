@@ -171,4 +171,5 @@ surface ([cli.md](docs/cli.md)).
 
 ## License
 
-See [LICENSE](LICENSE).
+See [LICENSE](LICENSE). Material from elsewhere, with its source and licence,
+is listed in [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES).
