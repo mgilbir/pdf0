@@ -157,7 +157,8 @@ func cmdValidate(args []string) error {
 	for _, e := range errs {
 		fmt.Fprintln(stdout, e)
 	}
-	return violationsf("%d violation(s) found", len(errs))
+	n, checker := tally(errs)
+	return findingsError(n, checker, fmt.Sprintf("%d violation(s) found", n))
 }
 
 func cmdDecrypt(args []string) error {
@@ -335,7 +336,7 @@ func cmdRepair(args []string) error {
 	if err != nil {
 		return fmt.Errorf("the repaired document does not read back (nothing written): %w", err)
 	}
-	remaining := len(pdf0.ValidatePDFA(rt, lvl))
+	remaining, checker := tally(pdf0.ValidatePDFA(rt, lvl))
 	if err := writeOutput(out, *force, buf.Bytes(), perm); err != nil {
 		return err
 	}
@@ -349,14 +350,18 @@ func cmdRepair(args []string) error {
 	if out == "-" {
 		name = "<stdout>"
 	}
-	fmt.Fprintf(report, "%s: %d fix(es) applied, %d violation(s) remain\n", name, len(actions), remaining)
-	if remaining > 0 {
-		if out == "-" {
-			return violationsf("%d violation(s) remain after repair", remaining)
-		}
-		return violationsf("%d violation(s) remain after repair (run: pdf0 validate -level %s %s)", remaining, *level, out)
+	// A checker finding is counted apart: it is a check that could not be
+	// completed, not a violation that remains.
+	summary := fmt.Sprintf("%s: %d fix(es) applied, %d violation(s) remain", name, len(actions), remaining)
+	if checker > 0 {
+		summary += fmt.Sprintf(", %d checker finding(s)", checker)
 	}
-	return nil
+	fmt.Fprintln(report, summary)
+	msg := fmt.Sprintf("%d violation(s) remain after repair (run: pdf0 validate -level %s %s)", remaining, *level, out)
+	if out == "-" {
+		msg = fmt.Sprintf("%d violation(s) remain after repair", remaining)
+	}
+	return findingsError(remaining, checker, msg)
 }
 
 func cmdMerge(args []string) error {
@@ -439,7 +444,8 @@ func cmdUA(args []string) error {
 	for _, e := range v {
 		fmt.Fprintln(stdout, e)
 	}
-	return violationsf("%d PDF/UA violation(s)", len(v))
+	n, checker := tally(v)
+	return findingsError(n, checker, fmt.Sprintf("%d PDF/UA violation(s)", n))
 }
 
 // readBack is how repair re-reads its own output: parseDoc, a variable only so

@@ -59,7 +59,8 @@ PDF0_USER_PASSWORD, PDF0_OWNER_PASSWORD), or a no-echo prompt when stdin
 is a terminal.
 
 exit codes: 0 success, 1 violations reported, 2 usage error or refused
-overwrite, 3 read/write, parse, or encryption error
+overwrite, 3 read/write, parse, or encryption error, or checks that could
+not be completed (only "limit" or "internal" findings)
 ```
 
 <!-- END GENERATED: cli help -->
@@ -77,17 +78,26 @@ The split between 1 and 3 is the point of the design: a conformance failure is a
 
 | Code | Meaning | Emitted by |
 |---|---|---|
-| 0 | Success — the run completed and no checks reported violations | all commands |
+| 0 | Success — the run completed and no checks reported anything | all commands |
 | 1 | Checks reported violations; the file was read (and written) fine | `validate`, `ua`, `repair` |
 | 2 | Usage error: bad/missing operand, unknown command or flag, unknown `-level`, a password given on the command line, an output that exists (without `-force`) or is one of the inputs | all commands |
-| 3 | Operational error: I/O, parse failure, missing or wrong password, encryption-state conflict, a result that could not be written to stdout | all commands |
+| 3 | The run failed. An operational error: I/O, parse failure, missing or wrong password, encryption-state conflict, a result that could not be written to stdout. Or, from `validate`, `ua` and `repair`, checks that reported nothing but checker findings | all commands |
 
-Exit 1 also covers a **checker finding**: a line whose rule is `limit` or `internal` says
-the check could not be completed (a resource limit was reached, a checker failed
-internally, or `-level declared` met a file that declares no level), not that the file
-breaks a rule. It is still exit 1, because a script asking "is this file conformant?" must
-not read "could not tell" as yes; the line says which it is, and the library tells the two
-apart with `IsCheckerFinding`.
+A **checker finding** is a line whose rule is `limit` or `internal`. It says a check could
+not be completed — a resource limit was reached, a stream uses a filter pdf0 does not
+decode, a checker failed internally, or `-level declared` met a file that declares no
+level — not that the file breaks a rule. The library tells the two apart with
+`IsCheckerFinding`, and the exit code follows from what the findings are:
+
+| The findings | Exit | Why |
+|---|---|---|
+| none | 0 | the implemented checks all ran and passed |
+| at least one violation, with or without checker findings | 1 | the file is known to break a rule |
+| checker findings only | 3, `error: N checker finding(s) and no violation: …` | conformance is unknown, so the run did not do what was asked |
+
+Exit 3 for "could not tell" means a script asking "is this file conformant?" reads it
+neither as yes nor as "it breaks a rule". The lines are printed either way, so the report
+says which check stopped and why.
 
 Violation lines go to **stdout**; the trailing `error: …` summary goes to **stderr**:
 
@@ -97,7 +107,7 @@ case $? in
   0) echo conformant ;;
   1) echo "violations:"; cat report.txt ;;
   2) echo "invoked pdf0 wrong" ;;
-  3) echo "could not process the file" ;;
+  3) echo "could not process the file, or could not tell" ;;
 esac
 ```
 
@@ -304,8 +314,8 @@ clean2b.pdf: no violations found for PDF/A-2b
 # exit 0
 $ pdf0 validate -level declared simple.pdf
 [PDF/A (as declared) limit] not validated: the level to validate against was to be taken from the document's own declaration, and it has no XMP metadata
-error: 1 violation(s) found   # stderr
-# exit 1
+error: 1 checker finding(s) and no violation: the checks could not be completed, so conformance is unknown   # stderr
+# exit 3
 $ pdf0 validate -level 5b clean2b.pdf
 error: unknown level "5b" (want 1b, 1a, 2b, 2u, 2a, 3b, 3u, 3a, 4, 4e, 4f, or declared)   # stderr
 # exit 2
@@ -315,7 +325,7 @@ error: unknown level "5b" (want 1b, 1a, 2b, 2u, 2a, 3b, 3u, 3a, 4, 4e, 4f, or de
 
 Any other `-level` is a **usage** error (exit 2), as the last run shows. With `-level
 declared`, a file that declares no PDF/A level is not validated: it is reported with one
-`limit` finding and exits **1**, as any [checker finding](#exit-codes) does. Level A
+`limit` finding and exits **3**, as a run with only [checker findings](#exit-codes) does. Level A
 (`1a`, `2a`, `3a`) and the `u`, `e` and `f` levels validate like any other.
 
 A locked file is refused rather than validated against ciphertext, exit **3**, with the
@@ -348,8 +358,9 @@ error: 9 PDF/UA violation(s)   # stderr
 <!-- END GENERATED: cli ua -->
 
 A clean run prints `<file>: no PDF/UA violations found (foundational checks)` — the
-parenthetical is the tool's own honesty about coverage. Exit codes 0, 1, 2, 3 (a locked
-file is 3, as for `validate`).
+parenthetical is the tool's own honesty about coverage. Exit codes 0, 1, 2, 3: a locked
+file is 3, as for `validate`, and so is a run whose only findings are
+[checker findings](#exit-codes).
 
 ## `decrypt`
 
@@ -475,7 +486,10 @@ error: unknown level "9z" (want 1b, 1a, 2b, 2u, 2a, 3b, 3u, 3a, 4, 4e, 4f)   # s
 
 The output file is written even when violations remain: exit 1 means "written but still
 non-conformant", not "nothing happened". A no-op run still prints its summary
-(`0 fix(es) applied, 0 violation(s) remain`) rather than exiting silently. The report is
+(`0 fix(es) applied, 0 violation(s) remain`) rather than exiting silently. Checker findings
+on the re-validated output are counted apart (`…, 0 violation(s) remain, 1 checker
+finding(s)`); when they are all there is, the output is written and the exit is 3, since
+whether it conforms is unknown — `pdf0 validate` on it prints them. The report is
 printed after the file is in place, so a `fixed:` line never describes a file that was not
 written.
 

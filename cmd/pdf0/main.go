@@ -3,7 +3,9 @@
 //
 // Exit codes: 0 — success (no violations found); 1 — the requested checks
 // reported violations; 2 — usage error, including a refusal to overwrite a
-// file; 3 — operational error (I/O, parse, encryption).
+// file; 3 — the run failed: an operational error (I/O, parse, encryption), or
+// checks that reported nothing but checker findings, so conformance is unknown
+// (findingsError).
 //
 // Passwords are never taken from argv; see secret.go. Outputs never replace an
 // input and are written atomically; see files.go.
@@ -38,6 +40,40 @@ func (e violationsError) Error() string { return e.msg }
 // violationsf builds a violationsError.
 func violationsf(format string, a ...any) error {
 	return violationsError{msg: fmt.Sprintf(format, a...)}
+}
+
+// tally splits a validator's findings into real violations and checker
+// findings (pdf0.IsCheckerFinding: the rules "limit" and "internal", a check
+// that could not be completed).
+func tally[V pdf0.Violation](findings []V) (violations, checker int) {
+	for _, f := range findings {
+		if pdf0.IsCheckerFinding(f) {
+			checker++
+		} else {
+			violations++
+		}
+	}
+	return violations, checker
+}
+
+// findingsError is the result of a validating command whose checks found
+// violations and checker findings in the numbers given, and the one place the
+// rule is written: no finding is success (exit 0); any violation is exit 1,
+// whatever checker findings come with it, because the file is known to break
+// a rule; checker findings alone are exit 3, the run failed, because the run
+// could not establish conformance either way, and a script asking "is this
+// file conformant?" must read neither yes nor "it breaks a rule" (docs audit
+// 2026-10-11 D64). msg is the command's own words for the violations.
+func findingsError(violations, checker int, msg string) error {
+	switch {
+	case violations > 0 && checker > 0:
+		return violationsf("%s, and %d checker finding(s)", msg, checker)
+	case violations > 0:
+		return violationsError{msg: msg}
+	case checker > 0:
+		return fmt.Errorf("%d checker finding(s) and no violation: the checks could not be completed, so conformance is unknown", checker)
+	}
+	return nil
 }
 
 // exitCode maps a command's error to the process exit code.
@@ -150,7 +186,8 @@ PDF0_USER_PASSWORD, PDF0_OWNER_PASSWORD), or a no-echo prompt when stdin
 is a terminal.
 
 exit codes: 0 success, 1 violations reported, 2 usage error or refused
-overwrite, 3 read/write, parse, or encryption error
+overwrite, 3 read/write, parse, or encryption error, or checks that could
+not be completed (only "limit" or "internal" findings)
 `, defaultLevel, levelNames)
 }
 
