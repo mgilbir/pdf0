@@ -86,7 +86,8 @@ func (t Token) String() string {
 	return fmt.Sprintf("{%s %q @%d}", t.Type, t.Value, t.Offset)
 }
 
-// Lexer is a PDF tokenizer that reads from an io.ReaderAt.
+// Lexer is a PDF tokenizer over an in-memory byte slice. NewLexerFromReaderAt
+// reads an io.ReaderAt into one first.
 type Lexer struct {
 	data []byte
 	pos  int64

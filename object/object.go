@@ -2,12 +2,14 @@
 // interface and every value type a PDF document is built from.
 //
 // It is data only — no parsing, no serialization, no document-level resolution
-// of references — and it depends on nothing else in this module, which is what
-// let it be the first package split out of the flat root package.
+// of references — and it depends on nothing else in this module, so every
+// other package can depend on it.
 //
-// Every type here is aliased from the root pdf0 package, so pdf0.Dictionary and
-// object.Dictionary are the same type: values pass between the two without
-// conversion and either name may be used. The canonical documentation is here.
+// The Object interface and every value type are aliased in the root pdf0
+// package, so pdf0.Dictionary and object.Dictionary are the same type: values
+// pass between the two without conversion and either name may be used. Entry
+// and the functions (NewDictionary, Equal and the rest) are not aliased and
+// are named only here. The canonical documentation is here.
 //
 // # One representation per type
 //

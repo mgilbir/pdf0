@@ -9,8 +9,9 @@
 // they are one public package rather than three copies. The font programs they
 // are applied to are read by github.com/mgilbir/forme/font, whose Program this
 // package takes.
-//
-// # Provenance
+package simplefont
+
+// Provenance.
 //
 // TrueTypeGlyph, IsStandardLatin and IsSymbolSet were forme's font.TrueTypeGID,
 // font.StandardLatinName and font.SymbolSetNames. forme took them out of its
@@ -21,4 +22,3 @@
 // and comments only. forme is MIT-licensed, by the same author as pdf0. The
 // encoding tables are still forme's: this package reads them through forme's
 // accessors, once, and serves them read-only.
-package simplefont
