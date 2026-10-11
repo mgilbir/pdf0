@@ -94,9 +94,10 @@ func (d *Document) hasSignatures() bool {
 
 // signable refuses a document a signing writer cannot work on: a nil one, and
 // an encrypted one — with the page-tree and metadata writers' refusal when it
-// is Locked (the content is still ciphertext), and in any case because a
-// signature covers the file's bytes, which encrypting after signing would
-// change: sign the plaintext document, then encrypt it.
+// is Locked (the content is still ciphertext), and otherwise with "cannot sign
+// an encrypted document", because the writers do not encrypt what they add.
+// Encrypting a signed document afterwards is no way round it either: that
+// rewrites the bytes the signature covers, and it no longer verifies.
 func (d *Document) signable(op string) error {
 	switch {
 	case d == nil:
@@ -122,8 +123,14 @@ func (d *Document) signable(op string) error {
 // appends to the file instead; pass InvalidatingExistingSignatures only to
 // replace the file and discard the old signatures on purpose.
 //
-// The document must not be encrypted (sign a plaintext document, or encrypt a
-// signed one afterwards).
+// It refuses an encrypted document, with one of two errors. A document read
+// without its password (Locked) gets the refusal every writer gives one,
+// "pdf0: signing: the document is encrypted and was not decrypted (Locked);
+// …"; a decrypted one, or one SetEncryption marked for encryption, gets
+// "pdf0: signing: cannot sign an encrypted document". pdf0 cannot produce an
+// encrypted signed file: sign the plaintext document, and do not encrypt it
+// afterwards, since that rewrites the bytes the signature covers and it no
+// longer verifies.
 func (d *Document) WriteSigned(w io.Writer, cert *x509.Certificate, key crypto.Signer, opts ...SignOption) error {
 	cfg, err := signOptions(opts)
 	if err != nil {
@@ -162,7 +169,11 @@ func (d *Document) WriteSigned(w io.Writer, cert *x509.Certificate, key crypto.S
 // A verifier accepts the new signature as a permitted change after each
 // earlier signature, unless a certification signature with DocMDP P 1 — or a
 // FieldMDP lock on the field signed — forbids it (see
-// sign.Result.ChangesAllowed).
+// sign.Result.ChangesAllowed). The new signature's widget has no area, so it
+// is not listed in the earlier signatures' sign.Result.LaterVisibleSignatures.
+//
+// It refuses an encrypted document exactly as WriteSigned does, with the same
+// two errors.
 func (d *Document) WriteSignedIncremental(w io.Writer, cert *x509.Certificate, key crypto.Signer, opts ...SignOption) error {
 	cfg, err := signOptions(opts)
 	if err != nil {

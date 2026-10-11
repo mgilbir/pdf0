@@ -43,6 +43,9 @@ type ValidationData struct {
 // B-LTA document's archival time-stamp, which ETSI EN 319 142-1 expects to be
 // done before the last one's authority certificate expires, therefore keeps
 // every earlier piece of revocation evidence (audit 2026-09-22 C60).
+//
+// It refuses an encrypted document as WriteSigned does, with the same two
+// errors prefixed "pdf0: timestamp:" rather than "pdf0: signing:".
 func (d *Document) WriteArchivalTimestamp(w io.Writer, data ValidationData, tsaCert *x509.Certificate, tsaKey crypto.Signer) error {
 	if err := d.signable("timestamp"); err != nil {
 		return err

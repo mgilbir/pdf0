@@ -396,3 +396,74 @@ func TestTrailerIDNotDecrypted(t *testing.T) {
 		}
 	}
 }
+
+// TestSigningRefusesEncryptedDocuments pins the two refusals the signing
+// writers' godoc quotes (docs audit 2026-10-11 D51): a Locked document gets
+// the refusal every writer gives one, and a decrypted document, or one
+// SetEncryption marked, gets "cannot sign an encrypted document". It also pins
+// why there is no way round them: encrypting a signed document rewrites the
+// bytes its signature covers.
+func TestSigningRefusesEncryptedDocuments(t *testing.T) {
+	cert, key := signtest.CertKey(t)
+	tsaCert, tsaKey := signtest.TSACertKey(t)
+	marked := readBytes(t, buildMinimalPDF())
+	if err := marked.SetEncryption("user", "owner"); err != nil {
+		t.Fatal(err)
+	}
+	var enc bytes.Buffer
+	if err := marked.Write(&enc); err != nil {
+		t.Fatal(err)
+	}
+	locked := readBytes(t, enc.Bytes())
+	if !locked.Locked() {
+		t.Fatal("the file should not open with the empty password")
+	}
+	decrypted, err := ReadWithPassword(bytes.NewReader(enc.Bytes()), int64(enc.Len()), "user")
+	if err != nil || decrypted.Locked() {
+		t.Fatalf("ReadWithPassword: %v (locked=%v)", err, decrypted.Locked())
+	}
+	const lockedMsg = "the document is encrypted and was not decrypted (Locked); "
+	for _, tc := range []struct {
+		name string
+		d    *Document
+		want string // after "pdf0: <op>: "
+	}{
+		{"Locked", locked, lockedMsg},
+		{"decrypted", decrypted, "cannot sign an encrypted document"},
+		{"marked by SetEncryption", marked, "cannot sign an encrypted document"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, w := range []struct {
+				op    string
+				write func() error
+			}{
+				{"signing", func() error { return tc.d.WriteSigned(&bytes.Buffer{}, cert, key) }},
+				{"signing", func() error { return tc.d.WriteSignedIncremental(&bytes.Buffer{}, cert, key) }},
+				{"timestamp", func() error { return tc.d.WriteArchivalTimestamp(&bytes.Buffer{}, ValidationData{}, tsaCert, tsaKey) }},
+			} {
+				want := "pdf0: " + w.op + ": " + tc.want
+				if err := w.write(); err == nil || !strings.HasPrefix(err.Error(), want) {
+					t.Errorf("error = %v, want one starting %q", err, want)
+				}
+			}
+		})
+	}
+
+	signed := readBytes(t, signedBy(t, cert, key))
+	if err := signed.SetEncryption("user", "owner"); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := signed.Write(&out); err != nil {
+		t.Fatal(err)
+	}
+	reread, err := ReadWithPassword(bytes.NewReader(out.Bytes()), int64(out.Len()), "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range verifySigs(t, reread, sign.VerifyOptions{}) {
+		if r.Valid {
+			t.Errorf("%s still verifies after the signed document was encrypted", r.Field)
+		}
+	}
+}

@@ -100,9 +100,11 @@ type Result struct {
 	// CoversWholeDocument: the /ByteRange covers every byte of the file except
 	// the signature's own /Contents value.
 	CoversWholeDocument bool
-	// Valid: the /ByteRange has the one layout a signature may have (see
-	// readSignedRange), the bytes it covers are intact, and the signature (or
-	// time-stamp token) over them verifies under the embedded certificate.
+	// Valid: the /ByteRange has the one layout a signature may have — four
+	// non-negative integers [0 len1 start2 len2] naming two spans inside the
+	// file, whose gap is exactly this signature's /Contents hex string — the
+	// bytes it covers are intact, and the signature (or time-stamp token) over
+	// them verifies under the embedded certificate.
 	Valid bool
 	// SigningTime is the signing-time signed attribute, if present. The signer
 	// asserts it and nothing verifies it.
@@ -119,9 +121,19 @@ type Result struct {
 	// purpose the certificate is used for: document signing for a signer (a
 	// key usage of digitalSignature or contentCommitment, and an extended key
 	// usage that is absent or permits document signing), time-stamping for a
-	// time-stamp authority. Never set without roots.
+	// time-stamp authority; and no intermediate of the chain is revoked. Never
+	// set without roots.
+	//
+	// For a signer, it does not include the signer certificate's own
+	// revocation: a revoked signer still has TrustedChain set, and Revocation
+	// is where its status is reported. (For a document time-stamp, a revoked
+	// authority is not trusted.) It is never set for a signature that is not
+	// Valid: no chain is built for one.
 	TrustedChain bool
-	// ChainErr says why the chain did not build or its purpose was refused.
+	// ChainErr says why TrustedChain is not set for a Valid signature: the
+	// chain did not build, its purpose was refused, an intermediate is
+	// revoked, or no roots were supplied ("no trust roots were supplied"). It
+	// is nil when TrustedChain is set, and for a signature that is not Valid.
 	ChainErr error
 	// ValidationTime is the time the chain and revocation were judged at: the
 	// earliest time a trusted time-stamp proves the signature existed — its
@@ -456,24 +468,24 @@ func establishTrust(r *Result, m revocationMaterial, opts VerifyOptions) {
 	cert := r.sd.cert
 	pool := append(append([]*x509.Certificate(nil), r.sd.certs...), m.certs...)
 	var issuers []*x509.Certificate
-	if opts.Roots != nil {
-		chains, err := signerChains(cert, pool, opts.Roots, r.ValidationTime)
-		if err == nil {
-			var revoked RevocationInfo
-			chains, revoked, err = unrevokedChains(chains, m, r.ValidationTime)
-			if err != nil {
-				r.Revocation = revoked
-			}
-		}
+	// With nil roots signerChains builds nothing and says so; the error is
+	// kept, so ChainErr is never nil for a signature that is not trusted.
+	chains, err := signerChains(cert, pool, opts.Roots, r.ValidationTime)
+	if err == nil {
+		var revoked RevocationInfo
+		chains, revoked, err = unrevokedChains(chains, m, r.ValidationTime)
 		if err != nil {
-			r.ChainErr = err
-			if r.Revocation.Status == RevocationRevoked {
-				return
-			}
-		} else {
-			r.TrustedChain = true
-			issuers = chainIssuers(chains)
+			r.Revocation = revoked
 		}
+	}
+	if err != nil {
+		r.ChainErr = err
+		if r.Revocation.Status == RevocationRevoked {
+			return
+		}
+	} else {
+		r.TrustedChain = true
+		issuers = chainIssuers(chains)
 	}
 	if !r.TrustedChain {
 		issuers = signingIssuers(cert, pool)
