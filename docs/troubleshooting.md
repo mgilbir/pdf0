@@ -62,9 +62,13 @@ From the godoc on `Locked`:
 
 > Encrypted alone does not distinguish this from a successfully decrypted file
 > (both keep Encrypted true). Callers that intend to read content, validate,
-> extract, or re-encrypt should check Locked first: on a locked document
-> RemoveEncryption is a no-op, ExtractText and the validators see ciphertext,
-> SetEncryption refuses, and Write writes the file back verbatim.
+> extract, or re-encrypt should check Locked first.
+
+On a locked document the extractors return an error wrapping `LockReason()`,
+the validators decline every check that reads a string or stream with a
+`limit` finding (guard `not-decrypted`), `SetEncryption` and `Repair` refuse,
+and `Write` carries the ciphertext through unchanged under the file's own
+`/Encrypt` and `/ID` while regenerating the file's layout.
 
 **Empty password vs `ReadWithPassword`.** `Read` tries the empty password, which
 covers the common "owner-restricted, no user password" case. For anything else
@@ -233,9 +237,8 @@ M violation(s) remain after repair (run: pdf0 validate -level LEVEL FILE)
 
 This is expected for most inputs. From `Repair`'s godoc:
 
-> Repair never touches page content or fonts — it only removes forbidden
-> document-level constructs — so it cannot make a conformant document
-> non-conformant.
+> It never touches page content or fonts, so it cannot
+> make a conformant document non-conformant.
 >
 > It is not a substitute for validation: run ValidatePDFA afterwards to see what
 > remains (missing embedded fonts, device colour without an output intent, and
