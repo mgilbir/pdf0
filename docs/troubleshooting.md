@@ -58,24 +58,22 @@ Two fields, and they mean different things:
   `/EFF`, a `/Crypt` filter naming an undefined filter). Their bodies are empty,
   and `Write` refuses the document.
 
-From the godoc on `Locked`:
-
-> Encrypted alone does not distinguish this from a successfully decrypted file
-> (both keep Encrypted true). Callers that intend to read content, validate,
-> extract, or re-encrypt should check Locked first.
-
-On a locked document the extractors return an error wrapping `LockReason()`,
-the validators decline every check that reads a string or stream with a
-`limit` finding (guard `not-decrypted`), `SetEncryption` and `Repair` refuse,
-and `Write` carries the ciphertext through unchanged under the file's own
-`/Encrypt` and `/ID` while regenerating the file's layout.
+`Encrypted` alone does not tell a Locked document from a decrypted one (both
+keep it `true`), so check `Locked()` before reading content, validating or
+re-encrypting. On a Locked document the extractors (`ExtractText`,
+`ImagesContext`, `StreamData` and the rest) return an error wrapping
+`LockReason()`, `RemoveEncryption` is a no-op, `SetEncryption`, `Repair` and
+the signing writers refuse, the validators skip every check that reads content
+and say so with a `limit` finding (`not-decrypted`), and `Write` carries the
+ciphertext unchanged under the preserved `/Encrypt` and `/ID`, and the file
+layout is regenerated.
 
 **Empty password vs `ReadWithPassword`.** `Read` tries the empty password, which
 covers the common "owner-restricted, no user password" case. For anything else
 use `ReadWithPassword(r, size, pw)`, which accepts either the user or the owner
 password. A wrong password is *not* an error — the file parses structurally and
-comes back `Locked()`. If you do not check, you will validate ciphertext and get
-nonsense violations.
+comes back `Locked()`. If you do not check, whatever you read from it is
+ciphertext, and a validation of it is mostly skipped checks.
 
 The CLI checks for you, and tells a missing password from a wrong one (the
 password comes from `-password-file`, `PDF0_PASSWORD` or a terminal prompt,
@@ -91,28 +89,42 @@ FILE is encrypted; decrypt it before merging
 
 **Why `Write` sometimes refuses.** `Write` does *not* refuse every encrypted
 document. A document that was decrypted on `Read` is re-encrypted with the
-retained key and round-trips. A *locked* document's ciphertext is written back
-unchanged under the preserved `/Encrypt` and `/ID` — the layout is regenerated,
-the encrypted content is not touched, and `Write` returns nil — so a file you
-cannot decrypt is still round-trippable rather than lost. That passthrough is
-sound only when the encryption state is knowable and the whole object model
-survived, so it refuses when either is not:
+retained key and round-trips. For a *Locked* document, `Write` carries the
+ciphertext unchanged under the preserved `/Encrypt` and `/ID`, and the file
+layout is regenerated. It returns nil, so a file you cannot decrypt is still
+round-trippable rather than lost. That passthrough is sound only when the
+encryption state is knowable and the whole object model survived, so it
+refuses when either is not:
 
 <!-- messages -->
 ```
 cannot write encrypted document: its /Encrypt dictionary is unresolvable, so the encryption state is unknown
 cannot write encrypted document: N object stream(s) failed to decode on read, so some objects are missing
 cannot write encrypted document: N object stream(s) were not unpacked on read (a resource limit, an unsupported filter or undecrypted data), so some objects are missing
+cannot write encrypted document: N object stream(s) failed to decode on read and M were not unpacked (…), so some objects are missing
 ```
 
 The first would produce a file readers wrongly try to decrypt; the others would
-silently drop the objects locked inside a container that was not unpacked. A
-*decrypted* document is refused when `DecryptFailures` is non-empty, and when a
-stream added since `Read` names a crypt filter the handler does not define:
+silently drop the objects locked inside a container that was not unpacked.
+
+A *decrypted* document is refused when `DecryptFailures` is non-empty — the
+objects whose ciphertext did not decrypt on `Read` hold nothing:
 
 <!-- messages -->
 ```
 cannot write: object(s) … could not be decrypted on read, so their content is missing
+```
+
+It is also refused when a stream added since `Read` names a crypt filter the
+security handler cannot apply — a `/Crypt` filter whose `/DecodeParms /Name`
+the `/Encrypt` dictionary's `/CF` does not define. `DecryptFailures` is empty
+then: nothing failed on read, the stream is yours. Fix the stream's
+`/DecodeParms`, or drop the `/Crypt` filter so the document's own stream
+filter applies:
+
+<!-- messages -->
+```
+cannot write encrypted document: <object N>: the stream names a crypt filter the security handler cannot apply
 ```
 
 **`SetEncryption` refusals.** It needs a non-empty user password (an empty one
@@ -194,12 +206,12 @@ for _, e := range pdf0.ValidatePDFA(doc, pdfa.PDFA4) {
 }
 ```
 
-Neither fires on any file in the veraPDF corpus. If you see one, either the
-input is adversarial or a bound needs revisiting — [limits.md](limits.md) says
-which guard is which and how to raise it.
+Each checker finding names its guard in parentheses; [limits.md](limits.md)
+says which guard is which and how to raise its bound.
 
-Finally: validating a `Locked()` document validates ciphertext. Check
-`doc.Locked()` first.
+Finally: validating a `Locked()` document checks almost nothing — every check
+that reads content is skipped, and the result carries a `limit` finding
+(`not-decrypted`) saying so. Check `doc.Locked()` first.
 
 ## Validation is taking too long
 
@@ -253,26 +265,98 @@ document-level defects were present, not that the file is clean. It refuses a
 Locked document and an unknown level with an error rather than changing
 anything.
 
-## A signature says `Valid` but you should not trust it yet
+## Signatures
 
-`sign.Result.Valid` means only that the bytes *inside* the signed
-`/ByteRange` are intact and were signed by the embedded certificate's key. It
-says nothing about bytes outside that range, and nothing about whether the
-certificate is trustworthy. From the godoc on `sign.Result.Intact`:
+Each symptom leads with what to do. The full verdict rules, and a gate to copy,
+are in [signing.md](signing.md#which-verdict-do-i-read).
+
+**Your check accepted a document it should not have.** Gate on *every* result
+`VerifySignatures` returns — `Intact()`, `TrustedChain`, and a `Revocation`
+that is not `sign.RevocationRevoked` — and require at least one approval
+signature (a result with `DocTimestamp` false). `sign.Result.Valid` means only
+that the bytes *inside* the signed `/ByteRange` are intact and were signed by
+the embedded certificate's key: it says nothing about bytes outside that range,
+nor about who signed. From the godoc on `sign.Result.Intact`:
 
 > Intact reports that the signature verifies and every change made after it
 > is permitted (see ChangesAllowed). It is the verdict to read for a document
 > that has been through long-term-validation updates. It says nothing about
 > who signed: read TrustedChain and Revocation for that.
 
-Use `result.Intact()` (`Valid && ChangesAllowed`) as your baseline verdict, or
-`result.DocumentUnmodified()` (`Valid && CoversWholeDocument`) when nothing may
-have changed at all; `DisallowedChanges` names what changed. For trust,
-`VerifySignatures` builds a chain only to the roots you pass in
-`sign.VerifyOptions{Roots: …}` — with none, `TrustedChain` is always false —
-and reports `TrustedChain` / `ChainErr` separately; they never affect `Valid`.
-For long-term validation (PAdES B-T through B-LTA, timestamps, revocation) see
-[docs/signing.md](signing.md).
+Checking only the one field you care about is not enough either: a signature
+added later keeps an earlier one `Intact()` only if it is intact itself, but it
+may be anyone's, and its widget can draw anything over the signed page. The
+earlier result's `LaterVisibleSignatures` names such signatures; their own
+results say who made them.
+
+**`VerifySignatures` returned no results and a nil error.** The document is
+unsigned — reject it. No results means "no signatures", not "no problems"; a
+loop over the results alone accepts an unsigned or stripped file. (A non-nil
+error is different: verification could not run, and the results are nil.)
+
+**`TrustedChain` is false and `ChainErr` says `no trust roots were supplied`.**
+Pass the roots of the signers you accept: `sign.VerifyOptions{Roots: roots}`.
+There is no default store, and never use `x509.SystemCertPool()` — it vouches
+for domain names, not for signers. Any other `ChainErr` says why the chain
+failed: it did not build to your roots, the certificate is not for document
+signing, or an intermediate is revoked. `ChainErr` is nil when `TrustedChain`
+is set, and for a signature that is not `Valid` (read `Err`).
+
+**A B-LTA document's time-stamp is untrusted** (the result with `DocTimestamp`
+true has `TrustedChain` false, `ChainErr` naming its authority). Put the
+time-stamp authorities you accept in `sign.VerifyOptions.TSARoots`. A document
+time-stamp is judged against `TSARoots`, and against `Roots` only when
+`TSARoots` is nil — so the signer roots alone reject a TSA outside them. Do not
+add the TSA's root to `Roots` to get round it: every document-signing
+certificate that root issues would then count as a trusted signer.
+
+**`ValidatePAdES` says `Conformant` and `TrustedChain`, but the signer was
+revoked.** Read `PAdESResult.Revocation`. `Conformant` is about the signature's
+form, and `TrustedChain` covers the chain, its purpose and validity, and its
+intermediates — not the signer's own revocation.
+
+**`WriteSigned` returned `ErrAlreadySigned`.** The document already carries a
+signature or document time-stamp, and rewriting the file would invalidate it.
+Add your signature with `WriteSignedIncremental` on the document read from the
+signed file; pass `InvalidatingExistingSignatures()` to `WriteSigned` only to
+discard the old signatures on purpose:
+
+<!-- messages -->
+```
+signing: the document already carries signatures, which rewriting it would invalidate; use WriteSignedIncremental to add a signature, or pass InvalidatingExistingSignatures
+```
+
+**Signing failed with "exceeds reserved space".** Sign with a smaller
+certificate: the reservation for the signature's `/Contents` is a fixed 8192
+bytes and cannot be raised. The CMS pdf0 writes holds the signature, the
+signer's certificate (the only one it embeds) and, for B-T, the time-stamp
+token with its authority's certificate, so an unusually large certificate is
+what overflows it. (`<op>` is `signing`, or `timestamp` for a document
+time-stamp.)
+
+<!-- messages -->
+```
+<op>: signature (N hex) exceeds reserved space (M)
+```
+
+**Signing refused an encrypted document.** pdf0 cannot produce an encrypted
+signed file: sign the plaintext document. A document read without its password
+(Locked) gets the first message, one decrypted on `Read` or marked by
+`SetEncryption` the second; `<op>` is `signing`, or `timestamp` for
+`WriteArchivalTimestamp`:
+
+<!-- messages -->
+```
+pdf0: <op>: the document is encrypted and was not decrypted (Locked); …
+pdf0: <op>: cannot sign an encrypted document
+```
+
+**A signature that verified stopped verifying after `SetEncryption` and
+`Write`.** Encrypting rewrites every byte the signature covers, so it no longer
+verifies; `Write` does not refuse. Do not encrypt a signed document, and do not
+re-`Write` one at all (see [below](#round-trip-surprises-the-bytes-changed)):
+add signatures and time-stamps with `WriteSignedIncremental` and
+`WriteArchivalTimestamp`, which append to the signed file.
 
 ## An image came back with `Decoded=false`
 
@@ -316,7 +400,8 @@ Byte-for-byte comparison of input and output will fail, and that is by design.
 Consequences worth knowing:
 
 - **Do not re-`Write` a signed document.** Regenerating the layout invalidates
-  every signature over the original bytes.
+  every signature over the original bytes, and so does encrypting it with
+  `SetEncryption` first; `Write` refuses neither.
 - **To amend a file, use `WriteIncremental`.** It writes the bytes of the file
   the document was read from verbatim, followed by only the objects listed in
   changed, a new cross-reference section whose /Prev chains back to the file's
