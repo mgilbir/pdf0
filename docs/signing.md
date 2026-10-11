@@ -16,39 +16,112 @@ in the package.
 
 ## Which verdict do I read?
 
-**`sign.Result.Intact()` for integrity, `TrustedChain` for identity, and
-`Revocation` for status — each is a separate claim.** `r.Valid` on its own is
-not a safe check, and trust comes *only* from the roots you pass: with
-`sign.VerifyOptions{}` (nil roots) no chain is ever built, so `TrustedChain` is
-always `false` and a signature from an entirely unknown signer looks exactly
-like one from your CA.
+**Accept a signed PDF only when `VerifySignatures` returns at least one
+approval signature, and *every* result it returns — each signature and each
+document time-stamp — is `Intact()`, has `TrustedChain`, and is not revoked.**
+Integrity (`Intact()`), identity (`TrustedChain`) and status (`Revocation`) are
+separate claims, and none implies another; `r.Valid` on its own is not a safe
+check.
+
+- **No results means unsigned, not "no problems".** An unsigned PDF, or one
+  whose signature was stripped, gives zero results and a nil error, so a loop
+  over the results alone accepts it.
+- **Trust comes *only* from the roots you pass.** With `sign.VerifyOptions{}`
+  (nil roots) no chain is ever built: `TrustedChain` is always `false`, and
+  `ChainErr` says `no trust roots were supplied`. Without roots, a signature
+  from an entirely unknown signer looks exactly like one from your CA.
+- **A document time-stamp is trusted against `TSARoots`** (`Roots` when that
+  is nil). Set it to the time-stamp authorities you accept, or every B-LTA
+  file whose time-stamp comes from a TSA outside `Roots` fails the check.
+- **Check every result, not only the field you care about.** A signature added
+  after yours keeps yours `Intact()` only if that later signature is itself
+  intact, but its widget can draw anything over the page you signed — a
+  second party's signature box, or a full-page overlay. Your result lists such
+  signatures in `LaterVisibleSignatures`; whether you trust whoever made them
+  is their own result's `TrustedChain`.
 
 <!-- snippet
-var caCert *x509.Certificate
+var caCert, tsaCACert *x509.Certificate
 -->
 ```go
 data, _ := os.ReadFile("signed.pdf")
 doc, err := pdf0.Read(bytes.NewReader(data), int64(len(data)))
-// ...
+if err != nil {
+	return err
+}
 roots := x509.NewCertPool() // the roots of the signers YOU accept
 roots.AddCert(caCert)       // never x509.SystemCertPool(): see below
+tsaRoots := x509.NewCertPool() // the time-stamp authorities you accept
+tsaRoots.AddCert(tsaCACert)
 
-results, err := doc.VerifySignatures(sign.VerifyOptions{Roots: roots})
+results, err := doc.VerifySignatures(sign.VerifyOptions{Roots: roots, TSARoots: tsaRoots})
 if err != nil {
 	return err // verification could not run; not "no signatures"
 }
-for _, r := range results {
+approvals := 0
+for _, r := range results { // EVERY result, document time-stamps included
 	if !r.Intact() { // Valid AND every later change permitted
-		return fmt.Errorf("signature does not hold for the document as delivered: %v %v", r.Err, r.DisallowedChanges)
+		return fmt.Errorf("%s does not hold for the document as delivered: %v %v", r.Field, r.Err, r.DisallowedChanges)
 	}
 	if !r.TrustedChain {
-		return fmt.Errorf("signer is not trusted: %w", r.ChainErr)
+		if r.DocTimestamp { // judged against TSARoots
+			return fmt.Errorf("time-stamp %s: authority not trusted: %w", r.Field, r.ChainErr)
+		}
+		return fmt.Errorf("signer of %s is not trusted: %w", r.Field, r.ChainErr)
 	}
 	if r.Revocation.Status == sign.RevocationRevoked {
-		return fmt.Errorf("signer certificate was revoked at %s", r.Revocation.RevokedAt)
+		return fmt.Errorf("%s: certificate was revoked at %s", r.Field, r.Revocation.RevokedAt)
+	}
+	if !r.DocTimestamp {
+		approvals++
 	}
 }
+if approvals == 0 {
+	return errors.New("the document is not signed") // no results, or time-stamps only
+}
 ```
+
+If your workflow expects one signer, or only invisible signatures, also
+reject a result whose `LaterVisibleSignatures` is not empty: those later
+signatures are trusted by the loop above, but they still draw on the page.
+
+How each verdict is reached, and what feeds the gate:
+
+```mermaid
+flowchart TD
+    V["VerifySignatures(opts)"] --> N{"any signature or<br/>document time-stamp dictionary?"}
+    N -->|"no: 0 results, nil error"| UNSIGNED["unsigned: reject"]
+    N -->|"yes, each one"| BR["byte range: one layout, gap is exactly /Contents,<br/>ends at a revision end or the file end"]
+    BR --> COVER["CoversWholeDocument"]
+    BR --> CMS["CMS signature, or RFC 3161 token for a time-stamp:<br/>digest of the covered bytes, no SHA-1 or MD5"]
+    BR -->|"fails"| ERR["Err set, Valid false:<br/>nothing else is judged"]
+    CMS -->|"fails"| ERR
+    CMS --> VALID["Valid"]
+    VALID --> UNMOD["DocumentUnmodified() = Valid and CoversWholeDocument"]
+    COVER --> UNMOD
+    VALID --> CHG["changes after the signed revision,<br/>judged from the latest signature back"]
+    CHG --> ADDED{"a signature added later?"}
+    ADDED -->|"its own result is Intact"| PERM["permitted, and listed in<br/>LaterVisibleSignatures if a reader can see its widget"]
+    ADDED -->|"it is not"| DIS["not permitted"]
+    CHG --> ALLOWED["ChangesAllowed / DisallowedChanges"]
+    PERM --> ALLOWED
+    DIS --> ALLOWED
+    VALID --> INTACT["Intact() = Valid and ChangesAllowed"]
+    ALLOWED --> INTACT
+    VALID --> ROOTS{"roots given?<br/>Roots, or TSARoots for a time-stamp"}
+    ROOTS -->|"no"| NOROOTS["TrustedChain false<br/>ChainErr: no trust roots were supplied"]
+    ROOTS -->|"yes"| CHAIN["chain, purpose and validity at ValidationTime,<br/>no revoked intermediate"]
+    CHAIN --> TC["TrustedChain, or ChainErr saying why not"]
+    VALID --> REV["signer's own revocation, from the /DSS"]
+    REV --> RS["Revocation.Status"]
+    INTACT --> GATE["accept only if EVERY result passes all three,<br/>and at least one is an approval signature"]
+    TC --> GATE
+    RS --> GATE
+```
+
+`ValidatePAdES` carries the same `TrustedChain`, `Revocation` and
+`LaterVisibleSignatures` for each approval signature, and none of them affects
+its `Conformant` (see [PAdES](#pades)).
 
 **Do not use `x509.SystemCertPool()` or any web PKI pool as signing roots.**
 Those roots vouch for domain names: any of their CAs will issue a TLS
@@ -63,12 +136,13 @@ Every field of `sign.Result`, and the exact limit of what it promises:
 | `Valid bool` | the `/ByteRange` has the one layout a signature may have, the bytes inside it are intact, and the signature (or, for a document time-stamp, the RFC 3161 token) over them verifies under the embedded certificate | anything about bytes *outside* the range, or about who the signer is |
 | `CoversWholeDocument bool` | the `/ByteRange` covers every byte of the file except the signature's own `/Contents` hex string | that the signature verifies |
 | `DocumentUnmodified() bool` | `Valid && CoversWholeDocument` — nothing at all was changed after signing | trust, revocation or a reliable time |
-| `ChangesAllowed bool` | every change made to the file after the signed revision is permitted (see [Allowed changes](#allowed-changes)); true when there are none | that anything is trusted; false when the changes could not be established |
+| `ChangesAllowed bool` | every change made to the file after the signed revision is permitted (see [Allowed changes](#allowed-changes)), a later signature counting as permitted only when its own result is `Intact()`; true when there are none | that anything is trusted, including whoever made a later signature; false when the changes could not be established, and for a signature that is not `Valid` |
 | `DisallowedChanges []string` | a description of each change that is not permitted, or why the changes are unknown | |
-| `Intact() bool` | `Valid && ChangesAllowed` — the verdict for a document that has been through long-term-validation updates | trust or revocation |
+| `Intact() bool` | `Valid && ChangesAllowed` — the verdict for a document that has been through long-term-validation updates or later signatures | trust or revocation |
+| `LaterVisibleSignatures []string` | the `Field` names of the later signatures `ChangesAllowed` permitted whose widget a reader can see: a `/Rect` of non-zero area, neither the Hidden nor the NoView flag, and a normal appearance (`/AP /N`). Empty when there are none, and for a signature that is not `Valid` | that those signatures are trusted (read their own results), or that what they draw is harmless |
 | `Revision int` | the index into `Source().Revisions()` of the revision the signature covers; -1 when its range does not end at one | |
-| `TrustedChain bool` | the certificate chains to one of `VerifyOptions.Roots` (`TSARoots` for a document time-stamp), valid at `ValidationTime`, with a document-signing purpose (see [Trust](#trust)) | anything unless you passed roots |
-| `ChainErr error` | why the chain did not build, or why its purpose was refused | |
+| `TrustedChain bool` | the certificate chains to one of `VerifyOptions.Roots` (`TSARoots` for a document time-stamp), valid at `ValidationTime`, with a document-signing purpose (time-stamping for a time-stamp authority), through no revoked intermediate (see [Trust](#trust)) | anything unless you passed roots; the signer certificate's own revocation — a revoked signer still has `TrustedChain`, so read `Revocation` (a revoked time-stamp authority is not trusted); never set for a signature that is not `Valid` |
+| `ChainErr error` | why `TrustedChain` is not set for a `Valid` signature: the chain did not build, its purpose was refused, an intermediate is revoked, or no roots were given (`no trust roots were supplied`, or `no trust roots were supplied for time-stamp authorities`) | anything when it is nil: it is nil when `TrustedChain` is set, and for a signature that is not `Valid` (read `Err`) |
 | `ValidationTime time.Time` | the time chain and revocation were judged at: the earliest time a verified, *trusted* time-stamp proves the signature existed, or now | |
 | `SignerCommonName string` | the Subject CN of the embedded certificate — a display label, filled in even when verification fails | any identity assurance on its own |
 | `SigningTime time.Time` | the `signing-time` signed attribute, if the CMS carries one | a trustworthy time: the signer asserts it and nothing verifies it. It is never used as the validation time |
@@ -84,6 +158,70 @@ incremental update appends a new value for an existing page after the signed
 range, leaving the original bytes — and the signature over them — perfectly
 intact. `Intact()` catches it and `DisallowedChanges` names the page;
 `examples/sign_verify` demonstrates exactly this.
+
+An update can also add a *signature*: that is how a second party signs, so it
+is permitted — but only when the added signature is itself intact. A
+"signature" field whose value does not verify, or whose appearance was
+replaced after it was signed, is a change like any other and makes the earlier
+signature fail `Intact()`. One that does verify may still be signed by anyone
+and draw anything over the page (the "shadow attack" class); it is named in
+the earlier result's `LaterVisibleSignatures` and judged by its own result,
+which is why the gate requires *every* result to pass.
+
+## How do I sign?
+
+Sign with a certificate and any `crypto.Signer` (a key in memory, a PKCS#11
+token, an HSM); pdf0 signs with SHA-256 over RSA or ECDSA. The first signature
+rewrites the whole document; everything after it — a second signer, the
+long-term validation material, an archival time-stamp — is *appended* to the
+signed file, so earlier signatures keep verifying. Each step reads the
+previous step's output back, because an append needs the file the document
+was read from:
+
+<!-- snippet
+var cert, cert2, caCert, tsaCert *x509.Certificate
+var key, key2, tsaKey crypto.Signer
+var crls, ocsps [][]byte
+-->
+```go
+// PAdES B-T: a signature, plus a signature time-stamp from a TSA key you
+// hold. Leave out WithSignatureTimestamp for B-B.
+var signed bytes.Buffer
+if err := doc.WriteSigned(&signed, cert, key, pdf0.WithSignatureTimestamp(tsaCert, tsaKey)); err != nil {
+	return err
+}
+
+// A second signer appends a signature. WriteSigned would refuse here with
+// ErrAlreadySigned: rewriting the file would break the first signature.
+first, err := pdf0.Read(bytes.NewReader(signed.Bytes()), int64(signed.Len()))
+if err != nil {
+	return err
+}
+var cosigned bytes.Buffer
+if err := first.WriteSignedIncremental(&cosigned, cert2, key2); err != nil {
+	return err
+}
+
+// PAdES B-LT and B-LTA: append what a verifier will need years from now —
+// certificates, CRLs and OCSP responses (DER) you fetched yourself, since pdf0
+// does no network I/O — and a document time-stamp over the whole file.
+both, err := pdf0.Read(bytes.NewReader(cosigned.Bytes()), int64(cosigned.Len()))
+if err != nil {
+	return err
+}
+material := pdf0.ValidationData{Certs: []*x509.Certificate{caCert, tsaCert}, CRLs: crls, OCSPs: ocsps}
+var archived bytes.Buffer
+if err := both.WriteArchivalTimestamp(&archived, material, tsaCert, tsaKey); err != nil {
+	return err
+}
+```
+
+The time-stamp authority is local: the TSA certificate must carry
+`id-kp-timeStamping`, and a verifier trusts its tokens only if it chains to
+that verifier's `TSARoots`. Then verify the result as
+[Which verdict do I read?](#which-verdict-do-i-read) shows;
+`examples/sign_verify` is a runnable sign-then-verify program. What each
+writer produces, and what it refuses, is under [Signing](#signing).
 
 ## Verifying
 
@@ -142,6 +280,8 @@ classifies every object that differs:
   Document Security Store with its `/Certs`, `/CRLs`, `/OCSPs` and `/VRI`, and
   a document time-stamp field with its signature dictionary and widget (a
   time-stamp widget may carry an appearance only if its `/Rect` has no area).
+  The time-stamp must itself be intact, exactly as an added signature must
+  (below).
 - **Signing is permitted unless a certification signature forbids it**: a new
   signature field with its widget and signature dictionary, or a signature
   value in a field the signed revision left empty, is permitted — the ordinary
@@ -152,6 +292,16 @@ classifies every object that differs:
   signing an existing field is refused when an earlier signature's FieldMDP
   transform (`/TransformMethod /FieldMDP`, `/Action` `/All`, `/Include` or
   `/Exclude` over `/Fields`) locks that field.
+  **The added signature must itself be intact**: its own result `Valid`, and
+  every change after it permitted. Its presence is not enough. A field whose
+  value does not verify, whose value is not a signature dictionary the
+  verifier reads, or whose field or appearance changed after it was signed, is
+  a change that is not permitted, and `DisallowedChanges` says why — e.g. "a
+  signature field added after the signature, whose own signature does not
+  verify". To judge this, the results are settled from the latest signed
+  revision back. A permitted later signature whose widget a reader can see is
+  listed in `LaterVisibleSignatures`: its appearance draws over the signed
+  page, and nothing limits what it draws.
 - **Edits to existing objects are permitted only as far as attaching those
   requires**: the catalog may change `/DSS` and `/AcroForm`; the interactive
   form may gain the new fields at the end of `/Fields` and the signature bits
@@ -219,9 +369,19 @@ chain of trust ends at the newest time-stamp, judged now.
 
 ## Signing
 
-All writers refuse an encrypted document (`cannot sign an encrypted
-document`) — sign in plaintext and encrypt afterwards — and none mutates the
-in-memory `*Document`; they work on a clone.
+None of the writers mutates the in-memory `*Document`; they work on a clone.
+Each refuses an encrypted document, with one of two errors (`<op>` is
+`signing`, or `timestamp` for `WriteArchivalTimestamp`):
+
+<!-- messages -->
+```
+pdf0: <op>: the document is encrypted and was not decrypted (Locked); …   # read without its password
+pdf0: <op>: cannot sign an encrypted document      # decrypted on Read, or marked by SetEncryption
+```
+
+pdf0 cannot produce an encrypted signed file. Sign the plaintext document, and
+do not encrypt it afterwards: `SetEncryption` then `Write` succeeds, but it
+rewrites the bytes the signature covers, and the signature no longer verifies.
 
 | Call | Produces | Level |
 | --- | --- | --- |
@@ -251,24 +411,76 @@ document's archival time-stamp keeps every earlier piece of revocation
 evidence. The update touches only what the allowed-changes analysis accepts as
 archival, so the signatures before it stay `Intact`.
 
-The TSA is local: pdf0 issues time-stamp tokens from a certificate and key you
-hold, and has no RFC 3161 HTTP client, so a commercial TSA means fetching the
-token yourself; it fetches no CRLs or OCSP responses either — `ValidationData`
-is yours to fill.
+**Only a locally held TSA key is supported.** pdf0 issues time-stamp tokens
+in-process from a certificate and key you hold (`WithSignatureTimestamp`,
+`WriteArchivalTimestamp`). It has no RFC 3161 HTTP client and no way to accept
+a token obtained elsewhere, so a commercial time-stamp authority you reach over
+the network cannot be used. It fetches no CRLs or OCSP responses either —
+`ValidationData` is yours to fill.
+
+How a signature is written: a placeholder first, then the real offsets and
+the signature patched into the serialized bytes, since neither can be known
+before the bytes exist (`sign.go`, `doctimestamp.go`):
+
+```mermaid
+sequenceDiagram
+    participant C as caller
+    participant D as Document
+    participant B as serialized bytes
+    participant S as sign package
+    C->>D: WriteSigned(w, cert, key, opts)
+    Note over D: refuse an encrypted document,<br/>and ErrAlreadySigned
+    D->>D: on a clone, add a /Sig dictionary: /ByteRange placeholder,<br/>/Contents of 8192 zero bytes<br/>add the field, a zero-area widget on the first page,<br/>and extend /AcroForm
+    D->>B: Write, a full rewrite
+    B->>B: find the last /ByteRange placeholder,<br/>then the /Contents after it
+    B->>B: patch the real /ByteRange in place: all bytes<br/>except the /Contents hex string
+    B->>S: the covered bytes
+    S-->>B: detached CMS over their SHA-256 digest<br/>(plus a signature time-stamp with WithSignatureTimestamp)
+    B->>B: write the CMS as hex into /Contents, zero-padded,<br/>or fail if it exceeds the reserved space
+    B-->>C: the signed file, written to w
+    C->>D: Read it back, then WriteSignedIncremental
+    D->>B: the file it was read from, byte for byte, then only<br/>the new objects and an xref section chaining back with /Prev
+    Note over B,S: the same patch steps, for the new placeholder only
+    C->>D: Read it back, then WriteArchivalTimestamp
+    D->>B: the file it was read from, then the extended /DSS<br/>and a /Type /DocTimeStamp field, its placeholders patched alike
+    B->>S: the covered bytes
+    S-->>B: an RFC 3161 token over them, from the local TSA key
+    B-->>C: the token in /Contents, the file written to w
+```
 
 ## PAdES
 
 `ValidatePAdES(opts)` assesses each approval signature (document time-stamps
-count as long-term material) and returns a `PAdESResult`: `SubFilter`,
-`IsPAdES`, `Level`, `Conformant`, `Valid`, `CoversDocument`, `ChangesAllowed`,
-`DisallowedChanges`, `SignerCommonName`, `TrustedChain`, `TimestampValid`,
-`TimestampTrusted`, `TimestampTime` and `Issues`. `Conformant` means the
-`Issues` list is empty: sub-filter `ETSI.CAdES.detached`, the CMS verifies, no
-`/Cert` in the signature dictionary (the certificate belongs in the CMS), a
-CAdES signing-certificate attribute is present, the signature time-stamp (if
-any) verifies, a B-LTA document time-stamp after the signature verifies, and
-**every change after the signature is permitted**. Trust is reported beside it
-(`TrustedChain`, `TimestampTrusted`), not folded into it.
+count as long-term material) and returns a `PAdESResult`. **`Conformant` is
+about form, not trust: a revoked or untrusted signer can be `Conformant` with
+`TrustedChain` set.** Accept a signature on `Conformant`, `TrustedChain` and a
+`Revocation.Status` that is not `sign.RevocationRevoked` together, and apply
+the gate in [Which verdict do I read?](#which-verdict-do-i-read) to the
+document as a whole — `ValidatePAdES` returns nothing for an unsigned file
+either.
+
+`Conformant` means the `Issues` list is empty: sub-filter
+`ETSI.CAdES.detached`, the CMS verifies, no `/Cert` in the signature dictionary
+(the certificate belongs in the CMS), a CAdES signing-certificate attribute is
+present, the signature time-stamp (if any) verifies, a B-LTA document
+time-stamp after the signature verifies, and **every change after the
+signature is permitted** — a later signature counting as permitted only if it
+is itself intact. ETSI EN 319 142-1 defines the levels by the signature's form
+and the material it carries; whether the signer is trusted and unrevoked is
+validation (ETSI EN 319 102-1), reported beside it and never folded into it:
+
+| Field | Meaning |
+| --- | --- |
+| `Field` | the signature field's fully qualified name, as `sign.Result.Field` |
+| `SubFilter`, `IsPAdES` | the `/SubFilter`, and whether it is the PAdES one, `ETSI.CAdES.detached` |
+| `Level` | the baseline level whose material is present (B-B to B-LTA, below) |
+| `Conformant`, `Issues` | conformance to that level, and each problem found |
+| `Valid`, `CoversDocument`, `ChangesAllowed`, `DisallowedChanges` | as `sign.Result`'s `Valid`, `CoversWholeDocument`, `ChangesAllowed` and `DisallowedChanges` |
+| `LaterVisibleSignatures` | as `sign.Result`'s: later signatures whose widgets draw over the page. They do not affect `Conformant`; who signed each is that signature's own `VerifySignatures` result |
+| `SignerCommonName` | a display label, as `sign.Result`'s |
+| `TrustedChain` | the signer chains to `Roots` for document signing, at the validation time, through no revoked intermediate. **It does not include the signer's own revocation** |
+| `Revocation` | the signer certificate's status from the document's `/DSS`, as `sign.Result.Revocation`. A revoked signer is reported here and changes neither `TrustedChain` nor `Conformant` |
+| `TimestampValid`, `TimestampTrusted`, `TimestampTime` | the signature time-stamp verifies; its authority chains to your time-stamp roots; the time it asserts |
 
 ```mermaid
 flowchart LR
@@ -317,8 +529,10 @@ AIA issuer certificates. No DSS material, or no authenticated issuer, yields
 between the signer and the trust anchor is checked, each against the next
 certificate of the verified chain, at the validation time. A revoked
 intermediate makes the chain untrusted — `TrustedChain` false, `ChainErr`
-naming it, and `Revocation` reporting that revocation. The same applies to a
-time-stamp authority: a revoked authority certificate or intermediate makes
+naming it, and `Revocation` reporting that revocation. A revoked *signer*
+certificate is different: it is reported in `Revocation` only, and
+`TrustedChain` stays set, so a gate must read both. A time-stamp authority is
+judged more strictly: a revoked authority certificate or intermediate makes
 its time-stamps untrusted, whatever the time-stamp's own date — a
 deliberately conservative reading, since the revocation reason (key
 compromise or not) is not weighed. For live revocation, fetch the material
@@ -326,15 +540,6 @@ yourself and call `sign.CheckCertRevocation` directly.
 
 ## Limitations and edge cases
 
-- **The signature placeholder is found by anchoring on `/ByteRange`, not on
-  `/Contents`.** Worth knowing if you touch `patchSignature`: a page's
-  `/Contents 4 0 R` precedes the signature dictionary in essentially every real
-  document, and an earlier signature's `/Contents` is a filled hex blob, so the
-  first `/Contents` in the file is never the right target. `findSigSlots` locates
-  the unique, still-unfilled `/ByteRange` placeholder — which a filled signature
-  no longer carries — and searches forward from there. Signing a document with
-  page content, and adding a second signature to an already-signed file, are both
-  covered by regression tests in `sign_contents_test.go`.
 - **Result order is by object number.** Both `VerifySignatures` and
   `ValidatePAdES` sort the signature dictionaries by object number, which is
   stable across runs and meaningful: in a document signed by successive
@@ -344,9 +549,11 @@ yourself and call `sign.CheckCertRevocation` directly.
   to a dictionary, and a `/DocTimeStamp` only has to lie in a revision after the
   signature. A reported `B-LTA` means "the material is there" —
   `TimestampValid` and `Conformant` say whether it verifies.
-- **The signature must fit 8192 bytes** of DER. Bigger chains overflow the
-  reserved `/Contents` placeholder and signing fails with `signature (… hex)
-  exceeds reserved space`.
+- **The signature must fit 8192 bytes** of DER: the CMS, holding the signer's
+  certificate (the only one embedded) and any signature time-stamp token. The
+  reservation is fixed: a bigger CMS overflows the `/Contents` placeholder and
+  signing fails with `signing: signature (N hex) exceeds reserved space (16384)`
+  (`timestamp:` for a document time-stamp).
 - **Algorithms.** Signing supports RSA and ECDSA keys, always with SHA-256.
   Verification accepts RSA PKCS#1 v1.5, RSASSA-PSS (with the salt length and
   hash its parameters declare; an MGF1 hash different from the message hash is
@@ -368,7 +575,8 @@ yourself and call `sign.CheckCertRevocation` directly.
   time-stamp added to a signed document is still `Timestamp1` — but neither ever
   reuses a name already in the file.
 - **The widget goes on the first page**, with a zero `/Rect`: signatures produced
-  here are invisible. "First" means first in reading order, the page `PageList`
+  here are invisible, and never appear in an earlier signature's
+  `LaterVisibleSignatures`. "First" means first in reading order, the page `PageList`
   reports first, found by descending into intermediate `/Pages` nodes — a tree
   whose pages all sit below one is signable, and a `/Kids` array mixing
   intermediate nodes and leaves (legal under ISO 32000-2 §7.7.3.2) does not
@@ -386,7 +594,23 @@ yourself and call `sign.CheckCertRevocation` directly.
   first page is a direct object …`) rather than silently promoting a broken
   structure — an incremental update cannot supersede an object that does not
   exist.
-- **Encrypted documents** cannot be signed or incrementally updated at all.
+- **Encrypted documents** cannot be signed or incrementally updated at all
+  (see [Signing](#signing) for the two refusals), and encrypting a signed
+  document invalidates its signatures.
+
+## For contributors
+
+The signature placeholder is found by anchoring on `/ByteRange`, not on
+`/Contents` — worth knowing if you touch `patchSignature` or
+`patchDocTimestamp`. A page's `/Contents 4 0 R` precedes the signature
+dictionary in essentially every real document, and an earlier signature's
+`/Contents` is a filled hex blob, so the first `/Contents` in the file is never
+the right target. `findSigSlots` locates the unique, still-unfilled
+`/ByteRange` placeholder — which a filled signature no longer carries — and
+searches forward from there. Signing a document with page content, and adding a
+second signature to an already-signed file, are both covered by regression
+tests in `sign_contents_test.go`; the later-signature rules of
+[Allowed changes](#allowed-changes) by `sign_overlay_test.go`.
 
 ## See also
 
