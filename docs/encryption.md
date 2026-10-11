@@ -26,8 +26,9 @@ Two states people conflate. **`Document.Encrypted`** means the file carried an
 `/Encrypt` dictionary — it stays `true` after a *successful* decryption.
 **`Document.Locked()`** means the document carries `/Encrypt` but has no usable
 security handler, so **the strings and streams in the model are still
-ciphertext** and validators, `ExtractText` and the image extractors will happily
-process them into nonsense. `Encrypted` is *"was it encrypted"*, `Locked()` is
+ciphertext**: anything that reads content from it reads noise, unless it checks
+first (the validators do — they skip what reads content and report a `limit`
+finding). `Encrypted` is *"was it encrypted"*, `Locked()` is
 *"is it still encrypted"* — check the latter before reading content. The CLI
 does this per subcommand, see
 [troubleshooting.md](troubleshooting.md#encrypted-files) for those messages.
@@ -52,18 +53,23 @@ decrypted in a document that is *not* Locked (see
 |---|---|---|---|---|
 | Plaintext file | `false` | `false` | `nil` | writes plaintext |
 | Decrypted (right password) | `true` | `false` | handler | re-encrypts with the retained key, re-emits the preserved `/Encrypt` |
-| Locked (wrong password, unsupported or malformed scheme) | `true` | `true` | `nil` | writes the ciphertext back unchanged under the preserved `/Encrypt` and `/ID` (the file layout is regenerated, the encrypted content is not touched), so the result still opens with the right password |
+| Locked (wrong password, unsupported or malformed scheme) | `true` | `true` | `nil` | carries the ciphertext unchanged under the preserved `/Encrypt` and `/ID`, and the file layout is regenerated, so the result still opens with the right password |
 | After `RemoveEncryption` | `false` | `false` | `nil` | writes plaintext, no `/Encrypt` |
 
 A decrypted document round-trips: the file key and every `/Encrypt` parameter
 stay on the `Document`, and `Write` serializes *encrypted copies*, leaving the
-caller's in-memory plaintext untouched (`TestReEncryptRoundTrip`). A locked
-document is written back verbatim rather than corrupted, and must still decrypt
-afterwards with the real password (`TestEncryptedPassthroughRoundTrip`). The
-passthrough refuses in exactly two cases (unresolvable `/Encrypt`, undecodable
-object streams), both in
-[troubleshooting.md](troubleshooting.md#encrypted-files). A *decrypted* document
-has a third refusal: an object whose ciphertext did not decrypt (see below).
+caller's in-memory plaintext untouched (`TestReEncryptRoundTrip`). For a
+locked document, `Write` carries the ciphertext unchanged under the preserved
+`/Encrypt` and `/ID`, and the file layout is regenerated; the result must still
+decrypt afterwards with the real password
+(`TestEncryptedPassthroughRoundTrip`). The passthrough refuses when the
+`/Encrypt` dictionary does not resolve, and when an object stream failed to
+decode or was not unpacked on `Read` — three messages for the second case, by
+which of the two happened — all in
+[troubleshooting.md](troubleshooting.md#encrypted-files). A *decrypted*
+document has two more refusals: an object whose ciphertext did not decrypt
+(see below), and an added stream naming a crypt filter the handler cannot
+apply.
 
 - `SetEncryption(userPw, ownerPw)` encrypts the document and **only ever
   produces AES-256 (V5/R6)** — the legacy revisions are read-only. It installs a
@@ -109,8 +115,10 @@ the crypt filter picks the cipher.
 | 0, 3 | any | undocumented / unpublished | — | — | **no** (`ErrEncryptionUnsupported`) | no |
 | any | any | `/Filter` other than `/Standard` | — | — | **no** (`ErrEncryptionUnsupported`) | no |
 
-Any other `/V`–`/R` pair is `ErrEncryptionMalformed` (ISO 32000-2 Table 21
-defines exactly these). Every row marked "no" leaves the document `Locked()`.
+A `/V` outside 0–5 or an `/R` outside 2–6 is `ErrEncryptionUnsupported`;
+any other `/V`–`/R` pair within those ranges is `ErrEncryptionMalformed`
+(ISO 32000-2 Table 21 defines exactly the pairs above). Every row marked "no"
+leaves the document `Locked()`.
 
 **Validation happens once, at the boundary** (`internal/crypt/params.go`), before
 any value is used: `/Filter`, `/V`, `/R`, `/P`, `/O` and `/U` are required and
@@ -345,11 +353,12 @@ attachment, but without it pdf0 reports the whole document `Locked`.
 Decryption runs in two phases around object-stream materialization in `Read`
 (see the Read pipeline in [architecture.md](architecture.md#read)):
 
-- **Step 4.5**, after uncompressed objects are loaded: every string, and the
-  body of every object-stream container. The order is load-bearing: an
-  object-stream container is itself an encrypted stream, while the objects
-  stored inside it are *not* separately encrypted.
-- **Step 5.5**, after object streams are materialized: every other stream.
+- **First, before object streams are unpacked** — after the uncompressed
+  objects are loaded: every string, and the body of every object-stream
+  container. The order is load-bearing: an object-stream container is itself
+  an encrypted stream, while the objects stored inside it are *not* separately
+  encrypted.
+- **Then, after object streams are unpacked**: every other stream.
   Which filter a stream uses can depend on the whole graph — an embedded file is
   named by a file specification that may live inside an object stream — so those
   streams wait until the graph is complete (`crypt.Pending`). A container is
@@ -428,7 +437,7 @@ pdf0 implements what real files use, which is not what is safe:
 | `internal/saslprep` | RFC 4013 SASLprep; `internal/saslprep/tables.go` is generated by `internal/cmd/gensaslprep` |
 | `internal/pdfdoc` | PDFDocEncoding (ISO 32000-2 Table D.3) |
 | `crypt_api.go` | `SetEncryption`, `Locked`, `LockReason`, `DecryptFailures`, `EncryptionWarnings`, `RemoveEncryption`, the error sentinels |
-| `document.go` | `ReadWithPassword`, the step-4.5 and step-5.5 call sites, the `security` field, `Write`'s re-encrypt and passthrough |
+| `document.go` | `ReadWithPassword`, `Read`'s two decryption phases (`DecryptDocument` before object streams are unpacked, `Pending.Finish` after), the `security` field, `Write`'s re-encrypt and passthrough |
 | `objstm_write.go` | `encryptReachable` and the object-stream packing exclusions |
 
 Tests, and what each actually pins:
@@ -443,10 +452,10 @@ Tests, and what each actually pins:
   typed and an untyped embedded file), and a producer for R2–R4 dictionaries
   written from Algorithms 2–5 independently of the reader.
 - `crypt_validation_test.go` — the boundary: every malformed or unsupported
-  dictionary in its table leaves the document Locked with the right sentinel and
-  still writes back verbatim; V4 key length; `/EFF`, `/Crypt` and document-metadata
-  semantics checked on the written bytes and the read-back, with and without
-  object streams.
+  dictionary in its table leaves the document Locked with the right sentinel,
+  and `Write` still succeeds on it; V4 key length; `/EFF`, `/Crypt` and
+  document-metadata semantics checked on the written bytes and the read-back,
+  with and without object streams.
 - `crypt_setencryption_test.go` — C23 (empty owner password, empty user
   password), password preparation at R6 and R2–R4 with MuPDF and poppler as
   independent readers, the owner-password round variants, the orphaned
@@ -465,8 +474,9 @@ Tests, and what each actually pins:
 - Regressions: `crypt_alias_test.go` (duplicate-offset `/Encrypt` alias),
   `objstm_encrypt_test.go` (indirect `/CF` must not be packed),
   `crypt_locked_test.go` (the `Locked()` state machine, the C6/C7/C8 guard),
-  `crypt_passthrough_test.go` (verbatim passthrough, both refusals, and that
-  `Write` does not mutate the in-memory ciphertext), `crypt_encrypt_test.go`
+  `crypt_passthrough_test.go` (the Locked passthrough, its refusal of an
+  incomplete object model, and that `Write` does not mutate the in-memory
+  ciphertext; the unresolvable-`/Encrypt` refusal is in `readpath_test.go`), `crypt_encrypt_test.go`
   (`SetEncryption` / `RemoveEncryption`, plaintext absent from the output),
   `crypt_signature_test.go` (the signature `/Contents` exemption).
 
