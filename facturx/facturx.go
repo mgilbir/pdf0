@@ -11,18 +11,14 @@ import (
 	"github.com/mgilbir/formalis"
 )
 
-// This file validates the PDF container of a Factur-X (a.k.a. ZUGFeRD 2.x)
-// hybrid electronic invoice. A Factur-X document is a PDF/A-3 file that carries
-// a human-readable invoice and an embedded XML representation of the same
-// invoice (UN/CEFACT Cross Industry Invoice, EN 16931). This validator checks
-// the container — PDF/A-3 conformance, the embedded invoice XML attached as an
-// associated file, and the Factur-X XMP metadata that identifies it — and then
-// runs the invoice XML through the formalis rule engine, mirroring
-// pdf0.ValidateOrderX: the EN 16931 core at the declared profile, or, when the
-// fx:ConformanceLevel names a CIUS (XRECHNUNG) instead, the rule set the
-// invoice itself declares in BT-24 (Result.ValidateInvoiceXML says which). A
-// CIUS the container does not declare is the caller's to run, over
-// Result.XML.
+// This file validates the container of a Factur-X invoice (the package
+// documentation, doc.go, says what one is): the Violation and Result types,
+// and the run that checks the container and then the invoice XML, mirroring
+// pdf0.ValidateOrderX. The XML goes to the formalis rule engine at the
+// declared profile, or, when the fx:ConformanceLevel names a CIUS (XRECHNUNG)
+// instead, to the rule set the invoice itself declares in BT-24
+// (Result.ValidateInvoiceXML says which). A CIUS the container does not
+// declare is the caller's to run, over Result.XML.
 //
 // The checks are calibrated against a corpus of conforming Factur-X / ZUGFeRD
 // invoices across all profiles (MINIMUM, BASIC WL, BASIC, EN 16931, EXTENDED).
@@ -41,12 +37,8 @@ var facturxRelationships = map[object.Name]bool{"Data": true, "Alternative": tru
 // It exists because this validator composes two rule engines and the caller gets
 // one report. pdf0's findings anchor to a PDF object; the invoice engine's
 // anchor to a business term in an XML document and name the authority that wrote
-// the rule. Until formalis v0.2.0 this validator carried formalis.Violation
-// values directly, borrowing that type's Object field for PDF object numbers,
-// which made Factur-X and Order-X the only pdf0 findings that could not
-// satisfy pdf0.Violation — the exception the documentation had to keep
-// explaining. Both halves now arrive in a type pdf0 owns, so they combine with
-// every other validator's findings and IsCheckerFinding applies to them.
+// the rule. Both halves arrive in this one type, so they combine with every
+// other validator's findings and pdf0.IsCheckerFinding applies to them.
 type Violation struct {
 	// Rule is the identifier of the rule that was broken. pdf0's own container
 	// rules are "structure", "attachment", "metadata" and "invoice-xml"; the

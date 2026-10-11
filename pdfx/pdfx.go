@@ -7,14 +7,10 @@ import (
 	"github.com/mgilbir/pdf0/object"
 )
 
-// This file implements validation for the PDF/X levels (ISO 15930): PDF/X-1a,
-// PDF/X-3, PDF/X-4 and -4p, and PDF/X-6. The checks are conservative and
-// structural: identification, the PDF/X output intent and its ICC destination
-// profile, the /Trapped flag, page geometry boxes, font embedding, device
-// colour coverage, forbidden features, transparency where the level predates
-// it, and the prohibition on encryption. What differs between the levels is
-// one table, levels.go; the PDF/X-4 rules are calibrated against the valid Cal
-// Poly PDF/VT-1 test suite, whose files are conforming PDF/X-4.
+// This file is the PDF/X validator (the package documentation, doc.go, says
+// what it checks): the Level and Violation types and the checks themselves.
+// What differs between the levels is not here but in one table, levels.go,
+// which the level-dependent checks read.
 
 // Level identifies a PDF/X conformance level.
 //

@@ -9,13 +9,11 @@ import (
 	"strings"
 )
 
-// This file implements validation for PDF/VT-1 (ISO 16612-2), the self-contained
-// variable-and-transactional print exchange format. A PDF/VT-1 file is a
-// conforming PDF/X-4 file (ISO 15930-7) that additionally carries a document
-// part (DPart) hierarchy describing its record boundaries and identifies itself
-// as PDF/VT-1 in XMP metadata. This validator composes the PDF/X-4 and DPart
-// checks with the PDF/VT-specific requirements; it is calibrated against the
-// valid Cal Poly PDF/VT-1 test suite.
+// This file is the PDF/VT validator for both parts (the package documentation,
+// doc.go, says what it checks): it composes the PDF/X and DPart validators with
+// the PDF/VT identification and hierarchy requirements, and names each base
+// finding by the base it came from. It is calibrated against the valid Cal Poly
+// PDF/VT-1 test suite.
 
 // Violation reports a way in which a document departs from PDF/VT.
 type Violation struct {

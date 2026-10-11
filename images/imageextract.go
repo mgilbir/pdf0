@@ -18,15 +18,15 @@ import (
 )
 
 // This file owns image extraction, the work behind the root package's
-// Document.ExtractImages and Document.Images (images_api.go): the traversal
-// that reaches image XObjects through page resources, form XObjects and
-// annotation appearance streams, and the dispatch from a stream's filter chain
-// to a decoder (ISO 32000-2 clause 8.9). The codecs live elsewhere —
-// internal/ccitt, internal/jbig2, imagejpeg.go, imagecolor.go, imagemask.go —
-// only the JPXDecode bridge to gopenjpeg is here; an image no codec can render
-// yields the raw encoded bytes and a Note rather than an error, so one bad
-// image never aborts the walk. The per-codec support table is below, before
-// ExtractedImage.
+// Document.ImagesContext, Document.ExtractImagesContext and their context-free
+// forms (images_api.go): the traversal that reaches image XObjects through page
+// resources, form XObjects and annotation appearance streams, and the dispatch
+// from a stream's filter chain to a decoder (ISO 32000-2 clause 8.9). The
+// codecs live elsewhere — internal/ccitt, internal/jbig2, imagejpeg.go,
+// imagecolor.go, imagemask.go — only the JPXDecode bridge to gopenjpeg is here;
+// an image no codec can render yields the raw encoded bytes and a Note rather
+// than an error, so one bad image never aborts the walk. The per-codec support
+// table is below, before ExtractedImage.
 
 // decodeJPX decodes a JPEG 2000 (JPXDecode) codestream or JP2 container to a
 // standard-library image using gopenjpeg, a pure-Go port of OpenJPEG. It returns
