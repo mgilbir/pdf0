@@ -149,9 +149,13 @@ type Document struct {
 // malformed /Encrypt dictionary — is still parsed structurally, with its
 // strings and streams left encrypted: see Document.Locked and LockReason. An
 // /Encrypt dictionary never makes Read fail.
+//
 // Resource limits default to values safe for untrusted input; pass With* options
-// to change them. The resolved limits are stored on the returned Document, so
-// every validator and extractor that runs on it inherits the same configuration.
+// to change them. Every limit must be positive: zero or less is refused, before
+// anything is read, with an error wrapping ErrInvalidOption (pass math.MaxInt or
+// math.MaxInt64 for no practical limit). The resolved limits are stored on the
+// returned Document, so every validator and extractor that runs on it inherits
+// the same configuration.
 func Read(r io.ReaderAt, size int64, opts ...Option) (*Document, error) {
 	return readWithOptions(core.Canceler{}, r, size, "", opts)
 }
