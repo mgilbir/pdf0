@@ -34,6 +34,7 @@ Start from the question you have.
 | Know why something was built the way it was | [adr/](adr/README.md) |
 | Read the design record behind a feature | [design records](#design-records) |
 | Read a past findings report | [audits/](audits/README.md) |
+| See what changes in the next release, or record a change your pull request makes | [releases/unreleased.md](releases/unreleased.md) |
 
 The per-symbol API reference is the godoc: `go doc github.com/mgilbir/pdf0`, or
 [pkg.go.dev](https://pkg.go.dev/github.com/mgilbir/pdf0).
@@ -128,6 +129,10 @@ are options and deadlines are `…Context` variants
 why subsystems see a `core.View` ([0011](adr/0011-view-and-bridge.md)), and why
 shaping and layout live in forme
 ([0017](adr/0017-shaping-and-layout-in-forme.md)).
+
+**[releases/unreleased.md](releases/unreleased.md)** — reference. The draft
+of the next release's notes: breaking changes with their migrations, behaviour
+changes, additions and fixes, each added by the pull request that makes it.
 
 **[audits/](audits/README.md)** — historical findings reports and the live plans
 that work them off. Point-in-time snapshots, not a description of the current

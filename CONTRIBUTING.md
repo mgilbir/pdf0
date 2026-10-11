@@ -197,6 +197,17 @@ rest of `go test`). They hold the docs to the tree as it is:
 The audit reports and the design records under `docs/proposals/`, and an ADR
 once it is superseded, describe the past, and are not checked.
 
+## Release notes
+
+There is no CHANGELOG. A pull request that changes the exported API, or a
+behaviour a caller could notice, adds its entry to
+[docs/releases/unreleased.md](docs/releases/unreleased.md) in the same pull
+request, under Breaking changes (by package, each with its migration),
+Behaviour changes, Added or Fixed, written as a user should read it. A removed
+identifier is written in bold rather than backticks, since the docs lint
+resolves backticked names against the current tree. The file is emptied into
+the GitHub release notes when a tag is cut.
+
 ## Style
 
 - `gofmt`-clean, `go vet`-clean.
