@@ -9,7 +9,8 @@ Start from the question you have.
 | Pick a validator, or add a rule to one | [validators.md](validators.md) |
 | Add or debug a PDF/A rule | [pdfa.md](pdfa.md) |
 | Work on accessibility (PDF/UA) checking | [pdfua.md](pdfua.md) |
-| Turn HTML and CSS into a PDF, or work on the backend that writes it | [htmlpdf.md](htmlpdf.md) |
+| Turn HTML and CSS into a PDF, with your own fonts and images | [htmlpdf.md](htmlpdf.md) |
+| Work on the HTML backend, or explain a `backend-*` finding | [htmlpdf-backend.md](htmlpdf-backend.md) |
 | Set text with a font, or embed a font | [text.md](text.md) |
 | Know what the font writer puts in a file, or change it | [font-embedding.md](font-embedding.md) |
 | Understand a font finding, or touch font-program parsing | [fonts.md](fonts.md) |
@@ -17,6 +18,7 @@ Start from the question you have.
 | Read, write or debug encrypted files | [encryption.md](encryption.md) |
 | Sign a PDF, or decide whether a signature can be trusted | [signing.md](signing.md) |
 | Pull images out of a PDF, or fix a codec | [images.md](images.md) |
+| Embed an image in a page | [images.md](images.md#writing-images) |
 | Use the `cmd/pdf0` dev tool | [cli.md](cli.md) |
 | Understand what happens when a resource guard trips | [limits.md](limits.md) |
 | Cap what one untrusted document may cost | [architecture.md](architecture.md#resource-limits) |
@@ -44,7 +46,8 @@ and where each rule lives.
 read, because that is the question with a wrong answer that compiles.
 
 **[images.md](images.md)** — reference plus explanation. The extraction API and
-its memory contract, the codec dispatch, the resource budgets.
+its memory contract, writing images into a document, the codec dispatch, the
+resource budgets.
 
 **[pdfa.md](pdfa.md)** — explanation. Inside the PDF/A engine: the anatomy of a
 rule, what the dispatched checks actually cover, the per-run memos, and how one
@@ -53,9 +56,14 @@ rule body serves every level.
 **[pdfua.md](pdfua.md)** — explanation. The structure tree, the UA rule
 families, table-grid reconstruction, and how much a clean result is worth.
 
-**[htmlpdf.md](htmlpdf.md)** — reference plus explanation. The three inputs and
-the one call, where the layout engine actually lives, the two ways a render can
-decline, and the findings worth knowing about before you meet them.
+**[htmlpdf.md](htmlpdf.md)** — how-to plus reference. The three inputs and the
+one call, the two ways a render can decline, rendering a document you do not
+control, supplying fonts and images, and the findings worth knowing about
+before you meet them.
+
+**[htmlpdf-backend.md](htmlpdf-backend.md)** — reference plus explanation, for
+contributors. What the backend draws for each display-list operation, what it
+refuses and why, and how it is held to forme.
 
 **[text.md](text.md)** — how-to. Load a face, draw with it, embed it after
 the drawing, bound shaping of untrusted text, the font licence rule, PDF/A, and
