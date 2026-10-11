@@ -56,7 +56,7 @@ func checkUA2StructDestinations(d core.View, cat *object.Dictionary) []Violation
 			d.Charge(1)
 			seen[item] = true
 			if dest, ok := item.Lookup("Dest"); ok && !item.Has("A") && !dests.isStruct(dest) {
-				report("an outline item", object.RefNum(ref))
+				report("an outline item", anchorOf(d, item))
 			}
 			acts.add(item.Get("A"))
 			stack = append(stack, item.Get("Next"), item.Get("First"))
@@ -82,7 +82,7 @@ func checkUA2StructDestinations(d core.View, cat *object.Dictionary) []Violation
 	for _, a := range newAnnotContext(d, cat).annots {
 		if st, _ := d.ResolveName(a.Get("Subtype")); st == "Link" {
 			if dest, ok := a.Lookup("Dest"); ok && !a.Has("A") && !dests.isStruct(dest) {
-				report("a Link annotation", d.ObjNumOf(a))
+				report("a Link annotation", anchorOf(d, a))
 			}
 		}
 		acts.add(a.Get("A"))
@@ -100,7 +100,7 @@ func checkUA2StructDestinations(d core.View, cat *object.Dictionary) []Violation
 				continue
 			}
 		}
-		v = append(v, Violation{Clause: "8.8", Message: "a GoTo action has no structure destination (/SD, or a named destination that is one)", Object: d.ObjNumOf(act)})
+		v = append(v, Violation{Clause: "8.8", Message: "a GoTo action has no structure destination (/SD, or a named destination that is one)", Object: anchorOf(d, act)})
 	}
 	return v
 }
@@ -297,7 +297,7 @@ func checkUA2InvisibleAnnots(d core.View, cat *object.Dictionary) []Violation {
 			continue
 		}
 		if f, _ := d.Resolve(a.Get("F")).(object.Integer); f&1 != 0 {
-			v = append(v, Violation{Clause: "8.9.2.2", Message: "an annotation with the Invisible flag is in the logical structure and is not an artifact", Object: d.ObjNumOf(a)})
+			v = append(v, Violation{Clause: "8.9.2.2", Message: "an annotation with the Invisible flag is in the logical structure and is not an artifact", Object: anchorOf(d, a)})
 		}
 	}
 	return v
@@ -319,7 +319,7 @@ func checkUA2FileAttachments(d core.View, cat *object.Dictionary) []Violation {
 				continue
 			}
 		}
-		v = append(v, Violation{Clause: "8.9.2.4.10", Message: "the file specification of a file attachment annotation has no /AFRelationship", Object: d.ObjNumOf(a)})
+		v = append(v, Violation{Clause: "8.9.2.4.10", Message: "the file specification of a file attachment annotation has no /AFRelationship", Object: anchorOf(d, a)})
 	}
 	return v
 }
@@ -359,7 +359,7 @@ func checkUA2WidgetDescription(d core.View, cat *object.Dictionary) []Violation 
 		if _, r := d.StringValue(a.Get("Contents")); r != core.ReasonAbsent {
 			continue
 		}
-		v = append(v, Violation{Clause: "8.10.2.3", Message: "a widget annotation has neither a label (an Lbl beside it in its enclosing structure element) nor /Contents", Object: d.ObjNumOf(a)})
+		v = append(v, Violation{Clause: "8.10.2.3", Message: "a widget annotation has neither a label (an Lbl beside it in its enclosing structure element) nor /Contents", Object: anchorOf(d, a)})
 	}
 	return v
 }
@@ -392,7 +392,43 @@ func checkUA2EmbeddedFileDesc(d core.View, cat *object.Dictionary) []Violation {
 		if fs == nil || fs.Has("Desc") {
 			continue
 		}
-		v = append(v, Violation{Clause: "8.14.1", Message: "an embedded file's file specification has no /Desc", Object: object.RefNum(e.Value)})
+		v = append(v, Violation{Clause: "8.14.1", Message: "an embedded file's file specification has no /Desc", Object: anchorOf(d, fs)})
 	}
 	return v
+}
+
+// ua2AnchorSlot keys anchorOf's index on the run.
+type ua2AnchorSlot struct{}
+
+type ua2Anchors struct {
+	num   map[*object.Dictionary]int
+	built bool
+}
+
+// anchorOf is the object a finding about dict is reported against: dict's own
+// object, or for a dictionary written directly inside another object, that
+// object — what core.ReachableDict.ObjNum says, the anchor every
+// reachable-graph rule reports. Reporting a direct dictionary as object 0
+// made one document draw two findings, by whether a producer wrote the
+// dictionary inline or as its own object. The index is built once per run, the
+// first holder of a dictionary winning, from the reachable walk's fixed order;
+// a dictionary the walk does not reach falls back to the table's answer.
+func anchorOf(d core.View, dict *object.Dictionary) int {
+	if d.Run == nil {
+		return d.ObjNumOf(dict)
+	}
+	a := core.Slot[ua2Anchors](d.Run, ua2AnchorSlot{})
+	if !a.built {
+		a.num = map[*object.Dictionary]int{}
+		for _, r := range d.ReachableDicts() {
+			if _, dup := a.num[r.Dict]; !dup {
+				a.num[r.Dict] = r.ObjNum
+			}
+		}
+		a.built = true
+	}
+	if n, ok := a.num[dict]; ok {
+		return n
+	}
+	return d.ObjNumOf(dict)
 }

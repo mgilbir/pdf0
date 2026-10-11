@@ -577,3 +577,42 @@ func TestUA2ListNumberingDeepNesting(t *testing.T) {
 		t.Errorf("want %d findings, one per list, got %d", n, len(got))
 	}
 }
+
+// TestUA2FindingsAnchorDirectObjects: a dictionary written directly inside
+// another object is reported against the object it is written in, as the
+// reachable-graph rules report it, so the same document written with the
+// dictionary as an object of its own draws the same finding
+// (TestFindingsAreInvariantUnderIndirection; the corpus's PDF_A-4 6-6-3-t01
+// files hold direct GoTo actions).
+func TestUA2FindingsAnchorDirectObjects(t *testing.T) {
+	objectOf := func(vs []Violation, clause string) []int {
+		var out []int
+		for _, v := range vs {
+			if v.Clause == clause {
+				out = append(out, v.Object)
+			}
+		}
+		return out
+	}
+	f := ua2Fixture()
+	a, _ := f.annot("Link", [4]int{10, 10, 100, 30}, "Link")
+	a.Set("A", object.NewDictionary(object.Entry{Key: "S", Value: object.Name("GoTo")}, object.Entry{Key: "D", Value: object.Array{f.pageRef, object.Name("Fit")}}))
+	annotNum := 0
+	for n, o := range f.objs {
+		if o.Value == a {
+			annotNum = n
+		}
+	}
+	if got := objectOf(f.run("2"), "8.8"); len(got) != 1 || got[0] != annotNum {
+		t.Errorf("direct GoTo in annotation %d: want it reported against %d, got %v", annotNum, annotNum, got)
+	}
+
+	g := ua2Fixture()
+	fs := object.NewDictionary(object.Entry{Key: "F", Value: str("a")}, object.Entry{Key: "UF", Value: str("a")})
+	leaf := object.NewDictionary(object.Entry{Key: "Names", Value: object.Array{str("a"), fs}})
+	leafRef := g.add(leaf)
+	g.cat.Set("Names", object.NewDictionary(object.Entry{Key: "EmbeddedFiles", Value: object.NewDictionary(object.Entry{Key: "Kids", Value: object.Array{leafRef}})}))
+	if got := objectOf(g.run("2"), "8.14.1"); len(got) != 1 || got[0] != leafRef.Number {
+		t.Errorf("direct file specification in name-tree node %d: want it reported against %d, got %v", leafRef.Number, leafRef.Number, got)
+	}
+}

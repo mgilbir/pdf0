@@ -99,10 +99,10 @@ func checkUA2DocumentRoot(d core.View, cat *object.Dictionary) []Violation {
 	}
 	first := nodes[kids[0]]
 	if !first.Mapped {
-		return []Violation{{Clause: "8.2.5.2", Message: "the structure tree root's first child, before its Document element, resolves to no standard type, so it is not in the PDF 2.0 namespace (" + core.NSPDF20 + ")", Object: d.ObjNumOf(first.Elem)}}
+		return []Violation{{Clause: "8.2.5.2", Message: "the structure tree root's first child, before its Document element, resolves to no standard type, so it is not in the PDF 2.0 namespace (" + core.NSPDF20 + ")", Object: anchorOf(d, first.Elem)}}
 	}
 	if first.NS != core.NSPDF20 {
-		return []Violation{{Clause: "8.2.5.2", Message: "the Document structure element is not in the PDF 2.0 namespace (" + core.NSPDF20 + "); its namespace is " + first.NS, Object: d.ObjNumOf(first.Elem)}}
+		return []Violation{{Clause: "8.2.5.2", Message: "the Document structure element is not in the PDF 2.0 namespace (" + core.NSPDF20 + "); its namespace is " + first.NS, Object: anchorOf(d, first.Elem)}}
 	}
 	return nil
 }
@@ -114,7 +114,7 @@ func checkUA2NoH(d core.View, cat *object.Dictionary) []Violation {
 	var v []Violation
 	for _, n := range structTree(d, cat) {
 		if isStdType(n, "H") {
-			v = append(v, Violation{Clause: "8.2.5.12", Message: "the H structure type is used; PDF/UA-2 requires the numbered headings H1-Hn", Object: d.ObjNumOf(n.Elem)})
+			v = append(v, Violation{Clause: "8.2.5.12", Message: "the H structure type is used; PDF/UA-2 requires the numbered headings H1-Hn", Object: anchorOf(d, n.Elem)})
 		}
 	}
 	return v
@@ -149,7 +149,7 @@ func checkUA2ListNumbering(d core.View, cat *object.Dictionary) []Violation {
 			continue
 		}
 		if ln.of(n.Elem) == "None" {
-			v = append(v, Violation{Clause: "8.2.5.25", Message: "a list whose items have Lbl elements has no ListNumbering attribute, or ListNumbering None", Object: d.ObjNumOf(n.Elem)})
+			v = append(v, Violation{Clause: "8.2.5.25", Message: "a list whose items have Lbl elements has no ListNumbering attribute, or ListNumbering None", Object: anchorOf(d, n.Elem)})
 		}
 	}
 	return v
@@ -288,7 +288,7 @@ func checkUA2FormOneWidget(d core.View, cat *object.Dictionary) []Violation {
 	var v []Violation
 	for i, n := range nodes {
 		if c := widgets[i]; c > 1 {
-			v = append(v, Violation{Clause: "8.10.1", Message: "a Form structure element encloses " + strconv.Itoa(c) + " widget annotations; it may enclose at most one", Object: d.ObjNumOf(n.Elem)})
+			v = append(v, Violation{Clause: "8.10.1", Message: "a Form structure element encloses " + strconv.Itoa(c) + " widget annotations; it may enclose at most one", Object: anchorOf(d, n.Elem)})
 		}
 	}
 	return v
