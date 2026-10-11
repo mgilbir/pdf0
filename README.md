@@ -129,7 +129,7 @@ extraction inherits them. When a cap does stop a check, the trip is reported as 
 finding under the rule `"limit"` rather than guessed at — `IsCheckerFinding`
 separates that from a real non-conformance, and it means **unknown**, never
 *failed*. See [docs/limits.md](docs/limits.md) and
-[docs/architecture.md](docs/architecture.md#resource-limits).
+[docs/untrusted-input.md](docs/untrusted-input.md#capping-what-one-document-costs).
 
 Under a deadline, use the `…Context` variants — `ReadContext`,
 `Document.WriteContext`, `ValidatePDFAContext`, `ValidatePDFUAContext`,
@@ -144,7 +144,7 @@ errs := pdf0.ValidatePDFAContext(ctx, doc, pdfa.PDFA4)
 A cancelled validation returns the findings it had gathered plus one under the
 rule `"limit"`, so it can never be mistaken for a clean result; `Read`, `Write`
 and the extractors return an error wrapping `ctx.Err()` instead. See
-[docs/architecture.md](docs/architecture.md#cancellation) for which entry points
+[docs/untrusted-input.md](docs/untrusted-input.md#bounding-time-the-context-variants) for which entry points
 have a variant, why, and the measured cancellation latency.
 
 To write a PDF/A document, build it and write it with `Save` rather than

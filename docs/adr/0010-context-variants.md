@@ -30,5 +30,5 @@ an error for the extractors.
 - Whether a call can be cancelled is visible where the call is written, not in
   an argument to a `Read` twenty lines earlier.
 - Adding the variants changed no existing signature. The cost is a second name
-  per entry point; [architecture.md](../architecture.md#cancellation) lists
+  per entry point; [untrusted-input.md](../untrusted-input.md#bounding-time-the-context-variants) lists
   which have one, and why the rest do not.

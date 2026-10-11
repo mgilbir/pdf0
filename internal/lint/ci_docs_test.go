@@ -42,10 +42,16 @@ var generatedSections = []struct {
 	{
 		name:   "options",
 		source: "the With* functions in limits.go",
-		files:  []string{"docs/architecture.md"},
+		files:  []string{"docs/untrusted-input.md"},
 		render: func(t *testing.T, root string) string {
 			return renderOptionsDoc(t, root)
 		},
+	},
+	{
+		name:   "contexts",
+		source: "the exported API of the public packages, type-checked",
+		files:  []string{"docs/untrusted-input.md"},
+		render: renderContextsDoc,
 	},
 	{
 		name:   "datasets",
@@ -612,9 +618,9 @@ func renderDatasetDoc(t *testing.T, sets []dataset, readers map[string][]string)
 
 // renderOptionsDoc lists the With* options of limits.go from their own
 // documentation: what each caps (its first sentence) and its default (the
-// "(default …)" that sentence carries). The table in the architecture guide
-// used to be written by hand, and a count of the options was quoted in five
-// places; each went stale when an option was added.
+// "(default …)" that sentence carries). The table, now in the untrusted-input
+// guide, used to be written by hand, and a count of the options was quoted in
+// five places; each went stale when an option was added.
 func renderOptionsDoc(t *testing.T, root string) string {
 	t.Helper()
 	fset := token.NewFileSet()

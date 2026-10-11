@@ -20,9 +20,10 @@ Start from the question you have.
 | Pull images out of a PDF, or fix a codec | [images.md](images.md) |
 | Embed an image in a page | [images.md](images.md#writing-images) |
 | Use the `cmd/pdf0` dev tool | [cli.md](cli.md) |
+| Read untrusted PDFs safely: cap cost, set deadlines, read limit findings | [untrusted-input.md](untrusted-input.md) |
+| Cap what one untrusted document may cost | [untrusted-input.md](untrusted-input.md#capping-what-one-document-costs) |
+| Stop work under a deadline, and know what a cancelled run returns | [untrusted-input.md](untrusted-input.md#bounding-time-the-context-variants) |
 | Understand what happens when a resource guard trips | [limits.md](limits.md) |
-| Cap what one untrusted document may cost | [architecture.md](architecture.md#resource-limits) |
-| Stop work under a deadline, and know what a cancelled run returns | [architecture.md](architecture.md#cancellation) |
 | Work out why something failed | [troubleshooting.md](troubleshooting.md) |
 | Run the tests that a fresh clone skips | [testing.md](testing.md) |
 | Contribute a change | [../CONTRIBUTING.md](../CONTRIBUTING.md) |
@@ -34,7 +35,8 @@ The per-symbol API reference is the godoc: `go doc github.com/mgilbir/pdf0`, or
 
 ## What each doc is for
 
-**[architecture.md](architecture.md)** — explanation. The object model, the Read
+**[architecture.md](architecture.md)** — explanation. The packages and how
+they depend on each other, the Document lifecycle, the object model, the Read
 pipeline and its recovery ladder, the Write pipeline. Read before changing the
 parser or serializer.
 
@@ -84,14 +86,16 @@ conformance declarations every standard writes there, and schema validation.
 `Locked()`, what is supported, key derivation, and what is honestly not
 guaranteed.
 
-**[limits.md](limits.md)** — reference plus explanation. Every resource guard
-in the package, classified loud / silently lossy / silently wrong, what each
-truncated value feeds into, and the one mechanism that reports a trip — the
-reserved `limit` rule, which a cancelled run reports through too. Some of
-those guards are configurable; the options are in
-[architecture.md](architecture.md#resource-limits), cancellation is in
-[architecture.md](architecture.md#cancellation), and the design record behind
-both is [proposals/configurable-limits.md](proposals/configurable-limits.md).
+**[untrusted-input.md](untrusted-input.md)** — how-to. Reading files you did
+not write: the options that cap what a document costs and the `…Context`
+variants that bound how long it takes, both as tables generated from the code;
+what a `limit` finding means; and the errors extraction returns instead.
+
+**[limits.md](limits.md)** — reference plus explanation. What a `limit`
+finding tells you, how a trip reaches the caller, every resource guard in the
+package classified loud / silently lossy / silently wrong, and what each
+truncated value feeds into. The design record behind the options is
+[proposals/configurable-limits.md](proposals/configurable-limits.md).
 
 **[proposals/html-css-rendering.md](proposals/html-css-rendering.md)** — the
 design record for rendering HTML and CSS into a PDF page. It is done: the engine

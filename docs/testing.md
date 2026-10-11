@@ -374,7 +374,7 @@ and must return an error instead.
   and it kept burning a core and holding its memory until it finished on its own
   — with eight workers and a 25-second file, a real leak, and the concrete
   motivation for [the cancellation
-  design](architecture.md#cancellation). The `select` still bounds the wait,
+  design](adr/0010-context-variants.md). The `select` still bounds the wait,
   because a hang pdf0 does not check for cancellation in would block the worker
   forever, and finding exactly that is what this program is for. A `timeout`
   outcome is therefore a stronger signal than it used to be: the work did not

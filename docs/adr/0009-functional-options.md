@@ -34,7 +34,7 @@ used to carry configuration.
 The full argument, with the transports weighed and the defaults measured, is
 the design record [configurable-limits.md](../proposals/configurable-limits.md);
 the options and their defaults are listed in
-[architecture.md](../architecture.md#resource-limits).
+[untrusted-input.md](../untrusted-input.md#capping-what-one-document-costs).
 
 ## Consequences
 

@@ -352,7 +352,7 @@ Each exists because a crafted file reached it. Checks run behind `recover()`,
 but a hang or an OOM is not something `recover` catches.
 
 One of these is configurable per document; see
-[architecture.md](architecture.md#resource-limits).
+[untrusted-input.md](untrusted-input.md#capping-what-one-document-costs).
 
 - **`/W` is not expanded** — `parseCIDWidths` resolves the entries once into
   disjoint CID segments and `width` looks a CID up by binary search, so

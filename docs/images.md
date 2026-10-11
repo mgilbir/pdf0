@@ -42,7 +42,7 @@ image is not interruptible. There is deliberately no context variant of `Images`
 an iterator is already cancellable by `break`, and since each image is decoded
 only as it is yielded, breaking after image N skips exactly what a context check
 between images would have. See
-[architecture.md](architecture.md#cancellation).
+[untrusted-input.md](untrusted-input.md#bounding-time-the-context-variants).
 
 Each yielded value is an `ExtractedImage`:
 
