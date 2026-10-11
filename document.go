@@ -43,7 +43,9 @@ type Document struct {
 	// password; their strings and streams are then in the clear but this flag
 	// stays set. Otherwise the content stays encrypted and the document is
 	// Locked (see LockReason). Write re-encrypts a decrypted document
-	// (reproducing the original /Encrypt) and writes a Locked one back verbatim.
+	// (reproducing the original /Encrypt). A Locked one it re-serializes with
+	// the ciphertext carried unchanged: the file layout is regenerated, every
+	// object is written uncompressed, and /Encrypt and /ID are kept.
 	Encrypted bool
 
 	// valCache memoizes traversals for the duration of one validation run;
@@ -125,8 +127,21 @@ type Document struct {
 
 // Read parses a PDF document from the given data.
 //
-// A malformed or adversarial file always yields an error, never a panic: any
-// panic escaping the parse is recovered and returned as an error.
+// Read never panics on a malformed or adversarial file: a panic escaping the
+// parse is recovered and returned as an error. Nor does it refuse every
+// malformed file. Damage it can work around is repaired and the document is
+// returned with a nil error: a startxref that misses its section, a
+// cross-reference table that does not parse or whose offsets are wrong
+// (rebuilt by scanning the file for object headers, which Source().Rebuilt
+// reports), a stream whose /Length is wrong, an object stream that does not
+// decode (its objects are missing, and Write refuses the document). A nil
+// error means the file was parsed, not that it is well formed; the validators
+// report its defects. Read fails when too little is left to build a document
+// from: no %PDF- header in the first 1024 bytes, a damaged cross-reference
+// section and no object header anywhere in the file, a rebuilt table with no
+// document catalog, or an object stream and the cross-reference table
+// disagreeing about which object is object N. An error reading r, or a size
+// larger than r holds, is returned as well.
 //
 // Encrypted files (standard security handler) are decrypted with the empty
 // password; use ReadWithPassword to supply a user or owner password. A file
@@ -994,11 +1009,36 @@ func findTrailer(data []byte, afterPos int64) (*object.Dictionary, error) {
 
 // Write serializes the document to the writer in PDF format.
 //
+// Write regenerates the whole file structure from the object graph: header,
+// object layout, cross-reference section and trailer. It emits a
+// cross-reference stream, packing eligible objects into object streams, when
+// the source used one, and a traditional table otherwise.
+//
 // A document decrypted on Read is re-encrypted with its retained key so it
 // round-trips. A document that could not be decrypted (Document.Locked) is
-// written back verbatim as a lossless passthrough under its preserved /Encrypt.
-// Write regenerates the cross-reference section, emitting a cross-reference
-// stream when the source used one and a traditional table otherwise.
+// re-serialized with its ciphertext carried unchanged under its preserved
+// /Encrypt and /ID: the file layout is regenerated, not copied, and no object
+// is packed into an object stream, since a reader does not decrypt objects
+// inside one separately.
+//
+// Write refuses, before writing anything, a document it cannot represent
+// faithfully:
+//   - one from which Read left objects missing: an object stream that failed
+//     to decode or was not unpacked (a resource limit, an unsupported filter,
+//     ciphertext), or an object whose ciphertext did not decrypt
+//     (DecryptFailures non-empty);
+//   - a Locked document whose /Encrypt dictionary does not resolve, since
+//     whether its content is ciphertext is then unknown;
+//   - an entry in Objects under object number 0 (the free-list head) or a
+//     negative number, or a nil entry;
+//   - a document Write encrypts (decrypted on Read, or given SetEncryption)
+//     holding a stream that names a crypt filter its handler cannot apply;
+//   - two streams whose indirect /Length names the same object but whose data
+//     lengths differ.
+//
+// An object that does not serialize (a NaN or infinite number) fails the
+// write where it is met, and an error from w is returned as it happens; the
+// output may then be partial.
 func (d *Document) Write(w io.Writer) error { return d.write(core.Canceler{}, w) }
 
 // WriteContext is Write with cancellation.
@@ -1006,7 +1046,7 @@ func (d *Document) Write(w io.Writer) error { return d.write(core.Canceler{}, w)
 // Writing is usually fast, but its cost is the document's, not the caller's: a
 // malformed cross-reference table can make one large stream reachable from
 // thousands of object numbers, and the resulting output is legitimately
-// enormous. cmd/corpusprobe streams exactly that case to io.Discard.
+// enormous. internal/cmd/corpusprobe streams exactly that case to io.Discard.
 //
 // A cancelled write returns an error wrapping ctx.Err(). Whatever had already
 // been written stays written — an io.Writer cannot be rewound — so the output
@@ -1021,9 +1061,10 @@ func (d *Document) write(cancel core.Canceler, w io.Writer) error {
 	// An encrypted document with a security handler (decrypted on Read) is
 	// re-encrypted below with the retained key. Without a handler (an unsupported
 	// scheme or a non-empty password) the content is still in its original
-	// encrypted form in the model; it is written back verbatim under the
-	// preserved /Encrypt and /ID — a lossless passthrough that keeps a file we
-	// cannot decrypt round-trippable rather than losing it on save.
+	// encrypted form in the model; it is re-serialized with that ciphertext
+	// unchanged under the preserved /Encrypt and /ID — a passthrough of the
+	// content (the layout is regenerated) that keeps a file we cannot decrypt
+	// round-trippable rather than losing it on save.
 	if d.Locked() {
 		// The passthrough is sound only when the content is known to be
 		// encrypted and the whole object model survived Read:
