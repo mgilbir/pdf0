@@ -62,12 +62,28 @@ var (
 // filters naming its crypt filters are removed. Write then enciphers every
 // string and stream; the in-memory document stays in the clear, so it remains
 // usable afterwards. It refuses a Locked document.
+//
+// It refuses a document whose source file carries signatures or document
+// time-stamps, with an error wrapping ErrWouldInvalidateSignatures, and
+// changes nothing: encryption can only be applied by rewriting the whole file,
+// which invalidates every one of them, and an incremental update cannot add
+// it. Call AllowInvalidatingSignatures first to encrypt such a document
+// anyway. pdf0 cannot produce a file that is both encrypted and validly
+// signed.
 func (d *Document) SetEncryption(userPassword, ownerPassword string) error {
 	// Refuse to encrypt a document whose content is still ciphertext (an
 	// encrypted file we could not decrypt): enciphering it again would
 	// double-encrypt and corrupt it. The caller must decrypt it first.
 	if d.Locked() {
 		return errors.New("cannot encrypt: the document is already encrypted and was not decrypted")
+	}
+	// Encrypting rewrites every string and stream, and no incremental update
+	// can add or change encryption, so a signed document would lose its
+	// signatures at the next Write whatever the caller did. Refuse here, while
+	// nothing has changed, rather than leave Write to refuse a document already
+	// marked for encryption.
+	if err := d.signaturesAtRiskErr(true); err != nil {
+		return err
 	}
 	if userPassword == "" {
 		return errors.New("cannot encrypt: an empty user password lets anyone open the file, and SetEncryption grants every permission, so the file would not be protected")
@@ -198,6 +214,13 @@ func (d *Document) DecryptFailures() []int {
 // /Crypt filter (which would otherwise name a crypt filter no dictionary
 // defines). It has no effect on a document whose content could not be
 // decrypted (see Locked).
+//
+// It decrypts the document, not the file it was read from, so it opens no
+// way round the signature guard: Write still refuses a document whose file
+// carries signatures (ErrWouldInvalidateSignatures), and the incremental
+// writers refuse a document read from an encrypted file even after it, since
+// the update would keep that file's ciphertext under a trailer that no longer
+// says it is encrypted.
 func (d *Document) RemoveEncryption() {
 	if d.security == nil {
 		return

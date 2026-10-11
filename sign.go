@@ -7,7 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/mgilbir/pdf0/internal/crypt"
+	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/sign"
 	"io"
@@ -25,6 +25,13 @@ import (
 // that already has one must go through the incremental path, which appends the
 // new objects and reproduces the earlier bytes verbatim; a full rewrite would
 // invalidate the existing signature.
+//
+// The same fact guards every whole-document writer, not only the signing one:
+// Write, WriteContext, Save, SaveContext and SetEncryption refuse a document
+// whose source file carries signatures (ErrWouldInvalidateSignatures) unless
+// the caller consented with AllowInvalidatingSignatures. The test and the
+// refusal are here, beside ErrAlreadySigned, which is the same refusal for
+// WriteSigned.
 
 // sigContentsBytes is the reserved size of the /Contents placeholder (the CMS
 // signature is hex-encoded into it). Ample for an RSA-2048 or ECDSA signature
@@ -52,19 +59,106 @@ func WithSignatureTimestamp(tsaCert *x509.Certificate, tsaKey crypto.Signer) Sig
 	return func(c *signConfig) { c.tsaCert, c.tsaKey = tsaCert, tsaKey }
 }
 
-// InvalidatingExistingSignatures lets WriteSigned rewrite a document that
-// already carries signatures. The rewrite moves every byte the existing
-// signatures cover, so they no longer verify: their dictionaries are written
-// out, but a verifier reports them invalid. Pass it only when that is what you
-// intend; to add a signature and keep the existing ones valid, use
-// WriteSignedIncremental. It has no effect on WriteSignedIncremental.
+// InvalidatingExistingSignatures lets WriteSigned rewrite a document whose
+// source file already carries signatures. The rewrite moves every byte the
+// existing signatures cover, so they no longer verify: their dictionaries are
+// written out, but a verifier reports them invalid. Pass it only when that is
+// what you intend; to add a signature and keep the existing ones valid, use
+// WriteSignedIncremental. It has no effect on WriteSignedIncremental. It is
+// the one-call form of AllowInvalidatingSignatures, which gives the same
+// consent for every writer.
 func InvalidatingExistingSignatures() SignOption {
 	return func(c *signConfig) { c.invalidateExisting = true }
 }
 
-// ErrAlreadySigned is returned by WriteSigned for a document that carries
-// signatures (or document time-stamps), which a full rewrite would invalidate.
+// ErrAlreadySigned is returned by WriteSigned for a document whose source file
+// carries signatures (or document time-stamps), which a full rewrite would
+// invalidate. The other whole-document writers refuse the same document with
+// an error wrapping ErrWouldInvalidateSignatures.
 var ErrAlreadySigned = errors.New("signing: the document already carries signatures, which rewriting it would invalidate; use WriteSignedIncremental to add a signature, or pass InvalidatingExistingSignatures")
+
+// ErrWouldInvalidateSignatures is wrapped by the error Write, WriteContext,
+// Save, SaveContext and SetEncryption return for a document whose source file
+// carries signatures or document time-stamps: each of them rewrites the whole
+// file, which moves every byte those signatures cover, so none of them would
+// verify again. Test for it with errors.Is. AllowInvalidatingSignatures is the
+// consent that lets those calls proceed; WriteIncremental,
+// WriteSignedIncremental and WriteArchivalTimestamp append to the file instead
+// and need none.
+var ErrWouldInvalidateSignatures = errors.New("the file the document was read from carries signatures or document time-stamps, which rewriting the whole file would invalidate")
+
+// AllowInvalidatingSignatures consents to rewriting the whole file of a
+// document whose source file carries signatures or document time-stamps.
+// Without it, Write, WriteContext, Save, SaveContext and SetEncryption refuse
+// such a document with an error wrapping ErrWouldInvalidateSignatures, and
+// WriteSigned refuses it with ErrAlreadySigned; with it they proceed. What they
+// write still holds the old signature dictionaries, but those cover bytes that
+// no longer exist, and a verifier reports every one of them invalid.
+//
+// The consent belongs to this Document and lasts as long as it does, the way
+// SetEncryption's choice does: it is what lets a signed document be encrypted
+// at all, since SetEncryption would otherwise refuse before any writer is
+// called. A document read back from the output does not inherit it. It does
+// nothing for a document built in memory, which has no source file and so no
+// signature a rewrite could invalidate. For WriteSigned alone, the
+// InvalidatingExistingSignatures option gives the same consent for one call.
+//
+// To change a signed document and keep its signatures, do not call this:
+// write the change with WriteIncremental, which appends it to the file and
+// leaves the signed bytes as they were. A verifier may still report such a
+// change as one the signer did not permit (sign.Result.ChangesAllowed);
+// preserving the bytes keeps a signature valid, not every change allowed.
+func (d *Document) AllowInvalidatingSignatures() {
+	if d != nil {
+		d.invalidatesSignatures = true
+	}
+}
+
+// signaturesAtRisk returns how many signatures and document time-stamps a
+// whole rewrite of d would invalidate: those the source record found in the
+// file at Read (Source.sigs, by the verifier's own test — a dictionary with
+// /ByteRange and /Contents whose resolved /Type is absent, /Sig or
+// /DocTimeStamp), or none when the caller consented with
+// AllowInvalidatingSignatures. The file's signatures, not the object graph's:
+// a signature dictionary deleted from the graph is still one the rewrite
+// removes from the file, and one added in memory covers no byte of it.
+// Whether a signature verifies today is not asked: one pdf0 cannot verify
+// (an algorithm it does not implement) may verify for someone else.
+func (d *Document) signaturesAtRisk() int {
+	if d == nil || d.invalidatesSignatures || d.source == nil || len(d.source.data) == 0 {
+		return 0
+	}
+	return len(d.source.sigs)
+}
+
+// signaturesAtRiskErr is the refusal of a whole rewrite of a signed document,
+// or nil: SetEncryption's when encrypting, the writers' otherwise. The message
+// ends with the way out that applies — an incremental update cannot add
+// encryption, nor be written for an encrypted file — and each wording is one
+// literal, so the documentation can quote it whole.
+func (d *Document) signaturesAtRiskErr(encrypting bool) error {
+	n := d.signaturesAtRisk()
+	if n == 0 {
+		return nil
+	}
+	var msg string
+	switch {
+	case encrypting:
+		msg = fmt.Sprintf("cannot encrypt: the file the document was read from carries signatures or document time-stamps (%d), which rewriting the whole file would invalidate; encryption cannot be added by an incremental update, so call AllowInvalidatingSignatures first to encrypt it anyway", n)
+	case d.Encrypted || d.security != nil || d.source.fileEncrypted():
+		msg = fmt.Sprintf("cannot write: the file the document was read from carries signatures or document time-stamps (%d), which rewriting the whole file would invalidate; an encrypted file cannot be updated incrementally, so call AllowInvalidatingSignatures first to rewrite it anyway", n)
+	default:
+		msg = fmt.Sprintf("cannot write: the file the document was read from carries signatures or document time-stamps (%d), which rewriting the whole file would invalidate; write the changes with WriteIncremental to keep them, or call AllowInvalidatingSignatures first to rewrite the file anyway", n)
+	}
+	return signaturesAtRiskError(msg)
+}
+
+// signaturesAtRiskError is a refusal that errors.Is reports as
+// ErrWouldInvalidateSignatures.
+type signaturesAtRiskError string
+
+func (e signaturesAtRiskError) Error() string { return string(e) }
+func (e signaturesAtRiskError) Unwrap() error { return ErrWouldInvalidateSignatures }
 
 func signOptions(opts []SignOption) (signConfig, error) {
 	var c signConfig
@@ -77,27 +171,13 @@ func signOptions(opts []SignOption) (signConfig, error) {
 	return c, nil
 }
 
-// hasSignatures reports whether any object of d is a signature or document
-// time-stamp dictionary — the same test the encryption layer and the verifier
-// use to find one (crypt.IsSignatureDict).
-func (d *Document) hasSignatures() bool {
-	for _, iobj := range d.Objects {
-		if iobj == nil {
-			continue
-		}
-		if dict, ok := iobj.Value.(*object.Dictionary); ok && crypt.IsSignatureDict(dict) {
-			return true
-		}
-	}
-	return false
-}
-
 // signable refuses a document a signing writer cannot work on: a nil one, and
 // an encrypted one — with the page-tree and metadata writers' refusal when it
 // is Locked (the content is still ciphertext), and otherwise with "cannot sign
 // an encrypted document", because the writers do not encrypt what they add.
 // Encrypting a signed document afterwards is no way round it either: that
-// rewrites the bytes the signature covers, and it no longer verifies.
+// rewrites the bytes the signature covers, and it no longer verifies, so
+// SetEncryption refuses it without AllowInvalidatingSignatures.
 func (d *Document) signable(op string) error {
 	switch {
 	case d == nil:
@@ -117,11 +197,15 @@ func (d *Document) signable(op string) error {
 // document is not modified. With WithSignatureTimestamp the signature carries a
 // signature time-stamp (PAdES B-T).
 //
-// It rewrites the whole file, so it refuses a document that already carries a
-// signature, with ErrAlreadySigned: the rewrite would silently invalidate it.
-// Add a signature to a signed document with WriteSignedIncremental, which
-// appends to the file instead; pass InvalidatingExistingSignatures only to
-// replace the file and discard the old signatures on purpose.
+// It rewrites the whole file, so it refuses a document whose source file
+// already carries a signature or document time-stamp, with ErrAlreadySigned:
+// the rewrite would silently invalidate it. Signatures are those Read found in
+// the file, by VerifySignatures's test; one deleted from the object graph
+// since is still refused for, and a document built in memory has none. Add a
+// signature to a signed document with WriteSignedIncremental, which appends to
+// the file instead; pass InvalidatingExistingSignatures, or call
+// AllowInvalidatingSignatures first, only to replace the file and discard the
+// old signatures on purpose.
 //
 // It refuses an encrypted document, with one of two errors. A document read
 // without its password (Locked) gets the refusal every writer gives one,
@@ -130,7 +214,7 @@ func (d *Document) signable(op string) error {
 // "pdf0: signing: cannot sign an encrypted document". pdf0 cannot produce an
 // encrypted signed file: sign the plaintext document, and do not encrypt it
 // afterwards, since that rewrites the bytes the signature covers and it no
-// longer verifies.
+// longer verifies (SetEncryption refuses the signed document for that reason).
 func (d *Document) WriteSigned(w io.Writer, cert *x509.Certificate, key crypto.Signer, opts ...SignOption) error {
 	cfg, err := signOptions(opts)
 	if err != nil {
@@ -139,15 +223,17 @@ func (d *Document) WriteSigned(w io.Writer, cert *x509.Certificate, key crypto.S
 	if err := d.signable("signing"); err != nil {
 		return err
 	}
-	if !cfg.invalidateExisting && d.hasSignatures() {
+	if !cfg.invalidateExisting && d.signaturesAtRisk() > 0 {
 		return ErrAlreadySigned
 	}
 	signedDoc, _, err := withSignatureField(d)
 	if err != nil {
 		return err
 	}
+	// Serialised without Write's guard: the decision about the existing
+	// signatures was made above, and the placeholder is not one.
 	var buf bytes.Buffer
-	if err := signedDoc.Write(&buf); err != nil {
+	if err := signedDoc.serialize(core.Canceler{}, &buf); err != nil {
 		return err
 	}
 	out, err := patchSignature(buf.Bytes(), cert, key, cfg.tsaCert, cfg.tsaKey)

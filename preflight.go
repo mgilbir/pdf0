@@ -38,7 +38,10 @@ const maxFieldDepth = 64
 // fixes it removes encryption, which PDF/A forbids: a document Read decrypted
 // (Encrypted, but not Locked) is written by the next Write in plaintext, with
 // no password. A caller whose output must stay protected cannot have PDF/A,
-// and should not Repair.
+// and should not Repair. Repair itself changes only the model, but that next
+// Write rewrites the whole file, so on a document whose file carries
+// signatures it is refused (ErrWouldInvalidateSignatures) unless
+// AllowInvalidatingSignatures was called.
 //
 // Its other fixes are document-level and information-free: it removes the
 // additional actions the level forbids, and adds a file identifier (/ID) to

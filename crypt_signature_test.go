@@ -8,6 +8,7 @@ import (
 	"crypto/rc4"
 	"crypto/x509"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -267,6 +268,10 @@ func TestWriteEncryptedSignedKeepsContentsClear(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Encrypting a signed document invalidates its signature, so it takes the
+	// caller's consent; what is checked here is only that the signature value
+	// is still written in the clear.
+	sdoc.AllowInvalidatingSignatures()
 	if err := sdoc.SetEncryption("user", "owner"); err != nil {
 		t.Fatal(err)
 	}
@@ -402,7 +407,8 @@ func TestTrailerIDNotDecrypted(t *testing.T) {
 // the refusal every writer gives one, and a decrypted document, or one
 // SetEncryption marked, gets "cannot sign an encrypted document". It also pins
 // why there is no way round them: encrypting a signed document rewrites the
-// bytes its signature covers.
+// bytes its signature covers, so SetEncryption refuses it unless the caller
+// consents, and with consent the signature no longer verifies.
 func TestSigningRefusesEncryptedDocuments(t *testing.T) {
 	cert, key := signtest.CertKey(t)
 	tsaCert, tsaKey := signtest.TSACertKey(t)
@@ -450,6 +456,10 @@ func TestSigningRefusesEncryptedDocuments(t *testing.T) {
 	}
 
 	signed := readBytes(t, signedBy(t, cert, key))
+	if err := signed.SetEncryption("user", "owner"); !errors.Is(err, ErrWouldInvalidateSignatures) {
+		t.Fatalf("SetEncryption on a signed document = %v, want ErrWouldInvalidateSignatures", err)
+	}
+	signed.AllowInvalidatingSignatures()
 	if err := signed.SetEncryption("user", "owner"); err != nil {
 		t.Fatal(err)
 	}

@@ -123,6 +123,12 @@ type Document struct {
 	// a cross-reference stream (/Type /XRef) rather than a traditional table, so
 	// Write regenerates the same kind of structure.
 	usedXRefStream bool
+
+	// invalidatesSignatures records the caller's consent, given with
+	// AllowInvalidatingSignatures, to rewrite a signed document whole; without
+	// it the whole-document writers and SetEncryption refuse one (see
+	// signaturesAtRisk).
+	invalidatesSignatures bool
 }
 
 // Read parses a PDF document from the given data.
@@ -1041,12 +1047,22 @@ func findTrailer(data []byte, afterPos int64) (*object.Dictionary, error) {
 //   - two streams whose indirect /Length names the same object but whose data
 //     lengths differ.
 //
+// It also refuses, before writing anything, a document whose source file
+// carries signatures or document time-stamps, with an error wrapping
+// ErrWouldInvalidateSignatures: regenerating the file moves every byte they
+// cover, so none would verify again — even with nothing changed. Write the
+// changes as an incremental update with WriteIncremental to keep them (not
+// possible for an encrypted file), or call AllowInvalidatingSignatures first
+// to rewrite the file anyway. A document built in memory has no source file,
+// so this never applies to it.
+//
 // An object that does not serialize (a NaN or infinite number) fails the
 // write where it is met, and an error from w is returned as it happens; the
 // output may then be partial.
 func (d *Document) Write(w io.Writer) error { return d.write(core.Canceler{}, w) }
 
-// WriteContext is Write with cancellation.
+// WriteContext is Write with cancellation. It refuses what Write refuses,
+// including a signed document (ErrWouldInvalidateSignatures).
 //
 // Writing is usually fast, but its cost is the document's, not the caller's: a
 // malformed cross-reference table can make one large stream reachable from
@@ -1062,7 +1078,19 @@ func (d *Document) WriteContext(ctx context.Context, w io.Writer) error {
 	return d.write(core.NewCanceler(ctx), w)
 }
 
+// write is every whole-document writer's body: the refusal of a rewrite that
+// would invalidate the source file's signatures, then serialize.
 func (d *Document) write(cancel core.Canceler, w io.Writer) error {
+	if err := d.signaturesAtRiskErr(false); err != nil {
+		return err
+	}
+	return d.serialize(cancel, w)
+}
+
+// serialize regenerates the file from the object graph. Only a writer that
+// has made its own decision about existing signatures calls it directly
+// (WriteSigned, whose placeholder signature is in the graph it serializes).
+func (d *Document) serialize(cancel core.Canceler, w io.Writer) error {
 	// An encrypted document with a security handler (decrypted on Read) is
 	// re-encrypted below with the retained key. Without a handler (an unsupported
 	// scheme or a non-empty password) the content is still in its original

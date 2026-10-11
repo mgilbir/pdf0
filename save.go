@@ -71,13 +71,19 @@ const maxReportedViolations = 10
 //
 // Write remains available for a caller who means to write exactly what is in
 // the model, and is what a read-modify-write of someone else's file should use.
+//
+// Like Write, it refuses a document whose source file carries signatures or
+// document time-stamps, with an error wrapping ErrWouldInvalidateSignatures,
+// unless AllowInvalidatingSignatures was called: it, too, rewrites the whole
+// file.
 func (d *Document) Save(w io.Writer) error {
 	return d.save(core.Canceler{}, w)
 }
 
 // SaveContext is Save with cancellation. Both the write and the validation
 // respect it; see ValidatePDFAContext for how a cancelled validation reports
-// itself, and note that a cancelled Save writes nothing at all.
+// itself, and note that a cancelled Save writes nothing at all. It refuses a
+// signed document as Save does.
 func (d *Document) SaveContext(ctx context.Context, w io.Writer) error {
 	return d.save(core.NewCanceler(ctx), w)
 }
