@@ -246,7 +246,9 @@ PDF/A validator and to the text a reader extracts.
 A face with COLR colour glyphs (COLRv0 layers, COLRv1 paint graphs) has
 outlines, and used to be embedded as them, so its glyphs came out in the text
 colour alone. It is now drawn in colour, as Type 3 fonts like a bitmap face's,
-by default; `fonts.Face.SetColourGlyphs(false)` keeps the old embedding. Each
+by default; `fonts.Face.SetColourGlyphs(false)` keeps the old embedding. A
+face whose licence permits embedding only bitmaps is never drawn in colour,
+since the paintings are outline data ([text.md](text.md#licences)). Each
 glyph's procedure is the PDF translation of forme's painting
 (`shape.Face.PaintGlyph`), in `fonts/colr.go`:
 
@@ -312,12 +314,6 @@ well as by pdf0's own validator.
 
 ## Confirmed limitations
 
-- **Licence of a colour face:** a face drawn in its COLR colour glyphs is
-  written as Type 3 fonts whatever its licence's bitmap-embedding-only bit
-  says, so a face with that bit and no bitmap strikes has its paintings,
-  outlines included, embedded where [the rule](text.md#licences) refuses it.
-  `SetColourGlyphs(false)` restores the refusal. The Restricted License and
-  no-subsetting bits are honoured.
 - **Colour glyphs:** a COLR glyph that composites in SrcAtop, DestAtop, Xor
   or Plus is refused. A gradient stop in the text colour needs the text in
   DeviceRGB or DeviceGray. In PDF/A-1 a colour glyph with no outline of its

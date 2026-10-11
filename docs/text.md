@@ -149,11 +149,13 @@ docs link here.
   the glyphs drawn, which is a subset, and is refused with
   `fonts.ErrBitmapNoSubsetting`.
 
-One case is not yet held to this: a face drawn in its COLR colour glyphs is
-written as Type 3 fonts of its paintings, outlines included, even when its
-licence permits embedding only bitmaps and it has none.
-`Face.SetColourGlyphs(false)` restores the refusal; see [Confirmed
-limitations](font-embedding.md#confirmed-limitations).
+A COLR colour glyph is painted from glyph outlines — its layers and clips are
+glyphs — so bitmap embedding only also rules out drawing a face in its colour
+glyphs: the OpenType specification says "No outline data may be embedded". A
+colour face with that bit is drawn from its strikes when it has them and
+refused when it has none, whatever `Face.SetColourGlyphs` says; and under no
+subsetting a colour face drawn in colour is refused, while
+`SetColourGlyphs(false)` embeds it whole as its outlines.
 
 ## PDF/A
 
@@ -235,7 +237,7 @@ flowchart TD
     F["fonts.Face"] --> K{"made by"}
     K -->|"Standard"| STD["Type1, named and not embedded<br/>WinAnsiEncoding, except Symbol and ZapfDingbats<br/>(fails every PDF/A level)"]
     K -->|"LoadSimple, NotoSansSimple"| SIM["TrueType, WinAnsiEncoding<br/>/FontFile2"]
-    K -->|"Load, NotoSans, Adopt"| PIC{"glyphs drawn as pictures?<br/>strikes and no outlines;<br/>strikes and a bitmap-only licence;<br/>COLR glyphs, SetColourGlyphs on"}
+    K -->|"Load, NotoSans, Adopt"| PIC{"glyphs drawn as pictures?<br/>strikes and no outlines;<br/>strikes and a bitmap-only licence;<br/>COLR glyphs, SetColourGlyphs on,<br/>no bitmap-only licence"}
     PIC -->|yes| T3["Type 3 fonts: the home font under the page's name,<br/>sub-fonts under SubfontName (F1.1, F1.2, ...)"]
     T3 --> OPQ{"Forms.Opaque<br/>(PDF/A-1)"}
     OPQ -->|no| T3S["greyscale and colour glyphs with /SMask;<br/>COLR glyphs as shadings and groups"]
