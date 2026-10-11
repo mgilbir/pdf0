@@ -38,9 +38,10 @@ import (
 
 const noticesFile = "THIRD_PARTY_NOTICES"
 
-// ownFiles are committed files under testdata that this repository wrote:
-// scripts and manifests that fetch data sets, and the notes beside them. Each
-// glob must match something, so the list cannot outlive what it excuses.
+// ownFiles are committed files under a testdata directory that this
+// repository wrote: scripts and manifests that fetch data sets, the notes
+// beside them, and programs that make a fixture. Each glob must match
+// something, so the list cannot outlive what it excuses.
 var ownFiles = []struct{ glob, why string }{
 	{"testdata/*/download.sh", "fetches a data set; the data is not committed"},
 	{"testdata/*/sources.tsv", "a fetch manifest: URLs, pins and names, no data"},
@@ -50,6 +51,7 @@ var ownFiles = []struct{ glob, why string }{
 	{"testdata/colrv1/requirements.txt", "the Python packages skia_render.py needs"},
 	{"testdata/fontinstance/oracle.py", "writes oracle.txt"},
 	{"testdata/verapdf/verapdf-docker.sh", "runs veraPDF's docker image"},
+	{"cmd/pdf0/testdata/signpdf/main.go", "signs a PDF with a key made on the spot, for the CLI's signed-input transcripts"},
 }
 
 // noticeEntry is one entry of the file: a title, the files it covers, where
