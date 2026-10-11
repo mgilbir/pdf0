@@ -88,8 +88,8 @@ supplies and nothing embeds.
 
 ## Drawing
 
-`content.Builder` has one method per content-stream operator, named for what it
-does rather than for the operator: `MoveTo`, `LineTo`, `CurveTo`, `Rect` and
+`content.Builder`'s methods are named for what they do rather than for the
+content-stream operator they write: `MoveTo`, `LineTo`, `CurveTo`, `Rect` and
 `ClosePath` build a path; `Fill`, `Stroke`, `FillStroke`, `Clip` and `EndPath`
 end it. `SetRGB`, `SetGray` and `SetCMYK` set the fill colour, and their
 `SetStroke…` twins the stroke colour; `SetLineWidth`, `SetLineCap`, `SetDash`
