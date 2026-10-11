@@ -33,12 +33,16 @@ Adobe Glyph List
 ============================================================================
 
 Files:   pdfa/fonts.go (aglNames)
+         internal/fontcheck/glyphlist.txt
 Source:  https://github.com/adobe-type-tools/agl-aglfn, glyphlist.txt and
          zapfdingbats.txt (checked at 4036a9ca80a62f64f9de4f7321a9a045ad0ecfd6)
 Licence: BSD 3-Clause (BSD-3-Clause), as both files state it
 
-aglNames is the set of glyph names a PDF/A Differences array may use. Which
-version of the lists it was first taken from is not recorded. Checked on
+internal/fontcheck/glyphlist.txt is glyphlist.txt itself, verbatim with its
+notice, pinned by SHA-256 in internal/fontcheck/agl_test.go; the PDF/UA
+Differences rule (7.21.6) reads it. aglNames is the set of glyph names a PDF/A
+Differences array may use. Which version of the lists it was first taken from
+is not recorded. Checked on
 2026-10-11 against both files at the commit above: 962 of its 964 names are
 in one of them. The other two, "bracket" and "isinferior", are in neither.
 
