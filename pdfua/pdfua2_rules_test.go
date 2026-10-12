@@ -232,6 +232,21 @@ func TestUA2ListNumbering(t *testing.T) {
 	if count(b.f) != 0 {
 		t.Error("ListNumbering from the class map: want no finding")
 	}
+	// The element's /A takes precedence over its classes (ISO 32000-2
+	// 14.7.6.2); classes are read in order, revision numbers skipped.
+	b.l.Set("A", listAttr("None"))
+	if count(b.f) != 1 {
+		t.Error("/A ListNumbering None over a class's Disc: want 1 finding")
+	}
+	b = build(true)
+	b.f.root.Set("ClassMap", object.NewDictionary(
+		object.Entry{Key: "none", Value: listAttr("None")},
+		object.Entry{Key: "num", Value: object.Array{object.NewDictionary(object.Entry{Key: "O", Value: object.Name("Layout")}), listAttr("Disc")}},
+	))
+	b.l.Set("C", object.Array{object.Name("num"), object.Integer(3), object.Name("none")})
+	if count(b.f) != 0 {
+		t.Error("the first class naming ListNumbering, Disc, must answer: want no finding")
+	}
 	b = build(true)
 	b.f.docEl.Set("A", listAttr("Decimal"))
 	if count(b.f) != 0 {

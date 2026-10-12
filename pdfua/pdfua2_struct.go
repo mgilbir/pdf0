@@ -157,10 +157,10 @@ func checkUA2ListNumbering(d core.View, cat *object.Dictionary) []Violation {
 
 // listNumbering reads a list element's ListNumbering attribute as veraPDF does
 // (AttributeHelper.getListNumbering): the first attribute object owned by List
-// (/O /List) in the element's /A — a dictionary, or an array of them and their
-// revision numbers — whose ListNumbering is a name; failing that, the same in
-// the attribute objects its /C names in the structure tree root's /ClassMap;
-// failing that, the parent element's (/P), and so on up. A list with none
+// (/O /List) whose ListNumbering is a name, among those in the element's /A
+// and then those its /C names in the structure tree root's /ClassMap
+// (ownedAttrs, the reader the table rules share); failing that, the parent
+// element's (/P), and so on up. A list with none
 // anywhere is None, the attribute's default (ISO 32000-2 Table 383).
 //
 // An element without an attribute of its own has its parent's value, so each
@@ -210,59 +210,7 @@ func (ln *listNumbering) of(elem *object.Dictionary) string {
 
 // own is the ListNumbering an element gives itself, through /A or /C.
 func (ln *listNumbering) own(e *object.Dictionary) (string, bool) {
-	d := ln.d
-	if v, ok := ownedName(d, e.Get("A"), "List", "ListNumbering"); ok {
-		return v, true
-	}
-	if ln.classMap == nil {
-		return "", false
-	}
-	var classes []object.Object
-	switch c := d.Resolve(e.Get("C")).(type) {
-	case object.Name:
-		classes = []object.Object{c}
-	case object.Array:
-		classes = c
-	}
-	for _, c := range classes {
-		d.Charge(1)
-		name, ok := d.Resolve(c).(object.Name)
-		if !ok {
-			continue
-		}
-		if v, ok := ownedName(d, ln.classMap.Get(name), "List", "ListNumbering"); ok {
-			return v, true
-		}
-	}
-	return "", false
-}
-
-// ownedName reads key as a name from an attribute object whose owner (/O) is
-// owner: attrs is one attribute dictionary, or an array of them (with the
-// revision numbers ISO 32000-2 14.7.6 interleaves, which are skipped). The
-// first owned dictionary whose key holds a name answers.
-func ownedName(d core.View, attrs object.Object, owner object.Name, key object.Name) (string, bool) {
-	one := func(o object.Object) (string, bool) {
-		a := d.ResolveDict(o)
-		if a == nil {
-			return "", false
-		}
-		if o, _ := d.ResolveName(a.Get("O")); o != owner {
-			return "", false
-		}
-		v, ok := d.ResolveName(a.Get(key))
-		return string(v), ok
-	}
-	if arr, ok := d.Resolve(attrs).(object.Array); ok {
-		for _, e := range arr {
-			d.Charge(1)
-			if v, ok := one(e); ok {
-				return v, true
-			}
-		}
-		return "", false
-	}
-	return one(attrs)
+	return firstAttrName(ln.d, ownedAttrs(ln.d, e, ln.classMap, "List"), "ListNumbering")
 }
 
 // checkUA2FormOneWidget is ISO 14289-2 8.10.1: a Form structure element

@@ -31,6 +31,9 @@ type tableCell struct {
 	th      bool               // a TH; otherwise a TD
 	row     int                // set by gridLayout
 	col     int                // set by gridLayout
+	// attrs are the cell's attribute objects owned by Table: those in its
+	// /A, then those its /C names in the class map (ownedAttrs).
+	attrs []*object.Dictionary
 }
 
 // tableRow is the ordered cells of one TR.
@@ -45,6 +48,7 @@ func checkUATableGrid(d core.View, cat *object.Dictionary, part string) []Violat
 		return nil
 	}
 	roleMap := d.ResolveDict(root.Get("RoleMap"))
+	classMap := d.ResolveDict(root.Get("ClassMap"))
 	var v []Violation
 	// Tables whose /K is the same array have the same rows, and so the same
 	// defects: they are laid out once (audit 2026-09-22 C18, the table form).
@@ -68,7 +72,7 @@ func checkUATableGrid(d core.View, cat *object.Dictionary, part string) []Violat
 		}
 		var l layout
 		l.complete = true
-		if rows := collectTableRows(d, n.Elem, roleMap); len(rows) > 0 {
+		if rows := collectTableRows(d, n.Elem, roleMap, classMap); len(rows) > 0 {
 			maxFills := d.Limits.TableGridFills
 			lay := layoutTable(rows, maxFills)
 			l.defects, l.complete = lay.defects, lay.complete
@@ -93,7 +97,7 @@ func checkUATableGrid(d core.View, cat *object.Dictionary, part string) []Violat
 // The walk is iterative (kids pushed in reverse, so rows come out in document
 // order): a table's structure is as deep as the file says (audit 2026-09-22
 // C84). Each node visited is charged to the run's work meter.
-func collectTableRows(d core.View, table *object.Dictionary, roleMap *object.Dictionary) []tableRow {
+func collectTableRows(d core.View, table *object.Dictionary, roleMap, classMap *object.Dictionary) []tableRow {
 	var rows []tableRow
 	type item struct {
 		node object.Object
@@ -131,7 +135,7 @@ func collectTableRows(d core.View, table *object.Dictionary, roleMap *object.Dic
 			continue // nested table handled separately
 		}
 		if t == "TR" {
-			rows = append(rows, collectRowCells(d, elem, roleMap))
+			rows = append(rows, collectRowCells(d, elem, roleMap, classMap))
 			continue
 		}
 		push(structKids(d, elem))
@@ -140,7 +144,7 @@ func collectTableRows(d core.View, table *object.Dictionary, roleMap *object.Dic
 }
 
 // collectRowCells returns the TH/TD cells of a TR with their spans.
-func collectRowCells(d core.View, tr *object.Dictionary, roleMap *object.Dictionary) tableRow {
+func collectRowCells(d core.View, tr *object.Dictionary, roleMap, classMap *object.Dictionary) tableRow {
 	var cells tableRow
 	for _, kid := range structKids(d, tr) {
 		d.Charge(1)
@@ -152,15 +156,16 @@ func collectRowCells(d core.View, tr *object.Dictionary, roleMap *object.Diction
 		if t != "TH" && t != "TD" {
 			continue
 		}
-		cells = append(cells, tableCell{rowSpan: cellSpan(d, c, "RowSpan"), colSpan: cellSpan(d, c, "ColSpan"), elem: c, th: t == "TH"})
+		attrs := ownedAttrs(d, c, classMap, "Table")
+		cells = append(cells, tableCell{rowSpan: cellSpan(d, attrs, "RowSpan"), colSpan: cellSpan(d, attrs, "ColSpan"), elem: c, th: t == "TH", attrs: attrs})
 	}
 	return cells
 }
 
-// cellSpan reads a RowSpan/ColSpan value from a cell's /A table attribute,
+// cellSpan reads a RowSpan/ColSpan value from a cell's Table attributes,
 // defaulting to 1. A non-positive value is treated as 1.
-func cellSpan(d core.View, cell *object.Dictionary, key object.Name) int {
-	for _, ad := range tableAttrDicts(d, cell) {
+func cellSpan(d core.View, attrs []*object.Dictionary, key object.Name) int {
+	for _, ad := range attrs {
 		if n, ok := d.Resolve(ad.Get(key)).(object.Integer); ok {
 			if n < 1 {
 				return 1
@@ -169,27 +174,6 @@ func cellSpan(d core.View, cell *object.Dictionary, key object.Name) int {
 		}
 	}
 	return 1
-}
-
-// tableAttrDicts returns a cell's attribute dictionaries whose owner (/O) is
-// Table.
-func tableAttrDicts(d core.View, cell *object.Dictionary) []*object.Dictionary {
-	var out []*object.Dictionary
-	switch a := d.Resolve(cell.Get("A")).(type) {
-	case *object.Dictionary:
-		if o, _ := d.ResolveName(a.Get("O")); o == "Table" {
-			out = append(out, a)
-		}
-	case object.Array:
-		for _, e := range a {
-			if ad := d.ResolveDict(e); ad != nil {
-				if o, _ := d.ResolveName(ad.Get("O")); o == "Table" {
-					out = append(out, ad)
-				}
-			}
-		}
-	}
-	return out
 }
 
 // gridDefects lays the rows onto a grid and reports definite defects. maxFills
@@ -370,7 +354,7 @@ func tableHeaderDefects(d core.View, l tableLayout, part string) []Violation {
 		if !c.th || c.elem == nil {
 			continue
 		}
-		if _, ok := cellScope(d, c.elem); !ok {
+		if _, ok := cellScope(d, c); !ok {
 			allScoped = false
 		}
 		if s, r := d.StringValue(c.elem.Get("ID")); r == core.ReasonOK && len(s.Value) > 0 {
@@ -393,7 +377,7 @@ func tableHeaderDefects(d core.View, l tableLayout, part string) []Violation {
 		}
 		var unknown []string
 		named := false
-		for _, h := range tableAttrArray(d, c.elem, "Headers") {
+		for _, h := range tableAttrArray(d, c, "Headers") {
 			s, r := d.StringValue(h)
 			if r != core.ReasonOK {
 				continue
@@ -431,7 +415,7 @@ func positionalHeaders(d core.View, l tableLayout) []bool {
 	out := make([]bool, len(l.cells))
 	nRows := len(l.occupied)
 	scopeAt := func(c *tableCell, r, col int) string {
-		if s, ok := cellScope(d, c.elem); ok {
+		if s, ok := cellScope(d, c); ok {
 			return s // as written: an empty name or a misspelling is a header for nothing
 		}
 		switch {
@@ -527,18 +511,13 @@ func cellIndex(l tableLayout, c *tableCell) int {
 // value is as written: a Scope of the empty name is present, and says
 // neither Row, Column nor Both (corpus PDF_UA-2 8.2.5.26-t05-fail-a, whose
 // header cells carry /Scope / and fail).
-func cellScope(d core.View, cell *object.Dictionary) (string, bool) {
-	for _, ad := range tableAttrDicts(d, cell) {
-		if s, ok := d.ResolveName(ad.Get("Scope")); ok {
-			return string(s), true
-		}
-	}
-	return "", false
+func cellScope(d core.View, cell *tableCell) (string, bool) {
+	return firstAttrName(d, cell.attrs, "Scope")
 }
 
 // tableAttrArray is the first array a cell's Table attributes give for key.
-func tableAttrArray(d core.View, cell *object.Dictionary, key object.Name) object.Array {
-	for _, ad := range tableAttrDicts(d, cell) {
+func tableAttrArray(d core.View, cell *tableCell, key object.Name) object.Array {
+	for _, ad := range cell.attrs {
 		if a, ok := d.Resolve(ad.Get(key)).(object.Array); ok {
 			return a
 		}
