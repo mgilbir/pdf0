@@ -5,6 +5,7 @@ import (
 	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
+	"strings"
 	"testing"
 )
 
@@ -537,5 +538,41 @@ func TestPDFA1ForbidsDifferences(t *testing.T) {
 	doc, font, u := encodingTestFont(false, e, nil)
 	if got := checkTrueTypeEncoding(doc, PDFA1b, "", font, u); len(got) != 0 {
 		t.Errorf("PDF/A-1b: BaseEncoding alone: got %v, want none", got)
+	}
+}
+
+// TestDifferencesNeedCmap31: from PDF/A-2 on, a non-symbolic TrueType font
+// with a Differences array, "if the font program is embedded, ... shall
+// contain at least the Microsoft Unicode (3,1 – Platform ID = 3, Encoding ID
+// = 1) encoding in the 'cmap' table" (ISO 19005-2/-3 6.2.11.6, -4 6.2.10.6).
+// It is read as veraPDF reads it (fontcheck.DifferencesNotInAGL): whatever
+// the array names, an empty one included. An unembedded font has no cmap to
+// require, and PDF/A-1 forbids the array outright (TestPDFA1ForbidsDifferences).
+func TestDifferencesNeedCmap31(t *testing.T) {
+	grave := object.Array{object.Integer(96), object.Name("grave")}
+	for _, c := range []struct {
+		name  string
+		cmap  [][2]uint16
+		diffs object.Array
+		want  int
+	}{
+		{"(3,1) present", [][2]uint16{{1, 0}, {3, 1}}, grave, 0},
+		{"(3,0) and (1,0), no (3,1)", [][2]uint16{{1, 0}, {3, 0}}, grave, 1},
+		{"(3,10) only", [][2]uint16{{3, 10}}, grave, 1},
+		{"no (3,1), empty Differences", [][2]uint16{{1, 0}}, object.Array{}, 1},
+		{"not embedded", nil, grave, 0},
+	} {
+		for _, lv := range []Level{PDFA2b, PDFA3b, PDFA4} {
+			doc, font, u := encodingTestFont(false, differencesEncoding(c.diffs), c.cmap)
+			var cm []Violation
+			for _, v := range checkTrueTypeEncoding(doc, lv, "", font, u) {
+				if strings.Contains(v.Message, "(3,1)") {
+					cm = append(cm, v)
+				}
+			}
+			if len(cm) != c.want {
+				t.Errorf("%s, %s: %d (3,1) findings, want %d: %v", lv, c.name, len(cm), c.want, cm)
+			}
+		}
 	}
 }

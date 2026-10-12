@@ -388,6 +388,14 @@ func checkTrueTypeEncoding(doc core.View, level Level, rule string, fontDict *ob
 			// an empty array included.
 			bad("non-symbolic TrueType font Encoding dictionary must not contain a Differences entry")
 		default:
+			// ISO 19005-2/-3 6.2.11.6, -4 6.2.10.6: no Differences array
+			// "unless all of the glyph names in the Differences array are
+			// listed in the Adobe Glyph List and, if the font program is
+			// embedded, it shall contain at least the Microsoft Unicode (3,1
+			// – Platform ID = 3, Encoding ID = 1) encoding in the 'cmap'
+			// table". The cmap half is read as veraPDF reads it
+			// (fontcheck.DifferencesNotInAGL): an empty array triggers it
+			// too, and a program pdf0 could not read is not evidence.
 			if diffs, ok := doc.Resolve(enc.Get("Differences")).(object.Array); ok {
 				// One finding per name, however often the array repeats it.
 				reported := map[object.Name]bool{}
@@ -397,6 +405,9 @@ func checkTrueTypeEncoding(doc core.View, level Level, rule string, fontDict *ob
 						bad("Differences glyph name /%s is not in the Adobe Glyph List", string(name))
 					}
 				}
+			}
+			if _, noCmap31 := fontcheck.DifferencesNotInAGL(doc, fontDict); noCmap31 {
+				bad("non-symbolic TrueType font has a Differences array, but its embedded program has no Microsoft Unicode (3,1) cmap subtable")
 			}
 		}
 	}

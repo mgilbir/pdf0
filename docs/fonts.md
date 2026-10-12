@@ -227,6 +227,13 @@ separate list), are not listed. A name the array repeats is reported once.
 PDF/A-1 has no list at all: ISO 19005-1 6.3.7 forbids `/Differences` in such a
 font outright.
 
+The clause's other half is the cmap the names are looked up in: if the program
+is embedded, it must have a Microsoft Unicode (3,1) subtable.
+`fontcheck.DifferencesNotInAGL` reads that half for both engines, from the
+cmap's encoding records: any `/Differences` key with no (3,1) record is a
+finding, an empty array included, as veraPDF reads it, and a program pdf0
+could not read is not evidence either way.
+
 Two readings are pdf0's own. `.notdef` is accepted, as veraPDF accepts it. And
 the names are tested whether or not the font program is embedded, because the
 clause's "if the font program is embedded" governs only its (3,1)-cmap half;
