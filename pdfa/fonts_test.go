@@ -28,19 +28,6 @@ func TestPredefinedCMapTable(t *testing.T) {
 	}
 }
 
-func TestAGLGlyphName(t *testing.T) {
-	for _, n := range []string{"A", "space", "uni20AC", "u1F600", "ampersand"} {
-		if !aglGlyphName(n) {
-			t.Errorf("%q should be a valid AGL name", n)
-		}
-	}
-	for _, n := range []string{"", "notAGlyph", "uniXYZW", "uni20A"} {
-		if aglGlyphName(n) {
-			t.Errorf("%q should not be a valid AGL name", n)
-		}
-	}
-}
-
 func TestGlyphNameToRune(t *testing.T) {
 	cases := []struct {
 		name string
@@ -415,5 +402,112 @@ func TestType1CharStringsEndTerminator(t *testing.T) {
 	// dictionary is followed by more PostScript must not absorb it as glyphs.
 	if fp := font.ParseType1(fonttest.Type1Program([]string{"A", "B"})); fp == nil || len(fp.GlyphNames) != 2 {
 		t.Errorf("trailing PostScript after the closing end token leaked into the glyph list: %v", fp)
+	}
+}
+
+// encodingTestFont is a TrueType font dictionary, its descriptor and a usage
+// for checkTrueTypeEncoding. With cmap non-nil the descriptor embeds a
+// FontFile2 whose cmap table lists exactly those (platform, encoding)
+// records; with cmap nil the font is not embedded.
+func encodingTestFont(symbolic bool, enc object.Object, cmap [][2]uint16) (core.View, *object.Dictionary, *core.FontTextUsage) {
+	doc := mkView(map[int]*object.IndirectObject{}, nil)
+	fd := &object.Dictionary{}
+	flags := 32 // nonsymbolic
+	if symbolic {
+		flags = 4
+	}
+	fd.Set("Flags", object.Integer(flags))
+	if cmap != nil {
+		doc.Objects[6] = &object.IndirectObject{Number: 6, Value: object.NewStream(&object.Dictionary{}, sfntWithCmapRecords(cmap))}
+		fd.Set("FontFile2", object.IndirectRef{Number: 6})
+	}
+	doc.Objects[5] = &object.IndirectObject{Number: 5, Value: fd}
+	font := &object.Dictionary{}
+	font.Set("Subtype", object.Name("TrueType"))
+	font.Set("FontDescriptor", object.IndirectRef{Number: 5})
+	if enc != nil {
+		font.Set("Encoding", enc)
+	}
+	return doc, font, &core.FontTextUsage{ObjNum: 9, Modes: map[int]bool{}}
+}
+
+// sfntWithCmapRecords is a minimal sfnt whose only table is a cmap listing the
+// given (platform, encoding) records, each pointing at one empty format 0
+// subtable: enough for the record directory to be read.
+func sfntWithCmapRecords(recs [][2]uint16) []byte {
+	be16 := func(b []byte, v uint16) []byte { return append(b, byte(v>>8), byte(v)) }
+	be32 := func(b []byte, v uint32) []byte { return append(b, byte(v>>24), byte(v>>16), byte(v>>8), byte(v)) }
+	var cmap []byte
+	cmap = be16(cmap, 0)
+	cmap = be16(cmap, uint16(len(recs)))
+	sub := uint32(4 + 8*len(recs))
+	for _, r := range recs {
+		cmap = be16(cmap, r[0])
+		cmap = be16(cmap, r[1])
+		cmap = be32(cmap, sub)
+	}
+	cmap = be16(cmap, 0)   // format 0
+	cmap = be16(cmap, 262) // length
+	cmap = be16(cmap, 0)   // language
+	cmap = append(cmap, make([]byte, 256)...)
+	var f []byte
+	f = be32(f, 0x00010000) // sfnt version
+	f = be16(f, 1)          // numTables
+	f = be16(f, 16)
+	f = be16(f, 0)
+	f = be16(f, 0)
+	f = append(f, 'c', 'm', 'a', 'p')
+	f = be32(f, 0)     // checksum
+	f = be32(f, 12+16) // offset
+	f = be32(f, uint32(len(cmap)))
+	return append(f, cmap...)
+}
+
+// differencesEncoding is a WinAnsiEncoding-based Encoding dictionary whose
+// /Differences is diffs.
+func differencesEncoding(diffs object.Array) *object.Dictionary {
+	e := &object.Dictionary{}
+	e.Set("BaseEncoding", object.Name("WinAnsiEncoding"))
+	e.Set("Differences", diffs)
+	return e
+}
+
+// TestDifferencesNamesAreAGLListed: from PDF/A-2 on, a non-symbolic TrueType
+// font's /Differences may name only glyphs "listed in the Adobe Glyph List"
+// (ISO 19005-2/-3 6.2.11.6, -4 6.2.10.6). The list ISO 32000-1 cites is
+// glyphlist.txt, read as veraPDF reads it (fontcheck.AGLListed): its names
+// and .notdef. A uniXXXX or uXXXX name the list does not carry, the ITC Zapf
+// Dingbats names a1…a205 (a separate list), and bracket and isinferior (in
+// neither) are not listed; afii10017 and Gravesmall, which the list carries,
+// are. veraPDF 1.30.3 agrees on each at 2b and 4. A name repeated in the array
+// is reported once.
+//
+// The test applies whether or not the program is embedded, as the clause
+// reads; veraPDF tests the names of an embedded font only.
+func TestDifferencesNamesAreAGLListed(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		listed bool
+	}{
+		{"grave", true}, {"afii10017", true}, {"Gravesmall", true}, {".notdef", true},
+		{"uni0060", false}, {"u0060", false}, {"a1", false}, {"a205", false},
+		{"bracket", false}, {"isinferior", false}, {"notAGlyphName", false},
+	} {
+		for _, embedded := range []bool{false, true} {
+			var cmap [][2]uint16
+			if embedded {
+				cmap = [][2]uint16{{3, 1}}
+			}
+			want := 0
+			if !c.listed {
+				want = 1
+			}
+			for _, lv := range []Level{PDFA2b, PDFA3b, PDFA4} {
+				doc, font, u := encodingTestFont(false, differencesEncoding(object.Array{object.Integer(96), object.Name(c.name), object.Name(c.name)}), cmap)
+				if got := checkTrueTypeEncoding(doc, lv, "", font, u); len(got) != want {
+					t.Errorf("%s, embedded %v: Differences /%s: %d findings, want %d: %v", lv, embedded, c.name, len(got), want, got)
+				}
+			}
+		}
 	}
 }

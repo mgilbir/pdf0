@@ -213,20 +213,21 @@ base encoding (named, or `StandardEncoding` implicitly for a non-symbolic font)
 with `/Differences` to produce `map[byte]string`; `font/cff_strings.go` holds
 the 391 predefined CFF strings (Adobe Technical Note #5176, Appendix A).
 
-Two Adobe Glyph List tables validate the `/Differences` names of a
-non-symbolic TrueType font, and they do not agree. PDF/UA's is
-`fontcheck.AGLListed`, over Adobe's `glyphlist.txt` embedded verbatim
-(`internal/fontcheck/glyphlist.txt`, pinned by SHA-256): exactly the list's
-4,281 names plus `.notdef`, which is how veraPDF reads "listed in the Adobe
-Glyph List" — a `uniXXXX` name is not listed. PDF/A's is `aglNames` in
-`pdfa/fonts.go`, a hand-maintained table of 964 names — 762 of the list's,
-the 200 ZapfDingbats names `a1`…`a205` from Adobe's separate ZapfDingbats
-list, and `bracket` and `isinferior`, which are in neither — read through
-`aglGlyphName`, which also accepts the algorithmic `uniXXXX`/`uXXXX` forms and
-rejects `.notdef`. PDF/A keeps its own until switching is decided: on the
-veraPDF corpus the switch changes the findings on one file, Isartor
-`6-3-7-t01-fail-a`, whose `/.notdef` in `/Differences` is no longer reported;
-the file is still reported at every level, for its missing `/BaseEncoding`.
+One Adobe Glyph List table validates the `/Differences` names of a
+non-symbolic TrueType font, for PDF/A (ISO 19005-2/-3 6.2.11.6, -4 6.2.10.6)
+and PDF/UA alike: `fontcheck.AGLListed`, over Adobe's `glyphlist.txt` embedded
+verbatim (`internal/fontcheck/glyphlist.txt`, pinned by SHA-256) — the "Adobe
+Glyph List, Version 2.0 (September 2002)" ISO 32000-1 cites. It is exactly the
+list's 4,281 names plus `.notdef`, which is how veraPDF reads "listed in the
+Adobe Glyph List": a `uniXXXX` name, and the ZapfDingbats `a1`…`a205` (a
+separate list), are not listed. A name the array repeats is reported once.
+
+Two readings are pdf0's own. `.notdef` is accepted, as veraPDF accepts it. And
+the names are tested whether or not the font program is embedded, because the
+clause's "if the font program is embedded" governs only its (3,1)-cmap half;
+veraPDF tests the names of an embedded font only, so an unembedded font whose
+`/Differences` names an unlisted glyph is a PDF/A finding in pdf0 and not in
+veraPDF.
 
 For a Type 0 font the path from bytes to glyph is longer:
 
@@ -458,10 +459,7 @@ font validation reads.
 - `internal/fontcheck/glyphlist.txt` is Adobe's Glyph List, verbatim, under the
   BSD-style licence at its head, from
   [adobe-type-tools/agl-aglfn](https://github.com/adobe-type-tools/agl-aglfn) at
-  commit `4036a9ca`. The PDF/UA /Differences rule reads it.
-- `aglNames` in `pdfa/fonts.go` holds glyph names from the Adobe Glyph List and
-  the ITC Zapf Dingbats Glyph List (BSD 3-Clause), for the PDF/A rule. Two of
-  its 964 names, `bracket` and `isinferior`, are in neither list.
+  commit `4036a9ca`. The PDF/A and PDF/UA /Differences rules read it.
 - The predefined-CMap codespaces in `internal/core/cmap_predefined.go` are
   transcribed from Adobe's published CMaps (BSD 3-Clause).
 - `font/font_encodings.go` and `font/cff_strings.go` are forme's, transcribed

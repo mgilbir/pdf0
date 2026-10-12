@@ -8,7 +8,6 @@ import (
 	"github.com/mgilbir/pdf0/internal/fontcheck"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/simplefont"
-	"strings"
 	"unicode"
 )
 
@@ -322,9 +321,19 @@ func checkCMapEmbedded(doc core.View, level Level) []Violation {
 // (ISO 19005-2/-3, 6.2.11.6; -4, 6.2.10.6; grounded in ISO 32000-1,
 // 9.6.6.4): a symbolic TrueType font shall have no Encoding entry; a
 // non-symbolic one shall specify WinAnsiEncoding or MacRomanEncoding —
-// directly or as BaseEncoding — and Differences names must come from the
-// Adobe Glyph List — as PDF/A reads it, aglGlyphName, which is not the list
-// PDF/UA's rule reads (fontcheck.AGLListed; see docs/fonts.md).
+// directly or as BaseEncoding — and Differences names must be listed in the
+// Adobe Glyph List: ISO 32000-1 cites "Adobe Glyph List, Version 2.0
+// (September 2002)", which is glyphlist.txt, and fontcheck.AGLListed reads it
+// as veraPDF does — its 4,281 names and .notdef; not the ITC Zapf Dingbats
+// list, and not a uniXXXX name the list does not carry. PDF/UA's rule reads
+// the same list.
+//
+// Two readings are pdf0's choice. .notdef is accepted in a Differences array,
+// as veraPDF accepts it (its copy of the list carries the name). And the names
+// are tested whether or not the font program is embedded: the clause's "if the
+// font program is embedded" governs only its cmap half, so an unembedded font
+// is held to the list too. veraPDF tests the names of an embedded font only,
+// and passes an unembedded one whatever its Differences name.
 func checkTrueTypeEncoding(doc core.View, level Level, rule string, fontDict *object.Dictionary, u *core.FontTextUsage) []Violation {
 	rule = fontClause("encoding", level) // 6.3.7 / 6.2.11.6 / 6.2.10.6
 	var errs []Violation
@@ -369,214 +378,17 @@ func checkTrueTypeEncoding(doc core.View, level Level, rule string, fontDict *ob
 			bad("non-symbolic TrueType font BaseEncoding must be WinAnsiEncoding or MacRomanEncoding, got /%s", string(base))
 		}
 		if diffs, ok := doc.Resolve(enc.Get("Differences")).(object.Array); ok {
+			// One finding per name, however often the array repeats it.
+			reported := map[object.Name]bool{}
 			for _, el := range diffs {
-				if name, ok := doc.ResolveName(el); ok {
-					if !aglGlyphName(string(name)) {
-						bad("Differences glyph name /%s is not in the Adobe Glyph List", string(name))
-					}
+				if name, ok := doc.ResolveName(el); ok && !reported[name] && !fontcheck.AGLListed(string(name)) {
+					reported[name] = true
+					bad("Differences glyph name /%s is not in the Adobe Glyph List", string(name))
 				}
 			}
 		}
 	}
 	return errs
-}
-
-// aglGlyphName reports whether a glyph name is a legal Adobe Glyph List
-// reference: a listed name, a uniXXXX[XXXX...] form, or a uXXXX[XX] form
-// (Adobe Glyph Naming convention).
-func aglGlyphName(name string) bool {
-	if name == "" {
-		return false
-	}
-	isHex := func(s string) bool {
-		if s == "" {
-			return false
-		}
-		for _, c := range s {
-			if !(c >= '0' && c <= '9' || c >= 'A' && c <= 'F') {
-				return false
-			}
-		}
-		return true
-	}
-	if strings.HasPrefix(name, "uni") && len(name) >= 7 && (len(name)-3)%4 == 0 && isHex(name[3:]) {
-		return true
-	}
-	if strings.HasPrefix(name, "u") && len(name) >= 5 && len(name) <= 7 && isHex(name[1:]) {
-		return true
-	}
-	return aglNames[name]
-}
-
-// aglNames is the Adobe Glyph List subset covering the standard Latin,
-// Greek, Symbol, and ZapfDingbats glyph names used by the base encodings.
-//
-// The names are Adobe's, from glyphlist.txt and zapfdingbats.txt of
-// github.com/adobe-type-tools/agl-aglfn, under the BSD 3-Clause licence whose
-// notice THIRD_PARTY_NOTICES carries. Two names here, bracket and isinferior,
-// are in neither list.
-var aglNames = map[string]bool{
-	"A": true, "AE": true, "AEacute": true, "AEsmall": true, "Aacute": true, "Aacutesmall": true,
-	"Abreve": true, "Acircumflex": true, "Acircumflexsmall": true, "Acute": true, "Acutesmall": true, "Adieresis": true,
-	"Adieresissmall": true, "Agrave": true, "Agravesmall": true, "Alpha": true, "Alphatonos": true, "Amacron": true,
-	"Aogonek": true, "Aring": true, "Aringacute": true, "Aringsmall": true, "Asmall": true, "Atilde": true,
-	"Atildesmall": true, "B": true, "Beta": true, "Bsmall": true, "C": true, "Cacute": true,
-	"Caron": true, "Caronsmall": true, "Ccaron": true, "Ccedilla": true, "Ccedillasmall": true, "Ccircumflex": true,
-	"Cdotaccent": true, "Chi": true, "Circumflexsmall": true, "Csmall": true, "D": true, "Dcaron": true,
-	"Dcroat": true, "Delta": true, "Dieresis": true, "DieresisAcute": true, "DieresisGrave": true, "Dieresissmall": true,
-	"Dotaccentsmall": true, "Dsmall": true, "E": true, "Eacute": true, "Eacutesmall": true, "Ebreve": true,
-	"Ecaron": true, "Ecircumflex": true, "Ecircumflexsmall": true, "Edieresis": true, "Edieresissmall": true, "Edotaccent": true,
-	"Egrave": true, "Egravesmall": true, "Emacron": true, "Eng": true, "Eogonek": true, "Epsilon": true,
-	"Epsilontonos": true, "Esmall": true, "Eta": true, "Etatonos": true, "Eth": true, "Ethsmall": true,
-	"Euro": true, "F": true, "Fsmall": true, "G": true, "Gamma": true, "Gbreve": true,
-	"Gcaron": true, "Gcircumflex": true, "Gcommaaccent": true, "Gdotaccent": true, "Grave": true, "Gravesmall": true,
-	"Gsmall": true, "H": true, "H18533": true, "H18543": true, "H18551": true, "H22073": true,
-	"Hbar": true, "Hcircumflex": true, "Hsmall": true, "Hungarumlaut": true, "Hungarumlautsmall": true, "I": true,
-	"IJ": true, "Iacute": true, "Iacutesmall": true, "Ibreve": true, "Icircumflex": true, "Icircumflexsmall": true,
-	"Idieresis": true, "Idieresissmall": true, "Idotaccent": true, "Ifraktur": true, "Igrave": true, "Igravesmall": true,
-	"Imacron": true, "Iogonek": true, "Iota": true, "Iotadieresis": true, "Iotatonos": true, "Ismall": true,
-	"Itilde": true, "J": true, "Jcircumflex": true, "Jsmall": true, "K": true, "Kappa": true,
-	"Kcommaaccent": true, "Ksmall": true, "L": true, "Lacute": true, "Lambda": true, "Lcaron": true,
-	"Lcommaaccent": true, "Ldot": true, "Lslash": true, "Lslashsmall": true, "Lsmall": true, "M": true,
-	"Macron": true, "Macronsmall": true, "Msmall": true, "Mu": true, "N": true, "Nacute": true,
-	"Ncaron": true, "Ncommaaccent": true, "Nsmall": true, "Ntilde": true, "Ntildesmall": true, "Nu": true,
-	"O": true, "OE": true, "OEsmall": true, "Oacute": true, "Oacutesmall": true, "Obreve": true,
-	"Ocircumflex": true, "Ocircumflexsmall": true, "Odieresis": true, "Odieresissmall": true, "Ogoneksmall": true, "Ograve": true,
-	"Ogravesmall": true, "Ohm": true, "Ohorn": true, "Ohungarumlaut": true, "Omacron": true, "Omega": true,
-	"Omegatonos": true, "Omicron": true, "Omicrontonos": true, "Oslash": true, "Oslashacute": true, "Oslashsmall": true,
-	"Osmall": true, "Otilde": true, "Otildesmall": true, "P": true, "Phi": true, "Pi": true,
-	"Psi": true, "Psmall": true, "Q": true, "Qsmall": true, "R": true, "Racute": true,
-	"Rcaron": true, "Rcommaaccent": true, "Rfraktur": true, "Rho": true, "Ringsmall": true, "Rsmall": true,
-	"S": true, "SF010000": true, "SF020000": true, "SF030000": true, "SF040000": true, "SF050000": true,
-	"SF060000": true, "SF070000": true, "SF080000": true, "SF090000": true, "SF100000": true, "SF110000": true,
-	"Sacute": true, "Scaron": true, "Scaronsmall": true, "Scedilla": true, "Scircumflex": true, "Scommaaccent": true,
-	"Sigma": true, "Ssmall": true, "T": true, "Tau": true, "Tbar": true, "Tcaron": true,
-	"Tcommaaccent": true, "Theta": true, "Thorn": true, "Thornsmall": true, "Tildesmall": true, "Tsmall": true,
-	"U": true, "Uacute": true, "Uacutesmall": true, "Ubreve": true, "Ucircumflex": true, "Ucircumflexsmall": true,
-	"Udieresis": true, "Udieresissmall": true, "Ugrave": true, "Ugravesmall": true, "Uhorn": true, "Uhungarumlaut": true,
-	"Umacron": true, "Uogonek": true, "Upsilon": true, "Upsilon1": true, "Upsilondieresis": true, "Upsilontonos": true,
-	"Uring": true, "Usmall": true, "Utilde": true, "V": true, "Vsmall": true, "W": true,
-	"Wacute": true, "Wcircumflex": true, "Wdieresis": true, "Wgrave": true, "Wsmall": true, "X": true,
-	"Xi": true, "Xsmall": true, "Y": true, "Yacute": true, "Yacutesmall": true, "Ycircumflex": true,
-	"Ydieresis": true, "Ydieresissmall": true, "Ygrave": true, "Ysmall": true, "Z": true, "Zacute": true,
-	"Zcaron": true, "Zcaronsmall": true, "Zdotaccent": true, "Zeta": true, "Zsmall": true, "a": true,
-	"a1": true, "a10": true, "a100": true, "a101": true, "a102": true, "a103": true,
-	"a104": true, "a105": true, "a106": true, "a107": true, "a108": true, "a109": true,
-	"a11": true, "a110": true, "a111": true, "a112": true, "a117": true, "a118": true,
-	"a119": true, "a12": true, "a120": true, "a121": true, "a122": true, "a123": true,
-	"a124": true, "a125": true, "a126": true, "a127": true, "a128": true, "a129": true,
-	"a13": true, "a130": true, "a131": true, "a132": true, "a133": true, "a134": true,
-	"a135": true, "a136": true, "a137": true, "a138": true, "a139": true, "a14": true,
-	"a140": true, "a141": true, "a142": true, "a143": true, "a144": true, "a145": true,
-	"a146": true, "a147": true, "a148": true, "a149": true, "a15": true, "a150": true,
-	"a151": true, "a152": true, "a153": true, "a154": true, "a155": true, "a156": true,
-	"a157": true, "a158": true, "a159": true, "a16": true, "a160": true, "a161": true,
-	"a162": true, "a163": true, "a164": true, "a165": true, "a166": true, "a167": true,
-	"a168": true, "a169": true, "a17": true, "a170": true, "a171": true, "a172": true,
-	"a173": true, "a174": true, "a175": true, "a176": true, "a177": true, "a178": true,
-	"a179": true, "a18": true, "a180": true, "a181": true, "a182": true, "a183": true,
-	"a184": true, "a185": true, "a186": true, "a187": true, "a188": true, "a189": true,
-	"a19": true, "a190": true, "a191": true, "a192": true, "a193": true, "a194": true,
-	"a195": true, "a196": true, "a197": true, "a198": true, "a199": true, "a2": true,
-	"a20": true, "a200": true, "a201": true, "a202": true, "a203": true, "a204": true,
-	"a205": true, "a21": true, "a22": true, "a23": true, "a24": true, "a25": true,
-	"a26": true, "a27": true, "a28": true, "a29": true, "a3": true, "a30": true,
-	"a31": true, "a32": true, "a33": true, "a34": true, "a35": true, "a36": true,
-	"a37": true, "a38": true, "a39": true, "a4": true, "a40": true, "a41": true,
-	"a42": true, "a43": true, "a44": true, "a45": true, "a46": true, "a47": true,
-	"a48": true, "a49": true, "a5": true, "a50": true, "a51": true, "a52": true,
-	"a53": true, "a54": true, "a55": true, "a56": true, "a57": true, "a58": true,
-	"a59": true, "a6": true, "a60": true, "a61": true, "a62": true, "a63": true,
-	"a64": true, "a65": true, "a66": true, "a67": true, "a68": true, "a69": true,
-	"a7": true, "a70": true, "a71": true, "a72": true, "a73": true, "a74": true,
-	"a75": true, "a76": true, "a77": true, "a78": true, "a79": true, "a8": true,
-	"a81": true, "a82": true, "a83": true, "a84": true, "a85": true, "a86": true,
-	"a87": true, "a88": true, "a89": true, "a9": true, "a90": true, "a91": true,
-	"a92": true, "a93": true, "a94": true, "a95": true, "a96": true, "a97": true,
-	"a98": true, "a99": true, "aacute": true, "abreve": true, "acircumflex": true, "acute": true,
-	"acutecomb": true, "adieresis": true, "ae": true, "aeacute": true, "agrave": true, "aleph": true,
-	"alpha": true, "alphatonos": true, "amacron": true, "ampersand": true, "ampersandsmall": true, "angle": true,
-	"angleleft": true, "angleright": true, "anoteleia": true, "aogonek": true, "apple": true, "approxequal": true,
-	"aring": true, "aringacute": true, "arrowboth": true, "arrowdblboth": true, "arrowdbldown": true, "arrowdblleft": true,
-	"arrowdblright": true, "arrowdblup": true, "arrowdown": true, "arrowhorizex": true, "arrowleft": true, "arrowright": true,
-	"arrowup": true, "arrowupdn": true, "arrowupdnbse": true, "arrowvertex": true, "asciicircum": true, "asciitilde": true,
-	"asterisk": true, "asteriskmath": true, "at": true, "atilde": true, "b": true, "backslash": true,
-	"bar": true, "beta": true, "block": true, "braceex": true, "braceleft": true, "braceleftbt": true,
-	"braceleftmid": true, "bracelefttp": true, "braceright": true, "bracerightbt": true, "bracerightmid": true, "bracerighttp": true,
-	"bracket": true, "bracketleft": true, "bracketleftbt": true, "bracketleftex": true, "bracketlefttp": true, "bracketright": true,
-	"bracketrightbt": true, "bracketrightex": true, "bracketrighttp": true, "breve": true, "brokenbar": true, "bullet": true,
-	"c": true, "cacute": true, "caron": true, "carriagereturn": true, "ccaron": true, "ccedilla": true,
-	"ccircumflex": true, "cdotaccent": true, "cedilla": true, "cent": true, "centinferior": true, "centoldstyle": true,
-	"centsuperior": true, "chi": true, "circle": true, "circlemultiply": true, "circleplus": true, "circumflex": true,
-	"club": true, "colon": true, "colonmonetary": true, "comma": true, "commaaccent": true, "commainferior": true,
-	"commasuperior": true, "congruent": true, "copyright": true, "copyrightsans": true, "copyrightserif": true, "currency": true,
-	"cyrBreve": true, "cyrFlex": true, "cyrbreve": true, "cyrflex": true, "d": true, "dagger": true,
-	"daggerdbl": true, "dblGrave": true, "dblgrave": true, "dcaron": true, "dcroat": true, "degree": true,
-	"delta": true, "diamond": true, "dieresis": true, "dieresisacute": true, "dieresisgrave": true, "dieresistonos": true,
-	"divide": true, "dkshade": true, "dnblock": true, "dollar": true, "dollarinferior": true, "dollaroldstyle": true,
-	"dollarsuperior": true, "dong": true, "dotaccent": true, "dotbelowcomb": true, "dotlessi": true, "dotlessj": true,
-	"dotmath": true, "e": true, "eacute": true, "ebreve": true, "ecaron": true, "ecircumflex": true,
-	"edieresis": true, "edotaccent": true, "egrave": true, "eight": true, "eightinferior": true, "eightoldstyle": true,
-	"eightsuperior": true, "element": true, "ellipsis": true, "emacron": true, "emdash": true, "emptyset": true,
-	"endash": true, "eng": true, "eogonek": true, "epsilon": true, "epsilontonos": true, "equal": true,
-	"equivalence": true, "estimated": true, "eta": true, "etatonos": true, "eth": true, "exclam": true,
-	"exclamdbl": true, "exclamdown": true, "exclamdownsmall": true, "exclamsmall": true, "existential": true, "f": true,
-	"female": true, "ff": true, "ffi": true, "ffl": true, "fi": true, "figuredash": true,
-	"filledbox": true, "filledrect": true, "five": true, "fiveeighths": true, "fiveinferior": true, "fiveoldstyle": true,
-	"fivesuperior": true, "fl": true, "florin": true, "four": true, "fourinferior": true, "fouroldstyle": true,
-	"foursuperior": true, "fraction": true, "franc": true, "g": true, "gamma": true, "gbreve": true,
-	"gcaron": true, "gcircumflex": true, "gcommaaccent": true, "gdotaccent": true, "germandbls": true, "gradient": true,
-	"grave": true, "gravecomb": true, "greater": true, "greaterequal": true, "guillemotleft": true, "guillemotright": true,
-	"guilsinglleft": true, "guilsinglright": true, "h": true, "hbar": true, "hcircumflex": true, "heart": true,
-	"hookabovecomb": true, "house": true, "hungarumlaut": true, "hyphen": true, "hypheninferior": true, "hyphensuperior": true,
-	"i": true, "iacute": true, "ibreve": true, "icircumflex": true, "idieresis": true, "igrave": true,
-	"ij": true, "imacron": true, "infinity": true, "integral": true, "integralbt": true, "integralex": true,
-	"integraltp": true, "intersection": true, "invbullet": true, "invcircle": true, "invsmileface": true, "iogonek": true,
-	"iota": true, "iotadieresis": true, "iotatonos": true, "isinferior": true, "isuperior": true, "itilde": true,
-	"j": true, "jcircumflex": true, "k": true, "kappa": true, "kcommaaccent": true, "kgreenlandic": true,
-	"l": true, "lacute": true, "lambda": true, "lcaron": true, "lcommaaccent": true, "ldot": true,
-	"less": true, "lessequal": true, "lfblock": true, "lira": true, "ll": true, "logicaland": true,
-	"logicalnot": true, "logicalor": true, "longs": true, "lozenge": true, "lslash": true, "lsuperior": true,
-	"ltshade": true, "m": true, "macron": true, "male": true, "middot": true, "minus": true,
-	"minute": true, "msuperior": true, "mu": true, "multiply": true, "musicalnote": true, "musicalnotedbl": true,
-	"n": true, "nacute": true, "napostrophe": true, "nbspace": true, "ncaron": true, "ncommaaccent": true,
-	"nine": true, "nineinferior": true, "nineoldstyle": true, "ninesuperior": true, "notelement": true, "notequal": true,
-	"notsubset": true, "nsuperior": true, "ntilde": true, "nu": true, "numbersign": true, "o": true,
-	"oacute": true, "obreve": true, "ocircumflex": true, "odieresis": true, "oe": true, "ogonek": true,
-	"ograve": true, "ohorn": true, "ohungarumlaut": true, "omacron": true, "omega": true, "omega1": true,
-	"omegatonos": true, "omicron": true, "omicrontonos": true, "one": true, "onedotenleader": true, "oneeighth": true,
-	"onefitted": true, "onehalf": true, "oneinferior": true, "oneoldstyle": true, "onequarter": true, "onesuperior": true,
-	"onethird": true, "openbullet": true, "ordfeminine": true, "ordmasculine": true, "orthogonal": true, "oslash": true,
-	"oslashacute": true, "osuperior": true, "otilde": true, "p": true, "paragraph": true, "parenleft": true,
-	"parenleftbt": true, "parenleftex": true, "parenleftinferior": true, "parenleftsuperior": true, "parenlefttp": true, "parenright": true,
-	"parenrightbt": true, "parenrightex": true, "parenrightinferior": true, "parenrightsuperior": true, "parenrighttp": true, "partialdiff": true,
-	"percent": true, "period": true, "periodcentered": true, "periodinferior": true, "periodsuperior": true, "perpendicular": true,
-	"perthousand": true, "peseta": true, "phi": true, "phi1": true, "pi": true, "plus": true,
-	"plusminus": true, "prescription": true, "product": true, "propersubset": true, "propersuperset": true, "proportional": true,
-	"psi": true, "q": true, "question": true, "questiondown": true, "questiondownsmall": true, "questionsmall": true,
-	"quotedbl": true, "quotedblbase": true, "quotedblleft": true, "quotedblright": true, "quoteleft": true, "quotereversed": true,
-	"quoteright": true, "quotesinglbase": true, "quotesingle": true, "r": true, "racute": true, "radical": true,
-	"radicalex": true, "rcaron": true, "rcommaaccent": true, "reflexsubset": true, "reflexsuperset": true, "registered": true,
-	"registersans": true, "registerserif": true, "revlogicalnot": true, "rho": true, "ring": true, "rsuperior": true,
-	"rtblock": true, "rupiah": true, "s": true, "sacute": true, "scaron": true, "scedilla": true,
-	"scircumflex": true, "scommaaccent": true, "second": true, "section": true, "semicolon": true, "seven": true,
-	"seveneighths": true, "seveninferior": true, "sevenoldstyle": true, "sevensuperior": true, "sfthyphen": true, "shade": true,
-	"sigma": true, "sigma1": true, "similar": true, "six": true, "sixinferior": true, "sixoldstyle": true,
-	"sixsuperior": true, "slash": true, "smileface": true, "space": true, "spade": true, "ssuperior": true,
-	"sterling": true, "suchthat": true, "summation": true, "sun": true, "t": true, "tau": true,
-	"tbar": true, "tcaron": true, "tcommaaccent": true, "therefore": true, "theta": true, "theta1": true,
-	"thorn": true, "three": true, "threeeighths": true, "threeinferior": true, "threeoldstyle": true, "threequarters": true,
-	"threequartersemdash": true, "threesuperior": true, "tilde": true, "tildecomb": true, "tonos": true, "trademark": true,
-	"trademarksans": true, "trademarkserif": true, "triagdn": true, "triaglf": true, "triagrt": true, "triagup": true,
-	"tsuperior": true, "two": true, "twodotenleader": true, "twoinferior": true, "twooldstyle": true, "twosuperior": true,
-	"twothirds": true, "u": true, "uacute": true, "ubreve": true, "ucircumflex": true, "udieresis": true,
-	"ugrave": true, "uhorn": true, "uhungarumlaut": true, "umacron": true, "underscore": true, "underscoredbl": true,
-	"union": true, "universal": true, "uogonek": true, "upblock": true, "upsilon": true, "upsilondieresis": true,
-	"upsilondieresistonos": true, "upsilontonos": true, "uring": true, "utilde": true, "v": true, "w": true,
-	"wacute": true, "wcircumflex": true, "wdieresis": true, "weierstrass": true, "wgrave": true, "x": true,
-	"xi": true, "y": true, "yacute": true, "ycircumflex": true, "ydieresis": true, "yen": true,
-	"ygrave": true, "z": true, "zacute": true, "zcaron": true, "zdotaccent": true, "zero": true,
-	"zeroinferior": true, "zerooldstyle": true, "zerosuperior": true, "zeta": true,
 }
 
 // --- font program loading ---
