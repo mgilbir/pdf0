@@ -83,19 +83,23 @@ one content stream shared by thousands of pages in the same state runs, and
 records its text, once. Show operators are `Tj`, `TJ`, `'` and `"`; any other
 operator clears the pending string operands.
 
-**Rendering modes 3 and 7 are exempt.** `rendersVisibly(u)` returns false only
-when every recorded mode is 3 (invisible) or 7 (add to clip, paint nothing) —
-glyph shape is never painted in either. That gates the embedding rule
-(`checkFontsEmbedded`, in `pdfa/pdfa.go`, builds an `exemptInvisible` set), glyph coverage, the
-width rules, the damaged-program rule, `checkCIDSetProgramComplete` and the
-Type 3 width check. A font with no recorded modes is treated as visible.
+**Rendering mode 3 is exempt; mode 7 is not.** `rendersVisibly(u)` returns
+false only when every recorded mode is 3 (invisible): ISO 19005-2 6.2.11.4.1
+says a font "referenced for use solely in rendering mode 3 is therefore not
+rendered", and 19005-4 6.2.10.5 exempts "Glyphs that are referenced only with
+rendering mode 3". Mode 7 paints nothing either, but it adds the glyph outlines
+to the clipping path, so their shapes and advances decide what is painted
+after it; it is held to every rule, as veraPDF holds it (`renderingMode == 3`
+is its only exemption). `rendersVisibly` gates the embedding rule
+(`checkFontsEmbedded`, in `pdfa/pdfa.go`, builds an `exemptInvisible` set),
+glyph coverage, the width rules, the damaged-program rule,
+`checkCIDSetProgramComplete`, the `/CIDToGIDMap` requirement, the Type 3 width
+check and the Type 3 glyph-procedure resource check. A font with no recorded
+modes is treated as visible.
 
-Two deliberate exceptions. **`.notdef` references are flagged even in invisible
-text** — a text-showing operator must not reference it regardless of mode. And
-**the `/CIDToGIDMap` requirement uses mode 3 only**: `checkOneFontDict` computes
-its own `onlyInvisible` flag testing `m != 3`, ignoring mode 7, because the
-corpus passes a mode-3 font at 1b. That is the one place in the subsystem where
-the invisibility test is not `rendersVisibly`.
+One deliberate exception: **`.notdef` references are flagged even in
+invisible text** — a text-showing operator must not reference it regardless of
+mode.
 
 Two font checks bypass the model and walk every dictionary the trailer reaches
 (`core.View.ReachableDicts`) — `checkCMapEmbedded` and `checkCMapCIDLimit` —
@@ -198,8 +202,8 @@ Type 1 by `FontMatrix[0] * 1000` (the default 0.001 matrix giving a factor of
 em, and the comparison is `internal/fontcheck`'s, the same for PDF/A (6.2.11.5)
 and PDF/UA (7.21.5): `fontcheck.Simple`, `fontcheck.CID` and
 `fontcheck.Type3WidthDiffers`. The engines differ in which glyphs they ask
-about: PDF/A exempts text in rendering modes 3 and 7, PDF/UA mode 3 only, as
-veraPDF's test reads. A non-symbolic TrueType code is compared through the
+about only through their rendering-mode gates, which both exempt mode 3 alone,
+as veraPDF's test reads. A non-symbolic TrueType code is compared through the
 code-to-name table ISO 32000-1 9.6.6.4 builds, `StandardEncoding` filling what
 an Encoding dictionary leaves undefined; a name the (3,1) cmap lacks selects
 glyph 0, and is compared against `.notdef`'s width, as veraPDF compares it. If a

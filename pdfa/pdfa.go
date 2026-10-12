@@ -1260,7 +1260,7 @@ func checkFontsEmbedded(doc core.View, level Level) []Violation {
 
 	fonts := collectFonts(doc, pagesRef)
 
-	// A font used only for invisible text (rendering mode 3/7) is not
+	// A font used only for invisible text (rendering mode 3) is not
 	// "used for rendering" and need not be embedded (the corpus passes an
 	// unembedded Type1 shown in mode 3).
 	usage := core.CollectFontTextUsage(doc)

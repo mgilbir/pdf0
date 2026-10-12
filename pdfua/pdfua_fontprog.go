@@ -19,8 +19,7 @@ import (
 // veraPDF's test, for PDF/UA-1 and -2 alike, passes a glyph shown in rendering
 // mode 3, one with no width from the program or none from the dictionary, and
 // one whose two widths differ by at most 1: only invisible text (mode 3) is
-// exempt. Clip-only text (mode 7) is held to it, where the PDF/A engine's gate
-// exempts both.
+// exempt. Clip-only text (mode 7) is held to it, as the PDF/A engine holds it.
 //
 // veraPDF judges each glyph in the mode it was shown in. pdf0 records the
 // modes per font (core.FontTextUsage.Modes), not per string, so a font is

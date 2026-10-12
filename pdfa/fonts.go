@@ -191,13 +191,7 @@ func checkOneFontDict(doc core.View, level Level, rule string, fontDict *object.
 			// CIDFont shall carry CIDToGIDMap as a stream or /Identity;
 			// PDF/A requires the entry. Text rendered invisibly (mode 3
 			// only) is exempt — the corpus passes such a font at 1b.
-			onlyInvisible := len(u.Modes) > 0
-			for m := range u.Modes {
-				if m != 3 {
-					onlyInvisible = false
-				}
-			}
-			if dsub, _ := doc.ResolveName(desc.Get("Subtype")); dsub == "CIDFontType2" && !onlyInvisible {
+			if dsub, _ := doc.ResolveName(desc.Get("Subtype")); dsub == "CIDFontType2" && rendersVisibly(u) {
 				switch v := doc.Resolve(desc.Get("CIDToGIDMap")).(type) {
 				case nil:
 					bad("cidToGID", "CIDFontType2 must contain a CIDToGIDMap entry (stream or /Identity)")
@@ -710,15 +704,19 @@ func absf(x float64) float64 {
 	return x
 }
 
-// rendersVisibly reports whether the font showed text in any mode other than
-// 3 (invisible) or 7 (clip only) — modes where glyph shape/coverage is not
-// actually painted.
+// rendersVisibly reports whether the font is "used for rendering": whether it
+// showed text in any mode other than 3. ISO 19005-2 6.2.11.4.1 (and -4
+// 6.2.10.4.1): "A font referenced for use solely in rendering mode 3 is
+// therefore not rendered"; -4 6.2.10.5 exempts "Glyphs that are referenced
+// only with rendering mode 3". Mode 7 adds the glyph outlines to the clipping
+// path, so the glyphs' shapes and advances decide what is painted; veraPDF's
+// embedding, glyph-presence and width tests exempt rendering mode 3 alone.
 func rendersVisibly(u *core.FontTextUsage) bool {
 	if len(u.Modes) == 0 {
 		return true
 	}
 	for m := range u.Modes {
-		if m != 3 && m != 7 {
+		if m != 3 {
 			return true
 		}
 	}
