@@ -112,19 +112,19 @@ rule, noted in the source comments.
 | Family | Clause(s) | Checks | What actually fires |
 |---|---|---|---|
 | Tagging and document setup | 7.1 | `checkUACatalogBasics`, `checkUASuspects` | `/MarkInfo << /Marked true >>` absent, no `/StructTreeRoot`, `/ViewerPreferences /DisplayDocTitle` not true, `/MarkInfo /Suspects` true |
-| PDF/UA declaration | 5 | `checkUAIdentifier`, `checkUAIdentifierPrefix` | no XMP, no `pdfuaid:part`, a `part` that disagrees with the requested part, or a `part`/`amd`/`corr` element written with a prefix other than `pdfuaid` while bound to the PDF/UA-id namespace URI |
+| PDF/UA declaration | 5 | `checkUAIdentifier`, `checkUAIdentifierPrefix` | no XMP, a packet that is not well-formed XML (the message names the parser's reason and line, as the PDF/A rule's does — see [xmp.md](xmp.md)), no `pdfuaid:part`, a `part` that disagrees with the requested part, or a `part`/`amd`/`corr` element written with a prefix other than `pdfuaid` while bound to the PDF/UA-id namespace URI |
 | Document title | 7.1 | `checkUATitle` | XMP has no `dc:title` (Matterhorn 06) — the companion to `DisplayDocTitle` |
 | Header version | 6.1 | `checkUAHeaderVersion` | header is not `1.x`. **UA-1 only** — selected by the `part` parameter, not filtered afterwards |
 | Structure typing | 7.1 | `checkUARoleMap`, `checkUARoleMapIntegrity`, `checkUAStructParent` | a `/S` neither standard nor mapped to a standard type (reported once per distinct type), a `/RoleMap` that remaps a standard type or is circular, an element with no `/P` |
 | Element nesting | 7.2 | `checkUAStructNesting` | violates the `uaAllowedParents` / `uaAllowedChildren` tables: `TD`/`TH` outside `TR`, `TR` outside `Table`/`THead`/`TBody`/`TFoot`, `LI` outside `L`, `LBody` outside `LI`, `TOCI` outside `TOC`, and the mirror child constraints |
 | Container well-formedness | 7.2 | `checkUATableListStructure` | more than one `Caption`/`THead`/`TFoot` on a `Table`, a `THead`/`TFoot` with no `TBody`, a `Table` `Caption` that is neither first nor last child, an `L`/`TOC` `Caption` that is not first |
 | Table grid | 7.2 | `checkUATableGrid` | see [Table grids](#table-grids) |
-| Table headers | 7.5 | `checkUATableGrid` (`tableHeaderDefects`) | in a table laid out without defects where some `TH` has no `Scope`, a `TD` whose headers cannot be determined: no `/Headers`, or one naming an `/ID` no `TH` carries — see [Table grids](#table-grids) |
-| Headings | 7.4, 7.4.2, 7.4.4 | `checkUAHeadings`, `checkUAOneHPerNode`, `checkUAStrongWeak` | a skipped level (`H1` then `H3`), a first numbered heading that is not `H1`, more than one child `<H>` under one node, a document mixing `<H>` with `<H1>`–`<H6>` |
+| Table headers | 7.5 | `checkUATableGrid` (`tableHeaderDefects`) | in a table laid out without defects where some `TH` has no `Scope` (in its `/A` or its classes, `ownedAttrs`), a `TD` whose headers cannot be determined: no `/Headers`, or one naming an `/ID` no `TH` carries — see [Table grids](#table-grids) |
+| Headings | 7.4.2, 7.4.4 | `checkUAHeadings`, `checkUAOneHPerNode`, `checkUAStrongWeak` | **PDF/UA-1 only:** a first numbered heading that is not `H1` and a skipped level (`H1` then `H3`), both under 7.4.2, whose bullets they are; more than one child `<H>` under one node, and a document mixing `<H>` with `<H1>`–`<H6>`, under 7.4.4. Part 2 has none of them: ISO 14289-2 8.2.5.12 NOTE 2 drops the sequential-heading requirement, and 8.2.5.12 forbids `<H>` outright, which `checkUA2NoH` reports for every `<H>` the 7.4.4 rules could fire on |
 | Figures and formulas | 7.3, 7.7 | `checkFigureAlt` | a `Figure` — and, in PDF/UA-1, a `Formula` — with neither a non-empty `/Alt` nor an `/ActualText`. Any `/ActualText` counts, the empty string included: it is replacement text, and veraPDF reads it so (`ActualText != null`) |
 | Notes | 7.9 | `checkUANotes` | a `Note` with no `/ID`, or two `Note`s sharing one |
 | Language | 7.2 | `checkUALang`, `checkUA1LangDeterminable`, `checkUA2CatalogLang` | a *present* `/Lang` — catalog, structure element or marked-content property list — that is not an RFC 3066 Language-Tag (`uaLanguageTag`: `1*8ALPHA *("-" 1*8alphanum)`; the empty string is not one); for PDF/UA-2, no catalog `/Lang`; for PDF/UA-1 without a catalog `/Lang`, each piece of text whose language cannot be determined another way — see [Natural language](#natural-language) |
-| Annotations | 7.18.1, 7.18.2, 7.18.5, 7.18.8 | `checkUAAnnotations` | `TrapNet` present, a visible annotation with no `/StructParent`, a `PrinterMark` that *has* a `/StructParent`; and, **PDF/UA-1 only**, a `Link` with no `/Contents`, or any other non-`Widget` annotation with neither `/Contents` nor an `/Alt` on its enclosing structure element. Hidden (`/F` bit 2) and `Popup` annotations are exempt throughout, and an annotation whose `/Rect` lies outside its page's crop box from the description rules |
+| Annotations | 7.18.1, 7.18.2, 7.18.5, 7.18.8 | `checkUAAnnotations` | `TrapNet` present, a `PrinterMark` that *has* a `/StructParent`; and, **PDF/UA-1 only**, a visible annotation with no `/StructParent` (ISO 14289-2 8.9.2.2 lets any annotation be an artifact, and one outside the structure tree is one), a `Link` with no `/Contents`, or any other non-`Widget` annotation with neither `/Contents` nor an `/Alt` on its enclosing structure element. Hidden (`/F` bit 2) and `Popup` annotations are exempt throughout, and an annotation whose `/Rect` lies outside its page's crop box from the description rules |
 | Annotation placement | 7.18.1 | `checkUAAnnotStructType` | an OBJR-reached annotation under the wrong structure type: `Widget` wants `<Form>`, `Link` wants `<Link>`, everything else `<Annot>` |
 | Tab order | 7.18.3 | `checkUATabOrder` | a page carrying `/Annots` without `/Tabs /S` |
 | Form fields | 7.18.1, 7.15 | `checkUAFieldDescription`, `checkUAXFA` (and the `Widget` arm of `checkUAAnnotations`) | a field with no `/TU` whose description sits on a pure-widget child, a `Widget` (PDF/UA-1, inside the crop box) with neither an effective `/TU` (inherited up `/Parent`, bounded to 32 hops) nor an `/Alt` on its enclosing structure element, and a dynamic XFA form (`dynamicRender` required, detected in the *decoded* packet) |
@@ -261,14 +261,22 @@ two-dimensional fact and needs a two-dimensional model.
 laid out separately, on its own pass through the flattened tree).
 `collectRowCells` reduces each `TR` to `TH`/`TD` cells with their spans, read by
 `cellSpan` from an attribute dictionary whose owner `/O` is `Table`; a missing or
-non-positive value becomes 1. `layoutTable` then places the cells, recording
-each cell's slot (`gridDefects` is its defects alone):
+non-positive value becomes 1. A cell's attribute dictionaries are those
+`ownedAttrs` gives: the ones in its `/A`, then those of the classes its `/C`
+names in the structure tree root's `/ClassMap`, in that order, so `/A` takes
+precedence where both give an attribute (ISO 32000-2 14.7.6.2). `RowSpan`,
+`ColSpan`, `Scope` and `Headers` are all read that way, as veraPDF reads them,
+and PDF/UA-2's `ListNumbering` rule reads its attribute through the same
+function. The WTPDF example `amsldoc-tagged` scopes every `TH` through a class
+(`/C /TH-col`); read from `/A` alone, its data cells' headers could not be
+determined. `layoutTable` then places the cells, recording each cell's slot
+(`gridDefects` is its defects alone):
 
 ```mermaid
 flowchart TD
     T["Table structure element"] --> RG["descend THead / TBody / TFoot<br/>stop at a nested Table"]
     RG --> R["ordered TR rows"]
-    R --> C["cells: TH or TD<br/>rowSpan, colSpan from /A with /O /Table"]
+    R --> C["cells: TH or TD<br/>rowSpan, colSpan from /A, then the /C classes,<br/>with /O /Table"]
     C --> P["place row by row: skip columns already<br/>occupied by a rowspan from above,<br/>then fill rowSpan × colSpan slots"]
     P --> D1["RowSpan exceeds the rows remaining<br/>→ 'extends beyond the last row'"]
     P --> D2["slot already occupied<br/>→ 'cells overlap'"]
@@ -340,9 +348,12 @@ the catalog `/Lang` where PDF/UA-1 asks only that languages be determinable;
 PDF/UA-1's annotation-description rules (7.18.1, 7.18.5) and `Formula` rule
 (7.7) are not PDF/UA-2's — ISO 14289-2 makes a `Link`'s `/Contents` a "should"
 (8.9.2.4.2) and lets markup annotations omit it (8.9.2.3), and the veraPDF
-PDF/UA-2 profile has none of them; and PDF/UA-2 finds table headers by
-position. Every finding carries `Part`, and `Error()`
-prints it: `[PDF/UA-2 …]`. The shared rules keep their ISO 14289-1 clause
+PDF/UA-2 profile has none of them; nor are its rule that every visible
+annotation be in the structure tree (ISO 14289-2 8.9.2.2 makes one outside it
+an artifact), its heading-sequence rules (7.4.2; ISO 14289-2 8.2.5.12 NOTE 2)
+and its weakly-structured heading rules (7.4.4; part 2 forbids `H` instead);
+and PDF/UA-2 finds table headers by position. Every finding carries `Part`,
+and `Error()` prints it: `[PDF/UA-2 …]`. The shared rules keep their ISO 14289-1 clause
 numbers; read the clause against the standard you invoked.
 
 The rest of part 2's own rules are in `pdfua/pdfua2_ident.go`,
@@ -357,7 +368,7 @@ and each check reads the same:
 | 5 | `checkUA2Revision` | a packet declaring a PDF/UA part whose `pdfuaid:rev` is absent, is not `2024`, or is written with a prefix other than `pdfuaid` |
 | 8.2.5.2 | `checkUA2DocumentRoot` | a structure tree root whose children are not exactly one `Document`, or whose `Document` is not in the PDF 2.0 namespace. Children are read through `NonStruct`, `Div` and `Part`, and only types that resolve count, as veraPDF reads them. A `Part` holding the `Document` passes this rule; veraPDF reports it under ISO/TS 32005's containment rules, which pdf0 does not implement |
 | 8.2.5.12 | `checkUA2NoH` | an element whose type resolves to `H` |
-| 8.2.5.25 | `checkUA2ListNumbering` | an `L` with an `LI` that has an `Lbl` (both through grouping elements) and whose `ListNumbering` is absent or `None`. The attribute is the first one owned by `List` in `/A`, else in the `/ClassMap` classes `/C` names, else the parent element's |
+| 8.2.5.25 | `checkUA2ListNumbering` | an `L` with an `LI` that has an `Lbl` (both through grouping elements) and whose `ListNumbering` is absent or `None`. The attribute is the first one owned by `List` in `/A`, else in the `/ClassMap` classes `/C` names (`ownedAttrs`, the reader the table rules share), else the parent element's |
 | 8.8 | `checkUA2StructDestinations` | an outline item's or a `Link` annotation's `/Dest` (when the dictionary has no `/A`), or an array `/OpenAction`, that is not a structure destination; a GoTo action with no `/SD` whose `/D` is not a name or string naming one. The actions are those of outline items and annotations, the open action, the `/AA` of the catalog, the pages, the annotations and the form fields, and their `/Next` chains |
 | 8.9.2.2 | `checkUA2InvisibleAnnots` | an annotation with the Invisible flag (bit 1) enclosed by a structure element that neither is nor sits inside an `Artifact` |
 | 8.9.2.4.10 | `checkUA2FileAttachments` | a `FileAttachment` annotation whose `/FS` is not a dictionary with an `/AFRelationship` name; a string `/FS` is reported, as veraPDF reports it |
@@ -387,10 +398,19 @@ veraPDF PDF/UA-2 profile that no corpus file fails, among them 8.2.5.25-t02
 (real content directly in an `LI`), 8.9.2.2-t02 (an annotation with NoView
 set), 8.10.1-t03 (an XFA form of any kind) and 8.10.2.3-t02 (a widget with
 `/AA` needs `/Contents`), and PDF/UA-2's rules for the 2.0-only types (FENote,
-Title). The WTPDF examples, real PDF/UA-2 documents that veraPDF passes, are
-not held to `ValidatePDFUA2` by any test, and four of them are reported, for
-rules shared with part 1: a first heading that is not `H1`, table headers, an
-untagged annotation, and an XMP packet pdf0 cannot parse. This does not assert
+Title). The fourteen WTPDF examples, real PDF/UA-2 documents that veraPDF
+1.30.3 passes, are held to `ValidatePDFUA2` by `TestWTPDFValidatePDFUA2`:
+thirteen are clean, and `tb139mitt-deims24` has the one finding veraPDF does
+not make. Its XMP packet holds a U+0001, which XML 1.0 does not allow, so the
+packet is not XML (ISO 32000-2 14.3.2, required by ISO 14289-2 6.2), and the
+finding names it: "XMP metadata is not well-formed XML (XML syntax error on
+line 289: illegal character code U+0001), so it declares no PDF/UA part
+(pdfuaid:part)". veraPDF's XMP parser replaces ASCII control characters
+before parsing ([xmp.md](xmp.md)). Three more of them used to be reported,
+each for a part-1 rule applied the part-1 way: `47464-t-tagged` starts at
+`H3` (the heading-sequence rule), `PHY-exam` has a widget outside the
+structure tree (the untagged-annotation rule), and `amsldoc-tagged` scopes its
+header cells through `/C` classes, which were not read. This does not assert
 full ISO 14289-2 conformance.
 
 `ValidatePDFUA2` is also unreachable from the CLI: `pdf0 ua` only ever calls
@@ -399,7 +419,7 @@ full ISO 14289-2 conformance.
 ## The oracles
 
 A UA rule is held to two external sets of files, and a new or changed rule must
-leave both where they are. Neither is committed: `spec/` and `testdata/` are
+leave both where they are; a third, the WTPDF examples, is described last. Neither is committed: `spec/` and `testdata/` are
 gitignored.
 
 **The PDF Association reference files.** `TestUAReferenceFilesNoFalsePositives`
@@ -479,13 +499,24 @@ and 7.21.7-1 on Reference-10. When the spec as written would flag a reference
 file, the reference file wins — the same corpus-as-oracle discipline as PDF/A
 ([ADR 0001](adr/0001-corpus-as-oracle.md)).
 
-A third external set backstops the *parser* rather than the validator:
-`TestWTPDFExamples` (`wtpdf_test.go`) runs the LaTeX Project's Well Tagged PDF /
-PDF/UA-2 examples — real PDF 2.0 files with structure trees, associated files,
-MathML and custom role maps — asserting each parses, reports version `2.0`, has
-pages, and survives Read → Write → Read. Fetch with `make wtpdf`
-(`testdata/wtpdf/`, also gitignored). The data sets and their provenance are
-tabulated in [testing.md](testing.md).
+A third external set, the LaTeX Project's Well Tagged PDF / PDF/UA-2
+examples — fourteen real PDF 2.0 files with structure trees, associated files,
+MathML and custom role maps — backstops both the parser and `ValidatePDFUA2`
+(`wtpdf_test.go`; fetch with `make wtpdf` into `testdata/wtpdf/`, also
+gitignored). `TestWTPDFExamples` asserts each parses, reports version `2.0`,
+has pages, and survives Read → Write → Read. `TestWTPDFValidatePDFUA2` holds
+them to `ValidatePDFUA2`: veraPDF 1.30.3 (`-f ua2`) passes all fourteen, so a
+finding is pdf0's to justify, and the test lists the one it keeps
+(`tb139mitt-deims24`'s malformed XMP packet, [PDF/UA-2](#pdfua-2)); any other
+fails it. As PDF/UA-1, which they do not claim, pdf0 and veraPDF reject all
+fourteen for the same reasons — `pdfuaid:part` 2, the 2.0 header, and, in ten
+of them, `Formula` elements with no alternate text — and both report
+`47464-t-tagged`'s first heading `H3` and its skip from `H3` to `H5` under
+7.4.2, and `PHY-exam`'s untagged widget. That one pdf0 reports under 7.18.1,
+whose second paragraph has annotations in the structure tree, and veraPDF
+under 7.18.4 (a widget annotation nested within a `Form`; Matterhorn 28-010): the clause pdf0
+cites is the one its message states, and both apply. The data sets and their
+provenance are tabulated in [testing.md](testing.md).
 
 ## File map
 
@@ -495,7 +526,7 @@ tabulated in [testing.md](testing.md).
 | `pdfua/pdfua_lang.go` | natural language: `/Lang` syntax, the PDF/UA-2 catalog `/Lang`, and PDF/UA-1's per-object determinability with its content replay (`langScope`) | 7.2, UA-2 8.4.4 |
 | `pdfua/pdfua_fontprog.go` | the glyph-width rule, over `internal/fontcheck`, and its rendering-mode exemption | 7.21.5 (UA-2 8.4.5.6) |
 | `pdfua/pdfua_annotctx.go` | `annotContext`: each page annotation's enclosing structure element and its page's crop box | 7.18.1, 7.18.5 |
-| `pdfua/pdfua_struct.go` | Its names for `core.StructTree` and `walkStructElems`, element nesting tables, container well-formedness, heading strength, `Note` IDs, `/Suspects`, UA-1 header version, the two PDF/UA-2 namespace rules | 7.1, 7.2, 7.4.4, 7.9, 6.1, UA-2 8.2.4 and 8.2.5.29 (and ISO 32000-1 14.8.4.3) |
+| `pdfua/pdfua_struct.go` | Its names for `core.StructTree` and `walkStructElems`, element nesting tables, container well-formedness, heading strength, `Note` IDs, `/Suspects`, UA-1 header version, the two PDF/UA-2 namespace rules, and the one reader of structure attributes (`ownedAttrs`: `/A`, then the `/ClassMap` classes) | 7.1, 7.2, 7.4.4, 7.9, 6.1, UA-2 8.2.4 and 8.2.5.29 (and ISO 32000-1 14.8.4.3, ISO 32000-2 14.7.6.2) |
 | `pdfua/pdfua_content.go` | `streamContentFacts`, real-content vs artifact analysis, the form-XObject paint count, OBJR annotation placement | 7.1, 7.18.1, 7.20 |
 | `pdfua/pdfua_tablegrid.go` | the table grid reconstruction and the data cells' header association | 7.2, 7.5 |
 | `pdfua/pdfua2_ident.go` | `pdfuaid:rev`, PDF/UA-2's half of the identification | UA-2 5 |

@@ -5,6 +5,7 @@ import (
 	"github.com/mgilbir/pdf0/internal/testfiles"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -43,6 +44,52 @@ func TestWTPDFExamples(t *testing.T) {
 			}
 			if _, err := Read(bytes.NewReader(buf.Bytes()), int64(buf.Len())); err != nil {
 				t.Fatalf("re-Read after Write: %v", err)
+			}
+		})
+	}
+}
+
+// TestWTPDFValidatePDFUA2 holds the WTPDF examples to ValidatePDFUA2. Every
+// one is a PDF/UA-2 document veraPDF 1.30.3 passes (-f ua2), so a finding is
+// pdf0's to justify: each file is clean, but for the findings listed here,
+// which are pdf0's reading of the standard where veraPDF under-reports.
+//
+// tb139mitt-deims24: its XMP packet has a U+0001 in a dc:creator item. XML
+// 1.0's Char production excludes it, so the packet is not XML (ISO 32000-2
+// 14.3.2, which ISO 14289-2 6.2 requires). veraPDF's XMP parser replaces ASCII
+// controls before parsing (ParseOptions FIX_CONTROL_CHARS, on by default).
+func TestWTPDFValidatePDFUA2(t *testing.T) {
+	expected := map[string][]struct{ clause, msg string }{
+		"tb139mitt-deims24.pdf": {{"5", "illegal character code U+0001"}},
+	}
+	files := testfiles.WTPDF.Glob(t, "*.pdf")
+	for _, path := range files {
+		name := filepath.Base(path)
+		t.Run(name, func(t *testing.T) {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			doc, err := Read(bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				t.Fatalf("Read: %v", err)
+			}
+			want := expected[name]
+			matched := make([]bool, len(want))
+		findings:
+			for _, v := range ValidatePDFUA2(doc) {
+				for i, w := range want {
+					if !matched[i] && v.Clause == w.clause && strings.Contains(v.Message, w.msg) {
+						matched[i] = true
+						continue findings
+					}
+				}
+				t.Errorf("finding on a PDF/UA-2 file veraPDF passes: %v", v)
+			}
+			for i, w := range want {
+				if !matched[i] {
+					t.Errorf("expected finding not reported (clause %s, %q): update the expectation", w.clause, w.msg)
+				}
 			}
 		})
 	}
