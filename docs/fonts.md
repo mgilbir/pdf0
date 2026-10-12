@@ -199,8 +199,10 @@ em, and the comparison is `internal/fontcheck`'s, the same for PDF/A (6.2.11.5)
 and PDF/UA (7.21.5): `fontcheck.Simple`, `fontcheck.CID` and
 `fontcheck.Type3WidthDiffers`. The engines differ in which glyphs they ask
 about: PDF/A exempts text in rendering modes 3 and 7, PDF/UA mode 3 only, as
-veraPDF's test reads, and PDF/UA does not compare a TrueType code pdf0 reads
-as `.notdef` (see [pdfua.md](pdfua.md#the-rule-families)). If a
+veraPDF's test reads. A non-symbolic TrueType code is compared through the
+code-to-name table ISO 32000-1 9.6.6.4 builds, `StandardEncoding` filling what
+an Encoding dictionary leaves undefined; a name the (3,1) cmap lacks selects
+glyph 0, and is compared against `.notdef`'s width, as veraPDF compares it. If a
 descriptor carries a `FontFile*` stream no parser accepts and the font renders
 visibly, `damagedFontProgramError` reports it under the `embed` clause rather
 than silently exempting the font — across the corpus every valid embedded

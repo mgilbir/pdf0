@@ -82,6 +82,24 @@ func SimpleFontCodeToName(doc core.View, fontDict *object.Dictionary, symbolic b
 				}
 			}
 		}
+		// ISO 32000-1 9.6.6.4, for a non-symbolic TrueType font whose
+		// Encoding is a dictionary: "the table shall be initialized with the
+		// entries from the dictionary's BaseEncoding entry ... Any entries in
+		// the Differences array shall be used to update the table. Finally,
+		// any undefined entries in the table shall be filled using
+		// StandardEncoding." A BaseEncoding that names no predefined encoding
+		// (/Identity, say) initializes nothing, so every code not in
+		// Differences takes its StandardEncoding name. veraPDF's
+		// TrueTypeFontProgram builds the same table.
+		if st, _ := doc.ResolveName(fontDict.Get("Subtype")); st == "TrueType" && !symbolic {
+			if std, ok := simplefont.EncodingNamed("StandardEncoding"); ok {
+				for c, n := range std.Codes() {
+					if _, set := table[c]; !set {
+						table[c] = n
+					}
+				}
+			}
+		}
 	case nil:
 		if !symbolic {
 			applyBase("StandardEncoding")
@@ -150,18 +168,6 @@ func (s *Simple) ProgramWidth(code byte) (float64, bool) {
 // Widths[code-FirstChar] when in range, else a non-zero /MissingWidth.
 func (s *Simple) DeclaredWidth(doc core.View, code byte) (float64, bool) {
 	return declaredWidth(doc, s.widths, s.firstChar, code, s.missingWidth)
-}
-
-// SelectsNotdef reports whether a TrueType code selects glyph 0, .notdef, by
-// the font's own answer (simplefont.TrueTypeGlyph): a non-symbolic code the
-// encoding names no glyph for, or one whose glyph the (3,1) cmap lacks. It is
-// false for Type 1 and CFF, whose codes name glyphs.
-func (s *Simple) SelectsNotdef(code byte) bool {
-	if s.Subtype != "TrueType" {
-		return false
-	}
-	gid, ok := simplefont.TrueTypeGlyph(s.Program, s.Symbolic, code, s.Encoding[code])
-	return ok && gid == 0
 }
 
 // WidthDiffers reports whether the program and the dictionary both give a

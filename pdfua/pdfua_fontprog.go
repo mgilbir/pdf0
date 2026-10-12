@@ -28,8 +28,7 @@ import (
 // in mode 3 and some in another has all its glyphs compared.
 //
 // The comparison per glyph is shared; the walk over the shown glyphs is this
-// rule's, because it declines one case the PDF/A engine compares — a TrueType
-// code pdf0 reads as .notdef (see uaWidthDiffers).
+// rule's, because its rendering-mode gate is.
 func checkUAFontWidths(d core.View) []Violation {
 	var v []Violation
 	for fontDict, u := range core.CollectFontTextUsage(d) {
@@ -85,15 +84,6 @@ func uaWidthDiffers(d core.View, fontDict *object.Dictionary, u *core.FontTextUs
 				continue
 			}
 			asked[code] = true
-			// A TrueType code pdf0 reads as .notdef is one veraPDF reads
-			// differently: when the encoding's name finds no glyph it looks
-			// the code itself up in the cmap, and compares that glyph. pdf0
-			// does not model that fallback, so it asserts nothing about the
-			// code (corpus PDF_UA-1 7.21.6-t02-fail-a, whose /BaseEncoding
-			// /Identity names nothing, is no 7.21.5 failure to veraPDF).
-			if s.SelectsNotdef(code) {
-				continue
-			}
 			if s.WidthDiffers(d, code) {
 				return subtype, true
 			}

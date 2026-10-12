@@ -125,22 +125,48 @@ func TestUAGlyphWidthsMatchTheProgram(t *testing.T) {
 	}
 }
 
-// TestUAGlyphWidthsSkipATrueTypeNotdef: a TrueType code that pdf0 resolves to
-// glyph 0 is not compared. pdf0 follows ISO 32000-1 9.6.6.4 — a non-symbolic
-// code the encoding names no glyph for, or one whose name the (3,1) cmap lacks,
-// selects .notdef — while veraPDF, when the name finds no glyph, looks the code
-// itself up in the cmap and compares that glyph's width. The two read different
-// glyphs, and only veraPDF's reading is the oracle's; corpus PDF_UA-1
-// 7.21.6-t02-fail-a (a /BaseEncoding of /Identity, which names nothing) is not
-// a 7.21.5 failure to veraPDF. Whether .notdef may be shown at all is 7.21.8's
-// question, not this rule's.
-func TestUAGlyphWidthsSkipATrueTypeNotdef(t *testing.T) {
+// TestUAGlyphWidthsTrueTypeNameTable: a non-symbolic TrueType font's code is
+// compared through the code-to-name table ISO 32000-1 9.6.6.4 builds — an
+// Encoding dictionary's BaseEncoding, updated by Differences, with "any
+// undefined entries ... filled using StandardEncoding" — and a name the (3,1)
+// cmap lacks selects glyph 0, whose width is then the program's. veraPDF
+// 1.30.3 reads it the same way: a /BaseEncoding of /Identity (corpus PDF_UA-1
+// 7.21.6-t02-fail-a) initializes nothing, so code 65 is StandardEncoding's
+// "A", and a name with no glyph is compared against .notdef's advance.
+func TestUAGlyphWidthsTrueTypeNameTable(t *testing.T) {
 	prog := map[int]object.Object{7: object.NewStream(&object.Dictionary{}, widthProgram())}
-	f := simpleTrueType(object.Integer(777), object.Integer(600))
-	f.Set("Encoding", object.NewDictionary(object.Entry{Key: "BaseEncoding", Value: object.Name("Identity")}))
-	ua1, ua2 := clauseFindings(t, func() core.View { return fontPage(f, "BT /F1 12 Tf (A) Tj ET", prog) }, "7.21.5")
-	if len(ua1) != 0 || len(ua2) != 0 {
-		t.Errorf("a code pdf0 reads as .notdef was compared against .notdef's width: %v %v", ua1, ua2)
+	identity := func(wA object.Object) *object.Dictionary {
+		f := simpleTrueType(wA, object.Integer(600))
+		f.Set("Encoding", object.NewDictionary(object.Entry{Key: "BaseEncoding", Value: object.Name("Identity")}))
+		return f
+	}
+	euro := func(wA object.Object) *object.Dictionary {
+		f := simpleTrueType(wA, object.Integer(600))
+		f.Set("Encoding", object.NewDictionary(
+			object.Entry{Key: "BaseEncoding", Value: object.Name("WinAnsiEncoding")},
+			object.Entry{Key: "Differences", Value: object.Array{object.Integer(65), object.Name("Euro")}},
+		))
+		return f
+	}
+	cases := []struct {
+		name string
+		font *object.Dictionary
+		want bool
+	}{
+		{"an unknown BaseEncoding falls back to StandardEncoding: A's width agrees", identity(object.Integer(500)), false},
+		{"an unknown BaseEncoding falls back to StandardEncoding: A's width differs", identity(object.Integer(777)), true},
+		{"a name the cmap lacks is compared against .notdef's width", euro(object.Integer(500)), true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ua1, ua2 := clauseFindings(t, func() core.View { return fontPage(c.font, "BT /F1 12 Tf (A) Tj ET", prog) }, "7.21.5")
+			if got := len(ua1) > 0; got != c.want {
+				t.Errorf("PDF/UA-1: reported = %v, want %v (%v)", got, c.want, ua1)
+			}
+			if got := len(ua2) > 0; got != c.want {
+				t.Errorf("PDF/UA-2: reported = %v, want %v (%v)", got, c.want, ua2)
+			}
+		})
 	}
 }
 

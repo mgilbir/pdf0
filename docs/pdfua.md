@@ -531,18 +531,13 @@ Glyph List — are `internal/fontcheck`'s, which both engines call
   skipped unless `CIDToGIDMap` is `Identity`, and the simple-font `.notdef` case
   of 7.21.8 is unimplemented — both documented in-source as false-positive
   avoidance, not oversights.
-- **The width rule (7.21.5) is narrower than veraPDF's in three places.**
+- **The width rule (7.21.5) is narrower than veraPDF's in two places.**
   Rendering modes are recorded per font, not per glyph
   (`core.FontTextUsage.Modes`), so a font is exempt only when all its text is
   in mode 3; one that mixes mode 3 with another has every glyph compared, where
-  veraPDF exempts the mode-3 glyphs. A TrueType code pdf0 reads as `.notdef` is
-  not compared: when the encoding's glyph name finds nothing, veraPDF looks the
-  code itself up in the cmap and compares that glyph, a fallback pdf0 does not
-  model (corpus `7.21.6-t02-fail-a`, whose `/BaseEncoding /Identity` names
-  nothing, is no 7.21.5 failure to veraPDF). And a font program pdf0 cannot
-  read is not compared. The `/Differences` half of 7.21.6 likewise says
-  nothing of a program it cannot read, where veraPDF fails a program it could
-  not parse.
+  veraPDF exempts the mode-3 glyphs. And a font program pdf0 cannot read is not
+  compared. The `/Differences` half of 7.21.6 likewise says nothing of a
+  program it cannot read, where veraPDF fails a program it could not parse.
 - **A clean result is not conformance.** Matterhorn checkpoints covering reading
   order, colour-as-sole-meaning and most semantic judgements are outside what a
   static checker can assert.
