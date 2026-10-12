@@ -507,8 +507,10 @@ func checkUASecurity(d core.View) []Violation {
 // 2026-09-22 C83). A direct annotation is reported against the object it is
 // written in.
 //
-// The description rules (7.18.1, 7.18.5) are PDF/UA-1's: ISO 14289-2 makes a
-// Link's /Contents a "should" (8.9.2.4.2), lets markup annotations omit it
+// The rule that a visible annotation be tagged is PDF/UA-1's: ISO 14289-2
+// 8.9.2.2 lets any annotation be an artifact, one outside the structure tree
+// included. The description rules (7.18.1, 7.18.5) are PDF/UA-1's too: ISO
+// 14289-2 makes a Link's /Contents a "should" (8.9.2.4.2), lets markup annotations omit it
 // (8.9.2.3) and has no /TU rule, and the veraPDF PDF/UA-2 profile has none of
 // them. They follow the veraPDF PDF/UA-1 profile in two more ways: an
 // annotation whose rectangle is outside its page's crop box is exempt, and an
@@ -567,7 +569,10 @@ func checkUAAnnotations(d core.View, cat *object.Dictionary, part string) []Viol
 		// 28-002/010/011: every other visible annotation must be represented in the
 		// structure tree — it carries a /StructParent linking it to a structure
 		// element. (Hidden and Popup annotations were already skipped above.)
-		if a.Get("StructParent") == nil {
+		// PDF/UA-1 only: ISO 14289-2 8.9.2.2 lets any annotation be an artifact,
+		// and one "not present in the structure tree" is one; every rule of the
+		// veraPDF PDF/UA-2 profile passes an annotation with no structure parent.
+		if part == "1" && a.Get("StructParent") == nil {
 			v = append(v, Violation{Clause: "7.18.1", Message: "annotation is not tagged (no /StructParent linking it to the structure tree)", Object: num})
 		}
 	}

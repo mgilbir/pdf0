@@ -63,6 +63,34 @@ func TestUAWeakHeadingRulesArePartOne(t *testing.T) {
 	}
 }
 
+// TestUAUntaggedAnnotIsPartOne: ISO 14289-1 7.18.1 has every visible
+// annotation in the structure tree; ISO 14289-2 8.9.2.2 lets any annotation be
+// an artifact, and one not present in the structure tree is one, so a visible
+// annotation with no /StructParent is a PDF/UA-1 finding only. The WTPDF
+// example PHY-exam has such a widget (a tooltip button, /F 516), which
+// veraPDF passes as PDF/UA-2 and reports as PDF/UA-1 (7.18.4).
+func TestUAUntaggedAnnotIsPartOne(t *testing.T) {
+	const msg = "annotation is not tagged"
+	for _, st := range []object.Name{"Widget", "Square"} {
+		doc := mkView(nil, nil)
+		a := object.NewDictionary(
+			object.Entry{Key: "Type", Value: object.Name("Annot")},
+			object.Entry{Key: "Subtype", Value: st},
+			object.Entry{Key: "Contents", Value: str("a description")},
+			object.Entry{Key: "TU", Value: str("a description")},
+			object.Entry{Key: "F", Value: object.Integer(516)}, // Print | ToggleNoView: visible
+		)
+		doc.Objects[5] = &object.IndirectObject{Number: 5, Value: a}
+		referenced(doc, 5)
+		if got := findings(checkUAAnnotations(doc, nil, "1"), "7.18.1", msg); len(got) != 1 {
+			t.Errorf("PDF/UA-1, untagged %s: want one finding, got %v", st, got)
+		}
+		if got := findings(checkUAAnnotations(doc, nil, "2"), "7.18.1", msg); len(got) != 0 {
+			t.Errorf("PDF/UA-2, untagged %s: an annotation outside the structure tree is an artifact, got %v", st, got)
+		}
+	}
+}
+
 // tableDoc builds a Table of the given rows (each a list of cells) under a
 // structure tree root carrying classMap, and returns the view.
 func tableDoc(rows [][]*object.Dictionary, classMap *object.Dictionary) core.View {
