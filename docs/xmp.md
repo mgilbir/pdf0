@@ -6,9 +6,9 @@ Every conformance standard pdf0 validates declares itself in XMP: PDF/A writes
 therefore load-bearing for all of them, not a PDF/A detail — and it carries
 rules of its own, since PDF/A constrains which properties may appear, in which
 schema, with which value form. The model every reader and writer goes through
-is `internal/xmp`; the PDF/A rules over it are in `pdfa/xmp.go` (the glue and
-the streaming well-formedness check), `pdfa/xmp_schemas.go` (schema tables,
-property and extension-schema checks) and `pdfa/identification.go` (the pdfaid
+is `internal/xmp`; the PDF/A rules over it are in `pdfa/xmp.go` (the glue),
+`pdfa/xmp_schemas.go` (schema tables, the well-formedness rule, property and
+extension-schema checks) and `pdfa/identification.go` (the pdfaid
 reader). Open this doc before touching a schema table, before adding a rule
 that reads metadata, before writing metadata, or when a metadata finding looks
 wrong; for how the PDF/A validator runs, see [pdfa.md](pdfa.md#how-validatepdfa-runs).
@@ -19,7 +19,7 @@ wrong; for how the PDF/A validator runs, see [pdfa.md](pdfa.md#how-validatepdfa-
 flowchart TD
     S["catalog /Metadata stream"] --> F["decode the stream<br/>— applies /Filter, e.g. FlateDecode"]
     F --> E["DecodeXMPToUTF8<br/>UTF-8 / UTF-16 / UTF-32, BOM or not"]
-    E --> W["xmpWellFormed — streaming<br/>well-formed? properly namespaced rdf:RDF?"]
+    E --> W["xmp.CheckWellFormed — the model's judgement, no tree<br/>well-formed? properly namespaced rdf:RDF?"]
     E --> C{"packet ≤ `WithMaxXMPPacketBytes`?"}
     C -->|no| LIM["no model — a trip on the run,<br/>reported as a limit finding"]
     C -->|yes| M["xmp.Parse → the model<br/>(View.DocumentXMPPacket, memoised per run)"]
@@ -41,6 +41,21 @@ the XML parser has already unescaped.
 malformed (the well-formedness rule's to report) or limit (a trip has been
 noted, and the reader must neither guess a value nor report one missing).
 
+A packet that is not well-formed is reported with the cause, in the XML
+parser's words and naming the line, by both validators that report it: the
+PDF/A well-formedness rule (6.7.9 at PDF/A-1, 6.6.2.1 at -2 and -3, 6.7.2.1
+at -4) says "the XMP packet is not well-formed XML (XML syntax error on line
+289: illegal character code U+0001)", and the PDF/UA identification rule
+(clause 5) "XMP metadata is not well-formed XML (XML syntax error on line 289:
+illegal character code U+0001), so it declares no PDF/UA part
+(pdfuaid:part)". Both take the reason from `xmp.MalformedReason` (PDF/UA
+through `core.View.XMPMalformedReason`), so they cannot word one packet two
+ways. pdf0 does not repair a packet: XML 1.0 has no U+0001, so a packet
+holding one is not XML. veraPDF's PDF/UA-2 validation passes such a packet,
+because its XMP parser replaces ASCII control characters before parsing (its
+ParseOptions set FIX_CONTROL_CHARS by default); the WTPDF example
+`tb139mitt-deims24` is one.
+
 ## The model — `internal/xmp`
 
 Parsing is stdlib `encoding/xml` only; the library has no XML dependency.
@@ -48,9 +63,16 @@ Parsing is stdlib `encoding/xml` only; the library has no XML dependency.
 element keeps both the prefix it was written with and the URI that prefix
 means; it checks tag matching, and judges well-formedness exactly as
 `encoding/xml`'s `Token` does (a corpus test asserts the agreement on every
-packet). The tree keeps everything: processing instructions, comments,
-whitespace, namespace declarations, unknown elements, and — per node — the
-source bytes it was parsed from. The `CharsetReader` returns its input
+packet). `xmp.CheckWellFormed` is the same pass without the tree — the same
+tokenizer, the same tag matching, the same error — for the PDF/A rule, which
+needs only the verdict and whether a properly namespaced `rdf:RDF` is
+anywhere in the packet. Every malformed-packet error wraps `ErrMalformed`, and
+one the model finds (a mismatched or unclosed tag) is worded and placed as
+`encoding/xml` words its own:
+`XML syntax error on line 9: element <dc:creator> closed by </dc:Creator>`.
+The tree keeps everything: processing instructions, comments, whitespace,
+namespace declarations, unknown elements, and — per node — the source bytes it
+was parsed from. The `CharsetReader` returns its input
 unchanged: packets are already UTF-8 by then, but many still carry an
 `encoding=` declaration that would otherwise fail the decoder, and nothing is
 fetched from outside.
@@ -282,11 +304,14 @@ touch one.
   2026-09-22 C40: a 4 MiB packet of 520,000 comment-interrupted text runs builds
   in 0.4 s — so what the bound limits now is memory: that packet holds some
   300 MB of nodes while it is read.
-- **Streaming well-formedness.** `xmpWellFormed` answers "well-formed?" and
-  "has a properly namespaced `rdf:RDF`?" from the token stream with no tree, so
-  it stays O(n) and those two rules still apply to a packet too big to analyse
-  for properties. `TestXMPStreamingMatchesTree` asserts it agrees with the
-  older tree-based path, so the optimisation changed no outcome.
+- **Well-formedness without the tree.** `xmp.CheckWellFormed` answers
+  "well-formed?" and "has a properly namespaced `rdf:RDF`?" keeping only the
+  open elements, with no `MaxDepth` (nothing recurses), so it stays O(n) and
+  those two rules still apply to a packet too big to analyse for properties.
+  It is `xmp.Parse`'s own pass with the tree switched off, so it cannot judge a
+  packet differently: `TestXMPStreamingMatchesTree` and
+  `TestCorpusXMPRoundTrip` assert the agreement, the latter on every corpus
+  packet against `encoding/xml`'s `Token` as well.
 - **Entity expansion.** `encoding/xml` in strict mode neither defines nor
   expands DTD entities: a billion-laughs packet fails with `invalid character
   entity` (verified directly), surfacing as a "not well-formed XML" finding
@@ -298,7 +323,8 @@ touch one.
   packets nest about a dozen levels.
 
 Regression tests: `TestXMPLargePacketBounded` (cap lowered to 4 KiB: not
-modelled, a trip noted, well-formedness still clean), `TestDepthLimit` and `TestXMPManyElementsFast`
+modelled, a trip noted, well-formedness still clean), `TestDepthLimit`,
+`TestCheckWellFormedHasNoDepthLimit` and `TestXMPManyElementsFast`
 (200 000 elements under 5 s; tens of seconds before the tree build was
 bypassed).
 

@@ -369,7 +369,11 @@ func checkUAIdentifier(d core.View, cat *object.Dictionary, want string) []Viola
 		// "limit" finding. Saying the part is missing would be a guess.
 		return nil
 	case core.XMPMalformed:
-		return []Violation{{Clause: "5", Message: "XMP metadata is not well-formed XML, so it declares no PDF/UA part (pdfuaid:part)", Object: 0}}
+		msg := "XMP metadata is not well-formed XML"
+		if why := d.XMPMalformedReason(stream, object.RefNum(cat.Get("Metadata"))); why != "" {
+			msg += " (" + why + ")"
+		}
+		return []Violation{{Clause: "5", Message: msg + ", so it declares no PDF/UA part (pdfuaid:part)", Object: 0}}
 	case core.XMPAbsent:
 		return []Violation{{Clause: "5", Message: "XMP metadata does not declare the PDF/UA part (pdfuaid:part)", Object: 0}}
 	}

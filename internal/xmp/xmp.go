@@ -186,7 +186,7 @@ type Packet struct {
 // Parse builds the model of an XMP packet. data is UTF-8 text (a caller holding
 // raw metadata bytes converts first; core.DecodeXMPToUTF8 does). The error wraps
 // ErrMalformed for XML that is not well-formed and ErrLimit for nesting deeper
-// than MaxDepth.
+// than MaxDepth; MalformedReason says why a packet is not well-formed.
 //
 // Well-formedness is judged exactly as encoding/xml's Token judges it, which is
 // what every reader used before this model: tags must match and entities must
@@ -198,23 +198,66 @@ type Packet struct {
 // has no properties. Writers, which need somewhere to put a property, refuse
 // such a packet with ErrNoRDF.
 func Parse(data []byte) (*Packet, error) {
+	p, _, err := parse(data, true)
+	return p, err
+}
+
+// CheckWellFormed judges data exactly as Parse does — the same tokenizer, the
+// same tag matching, the same error — without building the model, so a
+// validator that needs only the verdict stays linear in the packet and needs
+// no size cap. It keeps only the open elements, and has no MaxDepth: nothing
+// it does recurses. hasRDF reports a properly namespaced rdf:RDF element
+// anywhere in the packet (Packet.HasRDF looks only within the first
+// top-level element).
+func CheckWellFormed(data []byte) (hasRDF bool, err error) {
+	_, hasRDF, err = parse(data, false)
+	return hasRDF, err
+}
+
+// MalformedReason is why err — from Parse or CheckWellFormed — says a packet
+// is not well-formed XML: encoding/xml's own words, naming the line, as in
+// "XML syntax error on line 289: illegal character code U+0001". It is ""
+// when err does not wrap ErrMalformed.
+func MalformedReason(err error) string {
+	if !errors.Is(err, ErrMalformed) {
+		return ""
+	}
+	why, _ := strings.CutPrefix(err.Error(), ErrMalformed.Error()+": ")
+	if why == ErrMalformed.Error() {
+		return ""
+	}
+	return why
+}
+
+// parse is Parse and CheckWellFormed: with build, it builds the model;
+// without, it keeps only the stack of open elements and reports whether an
+// rdf:RDF element was seen.
+func parse(data []byte, build bool) (*Packet, bool, error) {
 	p := &Packet{src: data}
 	body := data
 	if bytes.HasPrefix(body, []byte("\xEF\xBB\xBF")) {
 		// A byte-order mark before the first token. encoding/xml does not skip
 		// one, so it is kept aside as an opaque leading node.
-		p.top = append(p.top, &node{kind: textNode, data: "\uFEFF", raw: body[:3]})
+		if build {
+			p.top = append(p.top, &node{kind: textNode, data: "\uFEFF", raw: body[:3]})
+		}
 		body = body[3:]
 	}
 
 	dec := xml.NewDecoder(bytes.NewReader(body))
 	dec.Strict = true
 	dec.CharsetReader = func(_ string, in io.Reader) (io.Reader, error) { return in, nil }
+	// malformed is a defect the tokenizer does not see but the model does,
+	// worded and placed as encoding/xml words and places its own.
+	malformed := func(msg string) error {
+		line, _ := dec.InputPos()
+		return fmt.Errorf("%w: %w", ErrMalformed, &xml.SyntaxError{Msg: msg, Line: line})
+	}
 
 	var stack []*node
 	scope := map[string][]string{} // prefix -> stack of URIs; "" is the default namespace
 	var declared [][]string        // per open element, the prefixes it declared
-	sawElement := false
+	sawElement, hasRDF := false, false
 
 	resolve := func(prefix string, isAttr bool) string {
 		switch prefix {
@@ -232,6 +275,9 @@ func Parse(data []byte) (*Packet, error) {
 		return prefix // unbound: as encoding/xml leaves it
 	}
 	add := func(n *node) {
+		if !build {
+			return // only the open elements are kept, on the stack
+		}
 		if len(stack) > 0 {
 			parent := stack[len(stack)-1]
 			n.parent = parent
@@ -248,14 +294,14 @@ func Parse(data []byte) (*Packet, error) {
 			break
 		}
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrMalformed, err)
+			return nil, false, fmt.Errorf("%w: %w", ErrMalformed, err)
 		}
 		end := int(dec.InputOffset())
 		raw := body[start:end:end]
 		switch t := tok.(type) {
 		case xml.StartElement:
-			if len(stack) >= MaxDepth {
-				return nil, fmt.Errorf("%w: elements nested deeper than %d", ErrLimit, MaxDepth)
+			if build && len(stack) >= MaxDepth {
+				return nil, false, fmt.Errorf("%w: elements nested deeper than %d", ErrLimit, MaxDepth)
 			}
 			sawElement = true
 			var mine []string
@@ -277,16 +323,19 @@ func Parse(data []byte) (*Packet, error) {
 				}
 			}
 			n.space = resolve(n.prefix, false)
+			if n.is(NSRDF, "RDF") {
+				hasRDF = true
+			}
 			declared = append(declared, mine)
 			add(n)
 			stack = append(stack, n)
 		case xml.EndElement:
 			if len(stack) == 0 {
-				return nil, fmt.Errorf("%w: unexpected end tag </%s>", ErrMalformed, rawName(t.Name))
+				return nil, false, malformed("unexpected end element </" + rawName(t.Name) + ">")
 			}
 			n := stack[len(stack)-1]
 			if t.Name.Space != n.prefix || t.Name.Local != n.local {
-				return nil, fmt.Errorf("%w: element <%s> closed by </%s>", ErrMalformed, n.qname(), rawName(t.Name))
+				return nil, false, malformed("element <" + n.qname() + "> closed by </" + rawName(t.Name) + ">")
 			}
 			stack = stack[:len(stack)-1]
 			for _, pfx := range declared[len(declared)-1] {
@@ -296,22 +345,30 @@ func Parse(data []byte) (*Packet, error) {
 			n.endTag = raw
 			n.raw = body[n.rawStart:end:end]
 		case xml.CharData:
-			add(&node{kind: textNode, data: string(t), raw: raw})
+			if build {
+				add(&node{kind: textNode, data: string(t), raw: raw})
+			}
 		case xml.Comment:
-			add(&node{kind: commentNode, data: string(t), raw: raw})
+			if build {
+				add(&node{kind: commentNode, data: string(t), raw: raw})
+			}
 		case xml.ProcInst:
-			add(&node{kind: piNode, local: t.Target, data: string(t.Inst), raw: raw})
+			if build {
+				add(&node{kind: piNode, local: t.Target, data: string(t.Inst), raw: raw})
+			}
 		case xml.Directive:
-			add(&node{kind: directiveNode, data: string(t), raw: raw})
+			if build {
+				add(&node{kind: directiveNode, data: string(t), raw: raw})
+			}
 		}
 	}
 	if len(stack) > 0 {
-		return nil, fmt.Errorf("%w: unexpected end of packet inside <%s>", ErrMalformed, stack[len(stack)-1].qname())
+		return nil, false, malformed("unexpected end of packet inside <" + stack[len(stack)-1].qname() + ">")
 	}
 	if !sawElement {
-		return nil, fmt.Errorf("%w: no XML content", ErrMalformed)
+		return nil, false, fmt.Errorf("%w: no XML content", ErrMalformed)
 	}
-	return p, nil
+	return p, hasRDF, nil
 }
 
 func rawName(n xml.Name) string {

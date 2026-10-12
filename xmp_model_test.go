@@ -42,21 +42,27 @@ func documentXMPText(t *testing.T, d *Document) string {
 }
 
 // wellFormedByToken is the judgement the readers relied on before the model:
-// encoding/xml's Token over the whole packet.
-func wellFormedByToken(text string) bool {
+// encoding/xml's Token over the whole packet. hasRDF is whether Token saw a
+// properly namespaced rdf:RDF element, which is what the PDF/A
+// well-formedness rule asked of its own streaming reader before it used
+// xmp.CheckWellFormed.
+func wellFormedByToken(text string) (wellFormed, hasRDF bool) {
 	dec := xml.NewDecoder(strings.NewReader(text))
 	dec.CharsetReader = func(_ string, in io.Reader) (io.Reader, error) { return in, nil }
 	saw := false
 	for {
 		tok, err := dec.Token()
 		if err == io.EOF {
-			return saw
+			return saw, hasRDF
 		}
 		if err != nil {
-			return false
+			return false, hasRDF
 		}
-		if _, ok := tok.(xml.StartElement); ok {
+		if se, ok := tok.(xml.StartElement); ok {
 			saw = true
+			if se.Name.Space == xmp.NSRDF && se.Name.Local == "RDF" {
+				hasRDF = true
+			}
 		}
 	}
 }
@@ -90,7 +96,8 @@ func valueString(v xmp.Value) string {
 // Factur-X corpora through the model:
 //
 //   - it parses exactly when encoding/xml's Token accepts it, so the model
-//     judges well-formedness as the readers it replaced did;
+//     judges well-formedness as the readers it replaced did, and
+//     xmp.CheckWellFormed judges it exactly as Parse does;
 //   - an unmodified packet serialises to the bytes it came from;
 //   - the writer, forced to write every node from the model (Rewrite), yields a
 //     packet whose tree is Equivalent to the original — the writer proved on
@@ -120,9 +127,19 @@ func TestCorpusXMPRoundTrip(t *testing.T) {
 		withXMP++
 		name := filepath.Base(f)
 		p, perr := xmp.Parse([]byte(text))
-		if (perr == nil) != wellFormedByToken(text) {
-			t.Errorf("%s: model parse error %v disagrees with encoding/xml's Token (well-formed=%v)", name, perr, wellFormedByToken(text))
+		tokWF, tokRDF := wellFormedByToken(text)
+		if (perr == nil) != tokWF {
+			t.Errorf("%s: model parse error %v disagrees with encoding/xml's Token (well-formed=%v)", name, perr, tokWF)
 			continue
+		}
+		// The verdict-only reader the PDF/A rule uses is the model's: the
+		// same verdict, the same reason, and Token's rdf:RDF.
+		hasRDF, cerr := xmp.CheckWellFormed([]byte(text))
+		if (cerr == nil) != (perr == nil) || xmp.MalformedReason(cerr) != xmp.MalformedReason(perr) {
+			t.Errorf("%s: CheckWellFormed says %v, Parse %v", name, cerr, perr)
+		}
+		if cerr == nil && hasRDF != tokRDF {
+			t.Errorf("%s: CheckWellFormed hasRDF=%v, encoding/xml's Token %v", name, hasRDF, tokRDF)
 		}
 		if perr != nil {
 			malformed++

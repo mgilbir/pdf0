@@ -1,8 +1,9 @@
 package pdfua
 
 // Rules the WTPDF examples (real PDF/UA-2 documents veraPDF passes) showed
-// pdf0 applying the wrong way: part-1 rules run under part 2, and attributes
-// read from /A but not the class map.
+// pdf0 applying the wrong way: part-1 rules run under part 2, attributes read
+// from /A but not the class map, and a malformed XMP packet reported without
+// its cause.
 
 import (
 	"strings"
@@ -192,5 +193,20 @@ func TestUATableAttributesFromClassMap(t *testing.T) {
 	}
 	if beyond(lastRow(tcell("TD", object.Entry{Key: "C", Value: object.Name("span2")}, object.Entry{Key: "A", Value: tableAttr(object.Entry{Key: "RowSpan", Value: object.Integer(1)})}))) {
 		t.Error("the cell's /A RowSpan 1 must take precedence over its class's RowSpan 2")
+	}
+}
+
+// TestUAMalformedXMPSaysWhy: a packet that is not well-formed XML is reported
+// with the parser's reason, naming the line. The WTPDF example
+// tb139mitt-deims24 has a U+0001 in a dc:creator item, which XML 1.0's Char
+// production excludes; veraPDF's XMP parser replaces ASCII controls before
+// parsing (ParseOptions FIX_CONTROL_CHARS, on by default) and so does not
+// report it.
+func TestUAMalformedXMPSaysWhy(t *testing.T) {
+	const ns = ` xmlns:pdfuaid="http://www.aiim.org/pdfua/ns/id/"`
+	d, cat := uaXMPView(uaPacket(ns, "<pdfuaid:part>2</pdfuaid:part>\n<pdfuaid:rev>2024</pdfuaid:rev>\x01"))
+	got := checkUAIdentifier(d, cat, "2")
+	if len(got) != 1 || !strings.Contains(got[0].Message, "not well-formed") || !strings.Contains(got[0].Message, "U+0001") || !strings.Contains(got[0].Message, "line 2") {
+		t.Errorf("want one finding naming U+0001 on line 2, got %v", got)
 	}
 }

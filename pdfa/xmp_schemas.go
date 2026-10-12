@@ -1176,15 +1176,22 @@ func checkXMPWellFormed(doc core.View, level Level) []Violation {
 		errs = append(errs, Violation{Rule: attrRule, Level: level, Message: "the XMP packet is not encoded as UTF-8"})
 	}
 
-	xmp := core.DecodeXMPToUTF8(raw)
-	if xmp != "" {
-		// Stream the packet rather than building a node tree: well-formedness and
+	text := core.DecodeXMPToUTF8(raw)
+	if text != "" {
+		// Judge the packet without building a node tree: well-formedness and
 		// the presence of a properly namespaced rdf:RDF element are all that is
-		// needed here, and streaming stays linear on an adversarially large
-		// packet that would make tree-building blow up (see WithMaxXMPPacketBytes).
-		wellFormed, hasRDF := xmpWellFormed([]byte(xmp))
-		if !wellFormed {
-			errs = append(errs, Violation{Rule: wfRule, Level: level, Message: "the XMP packet is not well-formed XML"})
+		// needed here, and that stays linear on an adversarially large packet
+		// that would make tree-building blow up (see WithMaxXMPPacketBytes).
+		// It is the model's judgement, so a packet this rule rejects is one
+		// the property readers cannot read, and the reason is worded as
+		// PDF/UA's identification rule words it (xmp.MalformedReason).
+		hasRDF, err := xmp.CheckWellFormed([]byte(text))
+		if err != nil {
+			msg := "the XMP packet is not well-formed XML"
+			if why := xmp.MalformedReason(err); why != "" {
+				msg += " (" + why + ")"
+			}
+			errs = append(errs, Violation{Rule: wfRule, Level: level, Message: msg})
 		} else if !hasRDF {
 			// The packet is well-formed XML but carries no properly namespaced
 			// rdf:RDF element — e.g. the RDF namespace prefix is undeclared.
