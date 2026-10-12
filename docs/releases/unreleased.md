@@ -147,41 +147,41 @@ v0.6.0.
   rules above, every fail file of veraPDF's PDF/UA-1 and PDF/UA-2 suites is
   caught and none of their pass files is reported.
 - **`ValidatePDFA` reads a non-symbolic TrueType font's `/Differences` names
-  against Adobe's glyphlist.txt itself** (PDF/A-2/3/4), as veraPDF does: new
+  against Adobe's glyphlist.txt itself** (#353) (PDF/A-2/3/4), as veraPDF does: new
   findings for names not on it — `uniXXXX`/`uXXXX`, the ZapfDingbats
   `a1`–`a205`, `bracket`, `isinferior` — and none any more for names it carries
   (for example `afii10017`) or for `.notdef`; each unlisted name is reported
   once per array. An unembedded font is still checked, as the clause reads
   (veraPDF checks embedded fonts only).
-- **PDF/A-1 forbids `/Differences` in a non-symbolic TrueType font** (6.3.7):
+- **PDF/A-1 forbids `/Differences` in a non-symbolic TrueType font** (#353) (6.3.7):
   the key's presence, even an empty array, is the finding; the per-name findings
   are no longer made at part 1.
-- **PDF/A-2/3/4 require a (3,1) cmap subtable** in the embedded program of a
+- **PDF/A-2/3/4 require a (3,1) cmap subtable** (#353) in the embedded program of a
   non-symbolic TrueType font with `/Differences` (6.2.11.6 / 6.2.10.6).
-- **Rendering mode 7 is no longer exempt** from the font embedding,
+- **Rendering mode 7 is no longer exempt** (#353) from the font embedding,
   glyph-coverage, width, damaged-program, PDF/A-1 CIDSet-completeness and Type 3
   checks; only mode 3 (invisible text) is.
-- **The width rule** (PDF/A 6.3.6 / 6.2.11.5 / 6.2.10.5, PDF/UA 7.21.5) compares
+- **The width rule** (#353) (PDF/A 6.3.6 / 6.2.11.5 / 6.2.10.5, PDF/UA 7.21.5) compares
   a glyph the program lacks at the width of the glyph drawn in its place
   (.notdef, or CID 0 under Identity-H/V), a code outside `/Widths` against the
   descriptor's `/MissingWidth` (0 by default), and now checks codes an Identity
   CMap maps to no CID. New findings are possible.
-- **`ValidatePDFUA2` no longer reports PDF/UA-1's heading rules**: the heading
+- **`ValidatePDFUA2` no longer reports PDF/UA-1's heading rules** (#354): the heading
   sequence ("first heading is H*n*", a skipped level — ISO 14289-2 8.2.5.12 NOTE
   2 drops the requirement) and 7.4.4 (one `H` per node, mixing `H` with
   `H1`–`H6` — every `H` is already reported under 8.2.5.12).
-- **`ValidatePDFUA2` no longer reports an untagged annotation** ("annotation is
+- **`ValidatePDFUA2` no longer reports an untagged annotation** (#354) ("annotation is
   not tagged"): under ISO 14289-2 8.9.2.2 an annotation outside the structure
   tree is an artifact.
 - **`ValidatePDFUA` and `ValidatePDFUA2` read a table cell's Scope, RowSpan,
-  ColSpan and Headers from the classes its `/C` names in `/ClassMap`** as well
+  ColSpan and Headers from the classes its `/C` names in `/ClassMap`** (#354) as well
   as from `/A` (which wins), per ISO 32000-2 14.7.6.2: tables scoped through
   classes no longer draw 7.5 findings, and spans given by a class count in the
   7.2 grid checks.
-- **`ValidatePDFUA` reports a skipped heading level under clause `7.4.2`** (was
+- **`ValidatePDFUA` reports a skipped heading level under clause `7.4.2`** (#354) (was
   `7.4`), where ISO 14289-1 states it; filter on `7.4.2`. The first-heading
   message now reads "first heading is H*n*; numbered headings must start at H1".
-- **A malformed XMP packet's finding names the cause** — `ValidatePDFUA` /
+- **A malformed XMP packet's finding names the cause** (#354) — `ValidatePDFUA` /
   `ValidatePDFUA2` (clause 5) and `ValidatePDFA` (6.7.9, 6.6.2.1, 6.7.2.1)
   append the parser's reason, e.g. "(XML syntax error on line 289: illegal
   character code U+0001)". The packet is not repaired: pdf0 stays strict where
@@ -271,7 +271,7 @@ v0.6.0.
 - **`make check` is CI's build-test job**, in its order (#340), and
   `make check-examples` runs every example; `TestMakeTargetsAreWhatCIRuns` holds
   both to CI.
-- **The ISO 32000 spec-example tests need the hand-placed spec PDFs.**
+- **The ISO 32000 spec-example tests need the hand-placed spec PDFs.** (#352)
   `TestSpecExamples*` and `TestSpec17Examples*` extract the examples on the spot
   from `spec/pdf2.0/ISO_32000-2_sponsored-ec2.pdf` and
   `spec/pdf1.7/PDF32000_2008.pdf` (with `pdftotext` and `python3`) into the
@@ -279,7 +279,7 @@ v0.6.0.
   `testdata/spec_examples.json` and `testdata/spec_examples_17.json` are no
   longer in the repository or the module zip: they held ISO text there is no
   permission to redistribute.
-- **`testdata/pdfref17_examples.json`** holds the example code of Adobe's PDF
+- **`testdata/pdfref17_examples.json`** (#352) holds the example code of Adobe's PDF
   Reference 1.7, committed under that book's §1.4 permission;
   `TestPDFRef17Examples` round-trips 250 objects, 11 bare objects and 2 xref
   sections from it on every run, CI included.
@@ -366,12 +366,12 @@ v0.6.0.
 - **The developer tools under `internal/cmd` answer `-h`** (#340) rather than
   run: `genicc` and `gensaslprep` regenerated their files, and `gensaslprep`
   fetched the RFC, when asked for help.
-- **A symbolic TrueType font's cmap is judged by each PDF/A part's own rule.**
+- **A symbolic TrueType font's cmap is judged by each PDF/A part's own rule.** (#353)
   PDF/A-2/3 accept several subtables when one is (3,0); PDF/A-4 requires a (3,0)
   or (1,0) (a font with only (3,1) is a new finding there). A (1,0)+(3,0) font
   is no longer reported at PDF/A-2 to -4.
 - **A non-symbolic TrueType font's codes left undefined by its Encoding
-  dictionary are named from StandardEncoding** (ISO 32000-1 9.6.6.4), removing
+  dictionary are named from StandardEncoding** (#353) (ISO 32000-1 9.6.6.4), removing
   false glyph-missing, `.notdef` and width findings in `ValidatePDFA`,
   `ValidatePDFUA` and `ValidatePDFUA2` (for example under `/BaseEncoding
   /Identity`). PDF/UA 7.21.5 now also compares a code that selects `.notdef`

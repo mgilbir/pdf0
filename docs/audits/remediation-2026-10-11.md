@@ -178,18 +178,24 @@ release in [docs/releases/unreleased.md](../releases/unreleased.md), added in
 ## Open questions for the maintainer
 
 The two this stack left open are answered: D64 (exit 3, #346) and D66
-(`pdfx.LevelDeclared`, #346). The follow-up stack raised these:
+(`pdfx.LevelDeclared`, #346). The three the follow-up stack raised were
+investigated and settled in a third round, #352–#354:
 
-1. **The spec-example JSON.** `testdata/spec_examples*.json` carries about
-   300 KB of ISO 32000 text with no reproduction permission found (#348 says
-   so in THIRD_PARTY_NOTICES). Seek permission, rely on the implementation
-   exception, or stop committing it and generate it locally from the spec PDFs.
-2. **PDF/A font checks that differ from veraPDF** (found by #349, PDF/A left
-   unchanged): the AGL table holds `bracket` and `isinferior`, which are in
-   neither Adobe list, and accepts `uniXXXX`; PDF/A-1 6.3.7 is applied more
-   weakly than veraPDF's; a TrueType code read as `.notdef` is compared against
-   `.notdef`'s width; mode 7 is exempt from the width rule; the (3,1)-cmap
-   requirement is not applied at parts 2–4. No ratchet moves either way.
-3. **Four WTPDF PDF/UA-2 examples flagged by shared rules that veraPDF passes**
-   (found by #350): a first heading of H3 (7.4), table headers (7.5), an
-   untagged annotation (7.18.1), an XMP packet pdf0 cannot parse (5).
+1. **The spec-example JSON** (#352). No openly licensed copy of the examples
+   exists elsewhere. The ISO-derived JSON is no longer committed: the tests
+   extract it locally from the hand-placed spec PDFs. A code-only fixture from
+   Adobe's PDF Reference 1.7, whose §1.4 grants permission to copy and
+   distribute its example code, keeps real spec examples running in CI.
+2. **PDF/A font checks that differed from veraPDF** (#353). In four of the five
+   the spec text and veraPDF agreed and pdf0 was the outlier; all five are now
+   read as the clauses read, plus a symbolic-cmap false positive and missing
+   width findings found along the way. Two defaults are documented: `.notdef`
+   is accepted in `/Differences`, and an unembedded font is still name-tested.
+3. **The four WTPDF PDF/UA-2 findings** (#354). Three were pdf0 bugs (heading
+   sequence and untagged annotations are PDF/UA-1 rules; table attributes
+   attached through the class map were not read). The fourth, a U+0001 in
+   tb139's XMP, is a real defect veraPDF silently repairs; pdf0 stays strict
+   and names the cause.
+
+Left open: whether to report tb139's malformed `dc:creator` to the LaTeX
+Project, which is outward-facing and was not done.
