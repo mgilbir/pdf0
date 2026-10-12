@@ -120,9 +120,11 @@ func TestClassifiesOutcomes(t *testing.T) {
 			name: "panic in another goroutine",
 			lim:  small,
 			fn: func(t *testing.T) {
-				done := make(chan struct{})
-				go func() { defer close(done); var m map[string]int; m["x"] = 1 }()
-				<-done
+				// fn must not return on its own: a deferred close in the
+				// goroutine would run while the panic unwinds, and fn could
+				// finish and exit 0 before the runtime kills the process.
+				go func() { var m map[string]int; m["x"] = 1 }()
+				select {}
 			},
 			want:  Fatal,
 			crash: "panic: assignment to entry in nil map",
