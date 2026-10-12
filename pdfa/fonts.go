@@ -8,6 +8,7 @@ import (
 	"github.com/mgilbir/pdf0/internal/fontcheck"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/simplefont"
+	"slices"
 	"unicode"
 )
 
@@ -313,15 +314,16 @@ func checkCMapEmbedded(doc core.View, level Level) []Violation {
 
 // checkTrueTypeEncoding enforces the PDF/A TrueType encoding rules
 // (ISO 19005-1, 6.3.7; -2/-3, 6.2.11.6; -4, 6.2.10.6; grounded in ISO
-// 32000-1, 9.6.6.4): a symbolic TrueType font shall have no Encoding entry; a
-// non-symbolic one shall specify WinAnsiEncoding or MacRomanEncoding —
+// 32000-1, 9.6.6.4): a symbolic TrueType font shall have no Encoding entry,
+// and its program's cmap the subtables the part asks for (symbolicCmapProblem);
+// a non-symbolic one shall specify WinAnsiEncoding or MacRomanEncoding —
 // directly or as BaseEncoding. An Encoding dictionary shall have no
 // Differences entry at all at PDF/A-1; from PDF/A-2 on, its names must be
-// listed in the Adobe Glyph List: ISO 32000-1 cites "Adobe Glyph List, Version 2.0
-// (September 2002)", which is glyphlist.txt, and fontcheck.AGLListed reads it
-// as veraPDF does — its 4,281 names and .notdef; not the ITC Zapf Dingbats
-// list, and not a uniXXXX name the list does not carry. PDF/UA's rule reads
-// the same list.
+// listed in the Adobe Glyph List, and an embedded program must have a (3,1)
+// cmap subtable. ISO 32000-1 cites "Adobe Glyph List, Version 2.0 (September
+// 2002)", which is glyphlist.txt, and fontcheck.AGLListed reads it as veraPDF
+// does — its 4,281 names and .notdef; not the ITC Zapf Dingbats list, and not
+// a uniXXXX name the list does not carry. PDF/UA's rule reads the same list.
 //
 // Two readings are pdf0's choice. .notdef is accepted in a Differences array,
 // as veraPDF accepts it (its copy of the list carries the name). And the names
@@ -354,6 +356,11 @@ func checkTrueTypeEncoding(doc core.View, level Level, rule string, fontDict *ob
 	if symbolic {
 		if encObj != nil {
 			bad("symbolic TrueType font must not have an Encoding entry")
+		}
+		if fd != nil {
+			if msg := symbolicCmapProblem(doc, level, fd); msg != "" {
+				bad("%s", msg)
+			}
 		}
 		return errs
 	}
@@ -406,6 +413,43 @@ func checkTrueTypeEncoding(doc core.View, level Level, rule string, fontDict *ob
 		}
 	}
 	return errs
+}
+
+// symbolicCmapProblem says what is wrong with a symbolic TrueType font's cmap
+// table for the level, or "" when nothing is. Each part has its own rule:
+//
+//   - ISO 19005-1 6.3.7: the cmap shall "contain exactly one encoding".
+//   - ISO 19005-2/-3 6.2.11.6: "either exactly one encoding or ... at least,
+//     the Microsoft Symbol (3,0 – Platform ID=3, Encoding ID=0) encoding".
+//   - ISO 19005-4 6.2.10.6: "either the Microsoft Symbol (3,0 ...) or the Mac
+//     Roman (1,0 – Platform ID=1, Encoding ID=0) encoding". Exactly one
+//     encoding is no longer enough by itself.
+//
+// The records are fontcheck.CmapEncodings'. A program pdf0 could not read, or
+// one with no cmap records at all, is not judged.
+func symbolicCmapProblem(doc core.View, level Level, fd *object.Dictionary) string {
+	encs, known := fontcheck.CmapEncodings(doc, fd)
+	if !known || len(encs) == 0 {
+		return ""
+	}
+	has := func(platform, encoding int) bool {
+		return slices.Contains(encs, fontcheck.CmapEncoding{Platform: platform, Encoding: encoding})
+	}
+	switch level.Part() {
+	case 1:
+		if len(encs) != 1 {
+			return fmt.Sprintf("symbolic TrueType font must have exactly one cmap subtable, found %d", len(encs))
+		}
+	case 4:
+		if !has(3, 0) && !has(1, 0) {
+			return "symbolic TrueType font's cmap must have a Microsoft Symbol (3,0) or Mac Roman (1,0) subtable"
+		}
+	default:
+		if len(encs) != 1 && !has(3, 0) {
+			return fmt.Sprintf("symbolic TrueType font's cmap must have exactly one subtable or a Microsoft Symbol (3,0) subtable; it has %d and no (3,0)", len(encs))
+		}
+	}
+	return ""
 }
 
 // --- font program loading ---
@@ -514,8 +558,6 @@ func fontKindClause(kind string, level Level) string {
 		return fontClause("notdef", level)
 	case "width":
 		return fontClause("width", level)
-	case "cmap":
-		return fontClause("encoding", level)
 	}
 	return fontClause("general", level)
 }
@@ -536,13 +578,6 @@ func checkSimpleFontConsistency(doc core.View, level Level, rule string, fontDic
 		}
 		reported[kind] = true
 		errs = append(errs, Violation{Rule: fontKindClause(kind, level), Level: level, Message: msg, Object: u.ObjNum})
-	}
-
-	// ISO 19005-1 6.3.7: a symbolic TrueType font's embedded program shall
-	// contain exactly one cmap subtable. (cmapSubtableCount is 0 for a
-	// non-sfnt program, which this rule does not apply to.)
-	if subtype == "TrueType" && symbolic && fp.CmapSubtableCount > 0 && fp.CmapSubtableCount != 1 {
-		report("cmap", fmt.Sprintf("symbolic TrueType font must have exactly one cmap subtable, found %d", fp.CmapSubtableCount))
 	}
 
 	renders := rendersVisibly(u)

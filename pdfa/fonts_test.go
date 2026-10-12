@@ -1,6 +1,8 @@
 package pdfa
 
 import (
+	"encoding/binary"
+
 	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/pdf0/internal/core"
@@ -337,21 +339,57 @@ func TestDamagedFontProgramFlagged(t *testing.T) {
 	}
 }
 
-// TestSymbolicTrueTypeSingleCmap ensures a symbolic TrueType font with more
-// than one cmap subtable is flagged (ISO 19005-1 6.3.7).
-func TestSymbolicTrueTypeSingleCmap(t *testing.T) {
-	fp := &font.Program{CmapSubtableCount: 2}
-	if !(fp.CmapSubtableCount > 0 && fp.CmapSubtableCount != 1) {
-		t.Fatal("test premise wrong")
-	}
-	// One subtable is fine; two is not; zero (non-sfnt) is exempt.
-	for _, tc := range []struct {
-		count int
-		bad   bool
-	}{{1, false}, {2, true}, {0, false}, {3, true}} {
-		bad := tc.count > 0 && tc.count != 1
-		if bad != tc.bad {
-			t.Errorf("cmapSubtableCount=%d: got bad=%v want %v", tc.count, bad, tc.bad)
+// TestSymbolicTrueTypeCmapByPart: what a symbolic TrueType font's cmap must
+// hold differs by part, and each part's text is the rule (the veraPDF
+// profiles quote it, and veraPDF 1.30.3 reports exactly these cases on
+// fixtures derived from Isartor 6-3-7-t03-fail-a):
+//
+//   - ISO 19005-1 6.3.7: "Font programs' cmap tables for all symbolic
+//     TrueType fonts shall contain exactly one encoding".
+//   - ISO 19005-2/-3 6.2.11.6: "either exactly one encoding or ... at least,
+//     the Microsoft Symbol (3,0 ...) encoding".
+//   - ISO 19005-4 6.2.10.6: "either the Microsoft Symbol (3,0 ...) or the Mac
+//     Roman (1,0 ...) encoding" — a lone (3,1) no longer passes.
+//
+// pdf0 used to apply PDF/A-1's "exactly one" at every part, which reported the
+// Isartor file's (1,0)+(3,0) font at PDF/A-2, -3 and -4, where it conforms. A
+// program with no cmap records is not judged, at any part.
+func TestSymbolicTrueTypeCmapByPart(t *testing.T) {
+	for _, c := range []struct {
+		recs           [][2]uint16
+		a1, a2, a3, a4 bool // a finding is wanted
+	}{
+		{[][2]uint16{{1, 0}, {3, 0}}, true, false, false, false},
+		{[][2]uint16{{3, 1}, {3, 0}}, true, false, false, false},
+		{[][2]uint16{{1, 0}, {3, 1}}, true, true, true, false},
+		{[][2]uint16{{3, 1}, {3, 10}}, true, true, true, true},
+		{[][2]uint16{{1, 0}}, false, false, false, false},
+		{[][2]uint16{{3, 0}}, false, false, false, false},
+		{[][2]uint16{{3, 1}}, false, false, false, true},
+		{[][2]uint16{}, false, false, false, false},
+	} {
+		for _, lc := range []struct {
+			lv   Level
+			want bool
+		}{{PDFA1b, c.a1}, {PDFA2b, c.a2}, {PDFA3b, c.a3}, {PDFA4, c.a4}} {
+			doc, font, u := encodingTestFont(true, nil, c.recs)
+			if fp, _ := core.LoadFontProgram(doc, doc.ResolveDict(font.Get("FontDescriptor"))); fp == nil || fp.CmapSubtableCount != len(c.recs) { // reason: the fixture check is on the program itself
+				t.Fatalf("fixture wrong: %v did not load as a program with %d cmap subtables", c.recs, len(c.recs))
+			}
+			u.Strings = [][]byte{[]byte("A")}
+			u.Modes[0] = true
+			var got []Violation
+			for _, v := range checkOneFontDict(doc, lc.lv, "", font, u) {
+				if strings.Contains(v.Message, "cmap") {
+					got = append(got, v)
+				}
+			}
+			if (len(got) > 0) != lc.want || len(got) > 1 {
+				t.Errorf("%s, cmap %v: got %v, want a finding: %v", lc.lv, c.recs, got, lc.want)
+			}
+			if len(got) == 1 && got[0].Rule != fontClause("encoding", lc.lv) {
+				t.Errorf("%s, cmap %v: reported under %s, want %s", lc.lv, c.recs, got[0].Rule, fontClause("encoding", lc.lv))
+			}
 		}
 	}
 }
@@ -432,36 +470,25 @@ func encodingTestFont(symbolic bool, enc object.Object, cmap [][2]uint16) (core.
 	return doc, font, &core.FontTextUsage{ObjNum: 9, Modes: map[int]bool{}}
 }
 
-// sfntWithCmapRecords is a minimal sfnt whose only table is a cmap listing the
-// given (platform, encoding) records, each pointing at one empty format 0
-// subtable: enough for the record directory to be read.
+// sfntWithCmapRecords is a minimal TrueType program — head, maxp and a cmap
+// listing the given (platform, encoding) records, each pointing at one empty
+// format 0 subtable — that forme's sfnt reader accepts.
 func sfntWithCmapRecords(recs [][2]uint16) []byte {
-	be16 := func(b []byte, v uint16) []byte { return append(b, byte(v>>8), byte(v)) }
-	be32 := func(b []byte, v uint32) []byte { return append(b, byte(v>>24), byte(v>>16), byte(v>>8), byte(v)) }
-	var cmap []byte
-	cmap = be16(cmap, 0)
-	cmap = be16(cmap, uint16(len(recs)))
-	sub := uint32(4 + 8*len(recs))
-	for _, r := range recs {
-		cmap = be16(cmap, r[0])
-		cmap = be16(cmap, r[1])
-		cmap = be32(cmap, sub)
+	cmap := make([]byte, 4+8*len(recs))
+	binary.BigEndian.PutUint16(cmap[2:], uint16(len(recs)))
+	for i, r := range recs {
+		binary.BigEndian.PutUint16(cmap[4+8*i:], r[0])
+		binary.BigEndian.PutUint16(cmap[6+8*i:], r[1])
+		binary.BigEndian.PutUint32(cmap[8+8*i:], uint32(len(cmap)))
 	}
-	cmap = be16(cmap, 0)   // format 0
-	cmap = be16(cmap, 262) // length
-	cmap = be16(cmap, 0)   // language
-	cmap = append(cmap, make([]byte, 256)...)
-	var f []byte
-	f = be32(f, 0x00010000) // sfnt version
-	f = be16(f, 1)          // numTables
-	f = be16(f, 16)
-	f = be16(f, 0)
-	f = be16(f, 0)
-	f = append(f, 'c', 'm', 'a', 'p')
-	f = be32(f, 0)     // checksum
-	f = be32(f, 12+16) // offset
-	f = be32(f, uint32(len(cmap)))
-	return append(f, cmap...)
+	sub := make([]byte, 262) // format 0, every code to glyph 0
+	binary.BigEndian.PutUint16(sub[2:], 262)
+	cmap = append(cmap, sub...)
+	head := make([]byte, 54)
+	binary.BigEndian.PutUint16(head[18:], 1000) // unitsPerEm
+	maxp := make([]byte, 6)
+	binary.BigEndian.PutUint16(maxp[4:], 2) // numGlyphs
+	return buildTestSFNT([]sfntTable{{"cmap", cmap}, {"head", head}, {"maxp", maxp}})
 }
 
 // differencesEncoding is a WinAnsiEncoding-based Encoding dictionary whose

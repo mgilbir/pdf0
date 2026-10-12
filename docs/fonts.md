@@ -59,6 +59,12 @@ rules:
   `/Differences` entry at all, even an empty one (6.3.7); from PDF/A-2 on, the
   array is allowed if it names only Adobe Glyph List glyphs.
 - PDF/A-4 only: the forbidden ToUnicode targets U+0000, U+FEFF and U+FFFE.
+- Per part: what a symbolic TrueType font's cmap must hold
+  (`symbolicCmapProblem`, under the `encoding` concept). PDF/A-1: exactly one
+  subtable (6.3.7). PDF/A-2 and -3: exactly one, or a Microsoft Symbol (3,0)
+  among several (6.2.11.6). PDF/A-4: a (3,0) or a Mac Roman (1,0) subtable,
+  however many there are (6.2.10.6), so a lone (3,1) passes at 1 to 3 and fails
+  at 4. A program with no cmap records is not judged.
 - Everywhere but PDF/A-4, which has neither clause: the CID ≤ 65535
   implementation limit, and every `/CharSet` and `/CIDSet` rule (see
   [CIDSet and CharSet](#cidset-and-charset)).
@@ -141,8 +147,9 @@ flowchart TD
 from the font's own tables: the best Unicode `cmap` subtable into
 `font.Program.Cmap`, `(3,0)` into `font.Program.SymbolCmap` (queried with the
 `0xF000` prefix first), `(1,0)` into `font.Program.MacCmap`.
-`font.Program.CmapSubtableCount` is kept because ISO 19005-1 6.3.7 requires a
-symbolic TrueType font to declare exactly one subtable.
+The symbolic-font cmap rule does not read these: it reads the cmap's encoding
+records themselves (`fontcheck.CmapEncodings`), every subtable the font
+declares whether or not it could be parsed (see the level-gated rules above).
 
 **Which Unicode subtable wins** (`unicodeCmapRank`). A font may carry several, so
 the choice is ranked rather than "last one seen": `(3,10)` Windows full
