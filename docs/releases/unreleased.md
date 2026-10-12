@@ -166,6 +166,28 @@ v0.6.0.
   (.notdef, or CID 0 under Identity-H/V), a code outside `/Widths` against the
   descriptor's `/MissingWidth` (0 by default), and now checks codes an Identity
   CMap maps to no CID. New findings are possible.
+- **`ValidatePDFUA2` no longer reports PDF/UA-1's heading rules**: the heading
+  sequence ("first heading is H*n*", a skipped level — ISO 14289-2 8.2.5.12 NOTE
+  2 drops the requirement) and 7.4.4 (one `H` per node, mixing `H` with
+  `H1`–`H6` — every `H` is already reported under 8.2.5.12).
+- **`ValidatePDFUA2` no longer reports an untagged annotation** ("annotation is
+  not tagged"): under ISO 14289-2 8.9.2.2 an annotation outside the structure
+  tree is an artifact.
+- **`ValidatePDFUA` and `ValidatePDFUA2` read a table cell's Scope, RowSpan,
+  ColSpan and Headers from the classes its `/C` names in `/ClassMap`** as well
+  as from `/A` (which wins), per ISO 32000-2 14.7.6.2: tables scoped through
+  classes no longer draw 7.5 findings, and spans given by a class count in the
+  7.2 grid checks.
+- **`ValidatePDFUA` reports a skipped heading level under clause `7.4.2`** (was
+  `7.4`), where ISO 14289-1 states it; filter on `7.4.2`. The first-heading
+  message now reads "first heading is H*n*; numbered headings must start at H1".
+- **A malformed XMP packet's finding names the cause** — `ValidatePDFUA` /
+  `ValidatePDFUA2` (clause 5) and `ValidatePDFA` (6.7.9, 6.6.2.1, 6.7.2.1)
+  append the parser's reason, e.g. "(XML syntax error on line 289: illegal
+  character code U+0001)". The packet is not repaired: pdf0 stays strict where
+  veraPDF silently fixes control characters. Callers matching the whole message
+  should match its start. Metadata writers that refuse a malformed packet word a
+  mismatched, unexpected or unclosed tag with its line.
 
 ### Signatures
 
