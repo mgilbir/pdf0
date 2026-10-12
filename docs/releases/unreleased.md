@@ -24,7 +24,7 @@ v0.6.0.
 ### `pdfx`
 
 - **The zero `pdfx.Level` is `pdfx.LevelDeclared`, not `pdfx.PDFX4`, and every
-  level constant's value moved up by one** (`pdfx.PDFX4` was 0 and is 1,
+  level constant's value moved up by one** (#346) (`pdfx.PDFX4` was 0 and is 1,
   `pdfx.PDFX4p` 1 → 2, `pdfx.PDFX1a` 2 → 3, `pdfx.PDFX3` 3 → 4, `pdfx.PDFX6`
   4 → 5). A level left unset
   used to validate PDF/X-4 whatever the file was; it now validates the level
@@ -56,7 +56,7 @@ v0.6.0.
 ### Behaviour that breaks callers (not reported by gorelease)
 
 - **`Write`, `WriteContext`, `Save` and `SaveContext` refuse a signed
-  document.** A document read from a file that carries a signature or document
+  document.** (#347) A document read from a file that carries a signature or document
   time-stamp is refused with an error wrapping `ErrWouldInvalidateSignatures`,
   and nothing is written. These writers regenerate the whole file, which moves
   every byte a signature covers: they used to return nil and write a file whose
@@ -67,14 +67,14 @@ v0.6.0.
   `WriteSignedIncremental` and `WriteArchivalTimestamp`). To rewrite the file
   and discard them on purpose, call `AllowInvalidatingSignatures` on the
   document first.
-- **`SetEncryption` refuses a signed document**, with an error wrapping
+- **`SetEncryption` refuses a signed document** (#347), with an error wrapping
   `ErrWouldInvalidateSignatures`, and changes nothing. Encryption can only be
   applied by rewriting the whole file, and an incremental update cannot add it,
   so "sign, then encrypt" produced a file whose signature did not verify.
   *Migration:* call `AllowInvalidatingSignatures` first to encrypt it anyway;
   pdf0 cannot produce a file that is both encrypted and validly signed.
 - **The incremental writers refuse a document read from an encrypted file,
-  even after `RemoveEncryption`.** `WriteIncremental`,
+  even after `RemoveEncryption`.** (#347) `WriteIncremental`,
   `WriteSignedIncremental` and `WriteArchivalTimestamp` checked only whether
   the document was still encrypted (see Fixed).
   *Migration:* write the decrypted document whole with `Write`; if it is
@@ -91,7 +91,7 @@ v0.6.0.
 
 ### Validation
 
-- **`ValidatePDFX` with an unset level validates what the document declares**
+- **`ValidatePDFX` with an unset level validates what the document declares** (#346)
   (see Breaking changes). The declaration is the XMP
   `pdfxid:GTS_PDFXVersion` when it names a level, and otherwise the Info
   dictionary's `/GTS_PDFXVersion` (where PDF/X-1a and -3 identify); an Info-only
@@ -128,14 +128,14 @@ v0.6.0.
   reported** (#334). One over the decoded-stream limit, or under a filter pdf0
   does not implement, used to cut the chain of updates silently; it is now a
   read-time trip, reported by every validator as a `limit` finding.
-- **`ValidatePDFUA` and `ValidatePDFUA2` check two more font rules**, so a
+- **`ValidatePDFUA` and `ValidatePDFUA2` check two more font rules** (#349), so a
   document that passed may now get findings: 7.21.5 (part 2: 8.4.5.6), a shown
   glyph whose declared width differs from the embedded program's by more than
   1/1000 (only text in rendering mode 3 is exempt); and 7.21.6, a non-symbolic
   TrueType font whose `/Differences` names a glyph outside the Adobe Glyph
   List, or whose embedded program has no (3,1) cmap subtable. Both read the
   font as veraPDF does. PDF/A behaviour is unchanged.
-- **`ValidatePDFUA2` checks the ISO 14289-2 rules only part 2 has**:
+- **`ValidatePDFUA2` checks the ISO 14289-2 rules only part 2 has** (#350):
   `pdfuaid:rev` is `2024` under the `pdfuaid` prefix (5); one `Document` root
   in the PDF 2.0 namespace (8.2.5.2); no `H` (8.2.5.12); a list with `Lbl`
   items has a `ListNumbering` other than `None` (8.2.5.25); intra-document
@@ -161,7 +161,7 @@ v0.6.0.
   were supplied". It is nil exactly when `TrustedChain` is set or the signature
   is not `Valid`.
 
-- **`WriteSigned` finds an existing signature as `VerifySignatures` does.** Its
+- **`WriteSigned` finds an existing signature as `VerifySignatures` does.** (#347) Its
   `ErrAlreadySigned` refusal now asks what the file it was read from carries,
   by the verifier's test. It used to miss a signature whose `/Contents` is
   indirect, and rewrite the file without a word; it no longer refuses a
@@ -196,19 +196,19 @@ v0.6.0.
   is now drawn from its bitmap strikes, or refused with
   `fonts.ErrBitmapEmbeddingOnly` when it has none, at every level.
 - **In a document whose metadata declares PDF/UA-2, `SetStructureTree` writes
-  the top-level `Document` element in the PDF 2.0 structure namespace**, as
+  the top-level `Document` element in the PDF 2.0 structure namespace** (#351), as
   part 2 requires. Other documents are unchanged.
 
 ### The `pdf0` command
 
-- **A run whose only findings are checker findings exits 3** (`validate`, `ua`,
+- **A run whose only findings are checker findings exits 3** (#346) (`validate`, `ua`,
   `repair`). A `limit` or `internal` finding says a check could not be
   completed; with no violation beside it, conformance is unknown, which is
   "the run failed", not "violations". `pdf0 validate -level declared` on a file
   that declares no level is the common case; it exited 1. Any violation is still
   exit 1, with or without checker findings, and `repair`'s summary counts
   checker findings apart. See [cli.md](../cli.md#exit-codes).
-- **`decrypt`, `encrypt`, `repair` and `merge` refuse a signed input**, exit 3,
+- **`decrypt`, `encrypt`, `repair` and `merge` refuse a signed input** (#347), exit 3,
   naming the input and nothing written: each rewrites the whole file, which
   breaks every signature in it. `merge` refuses a signed input in any position.
   They used to write the file, and its signatures no longer verified. The new
@@ -232,7 +232,7 @@ v0.6.0.
 
 ## Added
 
-- **`pdfx.LevelDeclared`**, the zero `pdfx.Level`: validate against the level
+- **`pdfx.LevelDeclared`** (#346), the zero `pdfx.Level`: validate against the level
   the document declares.
 - **`Document.ImagesContext`** (#335): `Images` with cancellation, and a final
   error when the iteration stops short — the work budget (matching
@@ -255,24 +255,24 @@ v0.6.0.
   do the same for stroking. `content.Color.Underlying` records the underlying
   space.
 
-- **`ErrWouldInvalidateSignatures`**: the `errors.Is` target for a refusal to
+- **`ErrWouldInvalidateSignatures`** (#347): the `errors.Is` target for a refusal to
   rewrite a document whose file carries signatures.
-- **`Document.AllowInvalidatingSignatures`**: the consent to rewrite such a
+- **`Document.AllowInvalidatingSignatures`** (#347): the consent to rewrite such a
   document anyway, held by the document
   ([ADR 0019](../adr/0019-signature-consent-on-the-document.md)).
-- **`pdf0`'s `-invalidate-signatures` flag** on `decrypt`, `encrypt`, `repair`
+- **`pdf0`'s `-invalidate-signatures` flag** (#347) on `decrypt`, `encrypt`, `repair`
   and `merge`: the same consent, from the command line.
-- **`THIRD_PARTY_NOTICES`** at the module root lists everything the repository
+- **`THIRD_PARTY_NOTICES`** (#348) at the module root lists everything the repository
   keeps that came from elsewhere — its source, pin and licence — and carries
   the notices those licences require; it ships in the module zip, and a test
   holds it to the tree. The XMP RelaxNG schemas' MIT licence text, which was
   not shipped before, is now included, and `internal/saslprep/tables.go`
   carries RFC 3454's copyright notice and permission paragraph, as the RFC
   requires of derivative works.
-- **`DocumentInfo.Language`**: `SetDocumentInfo` writes the document's
+- **`DocumentInfo.Language`** (#351): `SetDocumentInfo` writes the document's
   language tag as the catalog `/Lang`. A value that is not a language tag is
   refused; in a PDF/A-1 document its subtags must be letters only.
-- **`Document.DeclarePDFUA`** declares a document PDF/UA-1 or PDF/UA-2: it
+- **`Document.DeclarePDFUA`** (#351) declares a document PDF/UA-1 or PDF/UA-2: it
   writes the `pdfuaid` identification (with `pdfuaid:rev` for part 2), the
   extension schema PDF/A requires for it, and `/ViewerPreferences
   /DisplayDocTitle`, and for part 2 puts the structure tree's `Document`
@@ -284,7 +284,7 @@ v0.6.0.
 
 ## Fixed
 
-- **An incremental update of a file read encrypted no longer garbles it.**
+- **An incremental update of a file read encrypted no longer garbles it.** (#347)
   After `RemoveEncryption`, `WriteIncremental`, `WriteSignedIncremental` and
   `WriteArchivalTimestamp` appended plaintext objects to the file's ciphertext
   under a trailer without `/Encrypt`, so every reader took the ciphertext for

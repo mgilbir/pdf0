@@ -96,9 +96,9 @@ datasets) at its own head.
 | D61 | Low | 13 | fixed |
 | D62 | Low | 10, 13 | fixed |
 | D63 | Low | 8 | fixed |
-| D64 | Low | 8 | fixed; exit 1 kept for a run that validated nothing (see open questions) |
+| D64 | Low | 8, #346 | fixed — and in the follow-up #346, a run whose only findings are checker findings exits 3 |
 | D65 | Low | 6, 7 | fixed |
-| D66 | Low | 4, 11 | documented; no API change (see open questions) |
+| D66 | Low | 4, 11, #346 | fixed — the follow-up #346 makes the zero `pdfx.Level` `LevelDeclared` (breaking; in the release notes) |
 | D67 | Low | 8, 10, 13 | fixed |
 | D68 | Info | 1, 4, 8 | fixed, except the `%%EOF` item, which was a misreading (below) |
 | D69 | Info | 8 | confirmed and amended |
@@ -158,41 +158,38 @@ operator is not reported (Reference-06 paints its page backgrounds that way),
 and a stub head is exempt wherever it sits (Reference-08). Both are documented
 in pdfua.md.
 
-## Left for later, deliberately
+## Left for later, and then done
 
-- **The remaining PDF/UA misses.** Four font fail files need the PDF/A width and
-  Adobe Glyph List machinery, which is unexported in `pdfa/fonts.go`. Twelve
-  PDF/UA-2-only rules were never implemented. All are listed in pdfua.md.
-- **A repository-wide third-party notice.** Fonts are now inventoried in
-  font-embedding.md. A root NOTICE would claim a complete inventory, and the
-  repository carries third-party material well outside fonts (the XMP RelaxNG
-  schemas, the spec-example JSON, RFC 3454 tables, Adobe CMaps, the AGL subset,
-  the shaping corpus). That deserves its own task, ideally test-checked as
-  forme's is.
-- **`Write` on a signed document after `SetEncryption`** silently invalidates
-  the signature. It is now documented (signing.md, troubleshooting.md). Refusing
-  it is a behaviour change to `Write`, and was not made here.
-- **Nothing writes the document-level parts of PDF/UA** (catalog `/Lang`,
-  `/ViewerPreferences /DisplayDocTitle`, the `pdfuaid` XMP identification). A
-  document built with `SetStructureTree` still fails `ValidatePDFUA` on those
-  clauses; building.md says so. Writing them is a feature, not a fix.
-- **`LaterVisibleSignatures` reports that a later signature is visible, not what
-  it draws.** Telling a legitimate signature box from an overlay is the
-  caller's trust decision.
+Each item this stack left for later was then done in a follow-up stack on top
+of it, #346–#351:
+
+| Item | Follow-up |
+|------|-----------|
+| The remaining PDF/UA misses: four font fail files, twelve PDF/UA-2-only rules | #349 shares PDF/A's font machinery through `internal/fontcheck` and adds 7.21.5/7.21.6; #350 adds the twelve part-2 rules. Both suites are now fully caught (PDF_UA-1 155/155, PDF_UA-2 84/84) with no pass file reported |
+| A repository-wide third-party notice | #348: `THIRD_PARTY_NOTICES`, held to the tree by a test |
+| `Write` on a signed document after `SetEncryption` | #347, generalised: every whole-file rewrite of a signed document is refused without `AllowInvalidatingSignatures()` (breaking; ADR 0019). It also fixed incremental writers that garbled a file read encrypted |
+| Nothing writes PDF/UA's document-level entries | #351: `DocumentInfo.Language` and `Document.DeclarePDFUA` |
+| `LaterVisibleSignatures` reports visibility, not content | unchanged by design |
+
+Breaking and behaviour changes of both stacks are collected for the next
+release in [docs/releases/unreleased.md](../releases/unreleased.md), added in
+#346.
 
 ## Open questions for the maintainer
 
-1. **D64.** `pdf0 validate -level declared` on a file with no declaration
-   prints one `limit` finding and exits 1 ("violations"). It is documented. An
-   exit of 3 ("the run failed") is arguably more honest.
-2. **D66.** `pdfx.Level`'s zero value is `PDFX4`. It is documented as a hazard;
-   giving it a `LevelDeclared`-style zero value, as pdfa has, would be a
-   breaking API change.
-3. **Breaking changes in this stack, for the release notes:**
-   - `sign.BuildSignedDataFull`, `sign.BuildTimestampToken`,
-     `sign.JoinFieldName`, `sign.VerifyCMS`, `pdfua.RunCheck` and
-     `pdfua.WithPart` are no longer exported.
-   - Behaviour changes: `Result.ChainErr` is non-nil when no roots are given; an
-     added signature that is not intact is a disallowed change; `ExtractText`
-     and friends return an error on a Locked document and on declined content;
-     `ExtractImages` and `Images` yield nothing for a Locked document.
+The two this stack left open are answered: D64 (exit 3, #346) and D66
+(`pdfx.LevelDeclared`, #346). The follow-up stack raised these:
+
+1. **The spec-example JSON.** `testdata/spec_examples*.json` carries about
+   300 KB of ISO 32000 text with no reproduction permission found (#348 says
+   so in THIRD_PARTY_NOTICES). Seek permission, rely on the implementation
+   exception, or stop committing it and generate it locally from the spec PDFs.
+2. **PDF/A font checks that differ from veraPDF** (found by #349, PDF/A left
+   unchanged): the AGL table holds `bracket` and `isinferior`, which are in
+   neither Adobe list, and accepts `uniXXXX`; PDF/A-1 6.3.7 is applied more
+   weakly than veraPDF's; a TrueType code read as `.notdef` is compared against
+   `.notdef`'s width; mode 7 is exempt from the width rule; the (3,1)-cmap
+   requirement is not applied at parts 2–4. No ratchet moves either way.
+3. **Four WTPDF PDF/UA-2 examples flagged by shared rules that veraPDF passes**
+   (found by #350): a first heading of H3 (7.4), table headers (7.5), an
+   untagged annotation (7.18.1), an XMP packet pdf0 cannot parse (5).
