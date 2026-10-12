@@ -1,14 +1,67 @@
 package pdfua
 
 // Rules the WTPDF examples (real PDF/UA-2 documents veraPDF passes) showed
-// pdf0 applying the wrong way: attributes read from /A but not the class map.
+// pdf0 applying the wrong way: part-1 rules run under part 2, and attributes
+// read from /A but not the class map.
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 )
+
+// TestUAHeadingSequenceIsPartOne: ISO 14289-1 7.4.2 asks that the first
+// numbered heading be H1 and that a descending sequence not skip a level;
+// ISO 14289-2 8.2.5.12 NOTE 2 says part 2, following WCAG, has no such
+// requirement, and the veraPDF PDF/UA-2 profile has no rule for it. The
+// WTPDF example 47464-t-tagged starts at H3 (its sections are LaTeX
+// subsections) and veraPDF passes it as PDF/UA-2.
+func TestUAHeadingSequenceIsPartOne(t *testing.T) {
+	mk := func() core.View {
+		doc := mkView(nil, nil)
+		headingDoc(doc, object.Array{heading(doc, 10, "H3"), heading(doc, 11, "H5")})
+		doc.Trailer.Set("Root", object.IndirectRef{Number: 1})
+		return doc
+	}
+	one := validateView(mk(), "1")
+	if len(findings(one, "7.4.2", "first heading is H3")) != 1 || len(findings(one, "7.4.2", "H5 follows H3")) != 1 {
+		t.Errorf("PDF/UA-1: H3 then H5 must be reported under 7.4.2, twice (first heading, skipped level), got %v", one)
+	}
+	for _, v := range validateView(mk(), "2") {
+		if strings.HasPrefix(v.Clause, "7.4") {
+			t.Errorf("PDF/UA-2 has no heading-sequence requirement, got %v", v)
+		}
+	}
+}
+
+// TestUAWeakHeadingRulesArePartOne: ISO 14289-1 7.4.4 constrains weakly
+// structured documents — at most one <H> under a node, and <H> not mixed
+// with <H1>-<H6>. ISO 14289-2 has no weakly structured documents: 8.2.5.12
+// forbids <H> outright, which reports every <H> the 7.4.4 rules could fire
+// on, and the veraPDF PDF/UA-2 profile has no rule but that one. So under
+// PDF/UA-2 the document is reported under 8.2.5.12 alone.
+func TestUAWeakHeadingRulesArePartOne(t *testing.T) {
+	mk := func() core.View {
+		doc := mkView(nil, nil)
+		sect := heading(doc, 12, "Sect", heading(doc, 10, "H"), heading(doc, 11, "H"))
+		headingDoc(doc, object.Array{sect, heading(doc, 13, "H1")})
+		doc.Trailer.Set("Root", object.IndirectRef{Number: 1})
+		return doc
+	}
+	one := validateView(mk(), "1")
+	if len(findings(one, "7.4.4", "more than one child <H>")) != 1 || len(findings(one, "7.4.4", "mixes <H>")) != 1 {
+		t.Errorf("PDF/UA-1: two <H> under one node, mixed with <H1>, must be reported under 7.4.4 twice, got %v", one)
+	}
+	two := validateView(mk(), "2")
+	if got := findings(two, "7.4.4", ""); len(got) != 0 {
+		t.Errorf("PDF/UA-2 has no 7.4.4, got %v", got)
+	}
+	if got := findings(two, "8.2.5.12", "H structure type"); len(got) != 2 {
+		t.Errorf("PDF/UA-2: each <H> must be reported under 8.2.5.12, got %v", got)
+	}
+}
 
 // tableDoc builds a Table of the given rows (each a list of cells) under a
 // structure tree root carrying classMap, and returns the view.

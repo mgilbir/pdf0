@@ -128,9 +128,18 @@ func validateView(doc core.View, part string) []Violation {
 	runCat(checkUATableListStructure)
 	runCat(func(d core.View, cat *object.Dictionary) []Violation { return checkUATableGrid(d, cat, part) })
 
-	// 7.4 — heading levels must not be skipped; start at H1; one <H> per node.
-	runCat(checkUAHeadings)
-	runCat(checkUAOneHPerNode)
+	// 7.4.2 — heading levels must not be skipped, and start at H1; 7.4.4 —
+	// one <H> per node, and <H> and <H1>–<H6> not mixed. All PDF/UA-1 only:
+	// ISO 14289-2 8.2.5.12 NOTE 2 says part 2, following WCAG, has no
+	// sequential-heading requirement, and part 2 has no weakly structured
+	// documents to constrain — it forbids <H> outright (8.2.5.12, below),
+	// which already reports every <H> the 7.4.4 rules could fire on. The
+	// veraPDF PDF/UA-2 profile has no rule but 8.2.5.12-t01 among them.
+	if part == "1" {
+		runCat(checkUAHeadings)
+		runCat(checkUAOneHPerNode)
+		runCat(checkUAStrongWeak)
+	}
 
 	// 7.16 — encryption must not disable accessibility (Matterhorn 26).
 	run(checkUASecurity)
@@ -193,9 +202,8 @@ func validateView(doc core.View, part string) []Violation {
 		runCat(checkUA2EmbeddedFileDesc)
 	}
 
-	// 7.1 — Suspects must not be true; 7.4.4 strong/weak; 7.9 Note IDs.
+	// 7.1 — Suspects must not be true; 7.9 Note IDs.
 	runCat(checkUASuspects)
-	runCat(checkUAStrongWeak)
 	runCat(checkUANotes)
 
 	// 7.1 — real content must be tagged or marked as an artifact (Matterhorn 01).
@@ -235,10 +243,15 @@ func checkUACatalogBasics(d core.View, cat *object.Dictionary) []Violation {
 	return v
 }
 
-// checkUAHeadings flags a skipped numbered-heading level (e.g. H1 followed by H3
-// without an intervening H2), walking the structure tree in document order. It
-// keys off the /RoleMap-resolved type, like the sibling heading checks, so a
-// custom type mapped to a numbered heading counts as one (audit C29).
+// checkUAHeadings flags a first numbered heading that is not H1 and a skipped
+// numbered-heading level (e.g. H1 followed by H3 without an intervening H2),
+// walking the structure tree in document order. Both requirements are ISO
+// 14289-1 7.4.2's bullets, where veraPDF (7.4.2-t01) and the corpus's
+// 7.4.2-t01 fail files put them; Matterhorn 14-003 cites the skip as
+// "UA1:7.4-1", but 7.4 has no paragraph of its own. It keys off the
+// /RoleMap-resolved type, like the sibling heading checks, so a custom type
+// mapped to a numbered heading counts as one (audit C29). validateView runs it
+// for PDF/UA-1 only.
 func checkUAHeadings(d core.View, cat *object.Dictionary) []Violation {
 	var levels []int
 	for _, n := range structTree(d, cat) {
@@ -248,14 +261,16 @@ func checkUAHeadings(d core.View, cat *object.Dictionary) []Violation {
 	}
 
 	var v []Violation
-	// 7.4.2: a strongly structured document's first numbered heading must be H1.
+	// 7.4.2: the first numbered heading must be H1. The clause is about
+	// documents that are not strongly structured (ISO 32000-1 14.8.4.3.5):
+	// numbered headings are what make a document weakly structured.
 	if len(levels) > 0 && levels[0] != 1 {
-		v = append(v, Violation{Clause: "7.4.2", Message: fmt.Sprintf("first heading is H%d; a strongly structured document must start at H1", levels[0]), Object: 0})
+		v = append(v, Violation{Clause: "7.4.2", Message: fmt.Sprintf("first heading is H%d; numbered headings must start at H1", levels[0]), Object: 0})
 	}
 	prev := 0
 	for _, lvl := range levels {
 		if prev != 0 && lvl > prev+1 {
-			v = append(v, Violation{Clause: "7.4", Message: fmt.Sprintf("heading level H%d follows H%d, skipping a level", lvl, prev), Object: 0})
+			v = append(v, Violation{Clause: "7.4.2", Message: fmt.Sprintf("heading level H%d follows H%d, skipping a level", lvl, prev), Object: 0})
 		}
 		prev = lvl
 	}

@@ -27,18 +27,15 @@ func TestUAHeadingSkip(t *testing.T) {
 		doc.Trailer.Set("Root", object.IndirectRef{Number: 1})
 		return doc
 	}
-	has74 := func(doc core.View) bool {
-		for _, e := range checkUAHeadings(doc, doc.ResolveDict(doc.Trailer.Get("Root"))) {
-			if e.Clause == "7.4" {
-				return true
-			}
-		}
-		return false
+	// ISO 14289-1 puts the skip in 7.4.2's bullets, as veraPDF (7.4.2-t01)
+	// and the corpus's 7.4.2-t01-fail-b do.
+	skips := func(doc core.View) []string {
+		return findings(checkUAHeadings(doc, doc.ResolveDict(doc.Trailer.Get("Root"))), "7.4.2", "skipping a level")
 	}
-	if !has74(mk("H1", "H3")) {
-		t.Error("H1→H3 skip not flagged")
+	if len(skips(mk("H1", "H3"))) == 0 {
+		t.Error("H1→H3 skip not flagged under 7.4.2")
 	}
-	if has74(mk("H1", "H2", "H3", "H2", "H1")) {
-		t.Error("a valid heading sequence was flagged")
+	if got := skips(mk("H1", "H2", "H3", "H2", "H1")); len(got) != 0 {
+		t.Errorf("a valid heading sequence was flagged: %v", got)
 	}
 }

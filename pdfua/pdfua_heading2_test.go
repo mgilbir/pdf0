@@ -1,9 +1,11 @@
 package pdfua
 
 import (
+	"strings"
+	"testing"
+
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
-	"testing"
 )
 
 // heading adds a structure element with type s (and optional kids) to doc and
@@ -30,17 +32,23 @@ func headingDoc(doc core.View, k object.Object) *object.Dictionary {
 	return cat
 }
 
-// TestUAFirstHeadingH1 flags a document whose first heading is not H1.
+// TestUAFirstHeadingH1 flags a document whose first heading is not H1. ISO
+// 14289-1 7.4.2 asks it of documents that are not strongly structured
+// (numbered headings are what make one weakly structured), so the message
+// must not say "strongly structured".
 func TestUAFirstHeadingH1(t *testing.T) {
 	doc := mkView(map[int]*object.IndirectObject{}, nil)
 	cat := headingDoc(doc, object.Array{heading(doc, 10, "H2"), heading(doc, 11, "H3")})
-	if !hasUAClause(checkUAHeadings(doc, cat), "7.4.2") {
-		t.Error("first heading H2 not flagged")
+	got := findings(checkUAHeadings(doc, cat), "7.4.2", "first heading is H2")
+	if len(got) != 1 {
+		t.Errorf("first heading H2: want one 7.4.2 finding, got %v", got)
+	} else if strings.Contains(got[0], "strongly") {
+		t.Errorf("the first-heading rule is about documents that are not strongly structured, got %q", got[0])
 	}
 	doc = mkView(map[int]*object.IndirectObject{}, nil)
 	cat = headingDoc(doc, object.Array{heading(doc, 10, "H1"), heading(doc, 11, "H2")})
-	if hasUAClause(checkUAHeadings(doc, cat), "7.4.2") {
-		t.Error("first heading H1 wrongly flagged")
+	if got := findings(checkUAHeadings(doc, cat), "7.4.2", "first heading"); len(got) != 0 {
+		t.Errorf("first heading H1 wrongly flagged: %v", got)
 	}
 }
 
@@ -70,7 +78,7 @@ func TestUAHeadingsRoleMapResolved(t *testing.T) {
 	roleMap.Set("Titre1", object.Name("H1"))
 	roleMap.Set("Titre3", object.Name("H3"))
 	doc.ResolveDict(cat.Get("StructTreeRoot")).Set("RoleMap", roleMap)
-	if !hasUAClause(checkUAHeadings(doc, cat), "7.4") {
+	if len(findings(checkUAHeadings(doc, cat), "7.4.2", "skipping a level")) == 0 {
 		t.Error("role-mapped heading skip (Titre1=H1 followed by Titre3=H3) was not flagged")
 	}
 }
