@@ -54,9 +54,9 @@ func TestXMPWellFormedStreaming(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			wf, rdf := xmpWellFormed([]byte(tc.xmp))
-			if wf != tc.wantWF || rdf != tc.wantRDF {
-				t.Errorf("xmpWellFormed = (%v,%v), want (%v,%v)", wf, rdf, tc.wantWF, tc.wantRDF)
+			rdf, err := xmp.CheckWellFormed([]byte(tc.xmp))
+			if wf := err == nil; wf != tc.wantWF || rdf != tc.wantRDF {
+				t.Errorf("CheckWellFormed = (well-formed %v, rdf %v), want (%v,%v)", wf, rdf, tc.wantWF, tc.wantRDF)
 			}
 		})
 	}
@@ -76,7 +76,8 @@ func TestXMPStreamingMatchesTree(t *testing.T) {
 		`   `,
 	}
 	for i, p := range packets {
-		wf, rdf := xmpWellFormed([]byte(p))
+		rdf, cerr := xmp.CheckWellFormed([]byte(p))
+		wf := cerr == nil
 		packet, err := xmp.Parse([]byte(p))
 		treeWF := err == nil
 		treeRDF := treeWF && packet.HasRDF()

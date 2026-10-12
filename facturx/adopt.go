@@ -22,6 +22,10 @@ import (
 // "pdfa-3/limit" would leave a caller of the composed validator with no
 // documented spelling for that distinction. The prefix exists to keep two rule
 // *namespaces* from colliding, and these two identifiers belong to neither.
+// finding.Namespaced is that rule, shared with PDF/VT, which composes PDF/X
+// and DPart the same way. Unlike PDF/VT's nested runs, the PDF/A-3 run here is
+// a run of its own with its own recorder (ValidatePDFAContext), so its "limit"
+// findings are adopted too: nothing else reports them.
 //
 // Every other finding is adopted, the conformance-letter finding included. It
 // used to be dropped, because a 3b target rejected an "A" or "U" declaration;
@@ -30,12 +34,7 @@ import (
 // every part-3 level, which is a real container defect.
 func adoptPDFAFindings(add func(rule, msg string, obj int), prefix string, errs []pdfa.Violation) {
 	for _, e := range errs {
-		switch {
-		case e.Rule == finding.InternalRule || e.Rule == finding.LimitRule:
-			add(e.Rule, e.Message, e.Object)
-		default:
-			add(prefix+e.Rule, e.Message, e.Object)
-		}
+		add(finding.Namespaced(prefix, e.Rule), e.Message, e.Object)
 	}
 }
 

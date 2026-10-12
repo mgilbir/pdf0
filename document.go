@@ -43,7 +43,9 @@ type Document struct {
 	// password; their strings and streams are then in the clear but this flag
 	// stays set. Otherwise the content stays encrypted and the document is
 	// Locked (see LockReason). Write re-encrypts a decrypted document
-	// (reproducing the original /Encrypt) and writes a Locked one back verbatim.
+	// (reproducing the original /Encrypt). A Locked one it re-serializes with
+	// the ciphertext carried unchanged: the file layout is regenerated, every
+	// object is written uncompressed, and /Encrypt and /ID are kept.
 	Encrypted bool
 
 	// valCache memoizes traversals for the duration of one validation run;
@@ -121,12 +123,31 @@ type Document struct {
 	// a cross-reference stream (/Type /XRef) rather than a traditional table, so
 	// Write regenerates the same kind of structure.
 	usedXRefStream bool
+
+	// invalidatesSignatures records the caller's consent, given with
+	// AllowInvalidatingSignatures, to rewrite a signed document whole; without
+	// it the whole-document writers and SetEncryption refuse one (see
+	// signaturesAtRisk).
+	invalidatesSignatures bool
 }
 
 // Read parses a PDF document from the given data.
 //
-// A malformed or adversarial file always yields an error, never a panic: any
-// panic escaping the parse is recovered and returned as an error.
+// Read never panics on a malformed or adversarial file: a panic escaping the
+// parse is recovered and returned as an error. Nor does it refuse every
+// malformed file. Damage it can work around is repaired and the document is
+// returned with a nil error: a startxref that misses its section, a
+// cross-reference table that does not parse or whose offsets are wrong
+// (rebuilt by scanning the file for object headers, which Source().Rebuilt
+// reports), a stream whose /Length is wrong, an object stream that does not
+// decode (its objects are missing, and Write refuses the document). A nil
+// error means the file was parsed, not that it is well formed; the validators
+// report its defects. Read fails when too little is left to build a document
+// from: no %PDF- header in the first 1024 bytes, a damaged cross-reference
+// section and no object header anywhere in the file, a rebuilt table with no
+// document catalog, or an object stream and the cross-reference table
+// disagreeing about which object is object N. An error reading r, or a size
+// larger than r holds, is returned as well.
 //
 // Encrypted files (standard security handler) are decrypted with the empty
 // password; use ReadWithPassword to supply a user or owner password. A file
@@ -134,9 +155,13 @@ type Document struct {
 // malformed /Encrypt dictionary — is still parsed structurally, with its
 // strings and streams left encrypted: see Document.Locked and LockReason. An
 // /Encrypt dictionary never makes Read fail.
+//
 // Resource limits default to values safe for untrusted input; pass With* options
-// to change them. The resolved limits are stored on the returned Document, so
-// every validator and extractor that runs on it inherits the same configuration.
+// to change them. Every limit must be positive: zero or less is refused, before
+// anything is read, with an error wrapping ErrInvalidOption (pass math.MaxInt or
+// math.MaxInt64 for no practical limit). The resolved limits are stored on the
+// returned Document, so every validator and extractor that runs on it inherits
+// the same configuration.
 func Read(r io.ReaderAt, size int64, opts ...Option) (*Document, error) {
 	return readWithOptions(core.Canceler{}, r, size, "", opts)
 }
@@ -220,22 +245,38 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 	// either fails — no startxref in the file, one that points outside it, or a
 	// newest section that does not parse — the table is rebuilt by scanning for
 	// object headers (the long-standing reader practice for damaged files; see
-	// rebuildXRefByScan). The trailer then comes from a scan too; an
-	// xref-stream file whose trailer IS the broken stream dictionary gets /Root
-	// synthesized from the catalog after the objects load.
+	// rebuildXRefByScan). The trailer then comes from a scan too (step 4.1),
+	// and a rebuilt file whose trailer names no /Root, or that has no trailer
+	// left at all, gets /Root synthesized from its catalog once every object,
+	// compressed ones included, is loaded (step 5.1).
 	var xrefTable *XRefTable
 	rebuilt := false // the table was reconstructed by scanning (load leniently)
 	var firstErr error
+	trailerScanned := false // doc.Trailer came from findTrailerByScan, not a parsed section
+	trailerAt := int64(-1)  // where that trailer was found; -1 for none
 	budget := newFileInUseBudget(size)
 	chainBroken := false
 	xrefOffset, adjust, err := locateXRef(data, headerOffset)
 	if err == nil {
 		var sections []XRefSection
-		sections, chainBroken, err = walkXRefChain(cancel, data, xrefOffset, adjust, lim, budget)
+		var cut error
+		sections, chainBroken, cut, err = walkXRefChain(cancel, data, xrefOffset, adjust, lim, budget)
 		if cerr := cancel.StopErr("reading PDF cross-reference chain"); cerr != nil {
 			return nil, cerr
 		}
 		if err == nil {
+			// An older section pdf0 declined to decode cut the chain there:
+			// every object only it or an older section located is missing, and
+			// the reader must be told why, as for the newest section below
+			// (docs audit 2026-10-11 D36). A malformed older section is a
+			// defect of the file, not a guard pdf0 applied, and stays out of
+			// the trip record, as a malformed newest section does.
+			switch core.ReasonOf(cut) {
+			case core.ReasonLimit:
+				doc.noteReadLimit(core.GuardDecodedStream, fmt.Sprintf("an older cross-reference section's stream decodes to more than the %s-byte per-stream limit, so the chain of updates was cut there; an object only that section or an older one located may be missing", core.LimitBound(int64(lim.DecodedStreamBytes), core.DefaultMaxDecodedStreamBytes)), 0)
+			case core.ReasonUnsupported:
+				doc.noteReadLimit(core.GuardUnsupportedFilter, "an older cross-reference section's stream is encoded in a way pdf0 does not implement ("+cut.Error()+"), so the chain of updates was cut there; an object only that section or an older one located may be missing", 0)
+			}
 			src.adjust = adjust
 			src.sections = sections
 			xrefTable = mergeSections(sections)
@@ -264,8 +305,10 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 		case core.ReasonUnsupported:
 			doc.noteReadLimit(core.GuardUnsupportedFilter, "the cross-reference stream is encoded in a way pdf0 does not implement ("+err.Error()+"), so the table was rebuilt by scanning the file; an object only that stream located may be missing", 0)
 		}
-		if tr := findTrailerByScan(data); tr != nil {
+		trailerScanned = true
+		if tr, at := findTrailerByScan(data); tr != nil {
 			doc.Trailer = *tr // dictcopy: a fresh parse of the scanned trailer; nothing else holds it
+			trailerAt = at
 		}
 	}
 
@@ -295,29 +338,15 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 	}
 	src.rebuilt = rebuilt
 	src.merged = xrefTable
-	// A rebuilt file may have no parseable trailer at all (an xref-stream
-	// file's trailer IS its broken stream dictionary). The document catalog is
-	// the root of the object hierarchy (ISO 32000-2, 7.7.2), so synthesize the
-	// /Root the trailer exists to provide from the first catalog object.
-	if rebuilt && doc.Trailer.Get("Root") == nil {
-		nums := make([]int, 0, len(doc.Objects))
-		for num := range doc.Objects {
-			nums = append(nums, num)
-		}
-		sort.Ints(nums)
-		for _, num := range nums {
-			if d, ok := doc.Objects[num].Value.(*object.Dictionary); ok {
-				if t, _ := d.Get("Type").(object.Name); t == "Catalog" {
-					doc.Trailer.Set("Root", object.IndirectRef{Number: num})
-					break
-				}
-			}
-		}
-		if doc.Trailer.Get("Root") == nil {
-			if firstErr != nil {
-				return nil, firstErr
-			}
-			return nil, fmt.Errorf("rebuilt cross-reference table found no document catalog")
+	// 4.1. A scanned trailer saw only "trailer" keywords. An xref-stream file
+	// has none: its trailer is the cross-reference stream's dictionary (ISO
+	// 32000-2 7.5.8.2), which the scan loaded as an ordinary object, and it is
+	// the only place its /Encrypt and /ID are recorded. The newest trailer in
+	// the file wins, whichever form it takes (7.5.6). This must precede
+	// decryption, which needs /Encrypt but not /Root.
+	if trailerScanned {
+		if tr, at := doc.newestXRefStreamTrailer(); tr != nil && at > trailerAt {
+			doc.Trailer = *tr.Clone() // dictcopy: a fresh clone; the stream keeps its own dictionary
 		}
 	}
 
@@ -375,6 +404,23 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 	}
 	doc.objStmCiphertext = nil // Read's working state (see the field)
 
+	// 5.1. A rebuilt file may have no trailer at all, or one without /Root.
+	// The document catalog is the root of the object hierarchy (ISO 32000-2,
+	// 7.7.2), so synthesize the /Root the trailer exists to provide from the
+	// catalog with the lowest object number. It runs only now, once object
+	// streams are unpacked, because the catalog may be a compressed object
+	// (docs audit 2026-10-11 D4); finding none is fatal.
+	if rebuilt && doc.Trailer.Get("Root") == nil {
+		if num := doc.firstCatalog(); num > 0 {
+			doc.Trailer.Set("Root", object.IndirectRef{Number: num})
+		} else {
+			if firstErr != nil {
+				return nil, firstErr
+			}
+			return nil, fmt.Errorf("rebuilt cross-reference table found no document catalog")
+		}
+	}
+
 	// 5.5. Decrypt the remaining streams, now that every object is loaded.
 	if pending != nil {
 		doc.decryptFailures = pending.Finish(doc.graph())
@@ -388,6 +434,25 @@ func readDocument(cancel core.Canceler, r io.ReaderAt, size int64, password stri
 	doc.Encrypted = doc.Trailer.Get("Encrypt") != nil
 
 	return doc, nil
+}
+
+// firstCatalog returns the lowest object number whose object is a /Type
+// /Catalog dictionary, or 0. Lowest-number-first makes the choice among several
+// catalogs the same on every read, whether each is stored compressed or not.
+func (d *Document) firstCatalog() int {
+	nums := make([]int, 0, len(d.Objects))
+	for num := range d.Objects {
+		nums = append(nums, num)
+	}
+	sort.Ints(nums)
+	for _, num := range nums {
+		if dict, ok := d.Objects[num].Value.(*object.Dictionary); ok {
+			if t, _ := dict.Get("Type").(object.Name); t == "Catalog" {
+				return num
+			}
+		}
+	}
+	return 0
 }
 
 // locateXRef finds the offset of the newest cross-reference section: the value
@@ -438,23 +503,30 @@ func locateXRef(data []byte, headerOffset int64) (offset, adjust int64, err erro
 // Only the newest section is required: its failure is the returned error, on
 // which Read rebuilds the table by scanning. A broken older section ends the
 // chain there and sets broken, so Read can still count the numbers that
-// section's objects use toward the high-water mark.
-func walkXRefChain(cancel core.Canceler, data []byte, stated, adjust int64, lim core.Limits, budget *inUseBudget) (sections []XRefSection, broken bool, err error) {
+// section's objects use toward the high-water mark; cut is that section's
+// error, so Read can report one pdf0 declined to decode (core.ReasonOf). A
+// /Prev that points outside the file also sets broken, with cut nil.
+//
+// When a section fails at its stated offset and again at the relocated one,
+// the error kept is the first, if pdf0 declined it (a limit, an unsupported
+// filter): that is the section the file named, and a malformed table found
+// by the relocation must not hide the reason it was not read.
+func walkXRefChain(cancel core.Canceler, data []byte, stated, adjust int64, lim core.Limits, budget *inUseBudget) (sections []XRefSection, broken bool, cut, err error) {
 	size := int64(len(data))
 	visited := make(map[int64]bool)
 	ends := eofEnds(data)
 	for {
 		// One iteration per incremental update; a file can carry thousands.
 		if err := cancel.StopErr("reading PDF cross-reference chain"); err != nil {
-			return nil, false, err
+			return nil, false, nil, err
 		}
 		offset := stated + adjust
 		if offset < 0 || offset >= size {
 			// /Prev points outside the file; ignore the broken chain tail.
-			return sections, true, nil
+			return sections, true, nil, nil
 		}
 		if visited[offset] {
-			return sections, false, nil // cycle in the /Prev chain
+			return sections, false, nil, nil // cycle in the /Prev chain
 		}
 		visited[offset] = true
 
@@ -470,13 +542,19 @@ func walkXRefChain(cancel core.Canceler, data []byte, stated, adjust int64, lim 
 			// nearest standalone "xref" keyword at or before the offset.
 			if rec := precedingXrefKeyword(data, offset); rec >= 0 && !visited[rec] {
 				visited[rec] = true
+				first := err
 				sec, err = parseXRefSection(cancel, data, rec, adjust, lim, budget)
+				if err != nil {
+					if r := core.ReasonOf(first); r == core.ReasonLimit || r == core.ReasonUnsupported {
+						err = first
+					}
+				}
 			}
 			if err != nil {
 				if len(sections) == 0 {
-					return nil, false, err
+					return nil, false, nil, err
 				}
-				return sections, true, nil // tolerate a broken older section
+				return sections, true, err, nil // tolerate a broken older section
 			}
 		}
 		sec.stated = stated
@@ -486,7 +564,7 @@ func walkXRefChain(cancel core.Canceler, data []byte, stated, adjust int64, lim 
 
 		prev, ok := sec.trailer.Get("Prev").(object.Integer)
 		if !ok {
-			return sections, false, nil
+			return sections, false, nil, nil
 		}
 		stated = int64(prev)
 	}
@@ -942,19 +1020,54 @@ func findTrailer(data []byte, afterPos int64) (*object.Dictionary, error) {
 
 // Write serializes the document to the writer in PDF format.
 //
+// Write regenerates the whole file structure from the object graph: header,
+// object layout, cross-reference section and trailer. It emits a
+// cross-reference stream, packing eligible objects into object streams, when
+// the source used one, and a traditional table otherwise.
+//
 // A document decrypted on Read is re-encrypted with its retained key so it
 // round-trips. A document that could not be decrypted (Document.Locked) is
-// written back verbatim as a lossless passthrough under its preserved /Encrypt.
-// Write regenerates the cross-reference section, emitting a cross-reference
-// stream when the source used one and a traditional table otherwise.
+// re-serialized with its ciphertext carried unchanged under its preserved
+// /Encrypt and /ID: the file layout is regenerated, not copied, and no object
+// is packed into an object stream, since a reader does not decrypt objects
+// inside one separately.
+//
+// Write refuses, before writing anything, a document it cannot represent
+// faithfully:
+//   - one from which Read left objects missing: an object stream that failed
+//     to decode or was not unpacked (a resource limit, an unsupported filter,
+//     ciphertext), or an object whose ciphertext did not decrypt
+//     (DecryptFailures non-empty);
+//   - a Locked document whose /Encrypt dictionary does not resolve, since
+//     whether its content is ciphertext is then unknown;
+//   - an entry in Objects under object number 0 (the free-list head) or a
+//     negative number, or a nil entry;
+//   - a document Write encrypts (decrypted on Read, or given SetEncryption)
+//     holding a stream that names a crypt filter its handler cannot apply;
+//   - two streams whose indirect /Length names the same object but whose data
+//     lengths differ.
+//
+// It also refuses, before writing anything, a document whose source file
+// carries signatures or document time-stamps, with an error wrapping
+// ErrWouldInvalidateSignatures: regenerating the file moves every byte they
+// cover, so none would verify again — even with nothing changed. Write the
+// changes as an incremental update with WriteIncremental to keep them (not
+// possible for an encrypted file), or call AllowInvalidatingSignatures first
+// to rewrite the file anyway. A document built in memory has no source file,
+// so this never applies to it.
+//
+// An object that does not serialize (a NaN or infinite number) fails the
+// write where it is met, and an error from w is returned as it happens; the
+// output may then be partial.
 func (d *Document) Write(w io.Writer) error { return d.write(core.Canceler{}, w) }
 
-// WriteContext is Write with cancellation.
+// WriteContext is Write with cancellation. It refuses what Write refuses,
+// including a signed document (ErrWouldInvalidateSignatures).
 //
 // Writing is usually fast, but its cost is the document's, not the caller's: a
 // malformed cross-reference table can make one large stream reachable from
 // thousands of object numbers, and the resulting output is legitimately
-// enormous. cmd/corpusprobe streams exactly that case to io.Discard.
+// enormous. internal/cmd/corpusprobe streams exactly that case to io.Discard.
 //
 // A cancelled write returns an error wrapping ctx.Err(). Whatever had already
 // been written stays written — an io.Writer cannot be rewound — so the output
@@ -965,13 +1078,26 @@ func (d *Document) WriteContext(ctx context.Context, w io.Writer) error {
 	return d.write(core.NewCanceler(ctx), w)
 }
 
+// write is every whole-document writer's body: the refusal of a rewrite that
+// would invalidate the source file's signatures, then serialize.
 func (d *Document) write(cancel core.Canceler, w io.Writer) error {
+	if err := d.signaturesAtRiskErr(false); err != nil {
+		return err
+	}
+	return d.serialize(cancel, w)
+}
+
+// serialize regenerates the file from the object graph. Only a writer that
+// has made its own decision about existing signatures calls it directly
+// (WriteSigned, whose placeholder signature is in the graph it serializes).
+func (d *Document) serialize(cancel core.Canceler, w io.Writer) error {
 	// An encrypted document with a security handler (decrypted on Read) is
 	// re-encrypted below with the retained key. Without a handler (an unsupported
 	// scheme or a non-empty password) the content is still in its original
-	// encrypted form in the model; it is written back verbatim under the
-	// preserved /Encrypt and /ID — a lossless passthrough that keeps a file we
-	// cannot decrypt round-trippable rather than losing it on save.
+	// encrypted form in the model; it is re-serialized with that ciphertext
+	// unchanged under the preserved /Encrypt and /ID — a passthrough of the
+	// content (the layout is regenerated) that keeps a file we cannot decrypt
+	// round-trippable rather than losing it on save.
 	if d.Locked() {
 		// The passthrough is sound only when the content is known to be
 		// encrypted and the whole object model survived Read:

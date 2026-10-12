@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"github.com/mgilbir/pdf0/internal/signtest"
 	"github.com/mgilbir/pdf0/sign"
+	"strings"
 	"testing"
 )
 
@@ -48,5 +49,12 @@ func TestVerifySignaturesWithRoots(t *testing.T) {
 	}
 	if !res[0].Valid {
 		t.Error("Valid (content integrity) must hold regardless of trust")
+	}
+
+	// With no roots at all no chain is built, and ChainErr says so rather
+	// than reading as "nothing went wrong" (docs audit 2026-10-11 D51).
+	res = verifySigs(t, signed, sign.VerifyOptions{})
+	if res[0].TrustedChain || res[0].ChainErr == nil || !strings.Contains(res[0].ChainErr.Error(), "no trust roots") {
+		t.Errorf("without roots: trusted=%v chainErr=%v, want false and \"no trust roots were supplied\"", res[0].TrustedChain, res[0].ChainErr)
 	}
 }

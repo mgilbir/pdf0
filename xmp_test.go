@@ -66,6 +66,47 @@ func TestValidatePDFA_XMPSyntaxChecked(t *testing.T) {
 	}
 }
 
+// TestMalformedXMPNamesItsCause: a metadata packet that is not well-formed
+// XML is reported, by the PDF/A well-formedness rule and the PDF/UA
+// identification rule alike, with the XML parser's reason and the line it
+// stopped on — the same words from both, since both judge the packet with the
+// one XMP model (xmp.CheckWellFormed is xmp.Parse without the tree). The
+// U+0001 case is the WTPDF example tb139mitt-deims24's: XML 1.0's Char
+// production excludes it, so the packet is not XML.
+func TestMalformedXMPNamesItsCause(t *testing.T) {
+	for _, tc := range []struct{ name, packet, reason string }{
+		{"control character", wrapXMP("\n<rdf:Description rdf:about=\"\">\x01</rdf:Description>"),
+			"(XML syntax error on line 2: illegal character code U+0001)"},
+		{"mismatched tags", wrapXMP("\n\n<rdf:Description rdf:about=\"\"></rdf:Seq>"),
+			"(XML syntax error on line 3: element <rdf:Description> closed by </rdf:Seq>)"},
+		{"unclosed element", wrapXMP("")[:len(wrapXMP(""))-len("</rdf:RDF></x:xmpmeta><?xpacket end='w'?>")] + "\n",
+			"(XML syntax error on line 2: unexpected end of packet inside <rdf:RDF>)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := mustPDFADoc(t, pdfa.PDFA2b)
+			setDocXMP(doc, tc.packet)
+			var a []string
+			for _, v := range ValidatePDFA(doc, pdfa.PDFA2b) {
+				if v.Rule == "6.6.2.1" && strings.Contains(v.Message, "not well-formed") {
+					a = append(a, v.Message)
+				}
+			}
+			if len(a) != 1 || !strings.Contains(a[0], tc.reason) {
+				t.Errorf("PDF/A 6.6.2.1: want one finding naming %s, got %q", tc.reason, a)
+			}
+			var ua []string
+			for _, v := range ValidatePDFUA(doc) {
+				if v.Clause == "5" && strings.Contains(v.Message, "not well-formed") {
+					ua = append(ua, v.Message)
+				}
+			}
+			if len(ua) != 1 || !strings.Contains(ua[0], tc.reason) {
+				t.Errorf("PDF/UA 5: want one finding naming %s, got %q", tc.reason, ua)
+			}
+		})
+	}
+}
+
 func TestValidatePDFA_XMPLevelDependentSchemas(t *testing.T) {
 	// crs is predefined at 2b (XMP 2005) but not at 1b (XMP 2004).
 	body := `<rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:AutoBrightness="True"/>`

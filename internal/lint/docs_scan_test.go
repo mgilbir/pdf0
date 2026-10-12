@@ -33,8 +33,8 @@ var historicalDocs = []string{
 
 // isHistorical reports whether a document describes the past: one under
 // historicalDocs, or an architecture decision record that has been
-// superseded (docs/adr/README.md: "A record is superseded, never edited to
-// say something different").
+// superseded (docs/adr/README.md: when a decision changes, a new record
+// supersedes the old one, which keeps its text).
 func isHistorical(rel string) bool {
 	for _, p := range historicalDocs {
 		if strings.HasPrefix(rel, p) {

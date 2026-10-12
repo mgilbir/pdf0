@@ -9,19 +9,18 @@ import (
 	"strings"
 )
 
-// This file implements validation for PDF/VT-1 (ISO 16612-2), the self-contained
-// variable-and-transactional print exchange format. A PDF/VT-1 file is a
-// conforming PDF/X-4 file (ISO 15930-7) that additionally carries a document
-// part (DPart) hierarchy describing its record boundaries and identifies itself
-// as PDF/VT-1 in XMP metadata. This validator composes the PDF/X-4 and DPart
-// checks with the PDF/VT-specific requirements; it is calibrated against the
-// valid Cal Poly PDF/VT-1 test suite.
+// This file is the PDF/VT validator for both parts (the package documentation,
+// doc.go, says what it checks): it composes the PDF/X and DPart validators with
+// the PDF/VT identification and hierarchy requirements, and names each base
+// finding by the base it came from. It is calibrated against the valid Cal Poly
+// PDF/VT-1 test suite.
 
 // Violation reports a way in which a document departs from PDF/VT.
 type Violation struct {
 	// Rule is the short rule identifier. A finding of the PDF/X base is
 	// prefixed with the base it came from — "pdfx-4/" for PDF/VT-1, "pdfx-5/"
-	// for PDF/VT-2 — and a DPart finding with "dpart/".
+	// for PDF/VT-2 — and a DPart finding with "dpart/". The checker findings
+	// "limit" and "internal" are never prefixed, wherever they arose.
 	Rule    string
 	Message string
 	Object  int // object number the violation anchors to, 0 if N/A
@@ -96,11 +95,16 @@ func validateView(doc core.View, part string) []Violation {
 			}
 			if v.Rule == finding.LimitRule {
 				// The nested run shares this run's recorder, so its guard
-				// trips are reported once, by the flush below — not prefixed
-				// as if they were a PDF/X conformance finding.
+				// trips are reported once, by the flush at the boundary
+				// (pdfvt_api.go) — not twice, and not prefixed as if they
+				// were a PDF/X conformance finding.
 				continue
 			}
-			add(basePrefix+v.Rule, v.Message, v.Object)
+			// A recovered panic inside the nested run is seen by nothing
+			// else, so it is adopted, under its bare reserved name
+			// (finding.Namespaced): "pdfx-4/internal" is an identifier
+			// IsCheckerFinding does not recognise.
+			add(finding.Namespaced(basePrefix, v.Rule), v.Message, v.Object)
 		}
 	})
 
@@ -136,14 +140,15 @@ func validateView(doc core.View, part string) []Violation {
 		}
 		for _, v := range dpartValidateView(doc) {
 			if v.Rule == finding.LimitRule {
-				continue // reported once by the flush below
+				continue // shared recorder: reported once at the boundary
 			}
-			add("dpart/"+v.Rule, v.Message, v.Object)
+			add(finding.Namespaced("dpart/", v.Rule), v.Message, v.Object)
 		}
 	})
 
-	// Guard trips are reported under their own rule, not as conformance
-	// failures (see limits.go).
+	// Guard trips — this run's and the nested ones', which share its recorder
+	// — are reported under their own rule, not as conformance failures, by the
+	// caller at the boundary (pdfvt_api.go), which holds the recorder.
 
 	// The checks iterate map-ordered doc.Objects, so their concatenated output
 	// order is nondeterministic; sort for stable, diffable reports.

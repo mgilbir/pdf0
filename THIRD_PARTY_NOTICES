@@ -1,0 +1,398 @@
+THIRD-PARTY NOTICES
+
+pdf0 is under the licence in LICENSE. Parts of this repository are other
+people's work, or are made from it: tables transcribed or generated from
+data they publish, and data files kept here as they published them. This
+file lists every one of them — which files of this repository it is in,
+where it was taken from and at which pin, and its licence — and carries the
+notice each licence asks to accompany a copy. Where no licence could be
+established, the entry says so.
+
+Each entry names its files under "Files:", as paths or globs. A path
+followed by a name in brackets is a file that is mostly this repository's
+own code, holding one table that is not; the name is the table. An entry
+whose material may not be passed on names, under "Local:", the files the
+tests make from it on a developer's machine instead: those are never
+committed.
+
+internal/lint/notices_test.go holds the file to the repository: every file
+an entry names exists, every named table is declared in its file, and every
+committed file that could be someone else's — anything under testdata/, any
+generated file, any binary file — is named by an entry here or is on that
+test's list of this repository's own files; and every "Local:" file is
+ignored by git and not committed. A notice quoted from a file this
+repository keeps is checked against that file, letter for letter, white
+space aside; a notice quoted from upstream names the URL and the pin it was
+read at.
+
+Not listed here: the modules pdf0 depends on (go.mod), which carry their own
+licences. github.com/mgilbir/forme, which holds the bundled Noto Sans face,
+the standard 14 fonts' AFM metrics, the CFF standard strings, the standard
+Latin encodings and the Unicode tables pdf0's text and layout code uses, has
+its own THIRD_PARTY_NOTICES. Nor the data sets the tests fetch rather than
+keep; docs/testing.md lists them, with their sources and licences.
+
+============================================================================
+Adobe Glyph List
+============================================================================
+
+Files:   internal/fontcheck/glyphlist.txt
+Source:  https://github.com/adobe-type-tools/agl-aglfn, glyphlist.txt
+         (checked at 4036a9ca80a62f64f9de4f7321a9a045ad0ecfd6)
+Licence: BSD 3-Clause (BSD-3-Clause), as the file states it
+
+internal/fontcheck/glyphlist.txt is glyphlist.txt itself, verbatim with its
+notice, pinned by SHA-256 in internal/fontcheck/agl_test.go; the PDF/A and
+PDF/UA Differences rules read it.
+
+The file carries this notice:
+
+Quoted from https://raw.githubusercontent.com/adobe-type-tools/agl-aglfn/4036a9ca80a62f64f9de4f7321a9a045ad0ecfd6/glyphlist.txt:
+
+    Copyright 2002-2019 Adobe (http://www.adobe.com/).
+
+    Redistribution and use in source and binary forms, with or
+    without modification, are permitted provided that the
+    following conditions are met:
+
+    Redistributions of source code must retain the above
+    copyright notice, this list of conditions and the following
+    disclaimer.
+
+    Redistributions in binary form must reproduce the above
+    copyright notice, this list of conditions and the following
+    disclaimer in the documentation and/or other materials
+    provided with the distribution.
+
+    Neither the name of Adobe nor the names of its contributors
+    may be used to endorse or promote products derived from this
+    software without specific prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND
+    CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES,
+    INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+    MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+    DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
+    CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+    SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+    NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+    LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+    HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+    CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+    OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+============================================================================
+Adobe CMap resources
+============================================================================
+
+Files:   internal/core/cmap_predefined.go (predefinedCodespaces)
+Source:  https://github.com/adobe-type-tools/cmap-resources, as the Debian
+         package poppler-data 0.4.12 ships them in /usr/share/poppler/cMap
+Licence: BSD 3-Clause (BSD-3-Clause), as each CMap file states it
+
+Only the codespace ranges of the predefined CMaps are transcribed, following
+usecmap to the CMap that declares them; no code-to-CID mapping is carried.
+TestPredefinedCodespacesMatchAdobe checks the table against the installed
+files. Every CMap file carries this notice:
+
+Quoted from /usr/share/poppler/cMap/Adobe-GB1/GB-EUC-H (poppler-data 0.4.12):
+
+    Copyright 1990-2019 Adobe. All rights reserved.
+
+    Redistribution and use in source and binary forms, with or
+    without modification, are permitted provided that the
+    following conditions are met:
+
+    Redistributions of source code must retain the above
+    copyright notice, this list of conditions and the following
+    disclaimer.
+
+    Redistributions in binary form must reproduce the above
+    copyright notice, this list of conditions and the following
+    disclaimer in the documentation and/or other materials
+    provided with the distribution.
+
+    Neither the name of Adobe nor the names of its contributors
+    may be used to endorse or promote products derived from
+    this software without specific prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND
+    CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES,
+    INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+    MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+    DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
+    CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+    SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+    NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+    LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+    HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+    CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+    OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+============================================================================
+RFC 3454 (stringprep)
+============================================================================
+
+Files:   internal/saslprep/tables.go
+Source:  https://www.rfc-editor.org/rfc/rfc3454.txt (SHA-256
+         eb722fa698fb7e8823b835d9fd263e4cdb8f1c7b0d234edf7f0e3bd2ccbb2c79,
+         checked by internal/cmd/gensaslprep before it reads a range)
+Licence: the permission in the RFC's Full Copyright Statement, quoted below
+
+The tables SASLprep uses (RFC 4013) are generated from the RFC's own text by
+internal/cmd/gensaslprep. The RFC permits derivative works that assist in
+its implementation provided its copyright notice and the permission
+paragraph are included on them, so the generator copies both out of the RFC
+into the table's header:
+
+Quoted from internal/saslprep/tables.go:
+
+    Copyright (C) The Internet Society (2002).  All Rights Reserved.
+
+    This document and translations of it may be copied and furnished to
+    others, and derivative works that comment on or otherwise explain it
+    or assist in its implementation may be prepared, copied, published
+    and distributed, in whole or in part, without restriction of any
+    kind, provided that the above copyright notice and this paragraph are
+    included on all such copies and derivative works.  However, this
+    document itself may not be modified in any way, such as by removing
+    the copyright notice or references to the Internet Society or other
+    Internet organizations, except as needed for the purpose of
+    developing Internet standards in which case the procedures for
+    copyrights defined in the Internet Standards process must be
+    followed, or as required to translate it into languages other than
+    English.
+
+============================================================================
+XMP RelaxNG schemas
+============================================================================
+
+Files:   testdata/xmp-rng/*.rng
+         testdata/xmp-rng/NOTICE.md
+Source:  https://github.com/ceztko/XMP-RNG-Schema, Schemas/
+         (0642aafbde2e68f35920b5b5f8510accdc5c0e4d)
+Licence: MIT (MIT) or the ISO 16684-2:2014 schema terms, at the recipient's
+         choice, as each file's SPDX header states it
+
+Fifteen RELAX NG schemas for the predefined XMP namespaces, kept unmodified:
+each is byte for byte the file of the same name at the commit above. Only
+TestXMPTablesMatchRNG reads them. Each file states:
+
+Quoted from testdata/xmp-rng/XMP_Properties-dc.rng:
+
+    <!-- SPDX-FileCopyrightText: (C) 2014 ISO <copyright@iso.org> -->
+    <!-- SPDX-FileCopyrightText: (C) 2025 Francesco Pretto <ceztko@gmail.com> -->
+    <!-- SPDX-License-Identifier: MIT OR LicenseRef-ISO16684_2-2014-schema -->
+
+The MIT licence, from the project's COPYING:
+
+Quoted from https://raw.githubusercontent.com/ceztko/XMP-RNG-Schema/0642aafbde2e68f35920b5b5f8510accdc5c0e4d/COPYING:
+
+    MIT License
+
+    Copyright (c) 2025 Francesco Pretto
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+The ISO terms, which the project quotes from ISO 16684-2:2014:
+
+Quoted from https://raw.githubusercontent.com/ceztko/XMP-RNG-Schema/0642aafbde2e68f35920b5b5f8510accdc5c0e4d/Resources/OriginalSchemas/COPYING.ISO16884_2-2014-schema.txt:
+
+    ISO 16884:1-2014 © ISO 2014
+    The source code for this schema can be freely used, in whole
+    or in part, without any constraints. The source code can be
+    used as the basis of derivative works. "Used" means that the
+    source code is copied, modified, distributed in its original
+    or a modified form, standalone or as part of something else,
+    including open source code and projects, commercially or
+    without charging fees.
+
+============================================================================
+COLRv1 test font
+============================================================================
+
+Files:   testdata/colrv1/test_glyphs-glyf_colr_1.ttf
+         testdata/colrv1/LICENSE
+Source:  https://github.com/googlefonts/color-fonts, fonts/
+         (0046ea4c3b69e9fbbe464c2594816894e3aa5e4b)
+Licence: Apache License 2.0 (Apache-2.0)
+
+Google Fonts' COLRv1 conformance font, kept unmodified: the font and the
+licence beside it are byte for byte the files at the commit above. The
+repository has no NOTICE file, and the font's name table states no
+copyright. The licence's full text ships beside the font, as the licence
+requires:
+
+Quoted from testdata/colrv1/LICENSE:
+
+                                 Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+============================================================================
+Examples from ISO 32000
+============================================================================
+
+Local:   testdata/spec-examples/*.json
+Source:  extracted by cmd/extract_spec_examples (main.py, main17.py), on
+         the machine that runs the tests, from ISO 32000-2:2020, the PDF
+         Association's sponsored edition with errata to 20 July 2024, and
+         from PDF32000_2008.pdf, Adobe's copy of ISO 32000-1:2008, both
+         placed by hand under spec/
+Licence: none established — see below; not redistributed
+
+Every EXAMPLE block of the two specifications, with the section and page it
+is on and the sentence that describes it: PDF syntax, fragments of it, and
+some prose. The spec-example tests parse them. They are not part of this
+repository: the tests extract them from the specifications into
+testdata/spec-examples/, which git ignores, and they must not be committed
+or passed on. The two documents state:
+
+Quoted from ISO 32000-2:2020, page ii:
+
+    COPYRIGHT PROTECTED DOCUMENT
+    © ISO 2020
+    All rights reserved. Unless otherwise specified, or required in the context of its implementation, no part of this publication may
+    be reproduced or utilized otherwise in any form or by any means, electronic or mechanical, including photocopying, or posting
+    on the internet or an intranet, without prior written permission. Permission can be requested from either ISO at the address
+    below or ISO’s member body in the country of the requester.
+
+Quoted from PDF32000_2008.pdf, page ii:
+
+    This version of the ISO 32000-1 standard is copyright by Adobe Systems Incorporated through an
+    agreement with ISO who is the copyright owner of the official ISO 32000-1 document of which this is an authorized copy.
+    The technical material is identical between this version and the ISO Standard; the page and sections numbers are also
+    preserved. Requests for permission to reproduce this document for any purpose should be arranged with ISO.
+
+No licence or permission to redistribute these extracts has been found, and
+none is claimed.
+
+============================================================================
+Example code from Adobe's PDF Reference, version 1.7
+============================================================================
+
+Files:   testdata/pdfref17_examples.json
+Source:  https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/pdfreference1.7old.pdf
+         (PDF Reference, sixth edition, version 1.7, Adobe Systems
+         Incorporated, November 2006; SHA-256
+         4aa598e7e2cc88867565fae793db38c140a10ca2b5551dccdb45e2124282ce29),
+         extracted by cmd/extract_spec_examples/pdfref17.py
+Licence: the permission given in the Reference's section 1.4, quoted below
+
+The code of 146 of the Reference's 147 examples, each with its example
+number and the page it is printed on, and nothing else: no caption, title
+or prose (the one example left out, 3.17, is an outline, not code). The
+spec-example tests parse it. The code is as the Reference prints it, with
+two changes: minus signs set as U+2212 are written as "-", and a few lines
+of prose set among the code (in Examples 4.37, 4.38, 8.20 and 8.21) are
+left out. The Reference is not committed; the extractor downloads it, or
+reads a copy, and refuses one whose SHA-256 is not the one above. The
+permission, with its footnote (the typeset text's line-end hyphens
+removed, and its superscript footnote mark written as "¹"):
+
+Quoted from PDF Reference, sixth edition, version 1.7, section 1.4, page 32:
+
+    Adobe owns copyrights in the PDF Reference. Adobe will enforce its
+    copyrights. One reason Adobe must retain its copyrights in the PDF
+    Reference is to maintain the integrity of the Portable Document Format
+    standard and ensure that the public can distinguish between the Portable
+    Document Format and other interchange formats for electronic documents.
+    Nonetheless, Adobe desires to promote the use of the Portable Document
+    Format for information interchange among diverse products and
+    applications. Accordingly, Adobe gives permission to everyone under its
+    copyrights to copy, modify, and distribute any example code in the
+    written specification, to the extent necessary to implement the Portable
+    Document Format in a manner compliant with the PDF Reference.¹
+
+    1. This example code includes, but is not limited to, the copyrighted
+    list of data structures, operators, and PostScript language function
+    definitions, that were referenced in PDF Reference, fifth edition,
+    version 1.6, Section 1.5 (Intellectual Property).
+
+pdf0 implements the Portable Document Format, and the fixture is the
+example code its parser and serializer are tested against.
+
+============================================================================
+sRGB ICC profiles
+============================================================================
+
+Files:   pdfa/icc/srgb-v2_1.icc
+         pdfa/icc/srgb-v4_3.icc
+Source:  internal/cmd/genicc, in this repository, which has
+         github.com/mgilbir/golittlecms (the version go.mod requires), a Go
+         port of Little CMS, build its built-in sRGB profile
+Licence: none claimed; each profile's own copyright tag reads "No copyright,
+         use freely"
+
+The profiles pdfa embeds as a PDF/A output intent. They are a program's
+output, not a copy of anyone's file: golittlecms writes the sRGB primaries,
+white point and tone curve of IEC 61966-2-1 and Little CMS's description
+("sRGB built-in") and copyright ("No copyright, use freely") tags.
+TestTheEmbeddedProfilesAreWhatTheEngineBuilds rebuilds both and compares.
+
+============================================================================
+Specification tables transcribed by hand
+============================================================================
+
+Files:   internal/ccitt/ccitt.go (whiteCodes)
+         internal/jbig2/jbig2_huffman.go (stdHuffTable)
+         internal/jbig2/mq.go (mqQeTable)
+         pdfa/xmp_schemas.go (xmpDCProperties)
+Source:  ITU-T T.4, Tables 2 and 3, and T.6, Table 1 (the CCITT fax codes);
+         ITU-T T.88 | ISO/IEC 14492, Annex B (the fifteen standard Huffman
+         tables) and Table E.1 (the MQ decoder's Qe states); the XMP
+         Specification of January 2004 and its 2005 edition (the predefined
+         schemas' properties and value types)
+Licence: none stated by the sources for these tables
+
+Tables of codes, numbers and names that every reader of these formats has
+to hold. They are listed for where they came from; none of the sources
+states a licence for them, and none is claimed. The XMP tables are checked
+against the RelaxNG schemas above by TestXMPTablesMatchRNG.
+
+============================================================================
+Shaping corpus
+============================================================================
+
+Files:   testdata/shaping/corpus.txt
+Source:  github.com/mgilbir/forme, testdata/harfbuzz/corpus.txt, written by
+         testdata/harfbuzz/corpus.py there (15d67e4)
+Licence: MIT (MIT), forme's LICENSE, whose copyright holder is this
+         repository's
+
+12,475 strings generated from code-point ranges by forme's script; no text
+from anywhere else is in them. Listed for where the file came from: it is a
+copy of another repository's file, byte for byte the one at the commit
+above.
+
+============================================================================
+Variable font measurements
+============================================================================
+
+Files:   testdata/fontinstance/oracle.txt
+Source:  testdata/fontinstance/oracle.py, in this repository, run over two of
+         forme's fonts with fontTools and uharfbuzz (the versions its first
+         line records)
+Licence: the licence in LICENSE
+
+Glyph indices, advances and ink bounds that HarfBuzz and fontTools report
+for instances of forme's Noto Sans and its CFF2 test font. No font data is
+copied into it. Listed for where its numbers come from.

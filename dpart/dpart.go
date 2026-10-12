@@ -7,13 +7,11 @@ import (
 	"github.com/mgilbir/pdf0/object"
 )
 
-// This file implements the document part (DPart) hierarchy defined in
-// ISO 32000-2:2020 clause 14.12. The DPart tree partitions a document's pages
-// into a hierarchy of parts, each optionally carrying document part metadata
-// (DPM). It is a core PDF 2.0 structure and the structural foundation of PDF/VT
-// (ISO 16612-2): a PDF/VT file expresses its record boundaries through this
-// tree. The checks here are grounded in Tables 408 and 409 and the connectivity
-// rules of 14.12.2 and 14.12.3; they operate on the parsed object model.
+// This file is the DPart validator (the package documentation, doc.go, says
+// what a hierarchy is): the walk from the catalog's /DPartRoot down to the leaf
+// page ranges, and the checks of document part metadata. The checks are
+// grounded in ISO 32000-2:2020 Tables 408 and 409 and the connectivity rules of
+// 14.12.2 and 14.12.3, and operate on the parsed object model.
 
 // Violation reports a way in which a document's DPart hierarchy departs
 // from ISO 32000-2 clause 14.12.

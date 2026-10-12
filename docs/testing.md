@@ -1,19 +1,56 @@
 # Testing
 
-This is the reference for pdf0's test data and test tiers: what runs on a bare
-`go test ./...`, what silently skips, and how to fetch the datasets that make the
-skipped tiers run. Read it on a fresh clone, and again when you are deciding what
-a change needs exercised — a change to the PDF/A rules needs the veraPDF corpus,
-a change to the JBIG2 decoder needs the pdf.js samples, and neither is present
-until you ask for it.
+This is the reference for running pdf0's tests: what to run before you push,
+what runs on a bare `go test ./...`, what silently skips, and how to fetch the
+data sets and install the tools that make the skipped tests run. Read it on a
+fresh clone, and again when you are deciding what a change needs exercised — a
+change to the PDF/A rules needs the veraPDF corpus, a change to the JBIG2
+decoder needs the pdf.js samples, and neither is present until you ask for it.
+
+## Before you push
+
+```
+make check          # exactly what CI's build-test job runs, in its order
+```
+
+`make check` is gofmt, `go vet`, the Dictionary-copy check, the build, the
+development tools' build, `go test ./... -count=1`, the link, Mermaid and
+no-binaries checks, and every example (`make check-examples`).
+`TestMakeTargetsAreWhatCIRuns` fails if the two drift apart. What can still
+differ is the machine:
+
+- **The Go version.** CI uses the Go named in the [CI section](#ci); a newer
+  local gofmt can flag a file CI accepts. `make check` runs the toolchain's own
+  gofmt, so `GOTOOLCHAIN=go1.26.6 make check` (any release of CI's minor
+  version) formats exactly as CI does.
+- **The Mermaid check** needs node and npx, and fetches its pinned
+  mermaid-cli from npm the first time it runs.
+- **The data.** On a fresh clone every test over a data set skips (see
+  [the tiers](#the-tiers)). Then add, for what you touched:
+
+| You touched | Also run |
+|---|---|
+| a validator, or anything a corpus test reads | `make test-corpus`: CI's corpus job (`go test ./... -count=1` with `VERAPDF_CORPUS` set), then `TestCorpus`'s counts. For all of that job's oracles, first fetch what it fetches (its fetch step in [CI](#ci)) |
+| the parser or serializer | `make refpdfs arlington`, then `make test-corpus` (the Arlington oracle and the round trips run inside it) |
+| an image codec | its sample set (`make ccitt`, `make jbig2`), then `go test ./...` |
+| font writing, Type 3 or colour glyphs, rendering | the programs and variables under [Tools and environment](#tools-and-environment): Ghostscript or poppler, `hb-view`, `PDF0_VERAPDF`, `PDF0_SKIA_PYTHON`; CI's corpus job has them all |
+| PDF/VT, PDF/X, DPart, PDF/UA, Order-X, the ISO spec-example tests or their extractors | the hand-placed data their oracles read ([External datasets](#external-datasets)); CI never has it |
+| `cmd/extract_spec_examples/pdfref17.py`, or the PDF Reference fixture | the Reference, for `TestPDFRef17ExamplesRegenerate` ([the committed fixture](#the-pdf-reference-fixture)) |
+| a fuzz target or the parser's input handling | `make fuzz FUZZTIME=60s`, as CI does (see [Fuzzing](#fuzzing)) |
+
+`go test -v ./... 2>&1 | grep SKIP` lists what did not run.
 
 ## The tiers
 
 **Tier 1 — always runs.** `go test ./...` on a fresh clone runs the parser,
-serializer, encryption, validator, font, XMP and CLI unit tests, plus the PDF 1.7
-and PDF 2.0 spec-example tests. The spec examples *are* committed
-(`testdata/spec_examples.json`, `testdata/spec_examples_17.json`), as are the
-vendored XMP RelaxNG schemas (`testdata/xmp-rng/`), so those tiers never skip.
+serializer, encryption, validator, font, XMP and CLI unit tests, plus the tests
+over the example code of Adobe's PDF Reference 1.7, which is committed
+(`testdata/pdfref17_examples.json`), as are the vendored XMP RelaxNG schemas
+(`testdata/xmp-rng/`), so those never skip. The tests over the examples of ISO
+32000-1 and ISO 32000-2 are in Tier 2: the examples are ISO's and are not
+committed, so they are extracted from the hand-placed specifications on the
+machine that runs them, and skip where those are absent (see
+[External datasets](#external-datasets)).
 
 A committed data file that a test cannot find fails the test: it is part of the
 repository, so its absence means a broken checkout or a wrong path, never an
@@ -32,16 +69,37 @@ a pass:
   make target writes it last, and only when every file arrived), so a fetch that
   was interrupted skips with a message saying so;
 - an environment override (`VERAPDF_CORPUS`, `ARLINGTON_MODEL`,
-  `VERAPDF_PROFILES`) that names something without its stamp, or nothing at all,
-  fails;
+  `VERAPDF_PROFILES`, `PDF_REFERENCE_17`) that names something without its
+  stamp, or nothing at all, fails;
 - a present data set in which the test finds zero files fails;
 - a named fixture missing from a present data set fails: the sets are pinned,
   so that is a layout change, not a missing download.
 
+How `internal/testfiles` decides, for a test that asks for a data set
+(`Dataset.Path`; `Lookup` returns false where `Path` would skip):
+
+```mermaid
+flowchart TD
+    A["a test asks for a data set"] --> E{"its override variable set?<br/>(VERAPDF_CORPUS, ARLINGTON_MODEL, VERAPDF_PROFILES, PDF_REFERENCE_17)"}
+    E -->|no| D{"a directory at the default location?"}
+    E -->|yes| C{"a directory where it points?"}
+    D -->|no| SKIP1["SKIP: never fetched or placed<br/>(the message says how to fetch or place it)"]
+    C -->|no| FAIL1["FAIL: the override names nothing"]
+    D -->|yes| S1{"a fetched set: is its .ok stamp there?"}
+    C -->|yes| S2{"a fetched set: is its .ok stamp there?"}
+    S1 -->|no| SKIP2["SKIP: the fetch did not complete"]
+    S2 -->|no| FAIL2["FAIL: the override names an incomplete fetch"]
+    S1 -->|"yes, or a hand-placed set"| USE["data set present"]
+    S2 -->|"yes, or a hand-placed set"| USE
+    USE --> W{"does the test find what it asks for?<br/>(Files, PDFs, Glob, File)"}
+    W -->|"no files, or a named fixture missing"| FAIL3["FAIL: present but empty, or the layout changed"]
+    W -->|yes| RUN["the test runs"]
+```
+
 Data placed by hand (the Cal Poly suite, the PDF/UA reference files, the
-Order-X examples, the ISO PDFs) has no stamp; the directory's presence is the
-signal, and present-but-empty fails. That is the point of the tier, and skipping
-is also its hazard:
+Order-X examples, the ISO PDFs, the PDF Reference) has no stamp; the
+directory's presence is the signal, and present-but-empty fails. That is the
+point of the tier, and skipping is also its hazard:
 
 > **A green `go test ./...` does not mean your change is covered.** On a fresh
 > clone every test over a data set skips, including the entire PDF/A conformance
@@ -51,9 +109,7 @@ is also its hazard:
 > make target and runs these (see [CI](#ci)); the hand-placed ones run only where
 > someone has placed them.
 
-The rule of thumb: if you touched a validator, run `make test-corpus`; if you
-touched the parser or serializer, run `make refpdfs && make test-arlington`; if
-you touched an image codec, fetch its sample set.
+What to run for a given change is the table in [Before you push](#before-you-push).
 
 **Tier 3 — opt-in, long-running.** Fuzzing (`make fuzz`) and the developer aids
 under `internal/cmd/` never run as part of `go test`.
@@ -79,62 +135,66 @@ None of these are committed. Where a manifest and a downloader are committed
 copyrighted or licence-restricted it has no make target and must be placed by
 hand.
 
-| Dataset | What it proves | Source / licence |
-|---|---|---|
-| **veraPDF corpus** | The PDF/A conformance ratchet: no false positives, no missed violations, no parse errors | [veraPDF/veraPDF-corpus](https://github.com/veraPDF/veraPDF-corpus) |
-| **PDF 2.0 reference PDFs** | Read→Write→Read round-trips over real PDF 2.0 files; also seeds the fuzzers | [pdf-association/pdf20examples](https://github.com/pdf-association/pdf20examples) |
-| **veraPDF validation profiles** | Per-rule detection coverage against the reference validator's own rule inventory (with the corpus) | [veraPDF/veraPDF-validation-profiles](https://github.com/veraPDF/veraPDF-validation-profiles), CC BY 4.0 |
-| **Arlington PDF Model** | External grammar oracle: the parser/serializer represent objects faithfully (right types, keys, structure) | [pdf-association/arlington-pdf-model](https://github.com/pdf-association/arlington-pdf-model), Apache-2.0 |
-| **WTPDF / PDF/UA-2 examples** | Round-trip and robustness over complex real tagged PDF 2.0 (structure trees, associated files, MathML, role maps) | LaTeX Project, [tagging-project discussion 72](https://github.com/latex3/tagging-project/discussions/72), fetched from Google Drive; licences vary per file (see `sources.tsv`) |
-| **CCITT samples** | Decode oracle for the Group 3/4 fax decoder (the veraPDF corpus has no CCITT images) | pdf.js (Apache-2.0), PyPDF4 (BSD) |
-| **JBIG2 samples** | Decode oracle for the JBIG2 decoder: generic templates, MMR, symbol/text, halftone, refinement | pdf.js conformance suite, Apache-2.0 |
-| **Factur-X / ZUGFeRD invoices** | FP=0 oracle for the Factur-X **container** checks; the invoice rule engine's findings are ratcheted, not forbidden (`facturxInvoiceRuleFindings`), because which business rules fire is `formalis`' scope decision | ZUGFeRD/corpus and ZUGFeRD/mustangproject, Apache-2.0 |
-| **Noto Sans CJK face** | The only CID-keyed CFF face the embedding tests have: a charset that is not the identity is what tells a CID from a glyph index | [notofonts/noto-cjk](https://github.com/notofonts/noto-cjk), OFL |
-| **Cal Poly PDF/VT-1 suite** | FP=0 oracle for PDF/VT, PDF/X and DPart — conforming files must report zero violations | Cal Poly Graphic Communications PDF/VT-1 Test File Suite; copyrighted test content, not redistributable |
-| **PDFUA-Reference-Files** | FP=0 oracle for PDF/UA — conformant reference documents must report zero violations | PDFUA-Reference-Files suite from pdfa.org |
-| **Order-X examples** | Order-X container checks against the conforming examples | Order-X specification bundle |
-| **ISO spec PDFs** | Guards the spec-example pipeline: the committed JSON must still be exactly what the extractors produce (also needs `pdftotext` and `python3` on `PATH`) | ISO / Adobe; copyrighted, never committed |
-| **Common Crawl PDFs** | Robustness: the parser must never panic or hang on real-world input nobody designed. Not a decode or conformance oracle — a crash hunt, and no `go test` walks it | digitalcorpora `CC-MAIN-2021-31-PDF-UNTRUNCATED`, ~8M PDFs from Common Crawl, streamed by `make cc-sweep` and never stored |
-
-Where each one lives, how it arrives, and which tests read it — generated from
-`internal/testfiles/datasets.go` (the one list the tests resolve data sets
-through) and from the tests themselves:
+What each proves, where it comes from, where it lives, how it arrives, and
+which tests read it — generated from `internal/testfiles/datasets.go` (the one
+list the tests resolve data sets through) and from the tests themselves:
 
 <!-- BEGIN GENERATED: datasets. From internal/testfiles/datasets.go and the tests that read each data set by TestGeneratedDocSections; regenerate with `go test ./internal/lint -run TestGeneratedDocSections -update`. -->
 
-| Data set | Location | Override | How it arrives | Read by |
-|---|---|---|---|---|
-| veraPDF corpus | `testdata/verapdf-corpus` | `VERAPDF_CORPUS` | `make corpus` | `TestAnAdoptedCIDFaceGetsItsOwnCollection`, `TestArlingtonCorpusParserFaithful`, `TestCFFSubsetDropsUnusedOutlines`, `TestCFFSubsetIsSmallerAndStillParses`, `TestCFFSubsetValidatesAtEveryLevel`, `TestCIDKeyedSystemInfoIsTheFontsOwn`, `TestCorpus`, `TestCorpusConformanceSuites`, `TestCorpusContentLexerDifferential`, `TestCorpusContentStateMemoSound`, `TestCorpusExtractEveryPage`, `TestCorpusIncrementalUpdatesOfXRefStreamFiles`, `TestCorpusIsartor`, `TestCorpusLevelA`, `TestCorpusParsesEntirely`, `TestCorpusReadKeepsEveryXRefObject`, `TestCorpusTWGA025UseCMapIsReadNotSkipped`, `TestCorpusWriteSignedOfXRefStreamFiles`, `TestCorpusXMPRoundTrip`, `TestDecryptCorpusFiles`, `TestEncryptedPassthroughAESCorpus`, `TestFindingsAreInvariantUnderIndirection`, `TestHybridCorpusManual`, `TestLevelACorpus`, `TestLoadSimpleRefusesWhatCannotBeOne`, `TestOpenTypeCFFEmbedsAndValidates`, `TestReEncryptCorpusRoundTrip`, `TestRepairEncryption`, `TestRuleCoverage`, `TestWorkMeterHeadroom` |
-| PDF 2.0 reference PDFs | `testdata/pdf20examples` | — | `make refpdfs` | `TestArlingtonParserFaithful`, `TestExtractAndMergePages`, `TestExtractText`, `TestOffsetsMatchObjects`, `TestReadSimplePDF`, `TestRoundTripReferencePDFs`, `TestValidateConcurrentSameDoc`, `TestWorkMeterHeadroom`, `TestWriteIsIdempotent`, `TestWriteObjectNumberMatchesKey` |
-| Arlington PDF model | `testdata/arlington-pdf-model/tsv/2.0` | `ARLINGTON_MODEL` | `make arlington` | `TestArlingtonCorpusParserFaithful`, `TestArlingtonOracleHasTeeth`, `TestArlingtonParserFaithful` |
-| veraPDF validation profiles | `spec/verapdf-profiles` | `VERAPDF_PROFILES` | `make profiles` | `TestRuleCoverage` |
-| WTPDF / PDF/UA-2 examples | `testdata/wtpdf` | — | `make wtpdf` | `TestWTPDFExamples`, `TestWorkMeterHeadroom` |
-| Factur-X corpus | `testdata/facturx` | — | `make facturx` | `TestCorpusFacturXSetDocumentInfoKeepsFindings`, `TestCorpusXMPRoundTrip`, `TestValidateFacturXCorpus`, `TestValidateFacturXInvoiceCorpus`, `TestValidateFacturXMutations`, `TestWorkMeterHeadroom` |
-| CCITT samples | `testdata/ccitt` | — | `make ccitt` | `TestCCITTRealFiles` |
-| JBIG2 samples | `testdata/jbig2` | — | `make jbig2` | `TestJBIG2EdgeCases`, `TestJBIG2GenericCrossCheck`, `TestJBIG2Halftone`, `TestJBIG2Huffman`, `TestJBIG2Refinement`, `TestJBIG2SymbolText` |
-| Noto Sans CJK face | `testdata/notocjk` | — | `make notocjk` | `TestACJKDocumentIsWrittenAndReadsBack`, `TestAFaceNeverSetUprightWritesNoVerticalFont`, `TestAFontRemovedFromTheDocumentIsWrittenAfresh`, `TestAFormAddedLaterKeepsTheFontNumbers`, `TestAnAdoptedCIDFaceIsKeyedCorrectly`, `TestBothFormsOfAFaceAreOneFont`, `TestCIDKeyedSetIsKeyedByCID`, `TestCIDKeyedWidthsAreKeyedByCID`, `TestDrawReplacedSaysItsReplacement`, `TestEveryDrawingPathRoundTripsInEveryFaceKind`, `TestEveryDrawingPathValidatesAtEveryLevel`, `TestTheCIDSetIsTheEmbeddedProgramsCharset`, `TestTheVerticalMetricsAreTheGlyphsOwn`, `fonts: TestAGlyphDrawnForTwoTextsCarriesBoth`, `fonts: TestEncodeAgreesWithFormesEncode`, `fonts: TestEveryPathWritesTheCodeTheFontIsAddressedBy`, `fonts: TestToUnicodeCoversOnlyTheGlyphsDrawn`, `htmlpdf: TestDrawUprightHangsEachGlyphBelowTheLast`, `htmlpdf: TestLetterSpacingGoesDownAnUprightRun`, `htmlpdf: TestRenderInEveryFaceKindRoundTrips`, `htmlpdf: TestUprightTextIsDrawnByItsVerticalMetrics` |
-| Noto Color Emoji (CBDT and COLRv1) | `testdata/notoemoji` | — | `make notoemoji` | `TestAColourDocumentIsTheSameEveryTime`, `TestAFontLicensedForItsBitmapsIsEmbeddedAsThem`, `TestAPDFA1DocumentsEmojiAreMasked`, `TestColourBitmapGlyphsAreTheirImages`, `TestColourEmojiAreWhatHarfBuzzPaints`, `TestColourGlyphDocumentsAreValidPDFA`, `TestColourGlyphsInAPDFA1Document`, `TestType3DocumentsAreValidForVeraPDF`, `htmlpdf: TestRenderInEveryFaceKindRoundTrips` |
-| Cal Poly PDF/VT-1 suite | `testdata/pdfvt` | — | by hand | `TestCorpusContentStateMemoSound`, `TestValidateDPartsCalPolySuite`, `TestValidatePDFVTCalPolySuite`, `TestValidatePDFXCalPolySuite`, `TestWorkMeterHeadroom` |
-| PDFUA-Reference-Files | `spec/pdfua/reference-files` | — | by hand | `TestUAReferenceFilesNoFalsePositives` |
-| Order-X examples | `spec/order-x/Order-X100_EN/05-ORDER-X EXAMPLES` | — | by hand | `TestValidateOrderXCorpus` |
-| ISO 32000-2 PDF | `spec/pdf2.0` | — | by hand | `TestSpecExamplesRegenerate` |
-| ISO 32000-1 PDF | `spec/pdf1.7` | — | by hand | `TestSpecExamplesRegenerate` |
+| Data set | What it proves | Source / licence | Location | Override | How it arrives | Read by |
+|---|---|---|---|---|---|---|
+| veraPDF corpus | The PDF/A conformance ratchet: no false positives, no missed violations, no parse errors; the rule-coverage ratchet; most whole-file robustness tests | [veraPDF/veraPDF-corpus](https://github.com/veraPDF/veraPDF-corpus) | `testdata/verapdf-corpus` | `VERAPDF_CORPUS` | `make corpus` | `TestAnAdoptedCIDFaceGetsItsOwnCollection`, `TestArlingtonCorpusParserFaithful`, `TestCFFSubsetDropsUnusedOutlines`, `TestCFFSubsetIsSmallerAndStillParses`, `TestCFFSubsetValidatesAtEveryLevel`, `TestCIDKeyedSystemInfoIsTheFontsOwn`, `TestCorpus`, `TestCorpusConformanceSuites`, `TestCorpusContentLexerDifferential`, `TestCorpusContentStateMemoSound`, `TestCorpusExtractEveryPage`, `TestCorpusIncrementalUpdatesOfXRefStreamFiles`, `TestCorpusIsartor`, `TestCorpusLevelA`, `TestCorpusPDFUA`, `TestCorpusParsesEntirely`, `TestCorpusReadKeepsEveryXRefObject`, `TestCorpusTWGA025UseCMapIsReadNotSkipped`, `TestCorpusWriteSignedOfXRefStreamFiles`, `TestCorpusXMPRoundTrip`, `TestDecryptCorpusFiles`, `TestEncryptedPassthroughAESCorpus`, `TestFindingsAreInvariantUnderIndirection`, `TestHybridCorpusManual`, `TestLevelACorpus`, `TestLoadSimpleRefusesWhatCannotBeOne`, `TestOpenTypeCFFEmbedsAndValidates`, `TestReEncryptCorpusRoundTrip`, `TestRepairEncryption`, `TestRuleCoverage`, `TestWorkMeterHeadroom` |
+| PDF 2.0 reference PDFs | Read→Write→Read round trips over real PDF 2.0 files; also seeds the fuzzers | [pdf-association/pdf20examples](https://github.com/pdf-association/pdf20examples) | `testdata/pdf20examples` | — | `make refpdfs` | `TestArlingtonParserFaithful`, `TestExtractAndMergePages`, `TestExtractText`, `TestOffsetsMatchObjects`, `TestReadSimplePDF`, `TestRoundTripReferencePDFs`, `TestValidateConcurrentSameDoc`, `TestWorkMeterHeadroom`, `TestWriteIsIdempotent`, `TestWriteObjectNumberMatchesKey` |
+| Arlington PDF model | External grammar oracle: the parser and serializer represent objects faithfully (right types, keys, structure) | [pdf-association/arlington-pdf-model](https://github.com/pdf-association/arlington-pdf-model), Apache-2.0 | `testdata/arlington-pdf-model/tsv/2.0` | `ARLINGTON_MODEL` | `make arlington` | `TestArlingtonCorpusParserFaithful`, `TestArlingtonOracleHasTeeth`, `TestArlingtonParserFaithful` |
+| veraPDF validation profiles | Per-rule detection coverage against the reference validator's own rule inventory (with the corpus) | [veraPDF/veraPDF-validation-profiles](https://github.com/veraPDF/veraPDF-validation-profiles), CC BY 4.0 | `spec/verapdf-profiles` | `VERAPDF_PROFILES` | `make profiles` | `TestRuleCoverage` |
+| WTPDF / PDF/UA-2 examples | Round trips and robustness over complex real tagged PDF 2.0 (structure trees, associated files, MathML, role maps) | LaTeX Project, [tagging-project discussion 72](https://github.com/latex3/tagging-project/discussions/72), fetched from Google Drive; licences vary per file (see `testdata/wtpdf/sources.tsv`) | `testdata/wtpdf` | — | `make wtpdf` | `TestWTPDFExamples`, `TestWTPDFValidatePDFUA2`, `TestWorkMeterHeadroom` |
+| Factur-X corpus | FP=0 oracle for the Factur-X **container** checks; the invoice rule engine's findings are ratcheted, not forbidden, because which business rules fire is formalis' scope decision | ZUGFeRD/corpus and ZUGFeRD/mustangproject, Apache-2.0 | `testdata/facturx` | — | `make facturx` | `TestCorpusFacturXSetDocumentInfoKeepsFindings`, `TestCorpusXMPRoundTrip`, `TestValidateFacturXCorpus`, `TestValidateFacturXInvoiceCorpus`, `TestValidateFacturXMutations`, `TestWorkMeterHeadroom` |
+| CCITT samples | Decode oracle for the Group 3/4 fax decoder (the veraPDF corpus has no CCITT images) | pdf.js (Apache-2.0), PyPDF4 (BSD) | `testdata/ccitt` | — | `make ccitt` | `TestCCITTRealFiles` |
+| JBIG2 samples | Decode oracle for the JBIG2 decoder: generic templates, MMR, symbol/text, halftone, refinement | pdf.js conformance suite, Apache-2.0 | `testdata/jbig2` | — | `make jbig2` | `TestJBIG2EdgeCases`, `TestJBIG2GenericCrossCheck`, `TestJBIG2Halftone`, `TestJBIG2Huffman`, `TestJBIG2Refinement`, `TestJBIG2SymbolText` |
+| Noto Sans CJK face | The only CID-keyed CFF face the embedding tests have: a charset that is not the identity is what tells a CID from a glyph index | [notofonts/noto-cjk](https://github.com/notofonts/noto-cjk), OFL | `testdata/notocjk` | — | `make notocjk` | `TestACJKDocumentIsWrittenAndReadsBack`, `TestAFaceNeverSetUprightWritesNoVerticalFont`, `TestAFontRemovedFromTheDocumentIsWrittenAfresh`, `TestAFormAddedLaterKeepsTheFontNumbers`, `TestAnAdoptedCIDFaceIsKeyedCorrectly`, `TestBothFormsOfAFaceAreOneFont`, `TestCIDKeyedSetIsKeyedByCID`, `TestCIDKeyedWidthsAreKeyedByCID`, `TestDrawReplacedSaysItsReplacement`, `TestEveryDrawingPathRoundTripsInEveryFaceKind`, `TestEveryDrawingPathValidatesAtEveryLevel`, `TestTheCIDSetIsTheEmbeddedProgramsCharset`, `TestTheVerticalMetricsAreTheGlyphsOwn`, `fonts: TestAGlyphDrawnForTwoTextsCarriesBoth`, `fonts: TestEncodeAgreesWithFormesEncode`, `fonts: TestEveryPathWritesTheCodeTheFontIsAddressedBy`, `fonts: TestToUnicodeCoversOnlyTheGlyphsDrawn`, `htmlpdf: TestDrawUprightHangsEachGlyphBelowTheLast`, `htmlpdf: TestLetterSpacingGoesDownAnUprightRun`, `htmlpdf: TestRenderInEveryFaceKindRoundTrips`, `htmlpdf: TestUprightTextIsDrawnByItsVerticalMetrics` |
+| Noto Color Emoji (CBDT and COLRv1) | Colour glyphs written as Type 3 fonts: CBDT colour bitmaps and COLRv1 paint graphs, checked against HarfBuzz, Skia and veraPDF where those are installed | [googlefonts/noto-emoji](https://github.com/googlefonts/noto-emoji), OFL | `testdata/notoemoji` | — | `make notoemoji` | `TestAColourDocumentIsTheSameEveryTime`, `TestAColourFaceHonoursABitmapOnlyLicence`, `TestAFontLicensedForItsBitmapsIsEmbeddedAsThem`, `TestAPDFA1DocumentsEmojiAreMasked`, `TestColourBitmapGlyphsAreTheirImages`, `TestColourEmojiAreWhatHarfBuzzPaints`, `TestColourGlyphDocumentsAreValidPDFA`, `TestColourGlyphsInAPDFA1Document`, `TestType3DocumentsAreValidForVeraPDF`, `htmlpdf: TestRenderInEveryFaceKindRoundTrips` |
+| Cal Poly PDF/VT-1 suite | FP=0 oracle for PDF/VT, PDF/X and DPart: conforming files must report zero violations | Cal Poly Graphic Communications PDF/VT-1 Test File Suite; copyrighted test content, not redistributable | `testdata/pdfvt` | — | by hand | `TestCorpusContentStateMemoSound`, `TestValidateDPartsCalPolySuite`, `TestValidatePDFVTCalPolySuite`, `TestValidatePDFXCalPolySuite`, `TestWorkMeterHeadroom` |
+| PDFUA-Reference-Files | FP=0 oracle for PDF/UA: conformant reference documents must report zero violations | PDFUA-Reference-Files suite from pdfa.org | `spec/pdfua/reference-files` | — | by hand | `TestUAReferenceFilesNoFalsePositives` |
+| Order-X examples | Order-X container checks against the conforming examples | Order-X specification bundle | `spec/order-x/Order-X100_EN/05-ORDER-X EXAMPLES` | — | by hand | `TestValidateOrderXCorpus` |
+| ISO 32000-2 PDF | The ISO 32000-2 spec-example tests, over every EXAMPLE of `spec/pdf2.0/ISO_32000-2_sponsored-ec2.pdf` as `cmd/extract_spec_examples` extracts it on the spot into `testdata/spec-examples/` (needs `pdftotext` and `python3`): they lex and parse each, logging what does not, and round-trip each single complete object. The examples are ISO's and are not committed | ISO; copyrighted, never committed | `spec/pdf2.0` | — | by hand | `TestSpecExampleCount`, `TestSpecExamplesLex`, `TestSpecExamplesParse`, `TestSpecExamplesRoundTrip` |
+| ISO 32000-1 PDF | As for ISO 32000-2, from `spec/pdf1.7/PDF32000_2008.pdf` | ISO / Adobe; copyrighted, never committed | `spec/pdf1.7` | — | by hand | `TestSpec17ExampleCount`, `TestSpec17ExamplesLex`, `TestSpec17ExamplesParse`, `TestSpec17ExamplesRoundTrip` |
+| Adobe PDF Reference 1.7 | Guards the committed `testdata/pdfref17_examples.json`: it must be exactly what `cmd/extract_spec_examples/pdfref17.py` makes of `pdfreference1.7old.pdf` (also needs `pdftohtml`, `pdftotext` and `python3`) | [Adobe](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/pdfreference1.7old.pdf); copyrighted, never committed; its example code is licensed by its section 1.4 (THIRD_PARTY_NOTICES) | `spec/pdfref1.7` | `PDF_REFERENCE_17` | by hand | `TestPDFRef17ExamplesRegenerate` |
 
 <!-- END GENERATED: datasets -->
 
 `spec/` as a whole is gitignored, so anything you drop under it stays out of git.
+The two ISO PDFs must have exactly the names the spec-example tests open:
+`spec/pdf2.0/ISO_32000-2_sponsored-ec2.pdf` and `spec/pdf1.7/PDF32000_2008.pdf`.
+Where one is placed, its tests run `cmd/extract_spec_examples` over it
+(`pdftotext -layout`, then `main.py` or `main17.py`) and keep the JSON in
+`testdata/spec-examples/`, which git ignores, under a name made from a digest of
+the PDF, the extractor and the pdftotext and python3 versions. The first run
+takes about fifteen seconds; later ones read the kept file, and any change to
+those inputs makes a new one, so there is no copy to go stale. The JSON is ISO's
+text: never commit it or pass it on (THIRD_PARTY_NOTICES). Without `pdftotext`
+or `python3` the tests skip; with them, an extraction that fails or finds fewer
+examples than the edition has fails.
+
+The PDF Reference goes in `spec/pdfref1.7/pdfreference1.7old.pdf`, or anywhere
+`PDF_REFERENCE_17` names the directory of; it is only needed to make
+[the committed fixture](#the-pdf-reference-fixture) again.
+
+One more data set is not in the table, because no `go test` reads it: the
+**Common Crawl PDFs** (digitalcorpora `CC-MAIN-2021-31-PDF-UNTRUNCATED`, about
+eight million PDFs from Common Crawl), streamed by `make cc-sweep` and never
+stored. It is a crash hunt — the parser must never panic or hang on real-world
+input nobody designed — not a decode or conformance oracle; see below.
 
 Every fetch is pinned, because the ratchet baselines are measurements of
 specific documents: the git checkouts at a commit (the `*_REF` variables in the
-Makefile), the manifest downloads at a commit in each URL, the Noto face at a
-commit and a SHA-256 digest, and the WTPDF files — which Google Drive serves by
+Makefile), the manifest downloads at a commit in each URL, the Noto faces at a
+commit and a SHA-256 digest each, and the WTPDF files — which Google Drive serves by
 an id whose content its owner can replace — by a SHA-256 digest in their
 manifest. A changed upstream file is a failed fetch, not a silently different
 test set. To move to a newer revision, change the pin and update the baselines
 it moves in the same change.
 
-The Common Crawl sweep is the one entry that does not follow the fetch-then-test
-shape. There is no manifest and no local corpus: 1000-file blocks are streamed,
+The Common Crawl sweep does not follow the fetch-then-test shape. There is no manifest and no local corpus: 1000-file blocks are streamed,
 probed and deleted, so a sweep of any length needs about 1.4 GB of disk rather
 than the eight million files. It is also deliberately not a `go test` — sweeping
 untrusted files is memory- and time-hostile, so it runs as a separate
@@ -144,15 +204,28 @@ serves genuinely broken PDFs, and roughly 0.7% is normal. A **panic or a hang**
 is the failure, and the file is quarantined as the reproduction. See
 [testdata/cc/README.md](../testdata/cc/README.md).
 
-A few data sets are the exception and *are* committed: `testdata/xmp-rng/`
-(ISO 16684 RelaxNG schemas, MIT, used by `TestXMPTablesMatchRNG`), the
-spec-example JSON, and `testdata/shaping/corpus.txt` — 12,475 strings over
-which `Shape`, `Draw` and `MeasureShaped` have to agree with each other, which
-is a self-consistency check and needs no oracle beside it — and
-`testdata/fontinstance/oracle.txt`, what HarfBuzz and fontTools say two
-variable fonts' instances advance and ink (forme's bundled Noto Sans and its
-CFF2 fixture, both in the forme module), which `TestAnInstanceIsEmbeddedAsItIsDrawn`
-holds the embedded font to. `oracle.py` beside it regenerates it.
+A few data sets are the exception and *are* committed. Their sources, pins
+and licences are in [THIRD_PARTY_NOTICES](../THIRD_PARTY_NOTICES), and
+`TestEveryThirdPartyFileHasANotice` (`internal/lint`) fails when a committed
+file under `testdata/` is named neither there nor on the test's own list of
+the repository's scripts and manifests:
+
+- `testdata/xmp-rng/` — ISO 16684 RelaxNG schemas, MIT or the ISO 16684-2
+  schema terms, used by `TestXMPTablesMatchRNG`;
+- `testdata/pdfref17_examples.json` — the example code of Adobe's PDF
+  Reference 1.7, under the permission its section 1.4 gives (the notice quotes
+  it); see [below](#the-pdf-reference-fixture);
+- `testdata/shaping/corpus.txt` — 12,475 strings, a copy of forme's shaping
+  corpus, over which `Shape`, `Draw` and `MeasureShaped` have to agree with
+  each other, which is a self-consistency check and needs no oracle beside it;
+- `testdata/fontinstance/oracle.txt` — what HarfBuzz and fontTools say two
+  variable fonts' instances advance and ink (forme's bundled Noto Sans and its
+  CFF2 fixture, both in the forme module), which
+  `TestAnInstanceIsEmbeddedAsItIsDrawn` holds the embedded font to;
+  `oracle.py` beside it regenerates it;
+- `testdata/colrv1/test_glyphs-glyf_colr_1.ttf` — Google Fonts' COLRv1 test
+  font, Apache-2.0, one glyph per COLRv1 feature, which the Skia comparison
+  draws ([testdata/colrv1/README.md](../testdata/colrv1/README.md)).
 
 Two oracle sets belong to other modules now and are fetched by their own
 Makefiles; pdf0 has no targets for either. The EN 16931 / CIUS data
@@ -161,6 +234,84 @@ Makefiles; pdf0 has no targets for either. The EN 16931 / CIUS data
 HarfBuzz's answers over six fonts, Unicode's UAX #9 conformance suites,
 CoreText, and the Universal Shaping Engine's category corrections — are
 `github.com/mgilbir/forme`', along with the engine they judge.
+
+### The PDF Reference fixture
+
+`testdata/pdfref17_examples.json` is the code of 146 of the 147 examples of
+Adobe's *PDF Reference*, sixth edition, version 1.7 (2006), each with its
+example number, the page it is printed on and a `source` naming both, and
+nothing else: no caption, title or prose. Adobe permits copying and
+distributing the Reference's example code (its section 1.4, quoted in
+THIRD_PARTY_NOTICES); the ISO editions grant nothing of the kind, which is why
+their examples are not committed. `TestPDFRef17Examples` lexes, parses, writes
+and parses again every complete indirect object written out in PDF in it (250),
+every example that is one bare object (11) and both cross-reference sections,
+and fails on any that does not come back as it went in; the four objects the
+Reference misprints are listed, and must fail. It runs everywhere, CI
+included.
+
+To make the fixture again, after changing the extractor:
+
+```
+python3 cmd/extract_spec_examples/pdfref17.py > testdata/pdfref17_examples.json
+```
+
+It downloads the Reference from
+<https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/pdfreference1.7old.pdf>,
+or reads a copy given with `--pdf`, refuses any file whose SHA-256 is not the
+one it pins, and needs `pdftohtml` and `pdftotext` (poppler). Review the
+difference before committing it. With the Reference placed (above),
+`TestPDFRef17ExamplesRegenerate` runs the extractor and fails unless it writes
+the committed file byte for byte.
+
+## Tools and environment
+
+Some tests need a program from outside Go — a renderer to compare pixels with,
+the reference PDF/A validator, an interpreter — or read an environment
+variable. Where the program or the variable is missing the test **skips**, and
+a skip reads as a pass, so on a machine without them those checks never run.
+CI's corpus job installs the renderers, a Skia venv and veraPDF's docker image
+and sets both variables ([testdata/verapdf/README.md](../testdata/verapdf/README.md),
+[testdata/colrv1/README.md](../testdata/colrv1/README.md)); the build-test job
+has none of them. Generated from `testEnvironment` in
+`internal/lint/testenv_test.go` and the tests themselves;
+`TestTestEnvironmentIsDocumented` fails when a test reads a variable or runs a
+program the list does not describe.
+
+<!-- BEGIN GENERATED: testenv. From testEnvironment in internal/lint/testenv_test.go and the tests that use each entry by TestGeneratedDocSections; regenerate with `go test ./internal/lint -run TestGeneratedDocSections -update`. -->
+
+| Variable | What it is | Unset | Read by |
+|---|---|---|---|
+| `PDF0_VERAPDF` | the veraPDF command the Type 3 and CIDSet tests validate their documents with; [testdata/verapdf/verapdf-docker.sh](../testdata/verapdf/README.md) runs the official image (needs docker) | those checks skip | `TestTheCIDSetIsWhatTheProgramHas`, `TestType3DocumentsAreValidForVeraPDF` |
+| `PDF0_SKIA_PYTHON` | a Python with the packages in `testdata/colrv1/requirements.txt`, which renders COLR glyphs with Skia ([testdata/colrv1/README.md](../testdata/colrv1/README.md)) | the Skia comparison skips | `TestColourGlyphsAreWhatSkiaPaints` |
+| `PDF0_CLI_BIN` | a prebuilt `pdf0` command for the CLI's black-box tests, to point them at an older build and watch them fail | the tests build the command from the checkout | `cmd/pdf0: TestMain` |
+| `PDF0_LARGE_PDF` | a large real PDF to measure cancellation latency on | the measurement skips | `TestCancelLargeRealFile` |
+| `PDF0_WORK_CORPUS` | a directory of further PDFs for the work-budget headroom measurement | only the data sets present are measured | `TestWorkMeterHeadroom` |
+| `PDF0_WORK_BIG` | any value: include files larger than the headroom measurement's size cap | the largest files are left out | `TestWorkMeterHeadroom` |
+| `PDF0_WORK_PROGRESS` | any value: name each file on stderr as the headroom measurement reaches it | silent | `TestWorkMeterHeadroom` |
+| `PDF0_WORK_CSV` | a file to write the headroom measurement's per-file samples to, as CSV | no CSV is written | `TestWorkMeterHeadroom` |
+| `PATH` | where the programs below are found; the CLI transcripts put the command they built first | — | `cmd/pdf0: TestCLIDocTranscripts` |
+| `CORPUSPROBE` | the built `corpusprobe` the Common Crawl sweep runs; `make cc-sweep-limited` sets it | the sweep runs `testdata/cc/run/corpusprobe`, which `make cc-sweep` builds | `testdata/cc/sweep.sh` |
+
+
+| Program | What for | Without it | Run by |
+|---|---|---|---|
+| `go` | the Go command: it builds what the CLI, example and developer-tool tests execute, and lists the packages the lints read | those tests fail | tests in `cmd/pdf0`, `htmlpdf`, `internal/cmd`, `internal/cmd/corpusprobe`, `internal/cmd/corpustime`, `internal/lint` |
+| `git` | checks that no binary is committed, that `.gitignore` covers every command's output, that THIRD_PARTY_NOTICES names every committed file that may be someone else's, and that what it marks local is ignored and uncommitted | those tests fail | `internal/lint: TestEveryNoticeQuotedFromHereIsWhatTheFileSays`, `internal/lint: TestEveryThirdPartyFileHasANotice`, `internal/lint: TestGitignoreCoversEveryCommand`, `internal/lint: TestLocalFilesAreNeverCommitted`, `scripts: TestCheckNoBinariesReadsTheIndex` |
+| `bash` | runs `scripts/check-no-binaries.sh` under its test | that test fails | `scripts: TestCheckNoBinariesReadsTheIndex` |
+| `/bin/sh` | runs the CLI transcripts in `docs/cli.md` and the CLI tests that need a redirect or a limit | those tests fail; the transcript test skips on Windows | tests in `cmd/pdf0` |
+| `gs` | Ghostscript: renders the pages the bitmap-font, colour-glyph and htmlpdf tests compare with what should be there | the comparisons run with whichever of gs and pdftoppm is present, and skip with neither; htmlpdf's vertical-text ink check needs gs itself and skips | tests in the root package, `htmlpdf` |
+| `pdftoppm` | poppler's renderer, the second rasteriser beside Ghostscript | as for gs | tests in the root package, `htmlpdf` |
+| `pdftotext` | poppler's text extractor: it extracts the ISO 32000 examples from the hand-placed specifications for the spec-example tests, and reads a table checked against ISO 32000-2's text, the Adobe fixture's guard, and htmlpdf's vertical text | those tests skip | tests in the root package, `htmlpdf`, `internal/pdfdoc` |
+| `pdftohtml` | poppler's layout reader: the guard that the committed PDF Reference 1.7 example code is what its extractor makes of the Reference | that guard skips | `TestPDFRef17ExamplesRegenerate` |
+| `pdfinfo` | poppler's reader, as an outside opinion of the documents the encryption tests write | those interop checks skip | `TestEmptyOwnerPasswordDoesNotOpen`, `TestR3OwnerPasswordShortKey`, `TestR6PasswordInterop` |
+| `hb-view` | HarfBuzz's renderer: a second opinion on how a COLRv1 emoji is painted | that comparison skips | `TestAColourGlyphTakesTheTextColour`, `TestColourEmojiAreWhatHarfBuzzPaints` |
+| `python3` | the spec-example extractors (`cmd/extract_spec_examples`), the stringprep cross-check (Python's own tables) and, with PyMuPDF installed, MuPDF's opinion of an encrypted file's passwords | those tests skip | tests in the root package, `internal/saslprep` |
+
+<!-- END GENERATED: testenv -->
+
+The data sets' override variables (`VERAPDF_CORPUS`, `ARLINGTON_MODEL`,
+`VERAPDF_PROFILES`) are in the data set table above.
 
 ## Make targets
 
@@ -177,7 +328,7 @@ CoreText, and the Universal Shaping Engine's category corrections — are
 | `make ccitt` | Run `testdata/ccitt/download.sh` to fetch the CCITT sample PDFs |
 | `make jbig2` | Run `testdata/jbig2/download.sh` to fetch the JBIG2 sample PDFs |
 | `make notocjk` | Download the Noto Sans JP face into `testdata/notocjk/` and check its digest |
-| `make notoemoji` | Download Noto Color Emoji's CBDT build into `testdata/notoemoji/` and check its digest |
+| `make notoemoji` | Download Noto Color Emoji's CBDT and COLRv1 builds into `testdata/notoemoji/` and check their digests |
 | `make cc-sweep` | Sweep real-world Common Crawl PDFs for parser panics and hangs (`FIRST=`/`LAST=` pick the block range); `make cc-sweep-limited` runs the same sweep inside a memory- and CPU-capped cgroup |
 
 Each fetch target is guarded by a `.ok` stamp file, so re-running is a no-op.
@@ -190,12 +341,14 @@ which fetches it again and writes the stamp.
 
 | Target | Effect |
 |---|---|
+| `make check` | What CI's build-test job runs (see [Before you push](#before-you-push)) |
+| `make check-examples` | Run every example and check each PDF it writes; part of `make check` |
 | `make test` | `go test ./...` — the default tier |
-| `make test-corpus` | `make corpus`, then `VERAPDF_CORPUS=… go test -v -run TestCorpus -count=1 ./...` |
+| `make test-corpus` | `make corpus`, then `VERAPDF_CORPUS=… go test ./... -count=1` — CI's corpus job — and `TestCorpus`'s counts |
 | `make test-arlington` | `make arlington refpdfs`, then `ARLINGTON_MODEL=…/tsv/2.0 go test -v -run TestArlington -count=1 ./...`; with the corpus also present it additionally sweeps the conformant corpus files |
 | `make rule-coverage` | `make profiles corpus`, then `VERAPDF_PROFILES=… VERAPDF_CORPUS=… go run -tags devtools ./internal/cmd/rulecoverage` |
 | `make fuzz` | Fuzz every target in `FUZZ_TARGETS` in turn, for `FUZZTIME` each (see [Fuzzing](#fuzzing)) |
-| `make check-docs` | `make check-links check-mermaid check-doc-code`: every relative link and anchor resolves, every Mermaid diagram renders, and the documentation says what the code does — every Go snippet type-checks, every code span, command and quoted message resolves, no prose states a count of the code, and the generated sections (CI, data sets, options) are current |
+| `make check-docs` | `make check-links check-mermaid check-doc-code`: every relative link and anchor resolves, every Mermaid diagram renders, and the documentation says what the code does — every Go snippet type-checks, every code span, command and quoted message resolves, no prose states a count of the code, and the generated sections (CI, data sets, tools and environment, options, and the CLI transcripts in [cli.md](cli.md)) are current. `check-mermaid` needs node and npx, and network the first time |
 
 **Clean**
 
@@ -297,7 +450,7 @@ and must return an error instead.
   and it kept burning a core and holding its memory until it finished on its own
   — with eight workers and a 25-second file, a real leak, and the concrete
   motivation for [the cancellation
-  design](architecture.md#cancellation). The `select` still bounds the wait,
+  design](adr/0010-context-variants.md). The `select` still bounds the wait,
   because a hang pdf0 does not check for cancellation in would block the worker
   forever, and finding exactly that is what this program is for. A `timeout`
   outcome is therefore a stronger signal than it used to be: the work did not
@@ -314,10 +467,18 @@ and must return an error instead.
 - **`internal/cmd/rulecoverage`** — the per-rule coverage report; see below.
   `make rule-coverage`, or
   `go run -tags devtools ./internal/cmd/rulecoverage [-v]` from the repository root.
-- **`internal/cmd/genicc`** and **`internal/cmd/gensaslprep`** — the generators
-  of the embedded ICC profiles and the SASLprep tables. Run them only to
-  regenerate those files; each file's test fails if the generator would now
-  produce something different.
+- **`internal/cmd/genicc`** — the generator of the sRGB ICC profiles `pdfa`
+  embeds. Run it only to regenerate them;
+  `TestTheEmbeddedProfilesAreWhatTheEngineBuilds` rebuilds both through
+  golittlecms and fails if the committed bytes differ.
+- **`internal/cmd/gensaslprep`** — the generator of `internal/saslprep/tables.go`.
+  It fetches RFC 3454 from the RFC Editor (it needs the network) and checks its
+  SHA-256 before reading a range. Nothing re-runs it: the committed tables are
+  held instead to an independent transcription, Python's stdlib `stringprep`,
+  by `TestTablesMatchPythonStringprep`, which skips without python3 and under
+  `-short`.
+
+  Every tool here answers `-h` with its usage (`TestEveryToolAnswersHelp`).
 
   Everything under `internal/cmd/` builds only with `-tags devtools`, so that
   `go install` of the module cannot fetch it; CI builds it with the tag so it
@@ -325,13 +486,13 @@ and must return an error instead.
   command (`internal/cmd/corpusprobe/main_test.go` and its sibling carry no tag, so `go test ./...` runs
   them); `rulecoverage`'s measurement lives in `internal/rulecov`, tested there
   and by `TestRuleCoverage`.
-- **`cmd/extract_spec_examples`** — the two Python extractors (`main.py` for
-  ISO 32000-2:2020, `main17.py` for ISO 32000-1:2008) that turn `pdftotext
-  -layout` output of a spec PDF into the committed
-  `testdata/spec_examples*.json`. You only need these when updating the spec
-  fixtures; `TestSpecExamplesRegenerate` re-runs them and diffs against the
-  committed JSON whenever the spec PDFs, `pdftotext` and `python3` are all
-  present.
+- **`cmd/extract_spec_examples`** — the Python extractors of the spec
+  examples. `main.py` (ISO 32000-2:2020) and `main17.py` (ISO 32000-1:2008)
+  turn `pdftotext -layout` output of a spec PDF into JSON; the ISO
+  spec-example tests run them on the spot and keep the result in the gitignored
+  `testdata/spec-examples/` ([External datasets](#external-datasets)).
+  `pdfref17.py` writes the committed `testdata/pdfref17_examples.json` from
+  Adobe's PDF Reference 1.7 ([the fixture](#the-pdf-reference-fixture)).
 
 ## Rule coverage
 
@@ -394,9 +555,12 @@ corpus to prove you closed them. See
 CI fetches every data set with a make target, counts what arrived, and runs the
 whole suite over it; it also fuzzes every target for a minute. What no CI run
 can cover is the hand-placed data — the Cal Poly suite, the PDF/UA reference
-files, the Order-X examples and the ISO PDFs — whose tests skip there. Before
-you propose a change those cover (PDF/VT, PDF/X, DPart, PDF/UA, Order-X, the
-spec-example pipeline), run them on a machine that has the data.
+files, the Order-X examples, the ISO PDFs and the PDF Reference — whose tests
+skip there: so CI runs the tests over the PDF Reference's committed example
+code, but not those over the ISO 32000 examples, nor the guard that the
+committed code is what its extractor makes. Before you propose a change those
+cover (PDF/VT, PDF/X, DPart, PDF/UA, Order-X, the spec-example extractors),
+run them on a machine that has the data.
 
 What each job runs, generated from `.github/workflows/ci.yml`:
 
@@ -415,7 +579,7 @@ CI runs on every `push` (branches: [main]) and every `pull_request`, as 3 jobs.
 7. doc links resolve: `./scripts/check-links.sh`
 8. mermaid diagrams render: `./scripts/check-mermaid.sh`
 9. no binaries in the tree: `./scripts/check-no-binaries.sh`
-10. example runs: `go run ./examples/simple_pdfa`, `go run ./examples/extract_images`, `go run ./examples/sign_verify`, `go run ./examples/html_to_pdf`
+10. example runs: `make check-examples`
 
 **`corpus`** (Go `1.26.x`):
 
@@ -452,5 +616,6 @@ has the data.
 | Order-X examples | `spec/order-x/Order-X100_EN/05-ORDER-X EXAMPLES` | They come with the Order-X specification bundle and are placed by hand | **no**: local only |
 | ISO 32000-2 PDF | `spec/pdf2.0` | It is copyrighted and placed by hand | **no**: local only |
 | ISO 32000-1 PDF | `spec/pdf1.7` | It is copyrighted and placed by hand | **no**: local only |
+| Adobe PDF Reference 1.7 | `spec/pdfref1.7` | Download it from Adobe and place it by hand | **no**: local only |
 
 <!-- END GENERATED: ci -->

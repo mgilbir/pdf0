@@ -1,119 +1,26 @@
-# Fonts
+# Font validation
 
-This doc is about reading fonts to validate them: `pdfa/fonts.go` and the
-shared font-usage walk in `internal/core/fontuse.go` here, and the font
-program reader they lean on, which is `font/fontprog.go` in
-[github.com/mgilbir/forme](https://github.com/mgilbir/forme) along with the
-generated tables `font/font_encodings.go` and `font/cff_strings.go`. Between
-them they answer three questions the PDF/A and PDF/UA font rules keep asking:
-*which glyphs does this file actually show*, *does the embedded font program
-define them*, and *do the declared widths match the program's*. None of that is
-decidable from the PDF object model, which is why sfnt, CFF and Type 1 programs
-are parsed at all. Open this doc when a font rule fires and you need to know
-why, when adding a rule that touches glyphs, or when chasing a false positive —
-font rules are the densest rule family here and the most common source of both.
-For the family view see [validators.md](validators.md).
+This doc is about reading the fonts in a PDF to validate them: the PDF/A font
+rules in `pdfa/fonts.go`, the checks PDF/A and PDF/UA share in
+`internal/fontcheck`, the shared font-usage walk in
+`internal/core/fontuse.go`, and the font program reader they lean on, which is
+`font/fontprog.go` in [github.com/mgilbir/forme](https://github.com/mgilbir/forme)
+along with the generated tables `font/font_encodings.go` and
+`font/cff_strings.go`. Between them they answer three questions the PDF/A and
+PDF/UA font rules keep asking: *which glyphs does this file actually show*,
+*does the embedded font program define them*, and *do the declared widths match
+the program's*. None of that is decidable from the PDF object model, which is
+why sfnt, CFF and Type 1 programs are parsed at all. Open this doc when a font
+rule fires and you need to know why, when adding a rule that touches glyphs, or
+when chasing a false positive — font rules are the densest rule family here and
+the most common source of both. For the family view see
+[validators.md](validators.md).
 
-Setting text with a font is a different subsystem and lives elsewhere.
-Shaping — OpenType layout, the bidirectional algorithm, the Indic, Khmer,
-Myanmar and Universal Shaping Engine models, subsetting — is forme's `shape`
-package, because none of it is about PDF. What is about PDF stays in `fonts/`
-here: turning positioned glyphs into content-stream operators, and writing the
-font into the document as the object graph a reader needs. [Setting text and
-getting it back](#setting-text-and-getting-it-back) below is about that half.
-
-## Setting text and getting it back
-
-`fonts.Face` has eight ways to put a string on a page — `Encode`, `Shape`,
-`ShapeWith`, `Draw`, `DrawShaped`, `DrawUpright`, `DrawReplaced` and
-`DrawUprightReplaced` — and `htmlpdf.Render` draws through `Draw`, and
-`DrawUpright` for text set upright down the page.
-All of them go through one path in `fonts/draw.go`:
-
-- **One function writes a code** (`appendCode`): `GlyphCode`'s two bytes for a
-  composite face — the glyph index, or the CID for a CID-keyed CFF — and the
-  WinAnsi byte for a simple or standard face. `/W`, `/CIDSet` and `/ToUnicode`
-  are keyed by the same call, so they agree with the page by construction.
-- **One plan decides what the text is.** `Draw` takes the text the glyphs were
-  shaped from. Each glyph's ToUnicode entry is fixed the first time it is
-  drawn: a ligature's is the letters it replaced ("ffi", not the U+FB03 the
-  cmap registers the glyph under), a conjunct's its cluster ("क्ष"), a
-  positional form's its letter, a plain character's the character the cmap
-  prefers (日 over the radical ⽇). A cluster whose glyphs, read in drawing
-  order, do not spell it — a vowel sign drawn before its consonant, a glyph
-  already mapped to other text — is wrapped in an `/ActualText` (ISO 32000-2
-  14.9.4), and so is a run drawn in an order other than the order it is read,
-  which is every right-to-left run.
-- **The CMap covers the glyphs used** and nothing else.
-
-`Encode` returns bare codes, which cannot carry an `/ActualText`: a glyph the
-cmap reaches from two characters extracts as the one the CMap names it by.
-
-**Text you do not control.** Shaping runs the font's lookups over the text,
-and a hostile font, or text that is simply long, can make that cost more than
-a caller can afford. `Shape`, `ShapeWith` and `DrawShaped` are unbounded, as
-forme's `ShapeGlyphs` is. Their bounded forms, `ShapeContext`,
-`ShapeWithContext` and `DrawShapedContext`, shape under a context and
-`fonts.RunLimits` (input bytes, glyphs, lookup work). They fail with the
-context's error, or with one wrapping `fonts.ErrRunLimit`, and then nothing is
-drawn or recorded. When they succeed, they produce exactly what the unbounded
-calls would. A zero limit takes forme's default. htmlpdf's text is shaped
-inside forme's layout, and is bounded the same way by `htmlpdf.RenderContext`
-(see [htmlpdf](htmlpdf.md#documents-you-do-not-control)).
-
-`DrawUpright` draws a run shaped with `shape.Features.Vertical`: the pen moves
-down by each glyph's vertical advance and each glyph is hung from its vertical
-origin (the font's `vmtx` and `VORG`, as forme reads them). How it is written
-depends on the form of the face it is called on:
-
-- **The vertical form** (`Face.Vertical`), which a composite face has, is the
-  standard way: a Type 0 font with `Identity-V` encoding (writing mode 1, ISO
-  32000-2 9.7.4.3) over the same CIDFont as the face's `Identity-H` font. The
-  CIDFont's `/W2` and `/DW2` state each kept glyph's own vertical advance and
-  position vector, from forme's `shape.Face.GlyphVerticalMetrics`, as `/W`
-  states its own width from `GlyphAdvance`. What shaping changed — a mark's
-  advance taken away, `vkrn`, `vpal`, an offset — is written as displacements
-  against those metrics: TJ numbers down the line, and a `Td` across it. A
-  reader knows the text is vertical; poppler's `pdftotext` reads the column.
-- **Any other face** is written in its horizontal font, which is all a simple
-  or standard face has: each glyph placed explicitly, with a displacement and
-  a rise.
-
-Either way the run is one `/ActualText`, since where upright glyphs stand — a
-letter-spaced column, a glyph centred in an em longer than its advance, a mark
-moved across the line — is not where a reader rebuilding text from positions
-looks for words. `Face.EmbedForms` writes the forms a document names over one
-descendant: one program, one descriptor, one ToUnicode CMap. `Page.Faces`
-takes either form under its own name and asks for every form its pages have
-named; `/W2` is written only when the vertical font is.
-
-`DrawReplaced` and `DrawUprightReplaced` draw as `Draw` and `DrawUpright` do,
-for glyphs that do not stand in the page's text for what they were shaped
-from, and say what they stand for instead: the run is one `/ActualText` with
-the replacement, and none inside it. An empty replacement says the glyphs are
-no text at all — htmlpdf draws text shadows and emphasis marks this way, as
-artifacts — and a replacement of one character says a set of pieces is that
-character once: a formula's stretched bracket, drawn by glyph index. The
-ToUnicode CMap still says what each glyph means.
-
-A glyph drawn by index that no shaping reached — the pieces of a stretched
-operator, from a MATH table — is recorded in forme's record of use
-(`shape.Face.Use`) as it is drawn, since shaping records only what it returns.
-The record is what forme's subsetter keeps and what `/CIDSet` lists, so the
-face is still subset and the glyph is in the program, `/W`, `/CIDSet` and the
-ToUnicode CMap.
-
-Embedding honours the font's licence (OS/2 `fsType`): Restricted License
-embedding is refused with `fonts.ErrRestrictedLicense`, bitmap-only with
-`fonts.ErrBitmapEmbeddingOnly`, and a font that forbids subsetting is embedded
-whole, without a subset tag. The program, `/CIDSet` and `/ToUnicode` streams
-are Flate-compressed. A face whose glyphs are only bitmaps follows its own
-rule; see [Bitmap-only faces](#bitmap-only-faces).
-
-`fonts_drawpaths_test.go` draws every path in a CID-keyed CFF, a TrueType face,
-an Arabic face, two bitmap-only faces, a simple face and a standard face, and
-checks both that the text extracts as written and that PDF/A-1b, -2b, -3b and
--4 find nothing wrong with the font.
+Writing fonts is the other half, and has its own docs: [text.md](text.md) is
+how to set text with a font and embed it, and
+[font-embedding.md](font-embedding.md) is what pdf0's writer puts in a file and
+why. Shaping — OpenType layout, the bidirectional algorithm, subsetting — is
+forme's `shape` package, because none of it is about PDF.
 
 ## Font types and what each requires
 
@@ -140,12 +47,27 @@ nothing in forme's `font/fontprog.go` can supply its widths.
 
 Rule identifiers differ per ISO 19005 part, so every finding routes through
 `fontClause(concept, level)` rather than one parent clause — the `embed` concept
-is 6.3.4 at PDF/A-1b, 6.2.11.4.1 at 2b/3b, 6.2.10.4.1 at A-4 — and the clause
+is 6.3.4 at PDF/A-1, 6.2.11.4.1 at 2b/3b, 6.2.10.4.1 at A-4 — and the clause
 values follow the veraPDF profiles, not a reading of the standard. Level-gated
-rules: `/CharSet` and `/CIDSet` *presence* on subset fonts and the
-CMap-must-be-embedded rule are PDF/A-1b only; the forbidden ToUnicode targets
-U+0000/U+FEFF/U+FFFE are PDF/A-4 only; the CID ≤ 65535 implementation limit
-applies everywhere except PDF/A-4, which has no implementation-limits clause.
+rules:
+
+- PDF/A-1 only: `/CharSet` and `/CIDSet` *presence* on subset fonts, the
+  CMap-must-be-embedded rule, and the font file's kind — PDF 1.4 names two
+  `/FontFile3` subtypes, `/Type1C` and `/CIDFontType0C`, so a `/FontFile3
+  /OpenType` program is a finding under the `general` concept (6.3.2). And a
+  non-symbolic TrueType font's `/Encoding` dictionary may not carry a
+  `/Differences` entry at all, even an empty one (6.3.7); from PDF/A-2 on, the
+  array is allowed if it names only Adobe Glyph List glyphs.
+- PDF/A-4 only: the forbidden ToUnicode targets U+0000, U+FEFF and U+FFFE.
+- Per part: what a symbolic TrueType font's cmap must hold
+  (`symbolicCmapProblem`, under the `encoding` concept). PDF/A-1: exactly one
+  subtable (6.3.7). PDF/A-2 and -3: exactly one, or a Microsoft Symbol (3,0)
+  among several (6.2.11.6). PDF/A-4: a (3,0) or a Mac Roman (1,0) subtable,
+  however many there are (6.2.10.6), so a lone (3,1) passes at 1 to 3 and fails
+  at 4. A program with no cmap records is not judged.
+- Everywhere but PDF/A-4, which has neither clause: the CID ≤ 65535
+  implementation limit, and every `/CharSet` and `/CIDSet` rule (see
+  [CIDSet and CharSet](#cidset-and-charset)).
 
 ## `collectFontTextUsage` — rules about text actually shown
 
@@ -167,19 +89,23 @@ one content stream shared by thousands of pages in the same state runs, and
 records its text, once. Show operators are `Tj`, `TJ`, `'` and `"`; any other
 operator clears the pending string operands.
 
-**Rendering modes 3 and 7 are exempt.** `rendersVisibly(u)` returns false only
-when every recorded mode is 3 (invisible) or 7 (add to clip, paint nothing) —
-glyph shape is never painted in either. That gates the embedding rule
-(`checkFontsEmbedded`, in `pdfa/pdfa.go`, builds an `exemptInvisible` set), glyph coverage, the
-width rules, the damaged-program rule, `checkCIDSetProgramComplete` and the
-Type 3 width check. A font with no recorded modes is treated as visible.
+**Rendering mode 3 is exempt; mode 7 is not.** `rendersVisibly(u)` returns
+false only when every recorded mode is 3 (invisible): ISO 19005-2 6.2.11.4.1
+says a font "referenced for use solely in rendering mode 3 is therefore not
+rendered", and 19005-4 6.2.10.5 exempts "Glyphs that are referenced only with
+rendering mode 3". Mode 7 paints nothing either, but it adds the glyph outlines
+to the clipping path, so their shapes and advances decide what is painted
+after it; it is held to every rule, as veraPDF holds it (`renderingMode == 3`
+is its only exemption). `rendersVisibly` gates the embedding rule
+(`checkFontsEmbedded`, in `pdfa/pdfa.go`, builds an `exemptInvisible` set),
+glyph coverage, the width rules, the damaged-program rule,
+`checkCIDSetProgramComplete`, the `/CIDToGIDMap` requirement, the Type 3 width
+check and the Type 3 glyph-procedure resource check. A font with no recorded
+modes is treated as visible.
 
-Two deliberate exceptions. **`.notdef` references are flagged even in invisible
-text** — a text-showing operator must not reference it regardless of mode. And
-**the `/CIDToGIDMap` requirement uses mode 3 only**: `checkOneFontDict` computes
-its own `onlyInvisible` flag testing `m != 3`, ignoring mode 7, because the
-corpus passes a mode-3 font at 1b. That is the one place in the subsystem where
-the invisibility test is not `rendersVisibly`.
+One deliberate exception: **`.notdef` references are flagged even in
+invisible text** — a text-showing operator must not reference it regardless of
+mode.
 
 Two font checks bypass the model and walk every dictionary the trailer reaches
 (`core.View.ReachableDicts`) — `checkCMapEmbedded` and `checkCMapCIDLimit` —
@@ -221,8 +147,9 @@ flowchart TD
 from the font's own tables: the best Unicode `cmap` subtable into
 `font.Program.Cmap`, `(3,0)` into `font.Program.SymbolCmap` (queried with the
 `0xF000` prefix first), `(1,0)` into `font.Program.MacCmap`.
-`font.Program.CmapSubtableCount` is kept because ISO 19005-1 6.3.7 requires a
-symbolic TrueType font to declare exactly one subtable.
+The symbolic-font cmap rule does not read these: it reads the cmap's encoding
+records themselves (`fontcheck.CmapEncodings`), every subtable the font
+declares whether or not it could be parsed (see the level-gated rules above).
 
 **Which Unicode subtable wins** (`unicodeCmapRank`). A font may carry several, so
 the choice is ranked rather than "last one seen": `(3,10)` Windows full
@@ -278,24 +205,73 @@ missing from a font that defines it (`TestType1CharStringsEndTerminator`).
 **Widths are always normalised to 1/1000 text-space units**, because that is
 what `/Widths` and `/W` are in: sfnt scales by `1000 / unitsPerEm`, CFF and
 Type 1 by `FontMatrix[0] * 1000` (the default 0.001 matrix giving a factor of
-1). The tolerance is `glyphWidthTolerance = 1.0`, one thousandth of an em. If a
+1). The tolerance is `fontcheck.WidthTolerance = 1.0`, one thousandth of an
+em, and the comparison is `internal/fontcheck`'s, the same for PDF/A (6.2.11.5)
+and PDF/UA (7.21.5): `fontcheck.Simple`, `fontcheck.CID` and
+`fontcheck.Type3WidthDiffers`. The engines differ in which glyphs they ask
+about only through their rendering-mode gates, which both exempt mode 3 alone,
+as veraPDF's test reads. A non-symbolic TrueType code is compared through the
+code-to-name table ISO 32000-1 9.6.6.4 builds, `StandardEncoding` filling what
+an Encoding dictionary leaves undefined; a name the (3,1) cmap lacks selects
+glyph 0, and is compared against `.notdef`'s width, as veraPDF compares it. If a
 descriptor carries a `FontFile*` stream no parser accepts and the font renders
 visibly, `damagedFontProgramError` reports it under the `embed` clause rather
 than silently exempting the font — across the corpus every valid embedded
 program parses, so this raises no false positive.
+
+**A glyph the program lacks is still compared**, because a reader still draws
+something in its place and advances by that glyph's width. A Type 1 or CFF
+code whose name the program does not define, or that a modelled base encoding
+names no glyph for, draws `.notdef` (ISO 32000-1 9.6.6.2), so
+`Simple.ProgramWidth` is `.notdef`'s width; under a base encoding pdf0 does not
+read (the program's own) a nameless code has no width. A CIDFont code whose
+CID has no glyph, or that the CMap maps to no CID, draws CID 0's glyph
+(9.7.6.3) — after any notdef mapping in the CMap, which Identity-H and -V do
+not have; `CID.ProgramWidth` substitutes CID 0 under those two only, and under
+a CMap of the document's own declines. The declared side follows Table 111: a
+code outside `/Widths` takes the descriptor's `/MissingWidth`, 0 when there is
+none, so a dictionary that leaves a shown code out of `/Widths` declares it 0
+wide; a dictionary with no `/Widths` at all declares only a non-zero
+`/MissingWidth`. Type 3 reads its optional descriptor's `/MissingWidth` the
+same way. veraPDF compares the same pairs for TrueType, CIDFontType2 and
+`/Type1C` programs; for a Type 1 `/FontFile` program and a CID-keyed CFF it
+compares a missing glyph against `/MissingWidth` instead of `.notdef`'s width,
+which can disagree with pdf0 when the two widths differ.
 
 ## Encodings and character mapping
 
 Two generated tables in forme back the encoding machinery, and their headers
 name their provenance: `font/font_encodings.go` ("generated from ISO 32000-1
 Annex D.2") holds `font.StandardEncodingNames`, `font.MacRomanEncodingNames` and
-`font.WinAnsiEncodingNames`, consumed by `simpleFontCodeToName`, which layers a
+`font.WinAnsiEncodingNames`, consumed by `fontcheck.SimpleFontCodeToName`, which layers a
 base encoding (named, or `StandardEncoding` implicitly for a non-symbolic font)
 with `/Differences` to produce `map[byte]string`; `font/cff_strings.go` holds
-the 391 predefined CFF strings (Adobe Technical Note #5176, Appendix A). A
-third table, `aglNames` in `pdfa/fonts.go`, is a hand-maintained Adobe Glyph
-List subset validating `/Differences` names on non-symbolic TrueType fonts;
-`aglGlyphName` also accepts the algorithmic `uniXXXX`/`uXXXX` forms.
+the 391 predefined CFF strings (Adobe Technical Note #5176, Appendix A).
+
+One Adobe Glyph List table validates the `/Differences` names of a
+non-symbolic TrueType font, for PDF/A (ISO 19005-2/-3 6.2.11.6, -4 6.2.10.6)
+and PDF/UA alike: `fontcheck.AGLListed`, over Adobe's `glyphlist.txt` embedded
+verbatim (`internal/fontcheck/glyphlist.txt`, pinned by SHA-256) — the "Adobe
+Glyph List, Version 2.0 (September 2002)" ISO 32000-1 cites. It is exactly the
+list's 4,281 names plus `.notdef`, which is how veraPDF reads "listed in the
+Adobe Glyph List": a `uniXXXX` name, and the ZapfDingbats `a1`…`a205` (a
+separate list), are not listed. A name the array repeats is reported once.
+PDF/A-1 has no list at all: ISO 19005-1 6.3.7 forbids `/Differences` in such a
+font outright.
+
+The clause's other half is the cmap the names are looked up in: if the program
+is embedded, it must have a Microsoft Unicode (3,1) subtable.
+`fontcheck.DifferencesNotInAGL` reads that half for both engines, from the
+cmap's encoding records: any `/Differences` key with no (3,1) record is a
+finding, an empty array included, as veraPDF reads it, and a program pdf0
+could not read is not evidence either way.
+
+Two readings are pdf0's own. `.notdef` is accepted, as veraPDF accepts it. And
+the names are tested whether or not the font program is embedded, because the
+clause's "if the font program is embedded" governs only its (3,1)-cmap half;
+veraPDF tests the names of an embedded font only, so an unembedded font whose
+`/Differences` names an unlisted glyph is a PDF/A finding in pdf0 and not in
+veraPDF.
 
 For a Type 0 font the path from bytes to glyph is longer:
 
@@ -341,327 +317,6 @@ token stream cannot: a keyword inside a comment, several entries on a line, CR
 alone between lines, an array-form destination throwing a count out of step. It
 runs over untrusted bytes, so expansion is bounded: no range may span more than
 65,536 codes, and one CMap may declare no more than 65,536 mappings.
-
-## CIDSet and CharSet
-
-Both are subset-completeness declarations in the `FontDescriptor`, and "present
-glyph" means something different per font type. `/CharSet` (Type 1 / MMType1) is
-a string of `/name` tokens, parsed by `core.ParseCharSet`. `/CIDSet` is a bitmap
-stream: bit *i*, MSB-first within each byte, means CID *i* is present. It is
-`core.CIDSet` and membership (`core.CIDSet.Has`) is tested directly against the
-bytes — deliberately, because materialising a set of every present CID turned a
-64 MB CIDSet (512 M bits) into roughly 70 seconds of validation. That is pinned
-by `cidset_test.go`, including a 16 MiB all-ones guard.
-
-| Check | Level | What it asserts |
-|-------|-------|-----------------|
-| `checkFontSubsets` (`pdfa/pdfa.go`) | 1b only | A subset font (`ABCDEF+` BaseFont prefix) must *have* `/CharSet` or `/CIDSet`. Parts 2+ only constrain the sets when present. |
-| `checkFontSubsetCompleteness` | all | When present, the set must list every glyph name / CID **used for rendering**. |
-| `checkCIDSetProgramComplete` | 1b only | The `/CIDSet` must be non-empty and enumerate every glyph **present in the program**: CID-keyed CFF charset CIDs, or, for `CIDFontType2`, every CID whose glyph (through its `/CIDToGIDMap`) has an outline. |
-
-The PDF/UA counterpart `checkType1CharSet` is stricter — it checks both
-directions, program→CharSet and CharSet→program. Its sibling
-`checkCIDFontCIDSet` records why the equivalent CIDFont rule is *not* enforced
-beyond emptiness in the PDF/A path: a conformant `/CIDSet` legitimately omits
-CIDs whose glyphs exist only as padding or composite components.
-
-## File map
-
-| File | Owns | Governing spec |
-|------|------|----------------|
-| `pdfa/fonts.go`, `internal/core/fontuse.go`, `internal/core/interp.go`, `internal/core/cmap.go`, `internal/core/cmapparse.go`, `internal/core/cmap_predefined.go`, `internal/core/tounicode.go` | Content execution (`core.CollectFontTextUsage`), the font rule functions, the predefined-CMap codespace table, encoding/AGL validation, CID width parsing, CIDSet/CharSet, CMap and ToUnicode reading | ISO 32000-2 clause 9 (9.6 simple fonts, 9.7 composite, 9.10 Unicode mapping)<br/>ISO 19005-1 6.3, -2/-3 6.2.11, -4 6.2.10 |
-| forme `font/fontprog.go` | `font.Program` plus `font.ParseSFNT`, `font.ParseCFF`, `font.ParseType1` | OpenType/sfnt spec (`head`, `maxp`, `hhea`, `hmtx`, `loca`, `glyf`, `cmap`)<br/>Adobe TN #5176 (CFF), TN #5177 (Type 2 charstrings), TN #5015 (Type 1) |
-| forme `font/font_encodings.go` | Generated: `font.StandardEncodingNames`, `font.MacRomanEncodingNames`, `font.WinAnsiEncodingNames` | ISO 32000-1 Annex D.2 |
-| forme `font/cff_strings.go` | Generated: the 391 CFF standard strings, indexed by SID | Adobe TN #5176 Appendix A |
-
-Font findings are also produced outside these files: `checkFontsEmbedded` and
-`checkFontSubsets` live in `pdfa/pdfa.go`, the clause-7.21 PDF/UA font family in
-`pdfua/pdfua.go`, and `pdfxCheckFontsEmbedded` in `pdfx/pdfx.go`.
-
-## DoS guards
-
-Each exists because a crafted file reached it. Checks run behind `recover()`,
-but a hang or an OOM is not something `recover` catches.
-
-One of these is configurable per document; see
-[architecture.md](architecture.md#resource-limits).
-
-- **`/W` is not expanded** — `parseCIDWidths` resolves the entries once into
-  disjoint CID segments and `width` looks a CID up by binary search, so
-  `[0 2000000000 500]` costs one entry, not two billion map inserts, and 2,000
-  overlapping full-space ranges cost 2,000 (audit 2026-07-26 C1, 2026-09-22
-  C10; `pdfa/fonts_wrange_test.go`). It runs *before* the visible-render gate, so
-  merely selecting a Type 0 font with `Tf` reaches it. A `/W` named by
-  reference is read once per run however many fonts share it.
-- **cmap format 4 total work** (`WithMaxCmapWork`, default `1 << 18`) — a valid
-  subtable partitions the BMP in ~65536 iterations, a hostile one with many
-  full-range segments is O(segments × 65535) (2026-07-26 audit C10). On trip the partial
-  map is returned and marked partial (`font.Program.CmapPartial`), the glyph rules
-  decline, and the trip is reported — see [limits.md](limits.md).
-- **cmap format 12 total work** (the same `WithMaxCmapWork` budget, charged
-  per subtable) — `nGroups` is
-  a `uint32` and one group may span the whole of Unicode (0x110000 codes), so the
-  expansion is entirely font-controlled. The budget charges one unit per group
-  *and* one per code, which bounds the group loop as well as the map; on trip the
-  partial map is returned, as in format 4. `1 << 18` is four times the 65535
-  glyphs an sfnt can hold, so no honest font comes near it. `nGroups` is also
-  checked against the bytes actually present, and a group is skipped when
-  inverted or when it starts past U+10FFFF.
-
-### Why formats 4 and 12 share one budget
-
-They were two separate constants, both `1 << 18`, and were collapsed into the
-single `WithMaxCmapWork`. The obvious
-objection is that format 12 can address sixteen times as many code points as
-format 4 — the whole of Unicode rather than the BMP — so it might warrant more
-room.
-
-Measured against the veraPDF corpus, it does not. Across **358 embedded cmaps the
-largest holds 4,985 entries — 1.9% of the budget**, leaving roughly 52x headroom,
-and the ceiling is set by the font rather than the format: an sfnt holds at most
-65,535 glyphs, so a font mapping more than `1 << 18` code points is mapping four
-codes to every glyph it has.
-
-Splitting the knob would also expose the wrong thing. A caller can reason about
-"how much work may one font cost me"; they cannot reason about "how much work may
-the format-12 subtable cost me", because which format a font uses is an internal
-detail of the font, not a property of the document they are validating. The unit
-the budget counts — one per group and one per code — is format-agnostic, and the
-budget bounds a single subtable rather than the whole table, so a font carrying
-several does not have them compete.
-
-If a real font is ever found that needs different room per format, the split is
-a second field and a second option; nothing here forecloses it.
-- **CMap range span and entry count** and **CIDSet membership without
-  materialisation** (`core.CIDSet` tests bits in place) — both described above.
-- **Content lexer progress** — `core.ContentLexer`, the one content-stream
-  lexer, consumes at least one byte per step (a stray `)` included, so leaked
-  inline-image sample data cannot stall it), steps over `BI … EI` inline images
-  honouring a declared `/L`, and drops a run of regular bytes longer than
-  `core.MaxContentTokenLen` that is not a number while letting numeric tokens
-  run to full Annex C precision.
-- **Per-run memoization** — the validation cache holds the font-usage map, the
-  per-stream event skeletons and the per-stream used-name sets.
-
-## Third-party data
-
-The metrics of the fourteen standard faces are generated from the **Adobe Core
-14 AFM files**, and live with the rest of the shaping code in forme
-(`shape/standard14.go`), which carries the Adobe copyright notices and the
-licence paragraph verbatim as that licence requires. Only advance widths and
-font-wide metrics are taken; no outline, no font program and no character shape
-is reproduced, and no AFM file is redistributed.
-
-The fourteen names — Helvetica, Times, Courier, Symbol, ZapfDingbats and the
-variants — are the identifiers ISO 32000-2 9.6.2.2 gives these faces, and are
-what a `/BaseFont` entry holds. Several are trademarks of their owners. Naming
-one in a PDF is how the format says "the face the reader already has"; this
-repository contains no typeface at all, and `find . -name '*.ttf' -o -name
-'*.otf'` returns nothing. The bundled face a document can be written with is
-forme's, under the SIL Open Font License, with its licence file beside it.
-
-Other generated tables and their sources are listed in the table above.
-
-## CID-keyed CFF
-
-A CID-keyed CFF numbers its glyphs by CID and reaches them through its charset,
-so the CID and the glyph index are two different numberings. Every static Noto
-CJK face is one. Three things in the written document are keyed by CID rather
-than by glyph, and all three come from the program rather than being assumed:
-
-| written | keyed by | read from |
-|---|---|---|
-| the code in the content stream | CID | `Encode`, which asks the charset |
-| `/W` | CID | `shape.Face.GlyphCode` |
-| `/CIDSet` | CID | the same |
-| `/ToUnicode` | CID | the same |
-| `/CIDSystemInfo` | — | the CFF's ROS operator |
-
-Getting any of them wrong is invisible on a font whose charset happens to be the
-identity, and most are. In Noto Sans JP `ｱ` is glyph 15435 and CID 59158, so a
-`/W` written by glyph index describes something fifteen thousand places away —
-and the reader shows a plausible page with the wrong metrics.
-
-`/CIDSystemInfo` is the font's own registry, ordering and supplement, from
-`shape.Face.CharacterCollection`, because §9.7.4.2 requires it to be compatible
-with the character collection of the glyph source. Noto's is
-`Adobe-Identity-0`; the veraPDF corpus carries an `Adobe-Japan1-6` font, which
-is what the test uses, since a font already in the Identity collection cannot
-tell a read value from an assumed one.
-
-**A CID-keyed font that cannot name its collection is refused, not defaulted.**
-`CharacterCollection` returns `ok == false` for a ROS naming strings the font
-does not carry, or a supplement below zero — both malformed in ways that parse,
-which is what makes them dangerous. Writing `Adobe-Identity-0` there looks like
-caution and is not: it is a specific claim that the CIDs are the font's own
-arbitrary numbering, and a reader believing it over an Adobe-Japan1 font looks
-every glyph up in the wrong collection. The check runs *before* subsetting,
-since the collection is a fact about the face; a font that cannot be embedded
-then says so for the reason that matters rather than reporting whatever the
-subsetter met first.
-
-Widths come from `hmtx` through `Face.GlyphAdvances`, not from the CFF
-charstrings — the two disagree in Noto Sans JP (glyph 34 is 608 in `hmtx` and
-742 in the CFF) and `hmtx` is what an OpenType wrapper makes authoritative. It
-is also what layout measured with, so the document's `/W` and its line breaks
-agree.
-
-A face from `fonts.Adopt` is embedded exactly as a loaded one is. `GlyphCode`
-answers the keying from the face, and the collection is read from the *subset* —
-the program `Adopt` never saw, which carries the ROS and the charset through
-untouched. For a loaded face the collection is known before subsetting, so a
-font that cannot be embedded says so for the reason that matters rather than
-reporting whatever the subsetter met first.
-
-## Variable fonts and CFF2
-
-A variable face is embedded as the instance it draws. forme hands a backend
-the instance itself (`shape.LoadInstance`, which htmlpdf receives from layout
-for bold text in a variable face): a static face with its own program, name,
-advances and metrics at that point of the design space. `fonts.Adopt` embeds
-it like any other face — its subset, `/W` from its advances and `/CIDSet` from
-the glyphs the subset kept — so nothing of the default master reaches the
-document. A variable face that was loaded rather than instanced (`fonts.Load`,
-`fonts.NotoSans`) is its default master, and that is what it draws and what is
-embedded; forme's subsetter drops the variation tables either way.
-
-A CFF2 font is read as the CFF it draws (forme 6f4fa65) and embedded as that:
-a `CIDFontType0` whose `/FontFile3` is `/OpenType`, an sfnt with a CID-keyed
-`CFF ` table in `Adobe-Identity-0` and no `CFF2`, which PDF has no font file
-type for. Its instances are cut the same way.
-
-`TestAnInstanceIsEmbeddedAsItIsDrawn` holds both to an oracle outside the two
-modules: `testdata/fontinstance/oracle.txt`, what HarfBuzz and fontTools'
-instancer say each glyph advances and inks at two locations of Noto Sans and
-of forme's CFF2 fixture. The document is written at every PDF/A level and read
-back: `/W`, the embedded program's own advance and outline box, `/CIDSet` and
-the validator. The drawing-path matrix has a variable instance and both CFF2
-faces as rows.
-
-One reader does not draw these programs: Poppler (24.02) shows nothing, or the
-wrong glyph, for an OpenType-wrapped CID-keyed CFF whose CIDs are not its glyph
-indices, which is every CID-keyed subset this package writes and so every CFF2
-font. It passes the CID to FreeType, which addresses an sfnt-wrapped font by
-glyph index. Ghostscript draws them, and Poppler draws the same program
-embedded bare as `/CIDFontType0C`. The wrapper is kept because `hmtx` in it is
-what makes the widths authoritative (see [CID-keyed CFF](#cid-keyed-cff)), and
-the fonts it applies to predate CFF2.
-
-## Bitmap-only faces
-
-A face whose glyphs are only bitmaps — EBDT, Apple's bdat, CBDT or sbix, with
-no glyf, CFF or CFF2 outlines (`shape.Face.BitmapOnly`) — cannot be embedded
-as a font program: a reader draws a program from its outlines, and would draw
-these blank. It is written as Type 3 fonts instead (ISO 32000-2 9.6.4), whose
-glyphs are content streams painting forme's image of each glyph
-(`shape.Face.PaintGlyph`). The design record is
-[bitmap-fonts-type3.md](proposals/bitmap-fonts-type3.md).
-
-- **A 1-bit glyph** is a `d1` stencil: an image mask, painted in whatever
-  colour the text is shown in.
-- **A greyscale glyph** (a 2-, 4- or 8-bit strike) is a `d0` image of the fill
-  colour with the coverage as its `/SMask`, so it keeps its anti-aliasing. The
-  colour is baked into the glyph, so each text colour is its own font.
-- **A colour bitmap** (CBDT, sbix) is a `d0` image of its PNG, with an `/SMask`
-  for its alpha.
-
-The strike is the one the text size picks in CSS pixels — points × 4/3 by
-default, or the size itself for a stream drawn in CSS pixels, as htmlpdf's is
-(`fonts.Face.SetPixelsPerUnit`). A glyph missing from that strike is drawn from
-the nearest strike that has it, rather than blank.
-
-A Type 3 font has one-byte codes, so a face is a set of sub-fonts keyed by
-strike and colour and split into planes of 256 codes. The caller names the face
-once, as it names any face; that name is the home font, and the others are
-`fonts.SubfontName` of it. `Draw` and the other `Draw` methods pick each glyph's
-font, select it with `Tf` inside the run, and select the caller's name again
-after it, which is why the content builder now reports the font and fill colour
-a stream has set (`content.Builder.Font`, `content.Builder.FillColor`).
-`fonts.Embedded.Subfonts` are the other fonts' dictionaries, and `Page.Faces`
-defines every one under its name. `Encode` and `Shape` have no stream to switch
-in, and write codes in the home font.
-
-The licence reads differently here: bitmap embedding only (0x0200) is exactly
-what these fonts are, and is embedded, and it makes a face with outlines and
-strikes beside them one of them; Restricted License is refused as for
-every face; and no subsetting (0x0100) is refused with
-`fonts.ErrBitmapNoSubsetting`, because the fonts carry images of the glyphs
-drawn and nothing else.
-
-`fonts_bitmap_test.go` renders the result with Ghostscript and poppler and
-compares every pixel of every glyph with forme's image of it, over forme's EBDT
-and bdat fixtures and Noto Color Emoji (`make notoemoji`), and holds it to the
-PDF/A validator and to the text a reader extracts.
-
-## Colour glyphs (COLR)
-
-A face with COLR colour glyphs (COLRv0 layers, COLRv1 paint graphs) has
-outlines, and used to be embedded as them, so its glyphs came out in the text
-colour alone. It is now drawn in colour, as Type 3 fonts like a bitmap face's,
-by default; `fonts.Face.SetColourGlyphs(false)` keeps the old embedding. Each
-glyph's procedure is the PDF translation of forme's painting
-(`shape.Face.PaintGlyph`), in `fonts/colr.go`:
-
-- transforms and clips are `cm` and `W n` inside `q`/`Q`;
-- solid fills set their colour and, through an ExtGState `ca`, their alpha;
-- linear and radial gradients are axial and radial shadings whose function
-  is the colour line stitched from linear pieces, a period at a time for
-  repeat and reflect, mirrored for reflect;
-- sweep gradients are function-based shadings computing the angle with a
-  PostScript calculator function;
-- a stop with alpha draws its shading through a luminosity soft mask;
-- the fifteen blend modes are isolated groups drawn with `/BM`, and Clear,
-  Src, Dest, DestOver, SrcIn, DestIn, SrcOut and DestOut are the groups
-  reordered or one drawn through an alpha soft mask of the other. A group
-  that blends or masks is itself drawn as an isolated group, so it blends
-  with its own backdrop and nothing on the page;
-- SrcAtop, DestAtop, Xor and Plus have no exact PDF equivalent, and a glyph
-  that uses one is refused rather than approximated.
-
-A paint in the foreground colour sets no colour: a `d0` procedure starts in
-the colour the text is shown in. So one font serves every text colour, and
-only a gradient with a stop in the foreground colour, whose shading has to
-state it, is keyed by the text colour. A glyph that sets no colour of its own
-is a `d1` procedure. In a PDF/A-1 document a colour glyph is its outline in
-the text colour; one with no outline of its own, as Noto Color Emoji's are,
-is refused.
-
-`fonts_colr_test.go` holds every glyph of Google's COLRv1 conformance font
-(`testdata/colrv1`) to Skia, the renderer COLRv1 was specified against,
-through blackrenderer, and Noto Color Emoji's COLRv1 build to HarfBuzz
-(`hb-view`), in Ghostscript's and poppler's rendering: edges to within
-anti-aliasing, and the inside of every shape to within 12 levels a channel.
-Skia, not HarfBuzz, is the oracle for the conformance font: HarfBuzz's cairo
-renderer draws the sweeps that pass a full turn differently from Skia, and
-pdf0 draws them as Skia does. Two renderer defects were found on the way and
-are worked around in what pdf0 writes: Ghostscript refuses a calculator
-function with a real of seventeen digits and a function-based shading without
-an explicit `/Matrix`. One is not: Ghostscript draws a shading inside two
-nested clips as one flat colour (glyph 208 of the conformance font), which
-poppler draws correctly.
-
-## Cost
-
-A face drawn as Type 3 fonts costs what its glyphs cost, once each: a page
-that draws glyphs already drawn adds nothing, and the embedding a document
-rewrites as pages add glyphs reuses each glyph's images, paintings and
-compressed procedure. Measured on 200 A4 pages of 50 glyphs each, cycling
-through every emoji the face has (1,212 distinct):
-
-| face | build | file | per glyph | peak RSS |
-|---|---|---|---|---|
-| Noto Sans (text, for scale) | 0.05 s | 0.2 MB | 0.3 KB | 34 MB |
-| Noto Color Emoji, CBDT | 0.62 s | 5.6 MB | 4.6 KB | 92 MB |
-| Noto Color Emoji, COLRv1 | 0.93 s | 8.6 MB | 7.1 KB | 276 MB |
-
-The time and the file grow with the distinct glyphs, not with the pages.
-Before the procedures were compressed once, a COLR face's build was
-quadratic in its glyphs: 3.4 s for the same document, each page slower than
-the last.
-
-Every PDF/A document these fonts produce, at every level, is also validated
-by veraPDF (`TestType3DocumentsAreValidForVeraPDF`, testdata/verapdf), as
-well as by pdf0's own validator.
 
 ## CMaps
 
@@ -723,29 +378,104 @@ The parser is bounded, because a CMap arrives in a document: `<0000> <FFFFFFFF>
 one wider than 65,536 refuses the whole map, and the stream decodes through the
 same budget as any other.
 
+## CIDSet and CharSet
+
+Both are subset-completeness declarations in the `FontDescriptor`, and "present
+glyph" means something different per font type and, because veraPDF reads them
+so, per PDF/A part. `/CharSet` (Type 1 / MMType1) is a string of `/name`
+tokens, parsed by `core.ParseCharSet`. `/CIDSet` is a bitmap stream: bit *i*,
+MSB-first within each byte, means CID *i* is present. It is `core.CIDSet` and
+membership (`core.CIDSet.Has`) is tested directly against the bytes —
+deliberately, because materialising a set of every present CID turned a 64 MB
+CIDSet (512 M bits) into roughly 70 seconds of validation. That is pinned by
+`cidset_test.go`, including a 16 MiB all-ones guard.
+
+| Check | Level | What it asserts |
+|-------|-------|-----------------|
+| `checkFontSubsets` (`pdfa/pdfa.go`) | PDF/A-1 | A subset font (`ABCDEF+` BaseFont prefix) must *have* `/CharSet` or `/CIDSet`. Parts 2 and 3 only constrain the sets when present. |
+| `checkFontSubsetCompleteness` | PDF/A-1, -2, -3 | When present, the set must list every glyph name / CID **used for rendering**. |
+| `checkCIDSetProgramComplete` | PDF/A-1 | The `/CIDSet` of a visibly rendered CIDFont subset must be non-empty and enumerate every glyph **present in the program**: CID-keyed CFF charset CIDs, or, for `CIDFontType2`, every CID whose glyph (through its `/CIDToGIDMap`) has an outline. |
+| `checkCIDSetMatchesProgram` | PDF/A-2, -3 | The `/CIDSet` of a subset CIDFont, when present, lists **exactly the CIDs the program has**, both ways (6.2.11.4.2), as veraPDF's parser reads them: for `CIDFontType2` through an Identity map, CIDs 0 up to the number of long metrics `hhea` declares for `hmtx`, empty glyphs included, and no CID past the glyphs `maxp` declares; through a map stream, the CIDs it maps to a declared glyph; for a CID-keyed CFF, its charset's CIDs; for a CFF that is not CID-keyed, none. CID 0 is neither required nor checked. |
+
+PDF/A-4 has no 6.2.10.4.2 — PDF 2.0 deprecates both sets, and veraPDF's
+PDF/A-4 profile stops at 6.2.10.4.1 — so none of these runs there (`subsetRule`
+says so). The two program readings differ on purpose: at PDF/A-1 a glyph slot
+with no outline is not a CID the set must list, and at PDF/A-2 and -3 it is.
+That is why pdf0's own writer lists every glyph slot of a TrueType program; see
+[font-embedding.md](font-embedding.md#cidset).
+
+The PDF/UA counterparts read the program a third way. `checkType1CharSet`
+checks both directions, program→CharSet and CharSet→program.
+`checkCIDFontCIDSet` asks a `CIDFontType2` set to list every CID whose glyph
+has an outline, and exempts a glyph that is only a composite-glyph component
+under an Identity map, since no CID was meant to show it.
+
+## DoS guards
+
+Each exists because a crafted file reached it. Checks run behind `recover()`,
+but a hang or an OOM is not something `recover` catches.
+
+One of these is configurable per document; see
+[untrusted-input.md](untrusted-input.md#capping-what-one-document-costs).
+
+- **`/W` is not expanded** — `fontcheck.ParseCIDWidths` resolves the entries once into
+  disjoint CID segments and `Width` looks a CID up by binary search, so
+  `[0 2000000000 500]` costs one entry, not two billion map inserts, and 2,000
+  overlapping full-space ranges cost 2,000 (audit 2026-07-26 C1, 2026-09-22
+  C10; `internal/fontcheck/cidwidths_test.go`). It runs *before* the visible-render gate, so
+  merely selecting a Type 0 font with `Tf` reaches it. A `/W` named by
+  reference is read once per run however many fonts share it.
+- **cmap format 4 total work** (`WithMaxCmapWork`, default `1 << 18`) — a valid
+  subtable partitions the BMP in ~65536 iterations, a hostile one with many
+  full-range segments is O(segments × 65535) (2026-07-26 audit C10). On trip the partial
+  map is returned and marked partial (`font.Program.CmapPartial`), the glyph rules
+  decline, and the trip is reported — see [limits.md](limits.md).
+- **cmap format 12 total work** (the same `WithMaxCmapWork` budget, charged
+  per subtable) — `nGroups` is
+  a `uint32` and one group may span the whole of Unicode (0x110000 codes), so the
+  expansion is entirely font-controlled. The budget charges one unit per group
+  *and* one per code, which bounds the group loop as well as the map; on trip the
+  partial map is returned, as in format 4. `1 << 18` is four times the 65535
+  glyphs an sfnt can hold, so no honest font comes near it. `nGroups` is also
+  checked against the bytes actually present, and a group is skipped when
+  inverted or when it starts past U+10FFFF.
+- **CMap range span and entry count** and **CIDSet membership without
+  materialisation** (`core.CIDSet` tests bits in place) — both described above.
+- **Content lexer progress** — `core.ContentLexer`, the one content-stream
+  lexer, consumes at least one byte per step (a stray `)` included, so leaked
+  inline-image sample data cannot stall it), steps over `BI … EI` inline images
+  honouring a declared `/L`, and drops a run of regular bytes longer than
+  `core.MaxContentTokenLen` that is not a number while letting numeric tokens
+  run to full Annex C precision.
+- **Per-run memoization** — the validation cache holds the font-usage map, the
+  per-stream event skeletons and the per-stream used-name sets.
+
+### Why formats 4 and 12 share one budget
+
+They were two separate constants, both `1 << 18`, and were collapsed into the
+single `WithMaxCmapWork`. The obvious
+objection is that format 12 can address sixteen times as many code points as
+format 4 — the whole of Unicode rather than the BMP — so it might warrant more
+room.
+
+Measured against the veraPDF corpus, it does not. Across **358 embedded cmaps the
+largest holds 4,985 entries — 1.9% of the budget**, leaving roughly 52x headroom,
+and the ceiling is set by the font rather than the format: an sfnt holds at most
+65,535 glyphs, so a font mapping more than `1 << 18` code points is mapping four
+codes to every glyph it has.
+
+Splitting the knob would also expose the wrong thing. A caller can reason about
+"how much work may one font cost me"; they cannot reason about "how much work may
+the format-12 subtable cost me", because which format a font uses is an internal
+detail of the font, not a property of the document they are validating. The unit
+the budget counts — one per group and one per code — is format-agnostic, and the
+budget bounds a single subtable rather than the whole table, so a font carrying
+several does not have them compete.
+
+If a real font is ever found that needs different room per format, the split is
+a second field and a second option; nothing here forecloses it.
+
 ## Confirmed limitations
-
-- **Colour glyphs:** a COLR glyph that composites in SrcAtop, DestAtop, Xor
-  or Plus is refused. A gradient stop in the text colour needs the text in
-  DeviceRGB or DeviceGray. In PDF/A-1 a colour glyph with no outline of its
-  own is refused. A linear or radial colour line whose stops all share one
-  offset is drawn as a step even when it repeats; Skia draws such a sweep as
-  nothing, and pdf0 does the same for a sweep, with nothing to say what a
-  linear or radial one should be.
-
-- **Bitmap-only faces:** a greyscale glyph in a colour that is not
-  DeviceGray, DeviceRGB or DeviceCMYK (a named ICC space, a Separation, a
-  pattern), or in a colour the stream has not set, is drawn as a stencil of its
-  coverage, which keeps the colour and loses the anti-aliasing. SVG glyphs are
-  refused. A font with outlines *and* bitmaps is embedded as its outlines,
-  unless its licence permits embedding only its bitmaps: then its strikes —
-  CBDT, sbix, EBDT or bdat — are written as Type 3 fonts, as a bitmap-only
-  face's are, and a glyph whose only ink is its outline is refused. Such a
-  font with no strikes is refused (`fonts.ErrBitmapEmbeddingOnly`). In a
-  document that
-  claims PDF/A-1, which forbids soft masks, a greyscale glyph is a stencil and
-  a colour bitmap is painted through a 1-bit `/Mask` (`fonts.Forms.Opaque`):
-  their colours are kept and their anti-aliased edges are not.
 
 - **Predefined CMaps are not decoded.** A Type 0 font whose `/Encoding` names
   one of Adobe's published CMaps — `UniJIS-UCS2-H` and the rest — is checked at
@@ -762,3 +492,41 @@ same budget as any other.
 - **`simpleGlyphExists` treats GID 0 as non-existent** for TrueType, merging
   "code maps to `.notdef`" with "code maps to nothing"; only `isNotdefGlyph`
   separates them.
+
+## Third-party data
+
+Every table or file this repository keeps that came from elsewhere is listed,
+with its source, its pin and its licence, in
+[THIRD_PARTY_NOTICES](../THIRD_PARTY_NOTICES); this section says which of them
+font validation reads.
+
+- `internal/fontcheck/glyphlist.txt` is Adobe's Glyph List, verbatim, under the
+  BSD-style licence at its head, from
+  [adobe-type-tools/agl-aglfn](https://github.com/adobe-type-tools/agl-aglfn) at
+  commit `4036a9ca`. The PDF/A and PDF/UA /Differences rules read it.
+- The predefined-CMap codespaces in `internal/core/cmap_predefined.go` are
+  transcribed from Adobe's published CMaps (BSD 3-Clause).
+- `font/font_encodings.go` and `font/cff_strings.go` are forme's, transcribed
+  by hand from ISO 32000-1 Annex D.2 and Adobe Technical Note #5176, and
+  listed in forme's own notices.
+
+No font is read by validation but the ones a document embeds. The fonts and
+font data the writer uses, and the one typeface committed to this repository,
+are in [font-embedding.md](font-embedding.md#fonts-and-font-data-from-elsewhere).
+
+## File map
+
+| File | Owns | Governing spec |
+|------|------|----------------|
+| `pdfa/fonts.go`, `internal/core/fontuse.go`, `internal/core/interp.go`, `internal/core/cmap.go`, `internal/core/cmapparse.go`, `internal/core/cmap_predefined.go`, `internal/core/tounicode.go` | Content execution (`core.CollectFontTextUsage`), the PDF/A font rule functions, the predefined-CMap codespace table, PDF/A's encoding/AGL validation, CIDSet/CharSet, CMap and ToUnicode reading | ISO 32000-2 clause 9 (9.6 simple fonts, 9.7 composite, 9.10 Unicode mapping)<br/>ISO 19005-1 6.3, -2/-3 6.2.11, -4 6.2.10 |
+| `internal/fontcheck/` | What PDF/A and PDF/UA both check: a simple font's code→name table and widths, a CIDFont's `/W` (`fontcheck.ParseCIDWidths`) and the glyph a shown code selects, Type 3 `d0`/`d1` widths, the per-glyph width comparison, and the Adobe Glyph List with the `/Differences` rule (`fontcheck.DifferencesNotInAGL`) | ISO 32000-2 9.6.5, 9.7.4.3; ISO 19005-2 6.2.11.5–6; ISO 14289-1 7.21.5–6 |
+| `simplefont/` | The standard Latin encodings and character sets, and the code→glyph rule of a simple TrueType font (`simplefont.TrueTypeGlyph`); shared with the font writer and text extraction | ISO 32000-2 9.6.5, 9.6.6.4, Annex D |
+| forme `font/fontprog.go` | `font.Program` plus `font.ParseSFNT`, `font.ParseCFF`, `font.ParseType1` | OpenType/sfnt spec (`head`, `maxp`, `hhea`, `hmtx`, `loca`, `glyf`, `cmap`)<br/>Adobe TN #5176 (CFF), TN #5177 (Type 2 charstrings), TN #5015 (Type 1) |
+| forme `font/font_encodings.go` | Generated: `font.StandardEncodingNames`, `font.MacRomanEncodingNames`, `font.WinAnsiEncodingNames` | ISO 32000-1 Annex D.2 |
+| forme `font/cff_strings.go` | Generated: the 391 CFF standard strings, indexed by SID | Adobe TN #5176 Appendix A |
+
+Font findings are also produced outside these files: `checkFontsEmbedded` and
+`checkFontSubsets` live in `pdfa/pdfa.go`, the Level A Unicode rules over fonts
+in `pdfa/pdfa_levela_fonts.go`, the clause-7.21 PDF/UA font family in
+`pdfua/pdfua.go` and `pdfua/pdfua_fontprog.go`, and `pdfxCheckFontsEmbedded` in `pdfx/pdfx.go`. The font
+writer's files are mapped in [font-embedding.md](font-embedding.md#file-map).

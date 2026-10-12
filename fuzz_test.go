@@ -151,6 +151,9 @@ func exercise(t *testing.T, doc *Document, data []byte) {
 		_, _ = formalis.Validate(context.Background(), fx.XML, fx.Profile)
 	}
 	_ = ValidateOrderX(doc)
+	// The serializer is what is exercised: without the consent, Write refuses
+	// a signed input before reaching it.
+	doc.AllowInvalidatingSignatures()
 	var buf bytes.Buffer
 	_ = doc.Write(&buf)
 }
@@ -192,6 +195,9 @@ func FuzzRoundTrip(f *testing.F) {
 		if err != nil {
 			return
 		}
+		// Round-trip a signed input too: the consent keeps Write's refusal of
+		// one from ending the run before the serializer is reached.
+		doc.AllowInvalidatingSignatures()
 		var buf bytes.Buffer
 		if err := doc.Write(&buf); err != nil {
 			return // legitimately unwritable (reserved object 0, broken object stream, …)

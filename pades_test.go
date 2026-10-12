@@ -213,3 +213,45 @@ func TestPAdESUncoveredBytesAreFlagged(t *testing.T) {
 		t.Errorf("the appended bytes should be named as a disallowed change; issues: %v", res[0].Issues)
 	}
 }
+
+// TestPAdESReportsRevocation is docs audit 2026-10-11 D3: a PAdES result
+// carries the signer's revocation status, as VerifySignatures's does. The
+// signer's CA has revoked it, and the DSS says so. The chain still builds —
+// TrustedChain does not include the signer's own revocation — and the PAdES
+// assessment is of the signature's form, which revocation does not change;
+// what a ValidatePAdES-only caller needs is the status beside them.
+func TestPAdESReportsRevocation(t *testing.T) {
+	ca, caKey := signtest.CA(t, "pdf0 PAdES revocation CA")
+	tsaCert, tsaKey := signtest.TSACertKey(t)
+	signed, leaf := signedByLeaf(t, ca, caKey, leafTemplate("pdf0 PAdES revoked signer"))
+	roots := x509.NewCertPool()
+	roots.AddCert(ca)
+	for _, tc := range []struct {
+		name    string
+		revoked []*x509.Certificate
+		want    sign.RevocationStatus
+	}{
+		{"revoked", []*x509.Certificate{leaf}, sign.RevocationRevoked},
+		{"not revoked", nil, sign.RevocationGood},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vd := ValidationData{Certs: []*x509.Certificate{ca}, CRLs: [][]byte{signtest.MakeCRL(t, ca, caKey, tc.revoked)}}
+			d := readBytes(t, archive(t, signed, vd, tsaCert, tsaKey))
+			approval, _ := approvalAndTimestamps(verifySigs(t, d, sign.VerifyOptions{Roots: roots}))
+			res := padesOf(t, d, sign.VerifyOptions{Roots: roots})
+			if len(res) != 1 || len(approval) != 1 {
+				t.Fatalf("got %d PAdES results and %d signatures, want one of each", len(res), len(approval))
+			}
+			p := res[0]
+			if p.Revocation != approval[0].Revocation {
+				t.Errorf("PAdES revocation %+v differs from VerifySignatures's %+v", p.Revocation, approval[0].Revocation)
+			}
+			if p.Revocation.Status != tc.want || p.Revocation.Source != "CRL" {
+				t.Errorf("revocation = %v/%q, want %v/CRL", p.Revocation.Status, p.Revocation.Source, tc.want)
+			}
+			if !p.TrustedChain || !p.Conformant {
+				t.Errorf("trusted=%v conformant=%v issues=%v: neither includes the signer's revocation", p.TrustedChain, p.Conformant, p.Issues)
+			}
+		})
+	}
+}

@@ -25,15 +25,11 @@ import (
 //		all = append(all, e)
 //	}
 //
-// There is no longer an exception. The Factur-X and Order-X validators return a
-// result struct rather than a slice, because they carry the extracted invoice
-// XML and its coverage alongside the findings, but the findings themselves are
-// facturx.Violation and facturx.OrderXViolation values and satisfy this
-// interface like any other. They used to hold formalis.Violation, an external
-// type this package could not extend, which also put them outside IsCheckerFinding — so a
-// cancelled or panicking run had no way to say "pdf0 stopped early" that a
-// caller could tell apart from a conformance failure. That is why those two
-// validators had no Context variant, and why they have one now.
+// The Factur-X and Order-X validators return a result struct rather than a
+// slice, because they carry the extracted invoice XML and its coverage
+// alongside the findings, but the findings themselves are facturx.Violation
+// and facturx.OrderXViolation values and satisfy this interface like any
+// other, IsCheckerFinding included.
 type Violation interface {
 	error
 	// RuleID returns the identifier of the violated rule — an ISO clause like

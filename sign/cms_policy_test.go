@@ -32,7 +32,7 @@ var hashOIDs = map[crypto.Hash]asn1.ObjectIdentifier{
 
 // buildTestCMS builds a detached CMS SignedData over content the way other
 // producers do, in the variant v: it is the producing side of the tests
-// below, written out rather than borrowed from BuildSignedDataFull so that the
+// below, written out rather than borrowed from buildSignedDataFull so that the
 // shapes pdf0 does not itself produce can be built.
 func buildTestCMS(t *testing.T, content []byte, v cmsVariant) []byte {
 	t.Helper()
@@ -119,10 +119,10 @@ func TestRSAPSSParametersAreHonoured(t *testing.T) {
 	content := []byte("bytes signed with RSASSA-PSS")
 	for _, salt := range []int{20, 32, 64} {
 		cms := buildTestCMS(t, content, cmsVariant{pssSalt: salt})
-		if _, _, _, err := VerifyCMS(cms, content); err != nil {
+		if _, _, _, err := verifyCMS(cms, content); err != nil {
 			t.Errorf("PSS with a %d-byte salt: %v", salt, err)
 		}
-		if _, _, _, err := VerifyCMS(cms, append(append([]byte(nil), content...), '!')); err == nil {
+		if _, _, _, err := verifyCMS(cms, append(append([]byte(nil), content...), '!')); err == nil {
 			t.Errorf("PSS with a %d-byte salt verified over different content", salt)
 		}
 	}
@@ -136,7 +136,7 @@ func TestESSCertIDv2WithHashAlgorithm(t *testing.T) {
 	content := []byte("bytes signed with an explicit ESS hash algorithm")
 	for _, h := range []crypto.Hash{crypto.SHA256, crypto.SHA384, crypto.SHA512} {
 		cms := buildTestCMS(t, content, cmsVariant{essHash: h})
-		if _, _, _, err := VerifyCMS(cms, content); err != nil {
+		if _, _, _, err := verifyCMS(cms, content); err != nil {
 			t.Errorf("ESSCertIDv2 with %v: %v", h, err)
 		}
 	}
@@ -157,7 +157,7 @@ func TestSignedContentTypeAndESSBinding(t *testing.T) {
 	}
 	// signedContentTypeIs / checkESSCertBinding receive the CONTENTS of the signed
 	// attributes SET (the concatenated Attribute SEQUENCEs), as RawValue.Bytes
-	// yields in VerifyCMS — not a SET-wrapped blob.
+	// yields in verifyCMS — not a SET-wrapped blob.
 	if !signedContentTypeIs(ctAttr, oidData) {
 		t.Error("id-data content-type not recognized")
 	}

@@ -52,7 +52,7 @@ var orderXDocumentTypes = map[string]bool{"ORDER": true, "ORDER_CHANGE": true, "
 // Violation's mean, which documents them.
 //
 // It is a type of its own rather than a shared invoice-container finding, for
-// the reason every other validator in this package has one: an Order-X is a
+// the reason every other pdf0 validator has one: an Order-X is a
 // different standard judged by a different rule set, and Error has to say so —
 // a caller holding one mixed report must be able to read "ORDER-03" and know it
 // is the order type code and not something an invoice rule engine said. The two
@@ -152,7 +152,7 @@ func validateOrderContext(ctx context.Context, doc core.View) (res OrderXResult)
 	// An Order-X file shall be PDF/A-3, adopted exactly as for Factur-X.
 	adoptPDFAFindings(add, "pdfa-3/", pdfaFindings(doc))
 	if doc.Locked {
-		return res // ciphertext throughout; see the same check in ValidateContext
+		return res // ciphertext throughout; see the same check in validateContext
 	}
 
 	cat := doc.ResolveDict(doc.Trailer.Get("Root"))

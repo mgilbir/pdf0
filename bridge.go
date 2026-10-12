@@ -49,6 +49,8 @@ var (
 
 	pdfrValidateView  = bridge.Resolve[func(core.View) []pdfr.Violation](bridge.PDFRValidateView)
 	pdfuaValidateView = bridge.Resolve[func(core.View, string) []pdfua.Violation](bridge.PDFUAValidateView)
+	pdfuaRunCheck     = bridge.Resolve[func(func() []pdfua.Violation) []pdfua.Violation](bridge.PDFUARunCheck)
+	pdfuaWithPart     = bridge.Resolve[func([]pdfua.Violation, string) []pdfua.Violation](bridge.PDFUAWithPart)
 	pdfvtValidateView = bridge.Resolve[func(core.View, string) []pdfvt.Violation](bridge.PDFVTValidateView)
 	pdfxValidateView  = bridge.Resolve[func(core.View, pdfx.Level) []pdfx.Violation](bridge.PDFXValidateView)
 

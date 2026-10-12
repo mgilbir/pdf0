@@ -21,14 +21,19 @@ import (
 //   - Restricted License embedding (0x0002, with neither of the more permissive
 //     usage bits beside it): the font must not be embedded at all. Embed
 //     refuses, and says so.
-//   - Bitmap embedding only (0x0200): only the font's bitmaps may be embedded.
-//     A face with bitmap strikes — whether or not it also has outlines — is
-//     embedded as images of them, in Type 3 fonts (type3.go), which is what
-//     the bit permits; a glyph whose only ink is its outline is refused. A
-//     face with no strikes is refused.
+//   - Bitmap embedding only (0x0200): "only bitmaps contained in the font may
+//     be embedded. No outline data may be embedded." A face with bitmap
+//     strikes — whether or not it also has outlines — is embedded as images
+//     of them, in Type 3 fonts (type3.go), which is what the bit permits; a
+//     glyph whose only ink is its outline is refused. A face with no strikes
+//     is refused, as the specification says. A COLR colour glyph is painted
+//     from outlines, so a face with the bit is never drawn in its colour
+//     glyphs (colourFace): its strikes are drawn, or it is refused.
 //   - No subsetting (0x0100): the font may be embedded only whole. Embed then
 //     writes the program it was loaded from, untouched, and names it without a
-//     subset tag, because it is not one. That includes a face from Adopt.
+//     subset tag, because it is not one. That includes a face from Adopt. A
+//     face written as Type 3 fonts carries only the glyphs drawn, which is a
+//     subset, and is refused (type3Allowed).
 //
 // Preview & Print (0x0004) and Editable (0x0008) permit what a PDF does with
 // a font, and Installable (no usage bit) permits everything. Where more than
@@ -45,15 +50,20 @@ var ErrRestrictedLicense = errors.New("fonts: the font's licence forbids embeddi
 var ErrBitmapEmbeddingOnly = errors.New("fonts: the font's licence permits embedding " +
 	"only its bitmaps (OS/2 fsType 0x0200), and it has none for what is drawn")
 
-// ErrBitmapNoSubsetting is a face whose glyphs are only bitmaps and whose
-// licence forbids subsetting it. Its Type 3 fonts carry images of the glyphs a
-// document drew, which is a subset, and they are not written.
+// ErrBitmapNoSubsetting is a face written as Type 3 fonts — its glyphs only
+// bitmaps, its licence permitting only its bitmaps, or drawn in its COLR
+// colour glyphs — whose licence forbids subsetting it. Its Type 3 fonts carry
+// the glyphs a document drew and no others, which is a subset, and they are
+// not written. A colour face can be embedded whole as its outlines instead,
+// in the text colour: SetColourGlyphs(false).
 var ErrBitmapNoSubsetting = errors.New("fonts: the font's licence forbids subsetting it " +
-	"(OS/2 fsType 0x0100), and a face whose glyphs are only bitmaps is embedded as images of the glyphs drawn")
+	"(OS/2 fsType 0x0100), and a face drawn as its bitmap or colour glyphs is written as Type 3 fonts " +
+	"of the glyphs drawn, which is a subset")
 
-// type3Allowed is embeddingAllowed for a face whose glyphs are only bitmaps,
-// which is embedded as images of them: what the bitmap-only bit permits, and
-// what no subsetting forbids.
+// type3Allowed is embeddingAllowed for a face written as Type 3 fonts, whose
+// glyphs are images of its bitmaps or paintings of its colour glyphs: what the
+// bitmap-only bit permits for the first (colourFace never draws the second
+// under it), and what no subsetting forbids for both.
 func type3Allowed(fsType shape.FSType, stated bool) error {
 	if !stated {
 		return nil

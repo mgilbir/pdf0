@@ -61,9 +61,10 @@ type Page struct {
 	// This is the ordinary way to put a font on a page. Embedding a face
 	// subsets it to the glyphs it was actually asked to set, so it can only
 	// happen once the drawing is finished — which makes the correct order
-	// draw, embed, then build the page, and makes embedding first produce a
-	// font containing nothing but .notdef. That is an ordering a caller has to
-	// know and cannot be reminded of.
+	// draw, embed, then build the page. Face.Embed refuses a face that has
+	// drawn nothing yet, but a face embedded part-way through is a font
+	// without the glyphs drawn after it, and nothing can notice that: it is
+	// an ordering a caller has to know.
 	//
 	// Naming the face here removes the question: the drawing is complete by the
 	// time a page is added, so this embeds it then. A face is embedded once

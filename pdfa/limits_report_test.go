@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/fontcheck"
 	"github.com/mgilbir/pdf0/internal/hostile"
 	"github.com/mgilbir/pdf0/object"
 	"strings"
@@ -141,19 +142,19 @@ func TestCmapWorkBudgetDoesNotCondemnGlyphs(t *testing.T) {
 func TestCIDWidthRangeIsCompleteWithoutExpansion(t *testing.T) {
 	hostile.Run(t, hostile.Limits{MaxRSS: 256 << 20, Timeout: time.Minute}, func(t *testing.T) {
 		doc := mkV(core.View{Objects: map[int]*object.IndirectObject{}})
-		w, complete := parseCIDWidths(doc, object.Array{object.Integer(0), object.Integer(2_000_000_000), object.Real(500)})
+		w, complete := fontcheck.ParseCIDWidths(doc, object.Array{object.Integer(0), object.Integer(2_000_000_000), object.Real(500)})
 		if !complete {
 			t.Error("a wide /W range is read in full, and the widths are complete")
 		}
-		if got, ok := w.width(1_999_999_999); !ok || got != 500 {
+		if got, ok := w.Width(1_999_999_999); !ok || got != 500 {
 			t.Errorf("width(1999999999) = %v, %v; want 500, true", got, ok)
 		}
 		// A malformed (inverted) range declares nothing, so nothing is missing.
-		if _, complete := parseCIDWidths(doc, object.Array{object.Integer(100), object.Integer(10), object.Real(500)}); !complete {
+		if _, complete := fontcheck.ParseCIDWidths(doc, object.Array{object.Integer(100), object.Integer(10), object.Real(500)}); !complete {
 			t.Error("an inverted /W range is malformed input, and declares nothing")
 		}
 		// A /W that is not an array cannot be read.
-		if _, complete := parseCIDWidths(doc, object.Integer(3)); complete {
+		if _, complete := fontcheck.ParseCIDWidths(doc, object.Integer(3)); complete {
 			t.Error("a /W that is not an array claims to be complete")
 		}
 	})

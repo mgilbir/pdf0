@@ -12,10 +12,17 @@ import (
 // through a core.View; this is the boundary that starts the run and reports the
 // guards that tripped while the file was read.
 
-// ValidatePDFVT checks whether doc conforms to PDF/VT-1 (ISO 16612-2). It
-// requires conformance to the PDF/X-4 base profile, a valid document part
-// hierarchy, and PDF/VT-1 identification in XMP. An empty result means no
-// violations were found.
+// ValidatePDFVT checks doc against the implemented PDF/VT-1 rules (ISO
+// 16612-2). It requires conformance to the PDF/X-4 base profile, a valid
+// document part hierarchy, and PDF/VT-1 identification in XMP; the base's
+// findings are reported under "pdfx-4/" and the hierarchy's under "dpart/".
+//
+// An empty result means none of the implemented checks fired, not a guarantee
+// of full conformance: it is as partial as ValidatePDFX and ValidateDParts,
+// which it composes. The result may include checker findings, under the rules
+// "limit" and "internal" — never prefixed, whichever part of the run they came
+// from — which say pdf0 could not finish a check rather than that the document
+// is wrong (IsCheckerFinding).
 func ValidatePDFVT(doc *Document) []pdfvt.Violation {
 	return validatePDFVTImpl(core.Canceler{}, doc, "1")
 }

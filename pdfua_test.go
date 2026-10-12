@@ -24,10 +24,24 @@ func TestValidatePDFUA(t *testing.T) {
 		}
 		return false
 	}
-	for _, want := range []string{"tagged", "structure tree", "default language", "DisplayDocTitle"} {
+	for _, want := range []string{"tagged", "structure tree", "DisplayDocTitle"} {
 		if !has(want) {
 			t.Errorf("expected a violation mentioning %q; got %v", want, v)
 		}
+	}
+	// A catalog /Lang is PDF/UA-2's requirement. PDF/UA-1 asks that each text's
+	// language be determinable, and this document shows no text.
+	if has("language") {
+		t.Errorf("PDF/UA-1: a document with no text has no language to determine; got %v", v)
+	}
+	ua2 := false
+	for _, e := range ValidatePDFUA2(doc) {
+		if strings.Contains(e.Message, "default language") {
+			ua2 = true
+		}
+	}
+	if !ua2 {
+		t.Error("PDF/UA-2: a document with no catalog /Lang must be reported")
 	}
 
 	// Make the document conform to the implemented checks.

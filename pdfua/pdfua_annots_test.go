@@ -49,12 +49,12 @@ func TestUATrapNet(t *testing.T) {
 	a.Set("Subtype", object.Name("TrapNet"))
 	doc.Objects[5] = &object.IndirectObject{Number: 5, Value: a}
 	referenced(doc, 5)
-	if !hasUAClause(checkUAAnnotations(doc), "7.18.2") {
+	if !hasUAClause(checkUAAnnotations(doc, nil, "1"), "7.18.2") {
 		t.Error("TrapNet annotation not flagged")
 	}
 	// A hidden TrapNet is exempt.
 	a.Set("F", object.Integer(2))
-	if hasUAClause(checkUAAnnotations(doc), "7.18.2") {
+	if hasUAClause(checkUAAnnotations(doc, nil, "1"), "7.18.2") {
 		t.Error("hidden annotation should be exempt")
 	}
 }
@@ -68,18 +68,18 @@ func TestUAAnnotationTagged(t *testing.T) {
 	a.Set("Subtype", object.Name("Text"))
 	doc.Objects[5] = &object.IndirectObject{Number: 5, Value: a}
 	referenced(doc, 5)
-	if !hasUAClause(checkUAAnnotations(doc), "7.18.1") {
+	if !hasUAClause(checkUAAnnotations(doc, nil, "1"), "7.18.1") {
 		t.Error("untagged annotation not flagged")
 	}
 	a.Set("StructParent", object.Integer(0))
 	a.Set("Contents", object.String{Value: []byte("a note")}) // 7.18.1 also needs a description
-	if hasUAClause(checkUAAnnotations(doc), "7.18.1") {
+	if hasUAClause(checkUAAnnotations(doc, nil, "1"), "7.18.1") {
 		t.Error("tagged annotation with a description should be clean")
 	}
 	// Hidden annotations are exempt even without /StructParent.
 	a.Delete("StructParent")
 	a.Set("F", object.Integer(2))
-	if hasUAClause(checkUAAnnotations(doc), "7.18.1") {
+	if hasUAClause(checkUAAnnotations(doc, nil, "1"), "7.18.1") {
 		t.Error("hidden annotation should be exempt from tagging")
 	}
 }
@@ -93,11 +93,11 @@ func TestUALinkAltText(t *testing.T) {
 	a.Set("StructParent", object.Integer(0)) // tagged, so only the alt-text rule applies
 	doc.Objects[5] = &object.IndirectObject{Number: 5, Value: a}
 	referenced(doc, 5)
-	if !hasUAClause(checkUAAnnotations(doc), "7.18.5") {
+	if !hasUAClause(checkUAAnnotations(doc, nil, "1"), "7.18.5") {
 		t.Error("Link without /Contents not flagged")
 	}
 	a.Set("Contents", object.String{Value: []byte("go to the next section")})
-	if hasUAClause(checkUAAnnotations(doc), "7.18.5") {
+	if hasUAClause(checkUAAnnotations(doc, nil, "1"), "7.18.5") {
 		t.Error("Link with /Contents should be clean")
 	}
 }
@@ -106,11 +106,11 @@ func TestUALinkAltText(t *testing.T) {
 // yields one internal finding carrying the panic value, rather than taking the
 // run down or vanishing.
 func TestRunCheckReportsPanics(t *testing.T) {
-	ua := RunCheck(func() []Violation { panic("bang") })
+	ua := runCheck(func() []Violation { panic("bang") })
 	if len(ua) != 1 || ua[0].Clause != finding.InternalRule {
-		t.Fatalf("RunCheck: got %v, want one %q finding", ua, finding.InternalRule)
+		t.Fatalf("runCheck: got %v, want one %q finding", ua, finding.InternalRule)
 	}
 	if !strings.Contains(ua[0].Message, "bang") {
-		t.Errorf("RunCheck: message %q does not carry the panic value", ua[0].Message)
+		t.Errorf("runCheck: message %q does not carry the panic value", ua[0].Message)
 	}
 }

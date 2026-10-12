@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"github.com/mgilbir/pdf0/object"
-	"github.com/mgilbir/pdf0/sign"
 	"io"
 	"time"
 )
@@ -44,6 +43,9 @@ type ValidationData struct {
 // B-LTA document's archival time-stamp, which ETSI EN 319 142-1 expects to be
 // done before the last one's authority certificate expires, therefore keeps
 // every earlier piece of revocation evidence (audit 2026-09-22 C60).
+//
+// It refuses an encrypted document as WriteSigned does, with the same two
+// errors prefixed "pdf0: timestamp:" rather than "pdf0: signing:".
 func (d *Document) WriteArchivalTimestamp(w io.Writer, data ValidationData, tsaCert *x509.Certificate, tsaKey crypto.Signer) error {
 	if err := d.signable("timestamp"); err != nil {
 		return err
@@ -234,7 +236,7 @@ func patchDocTimestamp(data []byte, tsaCert *x509.Certificate, tsaKey crypto.Sig
 	if err != nil {
 		return nil, err
 	}
-	token, err := sign.BuildTimestampToken(signed, tsaCert, tsaKey, time.Now().UTC())
+	token, err := signBuildTimestampToken(signed, tsaCert, tsaKey, time.Now().UTC())
 	if err != nil {
 		return nil, err
 	}

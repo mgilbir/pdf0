@@ -3,8 +3,9 @@
 //
 // The font is Helvetica, one of the fourteen a reader is required to have, so
 // nothing is embedded. That is legal in a plain PDF and *not* in PDF/A, which
-// requires every font to be embedded — see the fonts package for that, and
-// simple_pdfa for a conforming document.
+// requires every font to be embedded — see examples/text for an embedded font,
+// and examples/simple_pdfa for a conforming document. docs/building.md walks
+// through this API.
 package main
 
 import (
@@ -17,19 +18,12 @@ import (
 )
 
 func main() {
-	doc := &pdf.Document{Version: "1.7", Objects: map[int]*object.IndirectObject{}}
-
-	// A catalog and an empty page tree for AddPage to append to.
-	pages := &object.Dictionary{}
-	pages.Set("Type", object.Name("Pages"))
-	pages.Set("Kids", object.Array{})
-	pages.Set("Count", object.Integer(0))
-	pagesRef := doc.Add(pages)
-
-	catalog := &object.Dictionary{}
-	catalog.Set("Type", object.Name("Catalog"))
-	catalog.Set("Pages", pagesRef)
-	doc.Trailer.Set("Root", doc.Add(catalog))
+	// A catalog, an empty page tree for AddPage to append to, and a file
+	// identifier (/ID). NewDocument starts a PDF 2.0 document; setting Version
+	// before anything is added makes it a 1.7 one, written with a %PDF-1.7
+	// header.
+	doc := pdf.NewDocument()
+	doc.Version = "1.7"
 
 	// One of the standard fourteen faces, referenced rather than embedded.
 	helvetica := &object.Dictionary{}

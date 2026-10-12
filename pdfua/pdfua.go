@@ -5,6 +5,7 @@ import (
 	"github.com/mgilbir/pdf0/internal/checked"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/finding"
+	"github.com/mgilbir/pdf0/internal/fontcheck"
 	"github.com/mgilbir/pdf0/internal/xmp"
 	"github.com/mgilbir/pdf0/object"
 	"math"
@@ -41,8 +42,9 @@ func (v Violation) Error() string {
 	return fmt.Sprintf("[PDF/UA-%s %s] %s", part, v.Clause, v.Message)
 }
 
-// WithPart sets the part on every finding and returns them.
-func WithPart(vs []Violation, part string) []Violation {
+// withPart sets the part on every finding and returns them. The root package
+// calls it through internal/bridge, for the findings it adds at the boundary.
+func withPart(vs []Violation, part string) []Violation {
 	for i := range vs {
 		vs[i].Part = part
 	}
@@ -74,14 +76,23 @@ func validateView(doc core.View, part string) []Violation {
 		if doc.Cancel.Stopped() {
 			return
 		}
-		v = append(v, RunCheck(func() []Violation { return check(doc) })...)
+		v = append(v, runCheck(func() []Violation { return check(doc) })...)
 	}
 	runCat := func(check func(core.View, *object.Dictionary) []Violation) {
 		run(func(d core.View) []Violation { return check(d, cat) })
 	}
 
-	// 7.1 — tagged PDF, structure tree, shown title; 7.2 — default language.
+	// 7.1 — tagged PDF, structure tree, shown title.
 	runCat(checkUACatalogBasics)
+
+	// 7.2 — natural language: PDF/UA-2 requires the catalog /Lang; PDF/UA-1
+	// requires each text's language to be determinable, which a catalog /Lang
+	// settles at once.
+	if part == "2" {
+		runCat(checkUA2CatalogLang)
+	} else {
+		runCat(checkUA1LangDeterminable)
+	}
 
 	// 5 — the file must declare PDF/UA conformance in its XMP metadata.
 	run(func(d core.View) []Violation { return checkUAIdentifier(d, cat, part) })
@@ -98,6 +109,7 @@ func validateView(doc core.View, part string) []Violation {
 	run(checkUAToUnicodeValues)
 	run(checkUAFontSubsetGlyphs)
 	run(checkUANotdefCID)
+	run(checkUAFontWidths)
 
 	// 7.2 — text must map to Unicode (Matterhorn 10-001).
 	run(checkUACharMapping)
@@ -110,21 +122,31 @@ func validateView(doc core.View, part string) []Violation {
 	runCat(checkUARoleMapIntegrity)
 	runCat(checkUAStructParent)
 
-	// 7.2 — structure-element nesting (tables, lists, TOC) per the UA profile.
+	// 7.2 — structure-element nesting (tables, lists, TOC) per the UA profile;
+	// 7.5 — in a regular table, every data cell's headers determinable.
 	runCat(checkUAStructNesting)
 	runCat(checkUATableListStructure)
-	runCat(checkUATableGrid)
-	runCat(checkUATableTHScope)
+	runCat(func(d core.View, cat *object.Dictionary) []Violation { return checkUATableGrid(d, cat, part) })
 
-	// 7.4 — heading levels must not be skipped; start at H1; one <H> per node.
-	runCat(checkUAHeadings)
-	runCat(checkUAOneHPerNode)
+	// 7.4.2 — heading levels must not be skipped, and start at H1; 7.4.4 —
+	// one <H> per node, and <H> and <H1>–<H6> not mixed. All PDF/UA-1 only:
+	// ISO 14289-2 8.2.5.12 NOTE 2 says part 2, following WCAG, has no
+	// sequential-heading requirement, and part 2 has no weakly structured
+	// documents to constrain — it forbids <H> outright (8.2.5.12, below),
+	// which already reports every <H> the 7.4.4 rules could fire on. The
+	// veraPDF PDF/UA-2 profile has no rule but 8.2.5.12-t01 among them.
+	if part == "1" {
+		runCat(checkUAHeadings)
+		runCat(checkUAOneHPerNode)
+		runCat(checkUAStrongWeak)
+	}
 
 	// 7.16 — encryption must not disable accessibility (Matterhorn 26).
 	run(checkUASecurity)
 
-	// 7.18.2 — forbidden annotation subtypes (Matterhorn 28-007).
-	run(checkUAAnnotations)
+	// 7.18.2 — forbidden annotation subtypes (Matterhorn 28-007); 7.18.1 and
+	// 7.18.5 — annotation descriptions, PDF/UA-1 only.
+	run(func(d core.View) []Violation { return checkUAAnnotations(d, cat, part) })
 
 	// 7.15 — dynamic XFA is forbidden (Matterhorn 25-001).
 	runCat(checkUAXFA)
@@ -139,7 +161,7 @@ func validateView(doc core.View, part string) []Violation {
 	run(checkUAReferenceXObjects)
 	run(checkUAFormXObjectMCID)
 
-	// 7.2 — any present /Lang must be a valid BCP 47 tag.
+	// 7.2 — any present /Lang must be a language identifier (RFC 3066).
 	runCat(checkUALang)
 
 	// 7.10 — optional-content config; 7.11 — embedded-file specifications.
@@ -157,11 +179,31 @@ func validateView(doc core.View, part string) []Violation {
 	if part == "2" {
 		runCat(checkUA2NamespaceRoleMaps)
 		runCat(checkUA2MathParent)
+		runCat(checkUA2LinkTargets)
 	}
 
-	// 7.1 — Suspects must not be true; 7.4.4 strong/weak; 7.9 Note IDs.
+	// The rest of what only PDF/UA-2 asks (pdfua2_ident.go, pdfua2_struct.go,
+	// pdfua2_interactive.go): pdfuaid:rev (5); one Document root in the PDF
+	// 2.0 namespace (8.2.5.2); no H (8.2.5.12); ListNumbering on a labelled
+	// list (8.2.5.25); structure destinations (8.8); invisible annotations as
+	// artifacts (8.9.2.2); a file attachment's AFRelationship (8.9.2.4.10);
+	// one widget per Form (8.10.1) and a widget's label or /Contents
+	// (8.10.2.3); an embedded file's /Desc (8.14.1).
+	if part == "2" {
+		runCat(checkUA2Revision)
+		runCat(checkUA2DocumentRoot)
+		runCat(checkUA2NoH)
+		runCat(checkUA2ListNumbering)
+		runCat(checkUA2StructDestinations)
+		runCat(checkUA2InvisibleAnnots)
+		runCat(checkUA2FileAttachments)
+		runCat(checkUA2FormOneWidget)
+		runCat(checkUA2WidgetDescription)
+		runCat(checkUA2EmbeddedFileDesc)
+	}
+
+	// 7.1 — Suspects must not be true; 7.9 Note IDs.
 	runCat(checkUASuspects)
-	runCat(checkUAStrongWeak)
 	runCat(checkUANotes)
 
 	// 7.1 — real content must be tagged or marked as an artifact (Matterhorn 01).
@@ -170,16 +212,17 @@ func validateView(doc core.View, part string) []Violation {
 	// 7.18 — annotation must sit under the right structure element (28-010/011).
 	runCat(checkUAAnnotStructType)
 
-	// 7.3 — every figure needs alternate text.
-	runCat(checkFigureAlt)
+	// 7.3 — every figure needs alternate text; 7.7 — so does a formula.
+	runCat(func(d core.View, cat *object.Dictionary) []Violation { return checkFigureAlt(d, cat, part) })
 
 	// The caller sorts.
-	return WithPart(v, part)
+	return withPart(v, part)
 }
 
 // checkUACatalogBasics covers the catalog-level PDF/UA requirements: the file
-// must be tagged (7.1) with a structure tree, specify a default natural
-// language (7.2), and display its title in the window title bar (7.1).
+// must be tagged (7.1) with a structure tree and display its title in the
+// window title bar (7.1). The catalog /Lang is pdfua_lang.go's: PDF/UA-2
+// requires it, PDF/UA-1 only requires that languages be determinable.
 func checkUACatalogBasics(d core.View, cat *object.Dictionary) []Violation {
 	var v []Violation
 
@@ -192,11 +235,6 @@ func checkUACatalogBasics(d core.View, cat *object.Dictionary) []Violation {
 		v = append(v, Violation{Clause: "7.1", Message: "document has no structure tree (/StructTreeRoot)", Object: 0})
 	}
 
-	// 7.2 — a default natural language must be set.
-	if !d.NonEmptyStringOrLocked(cat.Get("Lang")) {
-		v = append(v, Violation{Clause: "7.2", Message: "document does not specify a default language (catalog /Lang)", Object: 0})
-	}
-
 	// 7.1 — the document title must be shown in the window title bar.
 	vp := d.ResolveDict(cat.Get("ViewerPreferences"))
 	if vp == nil || !d.IsTrue(vp.Get("DisplayDocTitle")) {
@@ -205,10 +243,15 @@ func checkUACatalogBasics(d core.View, cat *object.Dictionary) []Violation {
 	return v
 }
 
-// checkUAHeadings flags a skipped numbered-heading level (e.g. H1 followed by H3
-// without an intervening H2), walking the structure tree in document order. It
-// keys off the /RoleMap-resolved type, like the sibling heading checks, so a
-// custom type mapped to a numbered heading counts as one (audit C29).
+// checkUAHeadings flags a first numbered heading that is not H1 and a skipped
+// numbered-heading level (e.g. H1 followed by H3 without an intervening H2),
+// walking the structure tree in document order. Both requirements are ISO
+// 14289-1 7.4.2's bullets, where veraPDF (7.4.2-t01) and the corpus's
+// 7.4.2-t01 fail files put them; Matterhorn 14-003 cites the skip as
+// "UA1:7.4-1", but 7.4 has no paragraph of its own. It keys off the
+// /RoleMap-resolved type, like the sibling heading checks, so a custom type
+// mapped to a numbered heading counts as one (audit C29). validateView runs it
+// for PDF/UA-1 only.
 func checkUAHeadings(d core.View, cat *object.Dictionary) []Violation {
 	var levels []int
 	for _, n := range structTree(d, cat) {
@@ -218,14 +261,16 @@ func checkUAHeadings(d core.View, cat *object.Dictionary) []Violation {
 	}
 
 	var v []Violation
-	// 7.4.2: a strongly structured document's first numbered heading must be H1.
+	// 7.4.2: the first numbered heading must be H1. The clause is about
+	// documents that are not strongly structured (ISO 32000-1 14.8.4.3.5):
+	// numbered headings are what make a document weakly structured.
 	if len(levels) > 0 && levels[0] != 1 {
-		v = append(v, Violation{Clause: "7.4.2", Message: fmt.Sprintf("first heading is H%d; a strongly structured document must start at H1", levels[0]), Object: 0})
+		v = append(v, Violation{Clause: "7.4.2", Message: fmt.Sprintf("first heading is H%d; numbered headings must start at H1", levels[0]), Object: 0})
 	}
 	prev := 0
 	for _, lvl := range levels {
 		if prev != 0 && lvl > prev+1 {
-			v = append(v, Violation{Clause: "7.4", Message: fmt.Sprintf("heading level H%d follows H%d, skipping a level", lvl, prev), Object: 0})
+			v = append(v, Violation{Clause: "7.4.2", Message: fmt.Sprintf("heading level H%d follows H%d, skipping a level", lvl, prev), Object: 0})
 		}
 		prev = lvl
 	}
@@ -324,7 +369,11 @@ func checkUAIdentifier(d core.View, cat *object.Dictionary, want string) []Viola
 		// "limit" finding. Saying the part is missing would be a guess.
 		return nil
 	case core.XMPMalformed:
-		return []Violation{{Clause: "5", Message: "XMP metadata is not well-formed XML, so it declares no PDF/UA part (pdfuaid:part)", Object: 0}}
+		msg := "XMP metadata is not well-formed XML"
+		if why := d.XMPMalformedReason(stream, object.RefNum(cat.Get("Metadata"))); why != "" {
+			msg += " (" + why + ")"
+		}
+		return []Violation{{Clause: "5", Message: msg + ", so it declares no PDF/UA part (pdfuaid:part)", Object: 0}}
 	case core.XMPAbsent:
 		return []Violation{{Clause: "5", Message: "XMP metadata does not declare the PDF/UA part (pdfuaid:part)", Object: 0}}
 	}
@@ -452,16 +501,27 @@ func checkUASecurity(d core.View) []Violation {
 	return nil
 }
 
-// checkUAAnnotations flags forbidden annotation subtypes. Hidden and Popup
-// annotations are exempt from checkpoint 28.
+// checkUAAnnotations flags forbidden annotation subtypes, and, for PDF/UA-1,
+// annotations without the description ISO 14289-1 asks of them. Hidden and
+// Popup annotations are exempt from checkpoint 28.
 //
 // It judges the annotations the document reaches, direct ones included — an
 // annotation written inline in a page's /Annots is as much the page's as one
 // written as its own object — and not an orphan nothing refers to (audit
 // 2026-09-22 C83). A direct annotation is reported against the object it is
 // written in.
-func checkUAAnnotations(d core.View) []Violation {
+//
+// The rule that a visible annotation be tagged is PDF/UA-1's: ISO 14289-2
+// 8.9.2.2 lets any annotation be an artifact, one outside the structure tree
+// included. The description rules (7.18.1, 7.18.5) are PDF/UA-1's too: ISO
+// 14289-2 makes a Link's /Contents a "should" (8.9.2.4.2), lets markup annotations omit it
+// (8.9.2.3) and has no /TU rule, and the veraPDF PDF/UA-2 profile has none of
+// them. They follow the veraPDF PDF/UA-1 profile in two more ways: an
+// annotation whose rectangle is outside its page's crop box is exempt, and an
+// /Alt is read from the enclosing structure element (see annotContext).
+func checkUAAnnotations(d core.View, cat *object.Dictionary, part string) []Violation {
 	var v []Violation
+	ctx := newAnnotContext(d, cat)
 	for _, r := range d.ReachableDicts() {
 		a, num := r.Dict, r.ObjNum
 		if r.Stream != nil || !d.IsAnnotation(a) {
@@ -477,24 +537,28 @@ func checkUAAnnotations(d core.View) []Violation {
 		if st == "TrapNet" {
 			v = append(v, Violation{Clause: "7.18.2", Message: "TrapNet annotations are not permitted", Object: num})
 		}
+		// An /Alt on the annotation dictionary itself is not one ISO 32000
+		// defines, but it has always been accepted here and is kept.
+		hasAlt := d.NonEmptyStringOrLocked(a.Get("Alt")) || ctx.structAlt(d, a)
+		describe := part == "1" && !ctx.outsideCropBox(d, a)
 		// 28-012: a Link annotation needs an alternate description in /Contents.
-		if st == "Link" {
+		if describe && st == "Link" {
 			if !d.NonEmptyStringOrLocked(a.Get("Contents")) {
 				v = append(v, Violation{Clause: "7.18.5", Message: "Link annotation has no alternate description (/Contents)", Object: num})
 			}
 		}
 		// 7.18.1: a form-field Widget must have a non-empty field description /TU
-		// (own or inherited from its parent field) or an /Alt on the widget.
-		if st == "Widget" {
-			if !effectiveFieldTU(d, a) && !d.NonEmptyStringOrLocked(a.Get("Alt")) {
+		// (own or inherited from its parent field) or an /Alt.
+		if describe && st == "Widget" {
+			if !effectiveFieldTU(d, a) && !hasAlt {
 				v = append(v, Violation{Clause: "7.18.1", Message: "form-field Widget has neither a field description (/TU) nor an /Alt", Object: num})
 			}
 		}
 		// 7.18.1: every other visible annotation (not a Widget, which has its own
 		// TU/Alt rule, and not a PrinterMark artifact) must carry an alternate
 		// description in /Contents or /Alt.
-		if st != "Widget" && st != "Link" && st != "PrinterMark" {
-			if !d.NonEmptyStringOrLocked(a.Get("Contents")) && !d.NonEmptyStringOrLocked(a.Get("Alt")) {
+		if describe && st != "Widget" && st != "Link" && st != "PrinterMark" {
+			if !d.NonEmptyStringOrLocked(a.Get("Contents")) && !hasAlt {
 				v = append(v, Violation{Clause: "7.18.1", Message: "annotation of subtype /" + string(st) + " has no alternate description (/Contents or /Alt)", Object: num})
 			}
 		}
@@ -509,11 +573,96 @@ func checkUAAnnotations(d core.View) []Violation {
 		// 28-002/010/011: every other visible annotation must be represented in the
 		// structure tree — it carries a /StructParent linking it to a structure
 		// element. (Hidden and Popup annotations were already skipped above.)
-		if a.Get("StructParent") == nil {
+		// PDF/UA-1 only: ISO 14289-2 8.9.2.2 lets any annotation be an artifact,
+		// and one "not present in the structure tree" is one; every rule of the
+		// veraPDF PDF/UA-2 profile passes an annotation with no structure parent.
+		if part == "1" && a.Get("StructParent") == nil {
 			v = append(v, Violation{Clause: "7.18.1", Message: "annotation is not tagged (no /StructParent linking it to the structure tree)", Object: num})
 		}
 	}
 	return v
+}
+
+// checkUA2LinkTargets is ISO 14289-2 8.2.5.20: Link annotations that target
+// different locations belong in separate Link (or Reference) structure
+// elements. It follows veraPDF (8.2.5.20-t02, GFPDLinkAnnot): an annotation's
+// target is its structure destination — a GoTo action's /SD, else its /D, else
+// the annotation's /Dest, a named destination looked up first, whose first
+// element is a structure element — and two annotations in one structure
+// element whose structure destinations are different objects are reported,
+// once per element. An annotation with no structure destination takes no part.
+func checkUA2LinkTargets(d core.View, cat *object.Dictionary) []Violation {
+	ctx := newAnnotContext(d, cat)
+	first := map[*object.Dictionary]int{} // enclosing element -> its first structure destination
+	reported := map[*object.Dictionary]bool{}
+	var v []Violation
+	for _, a := range ctx.annots {
+		se := ctx.parent[a]
+		if se == nil || reported[se] {
+			continue
+		}
+		if st, _ := d.ResolveName(a.Get("Subtype")); st != "Link" {
+			continue
+		}
+		target := structDestination(d, cat, a)
+		if target == 0 {
+			continue
+		}
+		if prev, ok := first[se]; !ok {
+			first[se] = target
+		} else if prev != target {
+			reported[se] = true
+			v = append(v, Violation{Clause: "8.2.5.20", Message: "a structure element encloses Link annotations that target different locations", Object: d.ObjNumOf(se)})
+		}
+	}
+	return v
+}
+
+// structDestination is the object number of the structure element a Link
+// annotation targets, or 0 (see checkUA2LinkTargets).
+func structDestination(d core.View, cat *object.Dictionary, annot *object.Dictionary) int {
+	var dest object.Object
+	if act := d.ResolveDict(annot.Get("A")); act != nil {
+		if s, _ := d.ResolveName(act.Get("S")); s != "GoTo" {
+			return 0
+		}
+		dest = act.Get("SD")
+		if dest == nil {
+			dest = act.Get("D")
+		}
+	} else {
+		dest = annot.Get("Dest")
+	}
+	switch name := d.Resolve(dest).(type) {
+	case object.String:
+		dest = nil
+		names := d.ResolveDict(cat.Get("Names"))
+		entries, _ := d.NameTreeEntries(names.Get("Dests"))
+		for _, e := range entries {
+			d.Charge(1)
+			if string(e.Key) == string(name.Value) {
+				dest = e.Value
+				break
+			}
+		}
+	case object.Name:
+		dest = d.ResolveDict(cat.Get("Dests")).Get(name)
+	}
+	if dd := d.ResolveDict(dest); dd != nil {
+		dest = dd.Get("SD")
+	}
+	arr, ok := d.Resolve(dest).(object.Array)
+	if !ok || len(arr) == 0 {
+		return 0
+	}
+	ref, ok := arr[0].(object.IndirectRef)
+	if !ok {
+		return 0
+	}
+	if el := d.ResolveDict(ref); el == nil || el.Get("S") == nil {
+		return 0
+	}
+	return ref.Number
 }
 
 // isPredefinedCMap reports whether name is a predefined CMap from ISO 32000-1,
@@ -969,28 +1118,6 @@ func altArrayHasText(d core.View, o object.Object) bool {
 	return d.NonEmptyStringOrLocked(o)
 }
 
-// checkUALang enforces that any /Lang value present — in the catalog or on a
-// structure element — is a syntactically valid BCP 47 language tag (7.2, CosLang
-// rule of the UA profile). An empty /Lang is permitted (it defers to an
-// ancestor); a present but malformed tag is not.
-func checkUALang(d core.View, cat *object.Dictionary) []Violation {
-	var v []Violation
-	// /Lang is a text string, and a UTF-16 "en-US" is as valid a language tag
-	// as a PDFDocEncoded one: decode before judging it.
-	// A Locked document's /Lang is ciphertext, and judging it was how every
-	// encrypted file got a "not a valid language identifier" (audit 2026-09-22
-	// C63): only a value that was read is judged.
-	if s, r := d.StringValue(cat.Get("Lang")); r == core.ReasonOK && len(s.Value) > 0 && !core.ValidBCP47(core.DecodePDFTextString(s.Value)) {
-		v = append(v, Violation{Clause: "7.2", Message: "catalog /Lang " + quote(core.DecodePDFTextString(s.Value)) + " is not a valid language identifier", Object: 0})
-	}
-	walkStructElems(d, cat, func(elem *object.Dictionary, _ object.Name) {
-		if s, r := d.StringValue(elem.Get("Lang")); r == core.ReasonOK && len(s.Value) > 0 && !core.ValidBCP47(core.DecodePDFTextString(s.Value)) {
-			v = append(v, Violation{Clause: "7.2", Message: "structure element /Lang " + quote(core.DecodePDFTextString(s.Value)) + " is not a valid language identifier", Object: 0})
-		}
-	})
-	return v
-}
-
 func quote(s string) string { return "\"" + s + "\"" }
 
 // checkUAOptionalContent enforces the optional-content configuration
@@ -1225,9 +1352,16 @@ func checkUAFonts(d core.View) []Violation {
 }
 
 // checkUACharMapping flags text shown with a font whose character codes cannot
-// be mapped to Unicode. The clear, false-positive-free case: a composite
-// (Type0) font with Identity encoding and no ToUnicode CMap — its codes are
-// CIDs with no defined Unicode mapping (Matterhorn 10-001).
+// be mapped to Unicode (7.21.7, Matterhorn 10-001): a composite (Type0) font
+// with Identity encoding and no ToUnicode CMap, whose codes are CIDs.
+//
+// ISO 14289-1 7.21.7 admits the other mechanisms of ISO 19005-2 6.2.11.7.2,
+// one of which is a descendant CIDFont in the Adobe-GB1, Adobe-CNS1,
+// Adobe-Japan1 or Adobe-Korea1 character collection, for which Adobe publishes
+// the CID-to-Unicode mapping; such a font needs no ToUnicode (veraPDF reads it
+// through the collection's UCS2 CMap; corpus PDF_UA-1 7.21.7-t01-pass-a). The
+// Adobe-Identity collection has no such mapping, and a font in it is reported.
+// pdfa's toUnicodeExempt applies the same exemption for PDF/A Level U.
 func checkUACharMapping(d core.View) []Violation {
 	var v []Violation
 	for fontDict := range core.CollectFontTextUsage(d) {
@@ -1237,9 +1371,18 @@ func checkUACharMapping(d core.View) []Violation {
 		if st, _ := d.ResolveName(fontDict.Get("Subtype")); st != "Type0" {
 			continue
 		}
-		if enc, _ := d.Resolve(fontDict.Get("Encoding")).(object.Name); enc == "Identity-H" || enc == "Identity-V" {
-			v = append(v, Violation{Clause: "7.2", Message: "text uses a composite font with Identity encoding and no ToUnicode CMap; its character codes cannot be mapped to Unicode", Object: d.ObjNumOf(fontDict)})
+		if enc, _ := d.Resolve(fontDict.Get("Encoding")).(object.Name); enc != "Identity-H" && enc != "Identity-V" {
+			continue
 		}
+		if desc := core.Type0Descendant(d, fontDict); desc != nil && desc.Get("CIDSystemInfo") != nil {
+			if d.Locked {
+				continue // the collection's name is ciphertext: not evidence either way
+			}
+			if reg, ord := cidSystemInfo(d, desc); reg == "Adobe" && (ord == "GB1" || ord == "CNS1" || ord == "Japan1" || ord == "Korea1") {
+				continue
+			}
+		}
+		v = append(v, Violation{Clause: "7.2", Message: "text uses a composite font with Identity encoding and no ToUnicode CMap; its character codes cannot be mapped to Unicode", Object: d.ObjNumOf(fontDict)})
 	}
 	return v
 }
@@ -1248,7 +1391,9 @@ func checkUACharMapping(d core.View) []Violation {
 // on the fonts actually used for rendering (executed-content model):
 //   - 7.21.3.2 an embedded CIDFontType2 must carry a /CIDToGIDMap;
 //   - 7.21.6   a symbolic TrueType font must not have an /Encoding entry, and a
-//     non-symbolic one must use MacRomanEncoding or WinAnsiEncoding.
+//     non-symbolic one must use MacRomanEncoding or WinAnsiEncoding, and may
+//     have a /Differences array only of Adobe Glyph List names, looked up
+//     through a (3,1) cmap subtable when its program is embedded.
 func checkUAFontDicts(d core.View) []Violation {
 	var v []Violation
 	for fontDict := range core.CollectFontTextUsage(d) {
@@ -1300,6 +1445,15 @@ func checkOneUAFontDict(d core.View, fontDict *object.Dictionary) []Violation {
 		if base != "MacRomanEncoding" && base != "WinAnsiEncoding" {
 			v = append(v, Violation{Clause: "7.21.6", Message: "non-symbolic TrueType font must use MacRomanEncoding or WinAnsiEncoding", Object: num})
 		}
+		// The rule's second half: a /Differences array names only Adobe Glyph
+		// List glyphs, and an embedded program can look them up through a
+		// (3,1) cmap subtable (fontcheck.DifferencesNotInAGL).
+		switch name, noCmap31 := fontcheck.DifferencesNotInAGL(d, fontDict); {
+		case noCmap31:
+			v = append(v, Violation{Clause: "7.21.6", Message: "non-symbolic TrueType font has a /Differences array, but its embedded program has no Microsoft Unicode (3,1) cmap subtable", Object: num})
+		case name != "":
+			v = append(v, Violation{Clause: "7.21.6", Message: "non-symbolic TrueType font's /Differences names glyph /" + name + ", which is not in the Adobe Glyph List", Object: num})
+		}
 	}
 	return v
 }
@@ -1323,27 +1477,46 @@ func fontProgramEmbedded(d core.View, font *object.Dictionary) bool {
 	return fd.Get("FontFile") != nil || fd.Get("FontFile2") != nil || fd.Get("FontFile3") != nil
 }
 
-// checkFigureAlt walks the structure tree and flags Figure elements that carry
-// neither /Alt nor /ActualText. A figure is an element whose resolved type is
-// Figure: a custom /Img role-mapped to /Figure is one, and asking the written
-// /S let it through without alternate text (audit 2026-09-22 C80).
-func checkFigureAlt(d core.View, cat *object.Dictionary) []Violation {
+// checkFigureAlt walks the structure tree and flags Figure elements — and, for
+// PDF/UA-1, Formula elements (7.7) — that carry neither a non-empty /Alt nor
+// an /ActualText. A figure is an element whose resolved type is Figure: a
+// custom /Img role-mapped to /Figure is one, and asking the written /S let it
+// through without alternate text (audit 2026-09-22 C80).
+//
+// /ActualText satisfies the rule whatever its value, the empty string
+// included: it is replacement text, and an empty replacement says the element
+// contributes no text. That is the veraPDF reading ("ActualText != null",
+// 7.3-t01, 7.7-t01, PDF/UA-2 8.2.5.28.2-t01), and the corpus passes a Figure
+// whose /ActualText is empty (PDF_UA-1 7.3-t01-pass-c). An empty /Alt is no
+// description. PDF/UA-2 has no Formula rule of its own: its mathematics is
+// MathML (ISO 14289-2 8.2.5.29).
+func checkFigureAlt(d core.View, cat *object.Dictionary, part string) []Violation {
 	var v []Violation
 	for _, n := range structTree(d, cat) {
-		if !n.HasS || n.StdType != "Figure" {
+		if !n.HasS || (n.StdType != "Figure" && (n.StdType != "Formula" || part != "1")) {
 			continue
 		}
-		if !d.NonEmptyStringOrLocked(n.Elem.Get("Alt")) && !d.NonEmptyStringOrLocked(n.Elem.Get("ActualText")) {
-			v = append(v, Violation{Clause: "7.3", Message: "figure structure element has no non-empty alternate text (/Alt or /ActualText)", Object: 0})
+		if d.NonEmptyStringOrLocked(n.Elem.Get("Alt")) {
+			continue
 		}
+		if _, r := d.StringValue(n.Elem.Get("ActualText")); r != core.ReasonAbsent {
+			continue
+		}
+		if n.StdType == "Formula" {
+			v = append(v, Violation{Clause: "7.7", Message: "Formula structure element has neither a non-empty /Alt nor an /ActualText", Object: d.ObjNumOf(n.Elem)})
+			continue
+		}
+		v = append(v, Violation{Clause: "7.3", Message: "figure structure element has no non-empty alternate text (/Alt or /ActualText)", Object: 0})
 	}
 	return v
 }
 
-// RunCheck runs one check behind a recover boundary: a panic becomes an
-// "internal" finding, and a check the run's work meter stopped reports nothing
-// (see pdfa's runCheck).
-func RunCheck(check func() []Violation) (out []Violation) {
+// runCheck runs one check behind a recover boundary: a panic becomes a single
+// "internal" finding in place of whatever the check would have returned, and a
+// check the run's work meter stopped (core.IsAbort) reports nothing, its trip
+// being reported with the run's others. The root package calls it through
+// internal/bridge, for the PDF/UA-2 rule it runs at the boundary.
+func runCheck(check func() []Violation) (out []Violation) {
 	defer func() {
 		if r := recover(); r != nil {
 			out = nil

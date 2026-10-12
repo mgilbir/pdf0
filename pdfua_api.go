@@ -14,11 +14,23 @@ import (
 // builds that view, and appends the findings that can only be made from the
 // Document — the resource guards that tripped while the file was read.
 
-// ValidatePDFUA checks a document against the foundational PDF/UA-1 (ISO
-// 14289-1) requirements: the document must be tagged, carry a structure tree
-// and a default language, be configured to display its title, and give every
-// figure alternate text. It is a partial validator — a clean result means the
-// implemented checks passed, not full PDF/UA conformance.
+// ValidatePDFUA checks a document against PDF/UA-1 (ISO 14289-1). The checks
+// cover the catalog and identification (tagged, a structure tree, a displayed
+// title, the pdfuaid:part declaration and a 1.x header), the natural language
+// of every piece of text being determinable (from the catalog /Lang or a /Lang
+// nearer the text — PDF/UA-1 does not require the catalog entry itself),
+// the structure tree (standard or role-mapped types, nesting, tables, lists,
+// headings, notes, figure alternate text, real content tagged or marked as an
+// artifact), fonts and Unicode mapping, annotations, form fields and tab
+// order, security, XFA, optional content, embedded files, media clips and
+// reference XObjects; docs/pdfua.md lists the rule families and the clause
+// each reports under. A finding names its clause in pdfua.Violation.Clause
+// (where the other validators' findings have Rule).
+//
+// It is a partial validator — a clean result means the implemented checks
+// passed, not full PDF/UA conformance — and the result may include checker
+// findings under the clauses "limit" and "internal", which say pdf0 could not
+// finish rather than that the document is wrong (see IsCheckerFinding).
 func ValidatePDFUA(doc *Document) []pdfua.Violation {
 	return validatePDFUA(core.Canceler{}, doc, "1")
 }
@@ -58,11 +70,31 @@ func validatePDFUA(cancel core.Canceler, doc *Document, part string) []pdfua.Vio
 	// on the Document, which is why this is here and not below.
 	v = append(v, limitUAViolations(rd)...)
 	finding.Sort(v)
-	return pdfua.WithPart(v, part)
+	return pdfuaWithPart(v, part)
 }
 
-// ValidatePDFUA2 checks a document against PDF/UA-2. Findings reuse the pdfua.Violation
-// type; clause identifiers follow ISO 14289-2.
+// ValidatePDFUA2 checks a document against PDF/UA-2 (ISO 14289-2). It runs the
+// checks ValidatePDFUA does, with the identification rule requiring
+// pdfuaid:part 2 and without the 1.x-header rule, and adds the rules only part
+// 2 has: the declared PDF version must be 2.0 (clause "4"), pdfuaid:rev must
+// be 2024 ("5"), a type in an explicit namespace must not be role-mapped back
+// into that namespace ("8.2.4"), the structure tree root holds one Document
+// element in the PDF 2.0 namespace ("8.2.5.2"), H is not used ("8.2.5.12"),
+// Link annotations with different targets sit in different elements
+// ("8.2.5.20"), a labelled list has a ListNumbering ("8.2.5.25"), MathML's
+// math sits in a Formula ("8.2.5.29"), destinations within the document are
+// structure destinations ("8.8"), invisible annotations are artifacts
+// ("8.9.2.2"), a file attachment's file specification has an AFRelationship
+// ("8.9.2.4.10"), a Form element encloses at most one widget ("8.10.1"), a
+// widget has a label or /Contents ("8.10.2.3"), and an embedded file has a
+// /Desc ("8.14.1").
+//
+// Findings reuse the pdfua.Violation type, with Part "2", and Error prints
+// "[PDF/UA-2 …]". Only those rules carry ISO 14289-2 clause numbers: the
+// shared checks keep their ISO 14289-1 numbers, so read a clause against the
+// standard that numbers it (docs/pdfua.md, "PDF/UA-2"). The caveats of
+// ValidatePDFUA apply: it is a partial validator, and the result may include
+// checker findings.
 func ValidatePDFUA2(doc *Document) []pdfua.Violation {
 	return validatePDFUA2(core.Canceler{}, doc)
 }
@@ -76,16 +108,17 @@ func validatePDFUA2(cancel core.Canceler, d *Document) []pdfua.Violation {
 	if d == nil {
 		return validatePDFUA(cancel, d, "2")
 	}
-	// The shared checks (tagging, structure tree, default language, displayed
-	// title, Unicode mapping, artifacts, headings), parameterized for part 2 so
-	// the identification rule requires pdfuaid:part 2 and the UA-1 header rule
-	// is not run at all.
+	// The shared checks (tagging, structure tree, displayed title, Unicode
+	// mapping, artifacts, headings), parameterized for part 2 so the
+	// identification rule requires pdfuaid:part 2, the language rule requires the
+	// catalog /Lang (ISO 14289-2 8.4.4) rather than UA-1's determinable language,
+	// and the UA-1 header rule is not run at all.
 	out := validatePDFUA(cancel, d, "2")
 
 	// PDF/UA-2 is defined against PDF 2.0: the declared version (the header,
 	// or a later catalog /Version), and one that cannot be read is not 2.0 —
 	// it used to pass (audit 2026-09-22 C146).
-	out = append(out, pdfua.RunCheck(func() []pdfua.Violation {
+	out = append(out, pdfuaRunCheck(func() []pdfua.Violation {
 		declared := d.view().DeclaredVersion()
 		if maj, _, ok := core.ParsePDFVersion(declared); !ok || maj != 2 {
 			return []pdfua.Violation{{Clause: "4", Message: fmt.Sprintf("PDF/UA-2 is defined for PDF 2.0; file declares %q", declared), Part: "2"}}

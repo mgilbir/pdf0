@@ -255,7 +255,7 @@ func TestRoleMapChainBudgetDeclines(t *testing.T) {
 	rec := &core.Recorder{}
 	doc.Run, doc.Cancel = core.NewMeteredRun(rec, 1, core.Canceler{}) // room for one step
 	cat := doc.ResolveDict(object.IndirectRef{Number: 1})
-	if v := RunCheck(func() []Violation { return checkUARoleMap(doc, cat) }); len(v) != 0 {
+	if v := runCheck(func() []Violation { return checkUARoleMap(doc, cat) }); len(v) != 0 {
 		t.Errorf("budget trip manufactured a role-map finding: %+v", v)
 	}
 	if trips := rec.Snapshot(); len(trips) != 1 || trips[0].Guard() != core.GuardWork {

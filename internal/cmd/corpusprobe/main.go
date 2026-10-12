@@ -9,6 +9,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -84,6 +85,12 @@ func probe(path string) outcome {
 		// buffering it would OOM the probe on otherwise-handled input. A real
 		// consumer writes to a streaming io.Writer, so this matches real usage
 		// while still exercising the serializer.
+		//
+		// The consent first: without it WriteContext refuses a signed file
+		// (ErrWouldInvalidateSignatures) before reaching the serializer, and
+		// the signed corpus files would no longer be probed. Nothing is
+		// written, so no signature is lost.
+		doc.AllowInvalidatingSignatures()
 		_ = doc.WriteContext(ctx, io.Discard)
 		_ = pdf0.ValidatePDFUAContext(ctx, doc)
 		if ctx.Err() != nil {
@@ -144,6 +151,9 @@ func normalize(s string) string {
 // bound only stops a typo from spawning millions of goroutines.
 const maxWorkers = 1024
 
+// defaultWorkers is the worker count when none is given.
+const defaultWorkers = 8
+
 // parseArgs validates the command line: a directory, and an optional worker
 // count in 1..maxWorkers (default 8). "-1" used to panic in make(chan) and "0"
 // to probe nothing and report success (audit 2026-09-22 C156).
@@ -151,7 +161,7 @@ func parseArgs(args []string) (dir string, workers int, err error) {
 	if len(args) < 1 || len(args) > 2 {
 		return "", 0, fmt.Errorf("want a directory and an optional worker count")
 	}
-	dir, workers = args[0], 8
+	dir, workers = args[0], defaultWorkers
 	if len(args) == 2 {
 		n, err := strconv.Atoi(args[1])
 		if err != nil || n < 1 || n > maxWorkers {
@@ -173,7 +183,18 @@ func parseArgs(args []string) (dir string, workers int, err error) {
 // some did, when the walk hit errors, or when there was nothing to probe; 2 on
 // a usage error. testdata/cc/sweep.sh reads the report, not the status.
 func main() {
-	dir, workers, err := parseArgs(os.Args[1:])
+	flag.Usage = func() {
+		fmt.Fprintf(flag.CommandLine.Output(), `usage: corpusprobe <dir> [workers]
+
+Reads every .pdf under dir with %d workers by default (1 to %d), each under a
+%s timeout and panic recovery, and reports panics and hangs as bugs. Every
+non-ok outcome is logged to $TMPDIR/corpusprobe-failures.tsv.
+Exit 0 when nothing panicked or hung, 1 when something did or nothing was
+probed, 2 on a usage error.
+`, defaultWorkers, maxWorkers, perFileTimeout)
+	}
+	flag.Parse()
+	dir, workers, err := parseArgs(flag.Args())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "corpusprobe: %v\nusage: corpusprobe <dir> [workers]\n", err)
 		os.Exit(2)

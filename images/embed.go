@@ -13,8 +13,8 @@ import (
 // Embedding an image as a PDF XObject: the inverse of what the rest of this
 // package does.
 //
-// The two directions check each other. Whatever Embed writes, Walk reads back,
-// and the pixels must survive the trip — which is a far stronger statement than
+// The two directions check each other. Whatever Embed writes, the root
+// package's Document.Images reads back, and the pixels must survive the trip — which is a far stronger statement than
 // "the dictionary has the right keys", and it is the test this code is held to.
 
 // Allocator adds an object to a document and returns the reference to it. It is
@@ -38,10 +38,12 @@ type Allocator interface {
 const MaxPixels = 1 << 26 // 67 megapixels
 
 // Embed writes a Go image into doc as an image XObject and returns the
-// reference to put in a page's /Resources /XObject.
+// reference to put in a page's /Resources /XObject (pdf0.Page.XObjects). A
+// content stream draws it with Do into the unit square, so the matrix it is
+// drawn under is its size on the page.
 //
-// The pixels are stored losslessly: 8 bits per component, DeviceRGB or
-// DeviceGray, Flate-compressed. An image carrying transparency also gets an
+// The pixels are stored losslessly at 8 bits per component — a 16-bit image
+// is reduced to 8 — as DeviceRGB or DeviceGray, Flate-compressed. An image carrying transparency also gets an
 // /SMask — a second, greyscale image holding the alpha channel, which is how
 // PDF represents it (ISO 32000-2 11.6.5.3).
 //
@@ -50,6 +52,9 @@ const MaxPixels = 1 << 26 // 67 megapixels
 // greyscale photograph as RGB would triple it for nothing, and guessing that an
 // RGB image is "really" grey would be a lossy decision taken behind the
 // caller's back.
+//
+// It refuses a nil image, one with no area, and one of more than MaxPixels
+// pixels.
 func Embed(doc Allocator, img image.Image) (object.IndirectRef, error) {
 	if img == nil {
 		return object.IndirectRef{}, errors.New("images: cannot embed a nil image")
@@ -105,8 +110,16 @@ func Embed(doc Allocator, img image.Image) (object.IndirectRef, error) {
 // nothing. The bytes go in as they are.
 //
 // The geometry and colour space are the caller's to state correctly, because
-// this deliberately does not parse the JPEG: components must be 1 for grey or 3
-// for colour. A four-component (CMYK) JPEG is refused rather than mislabelled.
+// this deliberately does not parse the JPEG (image/jpeg's DecodeConfig reads
+// them from its header): components must be 1 for grey or 3 for colour. A
+// four-component (CMYK) JPEG is refused rather than mislabelled, and so are
+// empty data and a width or height that is not positive. Nothing is expanded,
+// so MaxPixels does not apply; an image past the extraction budget is still
+// written, and extraction reports it undecoded unless the reader raises that
+// budget.
+//
+// The slice is kept, not copied: it becomes the image stream's data, so
+// changing it afterwards changes the document.
 func EmbedJPEG(doc Allocator, jpeg []byte, width, height, components int) (object.IndirectRef, error) {
 	if len(jpeg) == 0 {
 		return object.IndirectRef{}, errors.New("images: no JPEG data")
@@ -151,6 +164,9 @@ func EmbedJPEG(doc Allocator, jpeg []byte, width, height, components int) (objec
 // than offered as a parameter because a stencil has no middle: a pixel either
 // paints or does not, and a caller wanting control over which is which should
 // resolve it into an *image.Alpha before getting here.
+//
+// It refuses a nil image, one with no area, and one of more than MaxPixels
+// pixels.
 func EmbedStencil(doc Allocator, img image.Image) (object.IndirectRef, error) {
 	if img == nil {
 		return object.IndirectRef{}, errors.New("images: cannot embed a nil image")

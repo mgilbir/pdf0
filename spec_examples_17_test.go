@@ -3,16 +3,18 @@ package pdf0
 // Tests derived from ALL examples in ISO 32000-1:2008 (PDF 1.7).
 //
 // Examples are extracted from the spec by cmd/extract_spec_examples/main17.py
-// and stored in testdata/spec_examples_17.json. Each example records the spec
-// section, page number, and content.
+// on the machine that runs the tests (spec_examples_extract_test.go): they are
+// ISO's and are not committed. Each example records the spec section, page
+// number, and content. Without the spec PDF the tests skip.
+// pdfref17_examples_test.go runs on the committed example code of Adobe's PDF
+// Reference 1.7, which shares much of it.
 //
-// Spec: PDF32000_2008.pdf (in spec/pdf1.7/)
+// Spec: PDF32000_2008.pdf (placed by hand in spec/pdf1.7/)
 
 import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -33,10 +35,7 @@ type spec17Example struct {
 
 func loadSpec17Examples(t *testing.T) []spec17Example {
 	t.Helper()
-	data, err := os.ReadFile("testdata/spec_examples_17.json")
-	if err != nil {
-		t.Fatalf("loading spec 1.7 examples: %v", err)
-	}
+	data := isoSpecExamples(t, iso32000_1())
 	var examples []spec17Example
 	if err := json.Unmarshal(data, &examples); err != nil {
 		t.Fatalf("parsing spec 1.7 examples: %v", err)
@@ -243,8 +242,8 @@ func TestSpec17ExampleCount(t *testing.T) {
 	examples := loadSpec17Examples(t)
 
 	total := len(examples)
-	if total < 250 {
-		t.Errorf("expected at least 250 examples from PDF 1.7 spec, got %d", total)
+	if total < iso32000_1().min {
+		t.Errorf("expected at least %d examples from PDF 1.7 spec, got %d", iso32000_1().min, total)
 	}
 	t.Logf("total examples: %d", total)
 

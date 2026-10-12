@@ -1,10 +1,13 @@
 package pdfa
 
 import (
+	"encoding/binary"
+
 	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
+	"strings"
 	"testing"
 )
 
@@ -25,19 +28,6 @@ func TestPredefinedCMapTable(t *testing.T) {
 	}
 	if _, ok := core.PredefinedCMaps["Bogus-CMap"]; ok {
 		t.Error("unlisted CMap must not be predefined")
-	}
-}
-
-func TestAGLGlyphName(t *testing.T) {
-	for _, n := range []string{"A", "space", "uni20AC", "u1F600", "ampersand"} {
-		if !aglGlyphName(n) {
-			t.Errorf("%q should be a valid AGL name", n)
-		}
-	}
-	for _, n := range []string{"", "notAGlyph", "uniXYZW", "uni20A"} {
-		if aglGlyphName(n) {
-			t.Errorf("%q should not be a valid AGL name", n)
-		}
 	}
 }
 
@@ -292,31 +282,6 @@ func hasRuleErr(errs []Violation, rule string) bool {
 	return false
 }
 
-func TestParseCIDWidths(t *testing.T) {
-	doc := mkView(map[int]*object.IndirectObject{}, nil)
-	// [ 1 [100 200] 5 7 300 ]  -> CID1=100, CID2=200, CID5..7=300
-	w := object.Array{object.Integer(1), object.Array{object.Integer(100), object.Integer(200)}, object.Integer(5), object.Integer(7), object.Integer(300)}
-	m, _ := parseCIDWidths(doc, w)
-	for cid, want := range map[int]float64{1: 100, 2: 200, 5: 300, 6: 300, 7: 300} {
-		if got, ok := m.width(cid); !ok || got != want {
-			t.Errorf("width(%d) = %v, %v; want %v", cid, got, ok, want)
-		}
-	}
-	for _, cid := range []int{0, 3, 4, 8, -1} {
-		if _, ok := m.width(cid); ok {
-			t.Errorf("CID %d should be unset", cid)
-		}
-	}
-	// A later entry overrides an earlier one where they overlap, as the
-	// expansion into a map did.
-	o, _ := parseCIDWidths(doc, object.Array{object.Integer(0), object.Integer(9), object.Integer(1), object.Integer(4), object.Array{object.Integer(7), object.Integer(8)}})
-	for cid, want := range map[int]float64{0: 1, 3: 1, 4: 7, 5: 8, 6: 1, 9: 1} {
-		if got, ok := o.width(cid); !ok || got != want {
-			t.Errorf("overlap: width(%d) = %v, %v; want %v", cid, got, ok, want)
-		}
-	}
-}
-
 // TestTrueTypeEncodingAt1b ensures the TrueType encoding rules apply at
 // PDF/A-1b (ISO 19005-1 6.3.7): symbolic fonts must not carry an Encoding.
 func TestTrueTypeEncodingAt1b(t *testing.T) {
@@ -374,21 +339,57 @@ func TestDamagedFontProgramFlagged(t *testing.T) {
 	}
 }
 
-// TestSymbolicTrueTypeSingleCmap ensures a symbolic TrueType font with more
-// than one cmap subtable is flagged (ISO 19005-1 6.3.7).
-func TestSymbolicTrueTypeSingleCmap(t *testing.T) {
-	fp := &font.Program{CmapSubtableCount: 2}
-	if !(fp.CmapSubtableCount > 0 && fp.CmapSubtableCount != 1) {
-		t.Fatal("test premise wrong")
-	}
-	// One subtable is fine; two is not; zero (non-sfnt) is exempt.
-	for _, tc := range []struct {
-		count int
-		bad   bool
-	}{{1, false}, {2, true}, {0, false}, {3, true}} {
-		bad := tc.count > 0 && tc.count != 1
-		if bad != tc.bad {
-			t.Errorf("cmapSubtableCount=%d: got bad=%v want %v", tc.count, bad, tc.bad)
+// TestSymbolicTrueTypeCmapByPart: what a symbolic TrueType font's cmap must
+// hold differs by part, and each part's text is the rule (the veraPDF
+// profiles quote it, and veraPDF 1.30.3 reports exactly these cases on
+// fixtures derived from Isartor 6-3-7-t03-fail-a):
+//
+//   - ISO 19005-1 6.3.7: "Font programs' cmap tables for all symbolic
+//     TrueType fonts shall contain exactly one encoding".
+//   - ISO 19005-2/-3 6.2.11.6: "either exactly one encoding or ... at least,
+//     the Microsoft Symbol (3,0 ...) encoding".
+//   - ISO 19005-4 6.2.10.6: "either the Microsoft Symbol (3,0 ...) or the Mac
+//     Roman (1,0 ...) encoding" — a lone (3,1) no longer passes.
+//
+// pdf0 used to apply PDF/A-1's "exactly one" at every part, which reported the
+// Isartor file's (1,0)+(3,0) font at PDF/A-2, -3 and -4, where it conforms. A
+// program with no cmap records is not judged, at any part.
+func TestSymbolicTrueTypeCmapByPart(t *testing.T) {
+	for _, c := range []struct {
+		recs           [][2]uint16
+		a1, a2, a3, a4 bool // a finding is wanted
+	}{
+		{[][2]uint16{{1, 0}, {3, 0}}, true, false, false, false},
+		{[][2]uint16{{3, 1}, {3, 0}}, true, false, false, false},
+		{[][2]uint16{{1, 0}, {3, 1}}, true, true, true, false},
+		{[][2]uint16{{3, 1}, {3, 10}}, true, true, true, true},
+		{[][2]uint16{{1, 0}}, false, false, false, false},
+		{[][2]uint16{{3, 0}}, false, false, false, false},
+		{[][2]uint16{{3, 1}}, false, false, false, true},
+		{[][2]uint16{}, false, false, false, false},
+	} {
+		for _, lc := range []struct {
+			lv   Level
+			want bool
+		}{{PDFA1b, c.a1}, {PDFA2b, c.a2}, {PDFA3b, c.a3}, {PDFA4, c.a4}} {
+			doc, font, u := encodingTestFont(true, nil, c.recs)
+			if fp, _ := core.LoadFontProgram(doc, doc.ResolveDict(font.Get("FontDescriptor"))); fp == nil || fp.CmapSubtableCount != len(c.recs) { // reason: the fixture check is on the program itself
+				t.Fatalf("fixture wrong: %v did not load as a program with %d cmap subtables", c.recs, len(c.recs))
+			}
+			u.Strings = [][]byte{[]byte("A")}
+			u.Modes[0] = true
+			var got []Violation
+			for _, v := range checkOneFontDict(doc, lc.lv, "", font, u) {
+				if strings.Contains(v.Message, "cmap") {
+					got = append(got, v)
+				}
+			}
+			if (len(got) > 0) != lc.want || len(got) > 1 {
+				t.Errorf("%s, cmap %v: got %v, want a finding: %v", lc.lv, c.recs, got, lc.want)
+			}
+			if len(got) == 1 && got[0].Rule != fontClause("encoding", lc.lv) {
+				t.Errorf("%s, cmap %v: reported under %s, want %s", lc.lv, c.recs, got[0].Rule, fontClause("encoding", lc.lv))
+			}
 		}
 	}
 }
@@ -440,5 +441,204 @@ func TestType1CharStringsEndTerminator(t *testing.T) {
 	// dictionary is followed by more PostScript must not absorb it as glyphs.
 	if fp := font.ParseType1(fonttest.Type1Program([]string{"A", "B"})); fp == nil || len(fp.GlyphNames) != 2 {
 		t.Errorf("trailing PostScript after the closing end token leaked into the glyph list: %v", fp)
+	}
+}
+
+// encodingTestFont is a TrueType font dictionary, its descriptor and a usage
+// for checkTrueTypeEncoding. With cmap non-nil the descriptor embeds a
+// FontFile2 whose cmap table lists exactly those (platform, encoding)
+// records; with cmap nil the font is not embedded.
+func encodingTestFont(symbolic bool, enc object.Object, cmap [][2]uint16) (core.View, *object.Dictionary, *core.FontTextUsage) {
+	doc := mkView(map[int]*object.IndirectObject{}, nil)
+	fd := &object.Dictionary{}
+	flags := 32 // nonsymbolic
+	if symbolic {
+		flags = 4
+	}
+	fd.Set("Flags", object.Integer(flags))
+	if cmap != nil {
+		doc.Objects[6] = &object.IndirectObject{Number: 6, Value: object.NewStream(&object.Dictionary{}, sfntWithCmapRecords(cmap))}
+		fd.Set("FontFile2", object.IndirectRef{Number: 6})
+	}
+	doc.Objects[5] = &object.IndirectObject{Number: 5, Value: fd}
+	font := &object.Dictionary{}
+	font.Set("Subtype", object.Name("TrueType"))
+	font.Set("FontDescriptor", object.IndirectRef{Number: 5})
+	if enc != nil {
+		font.Set("Encoding", enc)
+	}
+	return doc, font, &core.FontTextUsage{ObjNum: 9, Modes: map[int]bool{}}
+}
+
+// sfntWithCmapRecords is a minimal TrueType program — head, maxp and a cmap
+// listing the given (platform, encoding) records, each pointing at one empty
+// format 0 subtable — that forme's sfnt reader accepts.
+func sfntWithCmapRecords(recs [][2]uint16) []byte {
+	cmap := make([]byte, 4+8*len(recs))
+	binary.BigEndian.PutUint16(cmap[2:], uint16(len(recs)))
+	for i, r := range recs {
+		binary.BigEndian.PutUint16(cmap[4+8*i:], r[0])
+		binary.BigEndian.PutUint16(cmap[6+8*i:], r[1])
+		binary.BigEndian.PutUint32(cmap[8+8*i:], uint32(len(cmap)))
+	}
+	sub := make([]byte, 262) // format 0, every code to glyph 0
+	binary.BigEndian.PutUint16(sub[2:], 262)
+	cmap = append(cmap, sub...)
+	head := make([]byte, 54)
+	binary.BigEndian.PutUint16(head[18:], 1000) // unitsPerEm
+	maxp := make([]byte, 6)
+	binary.BigEndian.PutUint16(maxp[4:], 2) // numGlyphs
+	return buildTestSFNT([]sfntTable{{"cmap", cmap}, {"head", head}, {"maxp", maxp}})
+}
+
+// differencesEncoding is a WinAnsiEncoding-based Encoding dictionary whose
+// /Differences is diffs.
+func differencesEncoding(diffs object.Array) *object.Dictionary {
+	e := &object.Dictionary{}
+	e.Set("BaseEncoding", object.Name("WinAnsiEncoding"))
+	e.Set("Differences", diffs)
+	return e
+}
+
+// TestDifferencesNamesAreAGLListed: from PDF/A-2 on, a non-symbolic TrueType
+// font's /Differences may name only glyphs "listed in the Adobe Glyph List"
+// (ISO 19005-2/-3 6.2.11.6, -4 6.2.10.6). The list ISO 32000-1 cites is
+// glyphlist.txt, read as veraPDF reads it (fontcheck.AGLListed): its names
+// and .notdef. A uniXXXX or uXXXX name the list does not carry, the ITC Zapf
+// Dingbats names a1…a205 (a separate list), and bracket and isinferior (in
+// neither) are not listed; afii10017 and Gravesmall, which the list carries,
+// are. veraPDF 1.30.3 agrees on each at 2b and 4. A name repeated in the array
+// is reported once.
+//
+// The test applies whether or not the program is embedded, as the clause
+// reads; veraPDF tests the names of an embedded font only.
+func TestDifferencesNamesAreAGLListed(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		listed bool
+	}{
+		{"grave", true}, {"afii10017", true}, {"Gravesmall", true}, {".notdef", true},
+		{"uni0060", false}, {"u0060", false}, {"a1", false}, {"a205", false},
+		{"bracket", false}, {"isinferior", false}, {"notAGlyphName", false},
+	} {
+		for _, embedded := range []bool{false, true} {
+			var cmap [][2]uint16
+			if embedded {
+				cmap = [][2]uint16{{3, 1}}
+			}
+			want := 0
+			if !c.listed {
+				want = 1
+			}
+			for _, lv := range []Level{PDFA2b, PDFA3b, PDFA4} {
+				doc, font, u := encodingTestFont(false, differencesEncoding(object.Array{object.Integer(96), object.Name(c.name), object.Name(c.name)}), cmap)
+				if got := checkTrueTypeEncoding(doc, lv, "", font, u); len(got) != want {
+					t.Errorf("%s, embedded %v: Differences /%s: %d findings, want %d: %v", lv, embedded, c.name, len(got), want, got)
+				}
+			}
+		}
+	}
+}
+
+// TestPDFA1ForbidsDifferences: ISO 19005-1 6.3.7 says of a non-symbolic
+// TrueType font, "If the value of the Encoding entry is a dictionary, it shall
+// not contain a Differences entry". PDF/A-1 has no Adobe Glyph List exception
+// — that arrived with ISO 19005-2 — so the key's presence is the finding,
+// whatever the array names and even when it is empty, as veraPDF's 6.3.7-1
+// reads it (corpus PDF_A-2b 6-2-11-6-t02-pass-d is a pass at 2b and a 6.3.7
+// failure at 1b). Each is one finding, and PDF/A-2 accepts both.
+func TestPDFA1ForbidsDifferences(t *testing.T) {
+	for _, diffs := range []object.Array{{object.Integer(96), object.Name("grave")}, {}} {
+		doc, font, u := encodingTestFont(false, differencesEncoding(diffs), nil)
+		for _, lv := range []Level{PDFA1a, PDFA1b} {
+			if got := checkTrueTypeEncoding(doc, lv, "", font, u); len(got) != 1 || got[0].Rule != "6.3.7" {
+				t.Errorf("%s: Differences %v: got %v, want one 6.3.7 finding", lv, diffs, got)
+			}
+		}
+		if got := checkTrueTypeEncoding(doc, PDFA2b, "", font, u); len(got) != 0 {
+			t.Errorf("PDF/A-2b: Differences %v of listed names: got %v, want none", diffs, got)
+		}
+	}
+	// An Encoding dictionary without Differences is not this rule's.
+	e := &object.Dictionary{}
+	e.Set("BaseEncoding", object.Name("WinAnsiEncoding"))
+	doc, font, u := encodingTestFont(false, e, nil)
+	if got := checkTrueTypeEncoding(doc, PDFA1b, "", font, u); len(got) != 0 {
+		t.Errorf("PDF/A-1b: BaseEncoding alone: got %v, want none", got)
+	}
+}
+
+// TestDifferencesNeedCmap31: from PDF/A-2 on, a non-symbolic TrueType font
+// with a Differences array, "if the font program is embedded, ... shall
+// contain at least the Microsoft Unicode (3,1 – Platform ID = 3, Encoding ID
+// = 1) encoding in the 'cmap' table" (ISO 19005-2/-3 6.2.11.6, -4 6.2.10.6).
+// It is read as veraPDF reads it (fontcheck.DifferencesNotInAGL): whatever
+// the array names, an empty one included. An unembedded font has no cmap to
+// require, and PDF/A-1 forbids the array outright (TestPDFA1ForbidsDifferences).
+func TestDifferencesNeedCmap31(t *testing.T) {
+	grave := object.Array{object.Integer(96), object.Name("grave")}
+	for _, c := range []struct {
+		name  string
+		cmap  [][2]uint16
+		diffs object.Array
+		want  int
+	}{
+		{"(3,1) present", [][2]uint16{{1, 0}, {3, 1}}, grave, 0},
+		{"(3,0) and (1,0), no (3,1)", [][2]uint16{{1, 0}, {3, 0}}, grave, 1},
+		{"(3,10) only", [][2]uint16{{3, 10}}, grave, 1},
+		{"no (3,1), empty Differences", [][2]uint16{{1, 0}}, object.Array{}, 1},
+		{"not embedded", nil, grave, 0},
+	} {
+		for _, lv := range []Level{PDFA2b, PDFA3b, PDFA4} {
+			doc, font, u := encodingTestFont(false, differencesEncoding(c.diffs), c.cmap)
+			var cm []Violation
+			for _, v := range checkTrueTypeEncoding(doc, lv, "", font, u) {
+				if strings.Contains(v.Message, "(3,1)") {
+					cm = append(cm, v)
+				}
+			}
+			if len(cm) != c.want {
+				t.Errorf("%s, %s: %d (3,1) findings, want %d: %v", lv, c.name, len(cm), c.want, cm)
+			}
+		}
+	}
+}
+
+// TestIncompleteCIDCodeIsWidthChecked: the odd byte that ends an Identity-H
+// string maps to no CID, and is drawn with CID 0's glyph (ISO 32000-1
+// 9.7.6.3), advancing by its width; that width is held to the declared one
+// like any other glyph's (corpus PDF_A-2b 6-2-11-4-1-t02-fail-e, which veraPDF
+// fails under 6.2.11.5).
+func TestIncompleteCIDCodeIsWidthChecked(t *testing.T) {
+	for _, c := range []struct {
+		dw   int
+		want bool
+	}{{1000, true}, {0, false}} {
+		desc := object.NewDictionary(
+			object.Entry{Key: "Subtype", Value: object.Name("CIDFontType2")},
+			object.Entry{Key: "CIDToGIDMap", Value: object.Name("Identity")},
+			object.Entry{Key: "DW", Value: object.Integer(c.dw)},
+			object.Entry{Key: "W", Value: object.Array{object.Integer(1), object.Array{object.Integer(500)}}},
+			object.Entry{Key: "FontDescriptor", Value: object.NewDictionary(object.Entry{Key: "FontFile2", Value: object.IndirectRef{Number: 9}})},
+		)
+		font := object.NewDictionary(
+			object.Entry{Key: "Subtype", Value: object.Name("Type0")},
+			object.Entry{Key: "Encoding", Value: object.Name("Identity-H")},
+			object.Entry{Key: "DescendantFonts", Value: object.Array{desc}},
+		)
+		doc := mkV(core.View{Objects: map[int]*object.IndirectObject{
+			1: {Number: 1, Value: font},
+			9: {Number: 9, Value: object.NewStream(&object.Dictionary{}, fonttest.SFNT(fonttest.SFNTOptions{Glyphs: []fonttest.Glyph{{Rune: 'A', Advance: 500, HasShape: true}}}))},
+		}})
+		u := &core.FontTextUsage{ObjNum: 1, Strings: [][]byte{{0, 1, 0}}, Modes: map[int]bool{0: true}}
+		got := false
+		for _, m := range errMessages(checkCIDFontConsistency(doc, PDFA2b, "", font, u)) {
+			if strings.Contains(m, "width information") {
+				got = true
+			}
+		}
+		if got != c.want {
+			t.Errorf("/DW %d: width finding = %v, want %v", c.dw, got, c.want)
+		}
 	}
 }

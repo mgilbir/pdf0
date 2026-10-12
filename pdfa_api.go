@@ -24,14 +24,21 @@ import (
 // wrote.
 var ErrInvalidMetadataText = xmp.ErrInvalidText
 
-// NewPDFADocument creates a minimal valid PDF/A document for the given level.
-// The document has an empty page tree and passes ValidatePDFA.
+// NewPDFADocument creates a minimal valid PDF/A document for the given level:
+// an empty page tree, the XMP identification and an sRGB output intent.
+//
+// Written and read back, it passes ValidatePDFA at that level. Validated as
+// returned, in memory, it carries one checker finding, under the rule "limit"
+// with the guard "no-source-file": the byte-level file-structure rules read the
+// file a document was read from, and this one has none yet (see ValidatePDFA).
 func NewPDFADocument(level pdfa.Level) (*Document, error) {
 	return NewPDFADocumentWithInfo(level, "", "")
 }
 
 // NewPDFADocumentWithInfo is NewPDFADocument with the document title and
-// author embedded in the generated XMP metadata.
+// author embedded in the generated XMP metadata. A title or author that cannot
+// be written as XMP text is refused with an error wrapping
+// ErrInvalidMetadataText.
 func NewPDFADocumentWithInfo(level pdfa.Level, title, author string) (*Document, error) {
 	return NewPDFADocumentWith(pdfa.SkeletonOptions{Level: level, Title: title, Author: author})
 }
@@ -54,7 +61,9 @@ func NewPDFADocumentWithInfo(level pdfa.Level, title, author string) (*Document,
 // of pdf0's colour management ends up in the document. A profile that is not
 // one, that disagrees with its own declared length, that is in a colour space a
 // PDF/A output intent may not use, or that is ICC v4 at a level based on PDF
-// 1.4, is an error rather than a document built wrongly.
+// 1.4, is an error rather than a document built wrongly; the first two wrap
+// pdfa.ErrNotAProfile. A title or author that cannot be written as XMP text
+// wraps ErrInvalidMetadataText.
 func NewPDFADocumentWith(opts pdfa.SkeletonOptions) (*Document, error) {
 	objs, trailer, version, err := pdfa.SkeletonWith(opts)
 	if err != nil {
@@ -66,7 +75,10 @@ func NewPDFADocumentWith(opts pdfa.SkeletonOptions) (*Document, error) {
 // ValidatePDFA checks doc against the implemented rules for the given PDF/A
 // level and returns the violations found. An empty result means "none of the
 // implemented checks fired", not a guarantee of full conformance: the validator
-// covers a subset of ISO 19005 (see the package README).
+// covers a subset of ISO 19005 (see docs/validators.md and docs/pdfa.md).
+// The result may also include checker findings, under the rules "limit" and
+// "internal", which say pdf0 could not finish a check rather than that the
+// document is wrong (IsCheckerFinding).
 //
 // The byte-level file-structure rules (the header, cross-reference tables,
 // object and stream syntax, stream lengths, data after %%EOF, signature
@@ -77,13 +89,10 @@ func NewPDFADocumentWith(opts pdfa.SkeletonOptions) (*Document, error) {
 // rules do not run, and the result says so with a checker finding under the
 // rule "limit" (IsCheckerFinding) rather than passing in silence.
 //
-// There is no variant that takes the file's bytes. There used to be
-// (ValidatePDFABytes), and it trusted them: bytes that were not the ones doc
-// was read from — a rewritten file, a truncated buffer — were measured against
-// doc's offsets, producing findings about neither, or an out-of-range slice
-// that collapsed every byte rule into one "internal" finding (audit 2026-09-22
-// C69). The only bytes that can be right are the ones the document already
-// holds.
+// There is no variant that takes the file's bytes: bytes other than the ones
+// doc was read from — a rewritten file, a truncated buffer — cannot be measured
+// against doc's offsets, so the only bytes that can be right are the ones the
+// document already holds.
 func ValidatePDFA(doc *Document, level pdfa.Level) []pdfa.Violation {
 	return validatePDFA(core.Canceler{}, doc, level)
 }

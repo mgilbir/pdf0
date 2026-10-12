@@ -1,9 +1,12 @@
 // Command pdf0 is a small command-line front end to the pdf0 library:
-// inspect, validate, decrypt, and encrypt PDF files.
+// inspect, validate, repair, merge, decrypt, and encrypt PDF files.
 //
 // Exit codes: 0 — success (no violations found); 1 — the requested checks
 // reported violations; 2 — usage error, including a refusal to overwrite a
-// file; 3 — operational error (I/O, parse, encryption).
+// file; 3 — the run failed: an operational error (I/O, parse, encryption), a
+// signed input a command would rewrite without -invalidate-signatures
+// (refuseSigned), or checks that reported nothing but checker findings, so
+// conformance is unknown (findingsError).
 //
 // Passwords are never taken from argv; see secret.go. Outputs never replace an
 // input and are written atomically; see files.go.
@@ -38,6 +41,40 @@ func (e violationsError) Error() string { return e.msg }
 // violationsf builds a violationsError.
 func violationsf(format string, a ...any) error {
 	return violationsError{msg: fmt.Sprintf(format, a...)}
+}
+
+// tally splits a validator's findings into real violations and checker
+// findings (pdf0.IsCheckerFinding: the rules "limit" and "internal", a check
+// that could not be completed).
+func tally[V pdf0.Violation](findings []V) (violations, checker int) {
+	for _, f := range findings {
+		if pdf0.IsCheckerFinding(f) {
+			checker++
+		} else {
+			violations++
+		}
+	}
+	return violations, checker
+}
+
+// findingsError is the result of a validating command whose checks found
+// violations and checker findings in the numbers given, and the one place the
+// rule is written: no finding is success (exit 0); any violation is exit 1,
+// whatever checker findings come with it, because the file is known to break
+// a rule; checker findings alone are exit 3, the run failed, because the run
+// could not establish conformance either way, and a script asking "is this
+// file conformant?" must read neither yes nor "it breaks a rule" (docs audit
+// 2026-10-11 D64). msg is the command's own words for the violations.
+func findingsError(violations, checker int, msg string) error {
+	switch {
+	case violations > 0 && checker > 0:
+		return violationsf("%s, and %d checker finding(s)", msg, checker)
+	case violations > 0:
+		return violationsError{msg: msg}
+	case checker > 0:
+		return fmt.Errorf("%d checker finding(s) and no violation: the checks could not be completed, so conformance is unknown", checker)
+	}
+	return nil
 }
 
 // exitCode maps a command's error to the process exit code.
@@ -121,21 +158,33 @@ func run(args []string) int {
 	return exitCode(err)
 }
 
+// usage prints the top-level help. The -level names come from pdfa.Levels(),
+// as parseLevel reads them: a hand-kept copy here once offered four of the
+// eleven.
 func usage() {
-	fmt.Fprint(os.Stderr, `pdf0 — inspect, validate, and (de)encrypt PDF files
+	fmt.Fprintf(os.Stderr, `pdf0 — inspect, validate, repair, merge, and (de)encrypt PDF files
 
 usage:
   pdf0 info     [-password-file F] <file>
-  pdf0 validate [-level 1b|2b|3b|4] [-password-file F] <file>
-  pdf0 decrypt  [-force] [-password-file F] <in> <out>
-  pdf0 encrypt  [-force] [-user-password-file F] [-owner-password-file F] <in> <out>
+  pdf0 validate [-level LEVEL|declared] [-password-file F] <file>
+  pdf0 decrypt  [-force] [-invalidate-signatures] [-password-file F] <in> <out>
+  pdf0 encrypt  [-force] [-invalidate-signatures] [-user-password-file F]
+                [-owner-password-file F] <in> <out>
   pdf0 extract  [-password-file F] <file>
-  pdf0 repair   [-force] [-level 1b|2b|3b|4] [-password-file F] <in> <out>
-  pdf0 merge    [-force] <out> <in1> <in2> [in3 ...]
+  pdf0 repair   [-force] [-invalidate-signatures] [-level LEVEL] [-password-file F] <in> <out>
+  pdf0 merge    [-force] [-invalidate-signatures] <out> <in1> <in2> [in3 ...]
   pdf0 ua       [-password-file F] <file>
+
+LEVEL is a PDF/A level (default %s):
+  %s
+validate also takes "declared": the level the file's own metadata claims.
 
 "-" is stdin as an input and stdout as an output. An existing output is
 replaced only with -force, and never when it is one of the inputs.
+
+decrypt, encrypt, repair and merge rewrite the whole file, which breaks every
+signature in it, so they refuse a signed input; -invalidate-signatures writes
+it anyway, and its signatures no longer verify.
 
 passwords are never taken on the command line. Each comes from, in order:
 its file flag ("-" reads stdin), the environment (PDF0_PASSWORD,
@@ -143,8 +192,9 @@ PDF0_USER_PASSWORD, PDF0_OWNER_PASSWORD), or a no-echo prompt when stdin
 is a terminal.
 
 exit codes: 0 success, 1 violations reported, 2 usage error or refused
-overwrite, 3 read/write, parse, or encryption error
-`)
+overwrite, 3 read/write, parse, or encryption error, a refused signed input,
+or checks that could not be completed (only "limit" or "internal" findings)
+`, defaultLevel, levelNames)
 }
 
 // parseDoc parses a PDF from memory, with a password when one is given.

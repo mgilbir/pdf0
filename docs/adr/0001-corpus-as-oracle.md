@@ -44,3 +44,12 @@ files carry their own test description in an outline entry titled
   ratchet workflow is written down in CONTRIBUTING rather than automated.
 - Where pdf0 deliberately diverges from a naive spec reading, the reason belongs
   in a comment at the rule, so the next reader does not "fix" it back.
+
+**Amended 2026-10-11:** the second bullet's "cannot run in CI" stopped being
+true on 2026-08-01, when CI gained a `corpus` job that fetches the corpus and
+runs the ratchets (7ee5312); since 2026-09-23 it fetches every data set that
+has a make target, each at a pinned revision, and counts what arrived
+(0e5471d). The ratchet is enforced on every pull request. What still runs only
+locally is the hand-placed data, which is not redistributable; and
+`make test-corpus` now runs exactly what that job runs. The decision is
+unchanged.

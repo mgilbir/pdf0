@@ -1,44 +1,61 @@
 # Images
 
-pdf0 can pull the raster images back out of a PDF and hand you `image.Image`
-values. This subsystem is the image XObject traversal plus in-tree decoders for the codecs Go's standard library
-does not cover: CCITT Group 3/4 fax, JBIG2, and the PDF colour-space machinery
-(Indexed palettes, Lab, Separation/DeviceN tint transforms) that turns samples
-into RGB. Reach for it to extract page artwork or scanned pages, to inspect what
-a file actually stores, or as the entry point when fixing a codec bug. For the
-rest of the library see the [README](../README.md) and
-[architecture.md](architecture.md).
+Images go both ways. pdf0 pulls the raster images back out of a PDF and hands
+you `image.Image` values, and it puts a Go image, a JPEG or a one-bit stencil
+into a document you are building (`images.Embed`, `images.EmbedJPEG`,
+`images.EmbedStencil`; [Writing images](#writing-images)).
 
-## Using it
+Reading is most of this page: the image XObject traversal plus in-tree decoders
+for the codecs Go's standard library does not cover — CCITT Group 3/4 fax,
+JBIG2 — and the PDF colour-space machinery (Indexed palettes, Lab,
+Separation/DeviceN tint transforms) that turns samples into RGB. Reach for it to
+extract page artwork or scanned pages, to inspect what a file actually stores,
+or as the entry point when fixing a codec bug. For the rest of the library see
+the [README](../README.md) and [architecture.md](architecture.md).
 
-Two entry points, both on `*Document`:
+## Reading images
 
+Three entry points, all on `*Document`. Reach for `ImagesContext` first: it
+decodes one image at a time and tells you when it stopped early.
+
+<!-- snippet
+var ctx context.Context
+-->
 ```go
-imgs := doc.ExtractImages()     // []images.ExtractedImage — every image at once
-for img := range doc.Images() { // iter.Seq[images.ExtractedImage] — one at a time
+for img, err := range doc.ImagesContext(ctx) { // iter.Seq2 — one image live at a time
+	if err != nil {
+		return err // stopped early: cancelled, out of budget, or a Locked document
+	}
 	_ = img
 }
+for img := range doc.Images() { // iter.Seq — the same, with no error to report a stop
+	_ = img
+}
+imgs, err := doc.ExtractImagesContext(ctx) // every image at once, and why it stopped
+_, _ = imgs, err
 ```
 
-They yield the same images in the same order. The difference is the memory
-contract, and it is the whole reason both exist. `ExtractImages` holds every
-decoded image in the returned slice simultaneously; on a large scan document
-that is hundreds of full-page bitmaps live at once — unbounded memory. `Images`
-decodes each image only as it is yielded, so unless you retain them at most one
-decoded image is live, and breaking out of the loop skips the remaining decode
-work entirely (`TestImagesIteratorLazy` pins that). Prefer `Images` for any file
-you did not produce yourself.
+They yield the same images in the same order. They differ in two contracts.
 
-Under a deadline, `ExtractImagesContext(ctx)` returns the images gathered before
-the cancellation **and** an error wrapping `ctx.Err()` — both, because a short
-slice returned bare is indistinguishable from a document with fewer images, and
-extraction has no finding channel to say otherwise. The error is nil exactly when
-every image was reached; the check is between images, so a single very large
-image is not interruptible. There is deliberately no context variant of `Images`:
-an iterator is already cancellable by `break`, and since each image is decoded
-only as it is yielded, breaking after image N skips exactly what a context check
-between images would have. See
-[architecture.md](architecture.md#cancellation).
+**Memory.** `ExtractImagesContext` (and the deprecated `ExtractImages`) hold
+every decoded image in the returned slice simultaneously; on a large scan
+document that is hundreds of full-page bitmaps live at once — unbounded memory.
+`ImagesContext` and `Images` decode each image only as it is yielded, so unless
+you retain them at most one decoded image is live, and breaking out of the loop
+skips the remaining decode work entirely (`TestImagesIteratorLazy` pins that).
+Prefer an iterator for any file you did not produce yourself.
+
+**Knowing it stopped.** A short result is indistinguishable from a document with
+fewer images unless something says otherwise, and extraction has no finding
+channel. `ImagesContext` yields one final zero image with a non-nil error when it
+stops before every image was reached: the error wraps `ctx.Err()` for a cancelled
+or expired context, matches `ErrResourceLimit` when the work budget
+(`WithMaxWork`) ran out, and wraps `LockReason()` for a Locked document, which
+yields no images. `ExtractImagesContext` returns the images gathered before the
+stop **and** that error. `Images` and the deprecated `ExtractImages` truncate
+silently: a budget stop or a Locked document just ends the sequence. The check
+is between images, so a single very large image is not interruptible. See
+[untrusted-input.md](untrusted-input.md#bounding-time-the-context-variants).
 
 Each yielded value is an `ExtractedImage`:
 
@@ -56,10 +73,11 @@ Each yielded value is an `ExtractedImage`:
 
 When a codec is not handled — or handled but the input fails — `Decoded` is
 false, `Image` is nil, and `Note` explains. `Encoded` is *not* uniformly the raw
-stream: on the codec branches (DCT/CCITT/JBIG2/JPX) it is `Stream.Data`, so you
-can pass it to an external decoder; on the general-purpose branch it holds the
-*decoded* samples that had an unrenderable layout, and is nil when the filter
-chain itself could not be reversed.
+stream. It is `Stream.Data` on the codec branches (DCT/CCITT/JBIG2/JPX), on an
+image a budget refused, and on the general-purpose branch when the filter chain
+itself could not be reversed, so you can pass it to an external decoder. On the
+general-purpose branch it holds the *decoded* samples when it was their layout
+that could not be rendered.
 
 ```go
 for img := range doc.Images() {
@@ -76,17 +94,114 @@ for img := range doc.Images() {
 A runnable version that builds its own document is in
 [`examples/extract_images`](../examples/extract_images/main.go).
 
+## Writing images
+
+Three functions put an image into a document you are building. Each adds an
+image XObject through an `images.Allocator` — `*pdf0.Document` is one — and
+returns the reference a page's `XObjects` names it by:
+
+| function | writes | reach for it for |
+|---|---|---|
+| `images.Embed` | any `image.Image`, losslessly: 8 bits a component, Flate-compressed, DeviceGray for an `*image.Gray` or `*image.Gray16` and DeviceRGB for everything else, plus an `/SMask` holding the alpha unless every pixel is opaque | a picture you have as pixels: a chart, a screenshot, a decoded PNG |
+| `images.EmbedJPEG` | JPEG bytes as they are, under `DCTDecode`, with the width, height and component count you state | a photograph that is already a JPEG |
+| `images.EmbedStencil` | a one-bit image mask (ISO 32000-2 8.9.6.2) that paints the current fill colour where it is set and leaves the page alone elsewhere | a monochrome mark — an icon, a rule, a mask — in whatever colour it is drawn in |
+
+An image is a resource, not a drawing: the page's content stream draws it with
+`Do` (`content.Builder.Draw`) into the unit square, so the matrix it is drawn
+under is its size and place on the page. The same shape as
+[`examples/extract_images`](../examples/extract_images/main.go), which CI runs:
+
+<!-- snippet
+var photoJPEG []byte
+var logo, icon image.Image
+-->
+```go
+doc := pdf0.NewDocument()
+
+logoRef, err := images.Embed(doc, logo)
+if err != nil {
+	return err
+}
+iconRef, err := images.EmbedStencil(doc, icon)
+if err != nil {
+	return err
+}
+// EmbedJPEG does not parse the JPEG, so the geometry comes from its header.
+cfg, err := jpeg.DecodeConfig(bytes.NewReader(photoJPEG))
+if err != nil {
+	return err
+}
+components := 3
+switch cfg.ColorModel {
+case color.GrayModel:
+	components = 1
+case color.CMYKModel:
+	components = 4 // refused below, rather than written mislabelled
+}
+photoRef, err := images.EmbedJPEG(doc, photoJPEG, cfg.Width, cfg.Height, components)
+if err != nil {
+	return err
+}
+
+var page content.Builder
+page.Save().Concat(120, 0, 0, 40, 50, 770).Draw("Logo").Restore()
+page.Save().Concat(400, 0, 0, 300, 50, 440).Draw("Photo").Restore()
+// A stencil paints in the fill colour current where it is drawn.
+page.Save().SetRGB(0.8, 0.1, 0.1).Concat(16, 0, 0, 16, 50, 410).Draw("Icon").Restore()
+
+_, err = doc.AddPage(pdf0.Page{
+	Width: 595, Height: 842,
+	Content: &page,
+	XObjects: map[object.Name]object.Object{
+		"Logo": logoRef, "Photo": photoRef, "Icon": iconRef,
+	},
+})
+if err != nil {
+	return err
+}
+return doc.Write(w)
+```
+
+What each one decides, and refuses:
+
+- **`Embed` follows the image's type, not its pixels.** An RGB image holding
+  only grey pixels is still written as RGB, since that was the caller's
+  choice; a 16-bit image is stored at 8 bits. An alpha channel that is opaque
+  everywhere is dropped rather than written as an `/SMask`.
+- **`EmbedJPEG` stores the bytes, and keeps the slice** rather than copying
+  it: it becomes the image stream's data, so changing it changes the
+  document. It trusts the geometry it is given, and
+  refuses any component count but 1 or 3 rather than mislabel a CMYK JPEG.
+- **`EmbedStencil` thresholds at half.** A pixel is set where its alpha is at
+  least half or, for an image with no alpha, where its luminance is below
+  half — the dark parts of a black-on-white drawing are the marks. To decide
+  otherwise, resolve the image into an `*image.Alpha` first.
+- **Size.** `Embed` and `EmbedStencil` refuse an image of more than
+  `images.MaxPixels` (2^26) pixels, the same number as the extraction
+  budget's default, so what they write is what extraction reads back by
+  default. `EmbedJPEG` expands nothing and has no cap; a JPEG past that budget
+  is still written, and `Images` reports it undecoded unless the reader raises
+  `WithMaxImagePixels`. All three refuse an image with no data or no area.
+- **PDF/A.** An `/SMask` is transparency, which PDF/A-1 forbids (rule 6.4), so
+  an image for a PDF/A-1 document must be opaque. At PDF/A-2b, a document
+  drawing an embedded image validates clean
+  (`TestEmbeddedImageValidatesAsPDFA`).
+
+The two directions check each other: whatever `Embed` writes, `Images` reads
+back pixel for pixel (`TestEmbeddedImageRoundTripsPixelForPixel`), and
+`htmlpdf` writes every picture through `Embed` for that reason.
+
 ## The decode pipeline
 
 ```mermaid
 flowchart TD
-    E["ExtractImages() → []ExtractedImage<br/>Images() → iter.Seq (one image live at a time)"] --> W["walk pages → inherited /Resources → /XObject<br/>form XObjects recursed (depth ≤ 16);<br/>annotation /AP appearance streams too;<br/>each object number yielded once"]
+    E["ImagesContext() / Images() → one image live at a time<br/>ExtractImagesContext() → []ExtractedImage, error"] --> W["walk pages → inherited /Resources → /XObject<br/>form XObjects recursed (depth ≤ 16);<br/>annotation /AP appearance streams too;<br/>each object number yielded once"]
     W --> F{"img.Filter = LAST name in the /Filter chain"}
     F -->|DCTDecode| J["image/jpeg on Stream.Data<br/>then imagejpeg.go applies /Decode<br/>(CMYK stays *image.CMYK)"]
-    F -->|CCITTFaxDecode| CC["preceding Flate/LZW/ASCIIHex reversed,<br/>internal/ccitt decodes T.4/T.6 → 1-bpp samples"]
+    F -->|CCITTFaxDecode| CC["preceding general-purpose filters reversed,<br/>internal/ccitt decodes T.4/T.6 → 1-bpp samples"]
     F -->|JBIG2Decode| JB["preceding filters reversed + /JBIG2Globals decoded,<br/>internal/jbig2: generic/refinement/symbol-text/halftone<br/>over its MQ coder → 1-bpp samples"]
     F -->|JPXDecode| JP["gopenjpeg on Stream.Data<br/>(/SMaskInData only steers the<br/>component-assembly fallback)"]
-    F -->|"no filter / Flate / LZW / ASCIIHex"| RAW["decodeImageSamples: whole chain reversed,<br/>64 MB cap, no run cache → raw samples"]
+    F -->|"anything else: no filter, or general-purpose ones<br/>(Flate / LZW / ASCIIHex / ASCII85 / RunLength)"| RAW["decodeImageSamples: whole chain reversed,<br/>64 MB cap, no run cache → raw samples"]
     CC --> BL{"/ImageMask true, or a /Decode present?"}
     JB --> BL
     BL -->|no| FAST["samplesToImage: 1-bpp DeviceGray fast path"]
@@ -104,7 +219,8 @@ flowchart TD
     CC -->|decode error| UN
     JB -->|decode error| UN
     JP -->|nil result| UN
-    RAW -->|unrenderable layout| UN
+    RAW -->|"chain not reversed (unsupported filter, malformed, a limit)"| UN
+    COL -->|unrenderable layout| UN
 ```
 
 Two details worth internalising. First, the codec branches are **not**
@@ -116,8 +232,8 @@ is the only path that can honour a colour-key `/Mask`), while `applyImageMasks`
 composites them after the fact on the codec paths, drawing the codec image into
 a fresh `*image.NRGBA` first.
 
-`walkImages` installs a per-run cache on a shallow `*Document` copy, exactly as
-the validators do, memoising page collection, decoded content streams and parsed
+Every entry point starts a run (`beginRunCancel`), which installs a per-run
+cache on a shallow `*Document` copy exactly as the validators do, memoising page collection, decoded content streams and parsed
 type-4 function programs. The whole traversal runs over untrusted input: it
 reports failures as `Note` strings rather than panicking, and one bad image does
 not abort the walk. That promise is kept by a recover around each image's decode
@@ -240,7 +356,7 @@ pixel. [limits.md](limits.md) classifies these guards on that axis.
   bounds type-3 stitching recursion. A type-0 function interpolates over the
   corners of the dimensions its input falls between samples in, not all 2^m of
   them (C50).
-- **Per-run memoisation** (`walkImages`, `psProgram`). Not a cap but the same
+- **Per-run memoisation** (`beginRunCancel`, `psProgram`). Not a cap but the same
   concern: without the run cache each per-pixel tint evaluation re-decoded and
   re-parsed the function stream, turning a sub-megabyte image into minutes.
 - **Sample size cap.** `decodeImageSamples` refuses a stream that inflates past
@@ -274,9 +390,11 @@ pixel. [limits.md](limits.md) classifies these guards on that axis.
 - **Inline images** (`BI … ID … EI` in a content stream) are not extracted;
   only image XObjects are.
 - The general-purpose filters — `FlateDecode`, `LZWDecode`, `ASCIIHexDecode`,
-  `ASCII85Decode` and `RunLengthDecode` — are reversed. An image whose samples
-  do not decode is reported undecoded with its raw bytes in `Encoded` and a
-  `Note` saying why (malformed, a limit, an unsupported filter).
+  `ASCII85Decode` and `RunLengthDecode` (`internal/core/filters.go`) — are
+  reversed, ahead of `CCITTFaxDecode` and `JBIG2Decode` as well as on their
+  own. An image whose samples do not decode is reported undecoded with its raw
+  bytes in `Encoded` and a `Note` saying why (malformed, a limit, an
+  unsupported filter).
 - `DCTDecode` and `JPXDecode` do not reverse preceding general-purpose filters;
   such a chain fails to decode.
 - JPEG decoding is the standard library's, so arithmetic-coded, 12-bit and

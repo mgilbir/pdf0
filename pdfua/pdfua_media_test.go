@@ -22,14 +22,14 @@ func TestUAPrinterMark(t *testing.T) {
 		referenced(doc, 5)
 		return doc
 	}
-	if !hasUAClause(checkUAAnnotations(mk(true)), "7.18.8") {
+	if !hasUAClause(checkUAAnnotations(mk(true), nil, "1"), "7.18.8") {
 		t.Error("tagged PrinterMark not flagged")
 	}
-	if hasUAClause(checkUAAnnotations(mk(false)), "7.18.8") {
+	if hasUAClause(checkUAAnnotations(mk(false), nil, "1"), "7.18.8") {
 		t.Error("artifact PrinterMark wrongly flagged")
 	}
 	// An untagged PrinterMark must not be flagged by the general tagging rule.
-	if hasUAClause(checkUAAnnotations(mk(false)), "7.18.1") {
+	if hasUAClause(checkUAAnnotations(mk(false), nil, "1"), "7.18.1") {
 		t.Error("PrinterMark wrongly subjected to the tagging rule")
 	}
 }

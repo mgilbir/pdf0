@@ -2,24 +2,16 @@
 
 ## Build and test
 
-```
-go build ./...
-go test ./...     # unit + spec-example tests; corpus/round-trip tests skip if their data is absent
-go vet ./...
-gofmt -l .        # must print nothing
-```
+Before you push, run `make check`, which is exactly what CI's build-test job
+runs, and what your change also needs from the table in
+[docs/testing.md, "Before you push"](docs/testing.md#before-you-push) — a
+validator change, for one, needs `make test-corpus`, which is CI's corpus job.
 
-`go test ./...` on a fresh clone stays green — but that is not the same as being
-covered. Every test whose (uncommitted) data is absent skips, including the
-whole PDF/A conformance ratchet, the Arlington structural oracle, every
-round-trip test against real PDFs, and the image-codec decode oracles.
-`go test -v ./... 2>&1 | grep SKIP` shows what you are not running.
-
+`go test ./...` on a fresh clone stays green, but that is not the same as being
+covered: every test whose (uncommitted) data or tool is absent skips.
 [docs/testing.md](docs/testing.md) is the reference for the test tiers, every
-external dataset and how to fetch it, all the make targets, the fuzzers, and the
-`cmd/` developer aids. In short: touched a validator, run `make test-corpus`;
-touched the parser or serializer, run `make refpdfs && make test-arlington`;
-touched an image codec, fetch that codec's sample set.
+external data set and tool and how to get it, the make targets, the fuzzers,
+and the developer aids under `internal/cmd/`.
 
 ## What CI checks
 
@@ -27,8 +19,9 @@ CI fetches every data set that has a make target and runs the whole suite over
 it, so the conformance ratchets, the Arlington oracle, the decode oracles and
 the rule-coverage ratchet all run on every pull request. What it cannot run is
 the data that is not redistributable: the tests over the Cal Poly suite, the
-PDF/UA reference files, the Order-X examples and the ISO PDFs skip there, and
-run only on a machine where someone has placed that data by hand. A green check
+PDF/UA reference files, the Order-X examples and the ISO PDFs (the ISO 32000
+spec-example tests among them) skip there, and run only on a machine where
+someone has placed that data by hand. A green check
 says nothing about those; run them yourself when you touch what they cover.
 
 The section below is generated from `.github/workflows/ci.yml` and
@@ -49,7 +42,7 @@ CI runs on every `push` (branches: [main]) and every `pull_request`, as 3 jobs.
 7. doc links resolve: `./scripts/check-links.sh`
 8. mermaid diagrams render: `./scripts/check-mermaid.sh`
 9. no binaries in the tree: `./scripts/check-no-binaries.sh`
-10. example runs: `go run ./examples/simple_pdfa`, `go run ./examples/extract_images`, `go run ./examples/sign_verify`, `go run ./examples/html_to_pdf`
+10. example runs: `make check-examples`
 
 **`corpus`** (Go `1.26.x`):
 
@@ -86,6 +79,7 @@ has the data.
 | Order-X examples | `spec/order-x/Order-X100_EN/05-ORDER-X EXAMPLES` | They come with the Order-X specification bundle and are placed by hand | **no**: local only |
 | ISO 32000-2 PDF | `spec/pdf2.0` | It is copyrighted and placed by hand | **no**: local only |
 | ISO 32000-1 PDF | `spec/pdf1.7` | It is copyrighted and placed by hand | **no**: local only |
+| Adobe PDF Reference 1.7 | `spec/pdfref1.7` | Download it from Adobe and place it by hand | **no**: local only |
 
 <!-- END GENERATED: ci -->
 
@@ -113,12 +107,15 @@ correct on paper but raises a false positive on a pass-file is wrong.
 
 Workflow when your change moves the counts:
 
-1. Run `make test-corpus` and read the logged line:
+1. Run `make test-corpus` — every test that reads the corpus, as CI runs them
+   — and read the line it prints last:
    `corpus results: pass=… fail=… | falsePositives=… missed=… parseErrors=…`
 2. If `falsePositives` rose, your rule is too strict — fix the rule, do **not**
    raise the baseline.
-3. If `missed` dropped (you caught more), lower `corpusMaxMissed` (or
-   `corpusMaxIsartorMissed`) to the new value to lock in the gain.
+3. Every baseline here is 0, so these counts can only be held, not improved: a
+   rule that catches a file for the right reason shows up in
+   `TestRuleCoverage` instead, whose per-level `ruleCoverageBaselines` you
+   tighten to lock the gain in (see [Checking rule coverage](#checking-rule-coverage)).
 4. Never raise a baseline to make a red test green.
 
 ## Adding a validation rule
@@ -128,17 +125,23 @@ Workflow when your change moves the counts:
    bytes is a `func(*core.FileRecord, pdfa.Level) []pdfa.Violation` in
    `byteChecks` instead, and reads only the file record.
    Group it with related rules by file — see the table in
-   [docs/validators.md](docs/validators.md#where-the-rules-live).
+   [docs/pdfa.md](docs/pdfa.md#where-the-rules-live).
 2. Resolve indirect references before type-asserting (`doc.Resolve` /
    `resolveName`): a value behind an indirect reference must not evade the rule.
-3. Guard every recursion with a visited-set and every `arr[0]` with a length
-   check — the validator processes untrusted files and must not panic or hang.
+3. Bound every recursion over the object graph by depth: call
+   `core.View.Descend`, or take a depth parameter and compare it to a bound,
+   or iterate instead. A visited set alone does not do it — a chain of a
+   hundred thousand distinct objects has no cycle to find, and overflows the
+   stack — so use one only beside the bound, against cycles and shared nodes.
+   `TestRecursiveWalkersAreBounded` (`internal/lint`) fails on a recursion
+   with neither. Guard every `arr[0]` with a length check too: the validator
+   processes untrusted files and must not panic or hang.
 4. Respect the executed-content model where the rule is about *used* resources
-   (see [validators.md](docs/validators.md) and [ADR 0004](docs/adr/0004-executed-content-model.md)).
+   (see [pdfa.md](docs/pdfa.md#the-executed-content-model) and [ADR 0004](docs/adr/0004-executed-content-model.md)).
 5. Add a unit test, then run `make test-corpus` and follow the ratchet workflow
    above.
 
-For validators other than PDF/A (PDF/UA, PDF/X, PDF/VT, DPart, Factur-X) see
+For validators other than PDF/A (PDF/UA, PDF/X, PDF/VT, PDF/R, DPart, Factur-X) see
 [docs/validators.md](docs/validators.md); for signatures see
 [docs/signing.md](docs/signing.md), for image codecs
 [docs/images.md](docs/images.md), and for the CLI [docs/cli.md](docs/cli.md).
@@ -187,10 +190,25 @@ rest of `go test`). They hold the docs to the tree as it is:
   (`TestDocsQuoteNoDriftingCounts`): a count that matters is generated;
 - the sections between `BEGIN GENERATED` and `END GENERATED` markers are
   written by `go test ./internal/lint -run TestGeneratedDocSections -update`
-  and checked against their sources.
+  and checked against their sources — except the command transcripts in
+  [docs/cli.md](docs/cli.md), which are written by running the command:
+  `go test ./cmd/pdf0 -run TestCLIDocTranscripts -update`;
+- every environment variable a test reads and every program it runs is
+  described in the testing guide (`TestTestEnvironmentIsDocumented`).
 
 The audit reports and the design records under `docs/proposals/`, and an ADR
 once it is superseded, describe the past, and are not checked.
+
+## Release notes
+
+There is no CHANGELOG. A pull request that changes the exported API, or a
+behaviour a caller could notice, adds its entry to
+[docs/releases/unreleased.md](docs/releases/unreleased.md) in the same pull
+request, under Breaking changes (by package, each with its migration),
+Behaviour changes, Added or Fixed, written as a user should read it. A removed
+identifier is written in bold rather than backticks, since the docs lint
+resolves backticked names against the current tree. The file is emptied into
+the GitHub release notes when a tag is cut.
 
 ## Style
 

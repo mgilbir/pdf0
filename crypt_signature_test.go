@@ -8,10 +8,13 @@ import (
 	"crypto/rc4"
 	"crypto/x509"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/mgilbir/pdf0/internal/bridge"
 	"github.com/mgilbir/pdf0/internal/crypt"
 	"github.com/mgilbir/pdf0/internal/signtest"
 	"github.com/mgilbir/pdf0/object"
@@ -158,6 +161,12 @@ func appendClearSignature(t *testing.T, enc []byte, cert *x509.Certificate, key 
 	return data
 }
 
+// signVerifyCMS is sign's bare CMS check over bytes — the signature is
+// cryptographically sound, nothing about trust — which the tests below use as
+// a control that does not go through the object model. It is not API; it
+// crosses through internal/bridge (docs audit 2026-10-11 D60).
+var signVerifyCMS = bridge.Resolve[func(der, content []byte) (*x509.Certificate, []*x509.Certificate, time.Time, error)](bridge.SignVerifyCMS)
+
 // rawContentsWindow returns the bytes the file's /Contents hex window decodes to.
 func rawContentsWindow(t *testing.T, file []byte) []byte {
 	t.Helper()
@@ -200,7 +209,7 @@ func TestEncryptedSignedFileVerifies(t *testing.T) {
 	// signature and are not in the way either. Trimming them is what a reader
 	// must not do: a DER that happens to end in 0x00 loses a byte and stops
 	// parsing, which is one signature in 256 and was this test's own flake.
-	if _, _, _, err := sign.VerifyCMS(rawContents, signedBytes); err != nil {
+	if _, _, _, err := signVerifyCMS(rawContents, signedBytes); err != nil {
 		t.Fatalf("control: the raw file bytes should carry a valid signature: %v", err)
 	}
 
@@ -259,6 +268,10 @@ func TestWriteEncryptedSignedKeepsContentsClear(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Encrypting a signed document invalidates its signature, so it takes the
+	// caller's consent; what is checked here is only that the signature value
+	// is still written in the clear.
+	sdoc.AllowInvalidatingSignatures()
 	if err := sdoc.SetEncryption("user", "owner"); err != nil {
 		t.Fatal(err)
 	}
@@ -385,6 +398,82 @@ func TestTrailerIDNotDecrypted(t *testing.T) {
 		if !bytes.Equal(w0.Value, g0.Value) {
 			t.Errorf("xref stream %v: /ID changed across the encrypted round-trip: %x -> %x",
 				xrefStream, w0.Value, g0.Value)
+		}
+	}
+}
+
+// TestSigningRefusesEncryptedDocuments pins the two refusals the signing
+// writers' godoc quotes (docs audit 2026-10-11 D51): a Locked document gets
+// the refusal every writer gives one, and a decrypted document, or one
+// SetEncryption marked, gets "cannot sign an encrypted document". It also pins
+// why there is no way round them: encrypting a signed document rewrites the
+// bytes its signature covers, so SetEncryption refuses it unless the caller
+// consents, and with consent the signature no longer verifies.
+func TestSigningRefusesEncryptedDocuments(t *testing.T) {
+	cert, key := signtest.CertKey(t)
+	tsaCert, tsaKey := signtest.TSACertKey(t)
+	marked := readBytes(t, buildMinimalPDF())
+	if err := marked.SetEncryption("user", "owner"); err != nil {
+		t.Fatal(err)
+	}
+	var enc bytes.Buffer
+	if err := marked.Write(&enc); err != nil {
+		t.Fatal(err)
+	}
+	locked := readBytes(t, enc.Bytes())
+	if !locked.Locked() {
+		t.Fatal("the file should not open with the empty password")
+	}
+	decrypted, err := ReadWithPassword(bytes.NewReader(enc.Bytes()), int64(enc.Len()), "user")
+	if err != nil || decrypted.Locked() {
+		t.Fatalf("ReadWithPassword: %v (locked=%v)", err, decrypted.Locked())
+	}
+	const lockedMsg = "the document is encrypted and was not decrypted (Locked); "
+	for _, tc := range []struct {
+		name string
+		d    *Document
+		want string // after "pdf0: <op>: "
+	}{
+		{"Locked", locked, lockedMsg},
+		{"decrypted", decrypted, "cannot sign an encrypted document"},
+		{"marked by SetEncryption", marked, "cannot sign an encrypted document"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, w := range []struct {
+				op    string
+				write func() error
+			}{
+				{"signing", func() error { return tc.d.WriteSigned(&bytes.Buffer{}, cert, key) }},
+				{"signing", func() error { return tc.d.WriteSignedIncremental(&bytes.Buffer{}, cert, key) }},
+				{"timestamp", func() error { return tc.d.WriteArchivalTimestamp(&bytes.Buffer{}, ValidationData{}, tsaCert, tsaKey) }},
+			} {
+				want := "pdf0: " + w.op + ": " + tc.want
+				if err := w.write(); err == nil || !strings.HasPrefix(err.Error(), want) {
+					t.Errorf("error = %v, want one starting %q", err, want)
+				}
+			}
+		})
+	}
+
+	signed := readBytes(t, signedBy(t, cert, key))
+	if err := signed.SetEncryption("user", "owner"); !errors.Is(err, ErrWouldInvalidateSignatures) {
+		t.Fatalf("SetEncryption on a signed document = %v, want ErrWouldInvalidateSignatures", err)
+	}
+	signed.AllowInvalidatingSignatures()
+	if err := signed.SetEncryption("user", "owner"); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := signed.Write(&out); err != nil {
+		t.Fatal(err)
+	}
+	reread, err := ReadWithPassword(bytes.NewReader(out.Bytes()), int64(out.Len()), "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range verifySigs(t, reread, sign.VerifyOptions{}) {
+		if r.Valid {
+			t.Errorf("%s still verifies after the signed document was encrypted", r.Field)
 		}
 	}
 }

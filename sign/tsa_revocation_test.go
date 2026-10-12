@@ -20,7 +20,7 @@ func TestTimestampRequiresTimeStampingEKU(t *testing.T) {
 
 	// A general (non-TSA) certificate must be rejected as a TSA.
 	badCert, badKey := signtest.CertKey(t)
-	token, err := BuildTimestampToken(imprint, badCert, badKey, time.Now())
+	token, err := buildTimestampToken(imprint, badCert, badKey, time.Now())
 	if err != nil {
 		t.Fatalf("buildTimestampToken: %v", err)
 	}
@@ -30,7 +30,7 @@ func TestTimestampRequiresTimeStampingEKU(t *testing.T) {
 
 	// A certificate carrying the timeStamping EKU is accepted.
 	tsaCert, tsaKey := signtest.TSACertKey(t)
-	good, err := BuildTimestampToken(imprint, tsaCert, tsaKey, time.Now())
+	good, err := buildTimestampToken(imprint, tsaCert, tsaKey, time.Now())
 	if err != nil {
 		t.Fatalf("buildTimestampToken (TSA): %v", err)
 	}

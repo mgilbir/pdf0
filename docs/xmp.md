@@ -6,12 +6,12 @@ Every conformance standard pdf0 validates declares itself in XMP: PDF/A writes
 therefore load-bearing for all of them, not a PDF/A detail — and it carries
 rules of its own, since PDF/A constrains which properties may appear, in which
 schema, with which value form. The model every reader and writer goes through
-is `internal/xmp`; the PDF/A rules over it are in `pdfa/xmp.go` (the glue and
-the streaming well-formedness check), `pdfa/xmp_schemas.go` (schema tables,
-property and extension-schema checks) and `pdfa/identification.go` (the pdfaid
+is `internal/xmp`; the PDF/A rules over it are in `pdfa/xmp.go` (the glue),
+`pdfa/xmp_schemas.go` (schema tables, the well-formedness rule, property and
+extension-schema checks) and `pdfa/identification.go` (the pdfaid
 reader). Open this doc before touching a schema table, before adding a rule
 that reads metadata, before writing metadata, or when a metadata finding looks
-wrong; for how the PDF/A validator runs, see [validators.md](validators.md).
+wrong; for how the PDF/A validator runs, see [pdfa.md](pdfa.md#how-validatepdfa-runs).
 
 ## The pipeline
 
@@ -19,7 +19,7 @@ wrong; for how the PDF/A validator runs, see [validators.md](validators.md).
 flowchart TD
     S["catalog /Metadata stream"] --> F["decode the stream<br/>— applies /Filter, e.g. FlateDecode"]
     F --> E["DecodeXMPToUTF8<br/>UTF-8 / UTF-16 / UTF-32, BOM or not"]
-    E --> W["xmpWellFormed — streaming<br/>well-formed? properly namespaced rdf:RDF?"]
+    E --> W["xmp.CheckWellFormed — the model's judgement, no tree<br/>well-formed? properly namespaced rdf:RDF?"]
     E --> C{"packet ≤ `WithMaxXMPPacketBytes`?"}
     C -->|no| LIM["no model — a trip on the run,<br/>reported as a limit finding"]
     C -->|yes| M["xmp.Parse → the model<br/>(View.DocumentXMPPacket, memoised per run)"]
@@ -41,6 +41,21 @@ the XML parser has already unescaped.
 malformed (the well-formedness rule's to report) or limit (a trip has been
 noted, and the reader must neither guess a value nor report one missing).
 
+A packet that is not well-formed is reported with the cause, in the XML
+parser's words and naming the line, by both validators that report it: the
+PDF/A well-formedness rule (6.7.9 at PDF/A-1, 6.6.2.1 at -2 and -3, 6.7.2.1
+at -4) says "the XMP packet is not well-formed XML (XML syntax error on line
+289: illegal character code U+0001)", and the PDF/UA identification rule
+(clause 5) "XMP metadata is not well-formed XML (XML syntax error on line 289:
+illegal character code U+0001), so it declares no PDF/UA part
+(pdfuaid:part)". Both take the reason from `xmp.MalformedReason` (PDF/UA
+through `core.View.XMPMalformedReason`), so they cannot word one packet two
+ways. pdf0 does not repair a packet: XML 1.0 has no U+0001, so a packet
+holding one is not XML. veraPDF's PDF/UA-2 validation passes such a packet,
+because its XMP parser replaces ASCII control characters before parsing (its
+ParseOptions set FIX_CONTROL_CHARS by default); the WTPDF example
+`tb139mitt-deims24` is one.
+
 ## The model — `internal/xmp`
 
 Parsing is stdlib `encoding/xml` only; the library has no XML dependency.
@@ -48,9 +63,16 @@ Parsing is stdlib `encoding/xml` only; the library has no XML dependency.
 element keeps both the prefix it was written with and the URI that prefix
 means; it checks tag matching, and judges well-formedness exactly as
 `encoding/xml`'s `Token` does (a corpus test asserts the agreement on every
-packet). The tree keeps everything: processing instructions, comments,
-whitespace, namespace declarations, unknown elements, and — per node — the
-source bytes it was parsed from. The `CharsetReader` returns its input
+packet). `xmp.CheckWellFormed` is the same pass without the tree — the same
+tokenizer, the same tag matching, the same error — for the PDF/A rule, which
+needs only the verdict and whether a properly namespaced `rdf:RDF` is
+anywhere in the packet. Every malformed-packet error wraps `ErrMalformed`, and
+one the model finds (a mismatched or unclosed tag) is worded and placed as
+`encoding/xml` words its own:
+`XML syntax error on line 9: element <dc:creator> closed by </dc:Creator>`.
+The tree keeps everything: processing instructions, comments, whitespace,
+namespace declarations, unknown elements, and — per node — the source bytes it
+was parsed from. The `CharsetReader` returns its input
 unchanged: packets are already UTF-8 by then, but many still carry an
 `encoding=` declaration that would otherwise fail the decoder, and nothing is
 fetched from outside.
@@ -80,7 +102,7 @@ subtle cases, each pinned by `TestParseXMPPropertyForms`:
 
 ### Writing: edit, don't regenerate
 
-Every metadata writer — `SetDocumentInfo`, `NewPDFADocument…` /
+Every metadata writer — `SetDocumentInfo`, `DeclarePDFUA`, `NewPDFADocument…` /
 `pdfa.GenerateXMPMetadata`, `EmbedFacturX` / `EmbedOrderX` / `facturx.XMPPacket` —
 edits a packet through the model (`core.EditableXMP` parses the document's own).
 `SetText`, `SetAltText` (one language item; the others are kept), `SetSeq`,
@@ -138,7 +160,8 @@ UTF-8 with a BOM in PDF 2.0, or PDFDocEncoding (ISO 32000-2 Annex D.3, via
 without it every UTF-16 Info entry looked "inconsistent" with its metadata
 counterpart, and until audit C77 a PDFDocEncoded `(Caf\351)` read as the
 invalid UTF-8 `"Caf\xe9"` and mismatched `Café`. The Info↔XMP consistency check
-(`checkInfoXMPConsistency`, ISO 19005-1 6.7.3, **PDF/A-1b only**) uses it on
+(`checkInfoXMPConsistency`, ISO 19005-1 6.7.3, **PDF/A-1 only**, 1a and 1b
+alike: it gates on `level.Part()`) uses it on
 eight pairs (Title/`dc:title`, Author/`dc:creator`, …), each XMP side read
 through the model — a language alternative at its `x-default` item, a sequence
 at its first — and the two dates compared through `normalizePDFDate` /
@@ -148,8 +171,8 @@ at its first — and the two dates compared through `normalizePDFDate` /
 
 | Standard | Property read | Notes |
 |---|---|---|
-| PDF/A | `pdfaid:part`, `pdfaid:conformance`, `pdfaid:rev` | ns `http://www.aiim.org/pdfa/ns/id/`, read by `readPDFAIdentification` (`pdfa/identification.go`) for the identification rule (`checkIdentification`) and for `LevelDeclared` runs, and by `Document.Conformance`/`Save` and the embedded-PDF/A rule through `pdfa.LevelFor`. The rule compares the declaration with the target: the part must match; the conformance must be one the target accepts (`B`, `U` or `A` at 2b/3b; `U` or `A` at 2u/3u; `B` or `A` at 1b; only `A` at an a level; none at plain A-4, `E` at 4e, `F` at 4f); at A-4 `rev` must be `2020`. The prefix must be `pdfaid` (ISO 19005-1 Table 3, -2/-3 6.6.4), and a `pdfaid:` prefix bound to another namespace is reported. The schema table also knows `amd` and `corr` (`corr` is dropped at 1b). |
-| PDF/UA | `pdfuaid:part` | ns `http://www.aiim.org/pdfua/ns/id/`. Clause 5 also requires the prefix itself to be `pdfuaid` for `part`, `amd` and `corr`. |
+| PDF/A | `pdfaid:part`, `pdfaid:conformance`, `pdfaid:rev` | ns `http://www.aiim.org/pdfa/ns/id/`, read by `readPDFAIdentification` (`pdfa/identification.go`) for the identification rule (`checkIdentification`) and for `LevelDeclared` runs, and by `Document.Conformance`/`Save` and the embedded-PDF/A rule through `pdfa.LevelFor`. The rule compares the declaration with the target: the part must match; the conformance must be one the target accepts (`B`, `U` or `A` at 2b/3b; `U` or `A` at 2u/3u; `B` or `A` at 1b; only `A` at an a level; none at plain A-4, `E` at 4e, `F` at 4f); at A-4 `rev` must be `2020`. The prefix must be `pdfaid` (ISO 19005-1 Table 3, -2/-3 6.6.4), and a `pdfaid:` prefix bound to another namespace is reported. The schema table also knows `amd` and `corr` (`corr` is dropped at part 1). |
+| PDF/UA | `pdfuaid:part` | ns `http://www.aiim.org/pdfua/ns/id/`. Clause 5 also requires the prefix itself to be `pdfuaid` for `part`, `amd` and `corr`. Written by `Document.DeclarePDFUA`, with `pdfuaid:rev` for part 2. |
 | PDF/X | `pdfxid:GTS_PDFXVersion` | ns `http://www.npes.org/pdfx/ns/id/`; a no-namespace `GTS_PDFXVersion` property is accepted as a fallback, and Info `/GTS_PDFXVersion` (decoded as a text string) for the older parts. |
 | PDF/VT | `pdfvtid:GTS_PDFVTVersion` | ns `http://www.npes.org/pdfvt/ns/id/`. XMP only — no Info fallback. |
 | Factur-X / ZUGFeRD | `DocumentType`, `Version`, `DocumentFileName`, `ConformanceLevel` | in `urn:factur-x:pdfa:CrossIndustryDocument:invoice:1p0#`, or the ZUGFeRD 2.0 / 1.0 invoice namespaces. |
@@ -167,12 +190,12 @@ its value form; a property in any other namespace must be declared by an
 embedded PDF/A extension schema. `predefinedXMPSchemas(level)` returns the
 table set, and which XMP edition applies depends on the level:
 
-- **PDF/A-1b — XMP 2004.** dc, xmp (Basic), xmpRights, xmpMM, xmpBJ, xmpTPg,
+- **PDF/A-1 (1a and 1b) — XMP 2004.** dc, xmp (Basic), xmpRights, xmpMM, xmpBJ, xmpTPg,
   pdf, photoshop, tiff, exif, pdfaid, with the 2005-only entries removed:
   `pdfaid:corr` dropped, `xmpTPg` only `MaxPageSize`/`NPages`, `pdf` only
   `Keywords`/`PDFVersion`/`Producer`, photoshop without
   `ColorMode`/`ICCProfile`/`TextLayers`, `SupplementalCategories` simple Text.
-- **PDF/A-2b and -3b — XMP 2005.** Adds the exif-aux, xmpDM (Dynamic Media),
+- **PDF/A-2 and -3, every conformance level — XMP 2005.** Adds the exif-aux, xmpDM (Dynamic Media),
   Camera Raw and `xmpidq` schemas plus `xmp:Label` and `xmp:Rating`, and takes
   `SupplementalCategories` as a Bag. `TestValidatePDFA_XMPLevelDependentSchemas`
   pins the split: a `crs:` property fails at 1b and passes at 2b.
@@ -183,8 +206,8 @@ Integer, Real, Rational (`int/int`), Boolean (strictly `True`/`False`), Date
 (`YYYY`, `YYYY-MM`, `YYYY-MM-DD`, or a full date-time with optional seconds and
 fraction and a `Z` or `±hh:mm` zone). Array items must be simple (or structures
 for the struct-array types), and a language alternative requires `xml:lang` on
-every item. Rule IDs come from `metadataClause`: properties are `6.7.2` at 1b
-and `6.6.2.3.1` at 2b/3b, extension-schema structure `6.7.8` / `6.6.2.3.3`, an
+every item. Rule IDs come from `metadataClause`: properties are `6.7.2` at part 1
+and `6.6.2.3.1` at parts 2 and 3, extension-schema structure `6.7.8` / `6.6.2.3.3`, an
 undefined field on an extension-schema object `6.7.8` / `6.6.2.3.2`.
 
 **Extension schemas.** `extensionDeclared` collects `pdfaExtension:schemas` →
@@ -216,7 +239,8 @@ declarations are now read as XML declares them, in any spelling.
 
 ## PDF/A-4 deliberately skips property-value validation
 
-`checkXMPProperties` returns `nil` immediately when `level == PDFA4`, and the
+`checkXMPProperties` returns `nil` immediately when `level.Part() == 4` (plain
+PDF/A-4, 4e and 4f alike), and the
 comment at the top of the function explains why: this is deliberate, not a TODO
 — the veraPDF corpus proves A-4 tolerates non-conforming XMP property values.
 The file it names, `PDF_A-4/6.1.5/…6-1-5-t02-pass-a.pdf`, carries
@@ -280,11 +304,14 @@ touch one.
   2026-09-22 C40: a 4 MiB packet of 520,000 comment-interrupted text runs builds
   in 0.4 s — so what the bound limits now is memory: that packet holds some
   300 MB of nodes while it is read.
-- **Streaming well-formedness.** `xmpWellFormed` answers "well-formed?" and
-  "has a properly namespaced `rdf:RDF`?" from the token stream with no tree, so
-  it stays O(n) and those two rules still apply to a packet too big to analyse
-  for properties. `TestXMPStreamingMatchesTree` asserts it agrees with the
-  older tree-based path, so the optimisation changed no outcome.
+- **Well-formedness without the tree.** `xmp.CheckWellFormed` answers
+  "well-formed?" and "has a properly namespaced `rdf:RDF`?" keeping only the
+  open elements, with no `MaxDepth` (nothing recurses), so it stays O(n) and
+  those two rules still apply to a packet too big to analyse for properties.
+  It is `xmp.Parse`'s own pass with the tree switched off, so it cannot judge a
+  packet differently: `TestXMPStreamingMatchesTree` and
+  `TestCorpusXMPRoundTrip` assert the agreement, the latter on every corpus
+  packet against `encoding/xml`'s `Token` as well.
 - **Entity expansion.** `encoding/xml` in strict mode neither defines nor
   expands DTD entities: a billion-laughs packet fails with `invalid character
   entity` (verified directly), surfacing as a "not well-formed XML" finding
@@ -296,7 +323,8 @@ touch one.
   packets nest about a dozen levels.
 
 Regression tests: `TestXMPLargePacketBounded` (cap lowered to 4 KiB: not
-modelled, a trip noted, well-formedness still clean), `TestDepthLimit` and `TestXMPManyElementsFast`
+modelled, a trip noted, well-formedness still clean), `TestDepthLimit`,
+`TestCheckWellFormedHasNoDepthLimit` and `TestXMPManyElementsFast`
 (200 000 elements under 5 s; tens of seconds before the tree build was
 bypassed).
 
@@ -323,7 +351,21 @@ Confirmed limitations:
   checks, and says so with a limit finding; only well-formedness and the
   packet-header rules still apply.
 
-On the writing side, `GenerateXMPMetadata` (`pdfa/create.go`) builds the
+On the writing side, two writers put an identification into the packet.
+
+`Document.DeclarePDFUA` (`pdfua_declare.go`) edits the document's packet:
+`pdfuaid:part`, and `pdfuaid:rev` `2024` for part 2 (removed again by a part-1
+declaration), with the prefix `pdfuaid` that clause 5 requires. It also writes
+an extension schema describing the `pdfuaid` namespace — `part`, `amd`, `corr`
+and `rev` — through `SetExtensionSchema`. pdf0 has no predefined `pdfuaid`
+table, and neither has PDF/A: a PDF/A-2b file carrying `pdfuaid:part` without
+the description fails 6.6.2.3.1 in pdf0 and in veraPDF alike. The description is
+written whether or not the document claims PDF/A when it is declared, since
+the claim can come later (`EmbedFacturX` adds PDF/A-3) and outside PDF/A it is
+inert; `SetExtensionSchema` replaces it, so declaring twice leaves one. Its
+`dc:title` comes from `SetDocumentInfo`, which `DeclarePDFUA` requires first.
+
+`GenerateXMPMetadata` (`pdfa/create.go`) builds the
 packet pdf0's PDF/A builder embeds, through the model: the wrapper `xmp.New`
 writes (a BOM as the `begin` value, and an `<?xpacket?>` header with neither a
 `bytes` nor an `encoding` attribute, both forbidden by 6.7.5 / 6.6.2.1 /

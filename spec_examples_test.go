@@ -3,16 +3,16 @@ package pdf0
 // Tests derived from ALL examples in ISO 32000-2:2020 (PDF 2.0).
 //
 // Examples are extracted from the spec by cmd/extract_spec_examples/main.py
-// and stored in testdata/spec_examples.json. Each example records the spec
-// section, page number, and content.
+// on the machine that runs the tests (spec_examples_extract_test.go): they are
+// ISO's and are not committed. Each example records the spec section, page
+// number, and content. Without the spec PDF the tests skip.
 //
-// Spec: ISO_32000-2_sponsored-ec2.pdf (in spec/pdf2.0/)
+// Spec: ISO_32000-2_sponsored-ec2.pdf (placed by hand in spec/pdf2.0/)
 
 import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -33,10 +33,7 @@ type specExample struct {
 
 func loadSpecExamples(t *testing.T) []specExample {
 	t.Helper()
-	data, err := os.ReadFile("testdata/spec_examples.json")
-	if err != nil {
-		t.Fatalf("loading spec examples: %v", err)
-	}
+	data := isoSpecExamples(t, iso32000_2())
 	var examples []specExample
 	if err := json.Unmarshal(data, &examples); err != nil {
 		t.Fatalf("parsing spec examples: %v", err)
@@ -494,8 +491,8 @@ func TestSpecExampleCount(t *testing.T) {
 	examples := loadSpecExamples(t)
 
 	total := len(examples)
-	if total < 300 {
-		t.Errorf("expected at least 300 examples from spec, got %d", total)
+	if total < iso32000_2().min {
+		t.Errorf("expected at least %d examples from spec, got %d", iso32000_2().min, total)
 	}
 	t.Logf("total examples: %d", total)
 

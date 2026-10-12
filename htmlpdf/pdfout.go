@@ -10,9 +10,9 @@
 // poorer for it. What arrives here is a display list — rectangles, runs of
 // text, images, clips — and what leaves is a document.
 //
-// So Render is layout.Compose plus writePage, and the seam is exact: the step
-// that turns a display list into a document is the only one that knows what a
-// document is. A caller who wants the display list instead — to draw onto a
+// So Render is layout.Compose plus the step that writes its display list into
+// a document, and the seam is exact: that step is the only one that knows what
+// a document is. A caller who wants the display list instead — to draw onto a
 // canvas, to test, to write some other format — calls Compose and never imports
 // this package.
 //
@@ -52,8 +52,8 @@ import (
 //   - layout.Layout units become points. CSS px is 1/96 inch and a PDF point is 1/72,
 //     so the factor is exactly 0.75.
 //
-// Both fold into the single transform §5 asks for, together with the
-// scale-to-fit factor. One "cm" at the top of the content stream, and the
+// Both fold into a single transform, together with the scale-to-fit factor
+// (Result.Scale). One "cm" at the top of the content stream, and the
 // output stays vector: text remains selectable and searchable, and no image is
 // resampled.
 
@@ -72,9 +72,12 @@ type Result struct {
 	// to check this.
 	Document *pdf0.Document
 
-	// Scale is the factor of §5: 1 when the content fitted, less when it had to
-	// be shrunk. It is reported because a caller may want to refuse a document
-	// that only fitted by being made small.
+	// Scale is the scale-to-fit factor: 1 when the content fitted at its
+	// natural size, less when it had to be shrunk to fit the sheet, and more
+	// only when Options.AllowScaleUp let an underfull page be enlarged. It is
+	// reported because a caller may want to refuse a document that only fitted
+	// by being made small; below Options.MinScale the engine refuses one itself
+	// (the min-scale rule).
 	Scale float64
 
 	// Findings is everything the guardrails raised, in a deterministic order —
@@ -205,6 +208,12 @@ func (e *RefusedError) Error() string {
 // scaled to fit (see Result.Scale), and there is no pagination to write. The
 // sheet is the one the document laid out on — the caller's, with the
 // document's own @page rules applied.
+//
+// opts.TransformGroups is set to true whatever the caller passed. It tells
+// forme that the backend draws a TransformGroup, which this one does, so a
+// rotated or skewed box is drawn through its matrix rather than reported and
+// drawn untransformed; it is a fact about the backend, not a choice about the
+// document.
 func Render(in layout.Input, opts layout.Options) (Result, error) {
 	return finish(layout.Compose(in, drawing(opts)), in)
 }
@@ -232,7 +241,7 @@ func drawing(opts layout.Options) layout.Options {
 // error, or one wrapping ErrRunLimit, and a zero Result: no document, and no
 // findings from a composition that stopped part way. Otherwise it returns
 // what Render returns for the document, the same bytes, and the work charged
-// in Result.ShapingWork.
+// in Result.ShapingWork. Like Render, it sets opts.TransformGroups.
 func RenderContext(ctx context.Context, in layout.Input, opts layout.Options, limits RunLimits) (Result, error) {
 	composed, err := layout.ComposeContext(ctx, in, drawing(opts), limits)
 	if err != nil {

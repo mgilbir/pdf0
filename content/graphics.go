@@ -1,6 +1,7 @@
 package content
 
 import (
+	"fmt"
 	"slices"
 
 	"github.com/mgilbir/pdf0/object"
@@ -294,7 +295,9 @@ func (b *Builder) SetStrokeGray(level float64) *Builder {
 	if !inUnit(level) {
 		return b.fail("gray level %v is outside [0,1]", level)
 	}
-	return b.op("G", level)
+	b.op("G", level)
+	b.setStrokeUnderlying("")
+	return b
 }
 
 // SetRGB sets the fill colour in DeviceRGB, each component in [0,1] (rg).
@@ -312,7 +315,9 @@ func (b *Builder) SetStrokeRGB(r, g, bl float64) *Builder {
 	if !inUnit(r) || !inUnit(g) || !inUnit(bl) {
 		return b.fail("RGB components (%v, %v, %v) are outside [0,1]", r, g, bl)
 	}
-	return b.op("RG", r, g, bl)
+	b.op("RG", r, g, bl)
+	b.setStrokeUnderlying("")
+	return b
 }
 
 // SetCMYK sets the fill colour in DeviceCMYK, each component in [0,1] (k).
@@ -330,7 +335,9 @@ func (b *Builder) SetStrokeCMYK(c, m, y, k float64) *Builder {
 	if !inUnit(c) || !inUnit(m) || !inUnit(y) || !inUnit(k) {
 		return b.fail("CMYK components (%v, %v, %v, %v) are outside [0,1]", c, m, y, k)
 	}
-	return b.op("K", c, m, y, k)
+	b.op("K", c, m, y, k)
+	b.setStrokeUnderlying("")
+	return b
 }
 
 // SetColorSpace selects a named colour space for filling (cs). Device spaces
@@ -350,11 +357,19 @@ func (b *Builder) SetStrokeColorSpace(name object.Name) *Builder {
 	if !isDeviceSpace(name) {
 		record(&b.res.ColorSpaces, name)
 	}
-	return b.op("CS", name)
+	b.op("CS", name)
+	b.setStrokeUnderlying("")
+	return b
 }
 
 // SetColor sets the fill colour components in the current colour space (scn).
+// In a space SetUncoloredPatternSpace selected it fails: there the components
+// go with a pattern name, through SetUncoloredPattern.
 func (b *Builder) SetColor(components ...float64) *Builder {
+	if b.state.fill.Underlying != "" {
+		return b.fail("scn with components alone in the uncoloured pattern space %v: "+
+			"they need the pattern name beside them (SetUncoloredPattern)", b.state.fill.Space)
+	}
 	b.setColorN("scn", components)
 	if b.state.hasFill {
 		// The components are in whatever space cs last selected. Before any
@@ -369,8 +384,13 @@ func (b *Builder) SetColor(components ...float64) *Builder {
 }
 
 // SetStrokeColor sets the stroke colour components in the current stroking
-// colour space (SCN).
+// colour space (SCN). In a space SetStrokeUncoloredPatternSpace selected it
+// fails, as SetColor does.
 func (b *Builder) SetStrokeColor(components ...float64) *Builder {
+	if b.state.strokeUnderlying != "" {
+		return b.fail("SCN with components alone in an uncoloured pattern space: " +
+			"they need the pattern name beside them (SetStrokeUncoloredPattern)")
+	}
 	return b.setColorN("SCN", components)
 }
 
@@ -387,8 +407,16 @@ func (b *Builder) setColorN(operator string, components []float64) *Builder {
 
 // SetPattern sets the fill colour to a named pattern (scn with a name operand).
 // The name must be defined in the page's /Resources /Pattern, and the current
-// colour space must be /Pattern.
+// colour space must be /Pattern. That is how a coloured pattern is painted; an
+// uncoloured one takes its colour beside its name, through SetUncoloredPattern,
+// and in a space SetUncoloredPatternSpace selected SetPattern fails rather than
+// write an scn with no components, which a reader rejects (ISO 32000-2
+// 8.7.3.3).
 func (b *Builder) SetPattern(name object.Name) *Builder {
+	if b.state.fill.Underlying != "" {
+		return b.fail("scn with the pattern name alone in the uncoloured pattern space %v: "+
+			"an uncoloured pattern needs its colour components beside the name (SetUncoloredPattern)", b.state.fill.Space)
+	}
 	record(&b.res.Patterns, name)
 	b.op("scn", name)
 	b.setFill(Color{Space: "Pattern", Pattern: name})
@@ -397,8 +425,133 @@ func (b *Builder) SetPattern(name object.Name) *Builder {
 
 // SetStrokePattern is SetPattern for stroking (SCN).
 func (b *Builder) SetStrokePattern(name object.Name) *Builder {
+	if b.state.strokeUnderlying != "" {
+		return b.fail("SCN with the pattern name alone in an uncoloured pattern space: " +
+			"an uncoloured pattern needs its colour components beside the name (SetStrokeUncoloredPattern)")
+	}
 	record(&b.res.Patterns, name)
 	return b.op("SCN", name)
+}
+
+// --- Uncoloured patterns ---
+//
+// An uncoloured tiling pattern (PaintType 2, ISO 32000-2 8.7.3.3) is shape
+// without colour: it is painted in a colour given where it is used. That takes
+// a /Pattern colour space with an underlying space, [/Pattern /DeviceRGB] say,
+// which pdf0.UncoloredPatternSpace builds for a page's /Resources /ColorSpace;
+// and one operator carrying both the colour, in the underlying space, and the
+// pattern: c1 … cn /P scn. The components alone, or the name alone, are an
+// operand-count error a reader rejects, and a colour split across two scn
+// operators is exactly that.
+//
+// A Builder cannot see the resource a colour-space name will be defined as, so
+// selecting the space says what its underlying space is, and the components are
+// checked against that. The resource the page defines under the name must be
+// that space: UncoloredPatternSpace with the same underlying space.
+
+// SetUncoloredPatternSpace selects for filling (cs) the colour space name
+// defines in the page's /Resources /ColorSpace, which must be a /Pattern space
+// over underlying: DeviceGray, DeviceRGB or DeviceCMYK.
+func (b *Builder) SetUncoloredPatternSpace(name, underlying object.Name) *Builder {
+	if err := checkUncoloredSpace(name, underlying); err != "" {
+		return b.fail("%s", err)
+	}
+	record(&b.res.ColorSpaces, name)
+	b.op("cs", name)
+	b.setFill(Color{Space: name, Underlying: underlying})
+	return b
+}
+
+// SetStrokeUncoloredPatternSpace is SetUncoloredPatternSpace for stroking (CS).
+func (b *Builder) SetStrokeUncoloredPatternSpace(name, underlying object.Name) *Builder {
+	if err := checkUncoloredSpace(name, underlying); err != "" {
+		return b.fail("%s", err)
+	}
+	record(&b.res.ColorSpaces, name)
+	b.op("CS", name)
+	b.setStrokeUnderlying(underlying)
+	return b
+}
+
+// SetUncoloredPattern sets the fill colour to the uncoloured pattern name,
+// painted in components: one scn carrying both (c1 … cn /name scn). The space
+// must have been selected with SetUncoloredPatternSpace, and components are in
+// its underlying space — one for DeviceGray, three for DeviceRGB, four for
+// DeviceCMYK — each in [0,1].
+func (b *Builder) SetUncoloredPattern(name object.Name, components ...float64) *Builder {
+	underlying := b.state.fill.Underlying
+	if err := checkUncoloredColour("scn", "SetUncoloredPatternSpace", underlying, components); err != "" {
+		return b.fail("%s", err)
+	}
+	b.uncoloredOp("scn", name, components)
+	c := b.state.fill
+	c.Components = slices.Clone(components)
+	c.Pattern = name
+	b.setFill(c)
+	return b
+}
+
+// SetStrokeUncoloredPattern is SetUncoloredPattern for stroking (SCN), in the
+// space SetStrokeUncoloredPatternSpace selected.
+func (b *Builder) SetStrokeUncoloredPattern(name object.Name, components ...float64) *Builder {
+	if err := checkUncoloredColour("SCN", "SetStrokeUncoloredPatternSpace", b.state.strokeUnderlying, components); err != "" {
+		return b.fail("%s", err)
+	}
+	return b.uncoloredOp("SCN", name, components)
+}
+
+func (b *Builder) uncoloredOp(operator string, name object.Name, components []float64) *Builder {
+	record(&b.res.Patterns, name)
+	operands := make([]any, 0, len(components)+1)
+	for _, c := range components {
+		operands = append(operands, c)
+	}
+	return b.op(operator, append(operands, name)...)
+}
+
+// checkUncoloredSpace says what is wrong with selecting name as an uncoloured
+// pattern space over underlying, or "" when nothing is.
+func checkUncoloredSpace(name, underlying object.Name) string {
+	if isDeviceSpace(name) {
+		return fmt.Sprintf("an uncoloured pattern space is a /ColorSpace resource, and %v names a space that is not one", name)
+	}
+	if componentCount(underlying) == 0 {
+		return fmt.Sprintf("an uncoloured pattern space's underlying space must be DeviceGray, DeviceRGB or DeviceCMYK, not %v", underlying)
+	}
+	return ""
+}
+
+// checkUncoloredColour says what is wrong with painting an uncoloured pattern
+// in components when the current space's underlying space is underlying ("" if
+// the current space is not an uncoloured pattern space), or "" when nothing is.
+func checkUncoloredColour(operator, selector string, underlying object.Name, components []float64) string {
+	if underlying == "" {
+		return fmt.Sprintf("%s with an uncoloured pattern needs an uncoloured pattern space selected first (%s)", operator, selector)
+	}
+	if n := componentCount(underlying); len(components) != n {
+		return fmt.Sprintf("%s: an uncoloured pattern over %v takes %d colour components, not %d",
+			operator, underlying, n, len(components))
+	}
+	for _, c := range components {
+		if !inUnit(c) {
+			return fmt.Sprintf("%s: colour components %v are outside [0,1]", operator, components)
+		}
+	}
+	return ""
+}
+
+// componentCount is the number of components a colour has in a device space,
+// or 0 for any other space.
+func componentCount(space object.Name) int {
+	switch space {
+	case "DeviceGray":
+		return 1
+	case "DeviceRGB":
+		return 3
+	case "DeviceCMYK":
+		return 4
+	}
+	return 0
 }
 
 // --- Shadings and XObjects ---

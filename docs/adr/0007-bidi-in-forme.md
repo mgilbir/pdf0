@@ -75,3 +75,12 @@ diff through it buys nothing.
   and each was answerable by exporting something. Code that another module would
   plausibly want should be exported; leaving it unexported is what makes the
   second implementation look like the cheaper option.
+
+**Amended 2026-10-11:** the Context's "Rule L4's mirroring did not have to be
+exported at all" did not hold for long, if it held at all. forme v0.1.0, which
+this module adopted the same day (5794212), already exports `bidi.MirrorOf` and
+`bidi.MirrorRunes`, and v0.4.0 added `bidi.Mirrored`, which forme's math
+stretching reads. Mirroring is public in forme/bidi, used by forme's shaper and
+layout engine; pdf0 calls none of the three. The decision — one implementation,
+in forme, exported — is unchanged, and the third consequence's lesson applies
+to mirroring as well.

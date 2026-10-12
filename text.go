@@ -14,25 +14,53 @@ import (
 
 // This file implements text extraction: the visible text of a whole document
 // or of a single page, decoded through each font's ToUnicode CMap (ISO 32000-2
-// clause 9.10.3) and recursing into invoked form XObjects. It reads content
+// clause 9.10.3) or, failing that, its encoding, and recursing into invoked
+// form XObjects. It reads content
 // through the shared lenient tokenizer, which survives a malformed stream
 // rather than diagnosing it. There is no layout model, so the output is
 // approximate rather than faithful.
 
 // ExtractText returns the visible text of every page in reading order, pages
-// separated by a form feed. Text is decoded through each font's ToUnicode CMap;
-// glyphs without a ToUnicode mapping are dropped. Layout is approximate: line
-// breaks follow the text-positioning operators and wide inter-glyph gaps become
-// spaces.
+// separated by a form feed. Layout is approximate: line breaks follow the
+// text-positioning operators and wide inter-glyph gaps become spaces.
+//
+// Each character code is decoded through its font's ToUnicode CMap first. A
+// code the CMap does not map falls back:
+//
+//   - in a simple font, to the character its /Encoding names (a base encoding
+//     and its /Differences; StandardEncoding when there is no /Encoding), and
+//     failing that to the code read as Latin-1, except that a code below 32 is
+//     dropped;
+//   - in a composite (Type 0) font, to the code read as UTF-16 when the
+//     font's /Encoding names a predefined Unicode CMap (Uni…-UCS2-… or
+//     Uni…-UTF16-…); otherwise the code is dropped.
+//
+// A marked-content sequence carrying /ActualText contributes that text in
+// place of everything shown inside it.
 //
 // The error is nil exactly when every page's text is in the result. Otherwise
 // it reports each page that is not, as a *PageTextError, and the result holds
 // the text of the others, still separated by form feeds so that the n-th page's
-// text stays after the (n-1)-th feed. Two things leave a page out: the content
-// budget running out (the page and every one after it, see below), and an
-// internal error — a panic in the extractor, recovered at the page so that one
-// bad page does not take down the caller or the other pages. Neither is a
-// statement about the file being wrong, and neither is silent.
+// text stays after the (n-1)-th feed. Three things leave a page out:
+//
+//   - content the page's text depends on that pdf0 declined to read: its own
+//     content stream or a form XObject's, over a size limit
+//     (WithMaxDecodedStreamBytes, WithMaxContentStreamBytes,
+//     WithMaxDecodedContentBytes), in a filter pdf0 does not decode, or one of
+//     DecryptFailures; or the ToUnicode or encoding CMap of a font it shows
+//     text in, declined for the same reasons;
+//   - the work budget running out (the page and every one after it, see
+//     below);
+//   - an internal error — a panic in the extractor, recovered at the page so
+//     that one bad page does not take down the caller or the other pages.
+//
+// Each is reported, none is silent, and a limit's error matches
+// ErrResourceLimit. Corrupt content is different: a stream whose data does not
+// decode carries no text to extract, so the page contributes what could be
+// read, with no error.
+//
+// A Locked document returns "" and one error wrapping LockReason: every page's
+// content is ciphertext.
 //
 // Extraction runs as one run, like a validation: it shares the run's memo of
 // decoded streams, parsed ToUnicode and CMaps, and its work meter
@@ -54,9 +82,10 @@ func (d *Document) ExtractText() (string, error) {
 // ctx.Err(). Both, because either alone would be a lie: discarding the text
 // throws away work the caller paid for, and returning it bare would present a
 // truncated document as a whole one. Extraction has no finding channel — the
-// mechanism the validators use to say "this result is incomplete" (see
-// cancel.go and docs/limits.md) — so the error is the only place that fact can
-// live, and a caller who ignores it gets a silently short document.
+// mechanism the validators use to say "this result is incomplete", a finding
+// under the "limit" rule (see IsCheckerFinding and docs/limits.md) — so the
+// error is the only place that fact can live, and a caller who ignores it gets
+// a silently short document.
 //
 // The error is nil exactly when the extraction ran to completion, with every
 // page's text in the result; it joins the cancellation with any
@@ -70,8 +99,13 @@ type PageTextError struct {
 	// Page is the 1-based page number in document order, or 0 from
 	// ExtractPageText, which is given the page rather than its number.
 	Page int
-	// Err says why: a resource limit (its message begins "resource limit
-	// reached" and names the guard) or an internal error in the extractor.
+	// Err says why: a resource limit, matching ErrResourceLimit, whose
+	// message names the guard; content pdf0 declined to read for another
+	// reason — a filter it does not implement, a stream that did not
+	// decrypt — whose message says which; from ExtractPageText on a Locked
+	// document, an error wrapping LockReason; or an internal error in the
+	// extractor. A message about declined content names the stream's object
+	// when there is one.
 	Err error
 }
 
@@ -85,6 +119,9 @@ func (e *PageTextError) Error() string {
 func (e *PageTextError) Unwrap() error { return e.Err }
 
 func (d *Document) extractText(cancel core.Canceler) (string, error) {
+	if d.Locked() {
+		return "", d.lockedError("extracting text")
+	}
 	catalog := d.ResolveDict(d.Trailer.Get("Root"))
 	if catalog == nil {
 		return "", cancel.StopErr("extracting text")
@@ -96,7 +133,7 @@ func (d *Document) extractText(cancel core.Canceler) (string, error) {
 	run := rd.newTextRun()
 	var pages []core.PageInfo
 	if core.Contain(func() { pages = rd.view().Pages(catalog.Get("Pages")) }) {
-		return "", stop.StopErr("extracting text")
+		return "", markLimit(stop.StopErr("extracting text"))
 	}
 	var b strings.Builder
 	var errs []error
@@ -104,18 +141,18 @@ func (d *Document) extractText(cancel core.Canceler) (string, error) {
 		// Per page: the coarse boundary. Within a page the tokenizer stops every
 		// core.CancelScanBytes, so a single enormous page is interruptible too.
 		if err := stop.StopErr("extracting text"); err != nil {
-			return b.String(), errors.Join(append(errs, err)...)
+			return b.String(), errors.Join(append(errs, markLimit(err))...)
 		}
 		if i > 0 {
 			b.WriteByte('\f')
 		}
 		text, err := rd.pageText(run, pg.Dict)
 		if err != nil {
-			errs = append(errs, &PageTextError{Page: i + 1, Err: err})
+			errs = append(errs, &PageTextError{Page: i + 1, Err: markLimit(err)})
 			if serr := stop.StopErr("extracting text"); serr != nil && !errors.Is(serr, context.Canceled) && !errors.Is(serr, context.DeadlineExceeded) {
 				// The work budget is the whole run's: every later page would
 				// be refused too, and one error for the rest says so.
-				errs = append(errs, fmt.Errorf("text of the pages after page %d not extracted: %w", i+1, serr))
+				errs = append(errs, markLimit(fmt.Errorf("text of the pages after page %d not extracted: %w", i+1, serr)))
 				break
 			}
 			continue
@@ -134,18 +171,21 @@ func (d *Document) extractText(cancel core.Canceler) (string, error) {
 // inside a form is not dropped.
 //
 // The error is a *PageTextError, with Page 0, when the page's text could not
-// be extracted — the content budget ran out, or the extractor failed
-// internally — and the text is then empty. See ExtractText.
+// be extracted — for the reasons ExtractText leaves a page out, or because the
+// document is Locked — and the text is then empty. See ExtractText.
 //
 // There is deliberately no ExtractPageTextContext: one page is the unit of work,
 // and a caller extracting several pages already has a loop of its own to check
 // a context in. Adding a variant here would move that check inside a call that
 // does one page's work either way.
 func (d *Document) ExtractPageText(page *object.Dictionary) (string, error) {
+	if d.Locked() {
+		return "", &PageTextError{Err: d.lockedError("extracting the page's text")}
+	}
 	rd := beginRun(d)
 	text, err := rd.pageText(rd.newTextRun(), page)
 	if err != nil {
-		return "", &PageTextError{Err: err}
+		return "", &PageTextError{Err: markLimit(err)}
 	}
 	return text, nil
 }
@@ -161,8 +201,31 @@ type textRun struct {
 	// pages memoizes a page's text by its content stream and resources, which
 	// are all the text depends on. Pages commonly carry their own copy of
 	// the same resource dictionary, so resources are matched by value
-	// (core.ResMemo).
+	// (core.ResMemo). A page whose text is incomplete is not memoized.
 	pages core.ResMemo[string]
+	// declined is the first content the page being extracted depends on that
+	// pdf0 declined to read, or nil. pageText resets it per page.
+	declined *declinedContent
+}
+
+// declinedContent is content a page's text depends on that pdf0 declined to
+// read: over a size limit, in a filter it does not decode, or not decrypted
+// (core.Reason). The text of such a page is incomplete, so it is left out and
+// reported rather than returned short.
+type declinedContent struct {
+	reason core.Reason
+	what   string // what was declined, in the page's terms
+	stream *object.Stream
+}
+
+// decline records d as the page's declined content, keeping the first. A
+// reason that is not a declined one, and cancellation (which stops the whole
+// extraction and is reported as such), are not recorded.
+func (r *textRun) decline(reason core.Reason, what string, stream *object.Stream) {
+	if !reason.Declined() || reason == core.ReasonCanceled || r.declined != nil {
+		return
+	}
+	r.declined = &declinedContent{reason: reason, what: what, stream: stream}
 }
 
 // fontMaps is fontMapsFrom(res), once per resource dictionary per run.
@@ -211,9 +274,13 @@ func (d *Document) pageText(run *textRun, page *object.Dictionary) (text string,
 		textPageHook(page)
 	}
 	v := d.view()
+	run.declined = nil
 	res := d.ResolveDict(v.InheritedPageAttr(page, "Resources"))
-	content, key, _ := v.ContentBytesAndKey(page.Get("Contents")) // reason: extraction returns the text it could decode
-	if key != nil {
+	content, key, r := v.ContentBytesAndKey(page.Get("Contents"))
+	if r.Declined() {
+		run.decline(r, "the page's content", d.declinedPart(page.Get("Contents")))
+	}
+	if key != nil && run.declined == nil {
 		if t, ok := run.pages.Get(v, key, res); ok {
 			v.ChargeCopy(len(t)) // the copy the caller is handed
 			return t, nil
@@ -221,10 +288,100 @@ func (d *Document) pageText(run *textRun, page *object.Dictionary) (text string,
 	}
 	var out strings.Builder
 	d.extractContentText(run, res, content, &out, map[*object.Stream]bool{}, 0)
+	if run.declined != nil {
+		return "", d.declinedError(run.declined)
+	}
 	if key != nil {
 		run.pages.Put(key, res, out.String())
 	}
 	return out.String(), nil
+}
+
+// declinedPart is the stream a page's /Contents names that pdf0 declined to
+// read: the stream itself, or the first declined one of an array of them.
+func (d *Document) declinedPart(contents object.Object) *object.Stream {
+	v := d.view()
+	switch c := d.Resolve(contents).(type) {
+	case *object.Stream:
+		return c
+	case object.Array:
+		for _, e := range c {
+			if s, ok := d.Resolve(e).(*object.Stream); ok {
+				if _, r := v.Content(s); r.Declined() {
+					return s
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// declinedError is the error for a page whose text depends on content pdf0
+// declined to read. A limit names the guard that tripped: the producer
+// recorded it in the run against the stream's object, or, for the run's total
+// of decoded content, against no object.
+func (d *Document) declinedError(c *declinedContent) error {
+	v := d.view()
+	e := &contentDeclinedError{reason: c.reason, what: c.what}
+	if c.stream != nil {
+		e.obj = v.StreamObjNum(c.stream)
+	}
+	if c.reason != core.ReasonLimit || v.Run == nil {
+		return e
+	}
+	trips := v.Run.Trips.Snapshot()
+	for _, t := range trips {
+		if g := t.Guard(); e.obj > 0 && t.Obj == e.obj && g != core.GuardUnsupportedFilter && g != core.GuardLocked {
+			e.guard = g
+			return e
+		}
+	}
+	// No trip against the stream: it was declined for the run's total, which
+	// is recorded against no object — unless the recorder dropped trips, when
+	// the stream's own may be among them and the guard is not known.
+	total := false
+	for _, t := range trips {
+		switch t.Guard() {
+		case core.GuardReportOverflow:
+			return e
+		case core.GuardContentTotal:
+			total = true
+		}
+	}
+	if total {
+		e.guard = core.GuardContentTotal
+	}
+	return e
+}
+
+// contentDeclinedError is declinedError's error. It matches ErrResourceLimit
+// when the content was declined for a limit.
+type contentDeclinedError struct {
+	reason core.Reason
+	guard  string // the guard that tripped, when the run recorded it
+	what   string
+	obj    int // the declined stream's object number, or 0
+}
+
+func (e *contentDeclinedError) Error() string {
+	what := e.what
+	if e.obj > 0 {
+		what = fmt.Sprintf("%s (object %d)", what, e.obj)
+	}
+	switch e.reason {
+	case core.ReasonLimit:
+		if e.guard == "" {
+			return fmt.Sprintf("resource limit reached: %s was not decoded, being over a size limit whose trip the run did not keep", what)
+		}
+		return fmt.Sprintf("resource limit reached (%s): %s was not decoded", e.guard, what)
+	case core.ReasonUnsupported:
+		return fmt.Sprintf("not implemented (%s): %s uses a filter pdf0 does not decode", core.GuardUnsupportedFilter, what)
+	}
+	return fmt.Sprintf("not decrypted (%s): %s did not decrypt under the document's key", core.GuardLocked, what)
+}
+
+func (e *contentDeclinedError) Is(target error) bool {
+	return target == ErrResourceLimit && e.reason == core.ReasonLimit
 }
 
 // maxTextFormDepth bounds recursion through nested form XObjects.
@@ -276,6 +433,9 @@ func (d *Document) extractContentText(run *textRun, res *object.Dictionary, cont
 	show := func(raw []byte) {
 		if replaced > 0 {
 			return
+		}
+		if cur.declined != nil && len(raw) > 0 {
+			run.decline(cur.declined.reason, cur.declined.what, cur.declined.stream)
 		}
 		for _, r := range cur.decode(raw) {
 			out.WriteRune(r)
@@ -356,7 +516,8 @@ func (d *Document) extractContentText(run *textRun, res *object.Dictionary, cont
 						if formRes == nil {
 							formRes = res // a form may draw with the calling context's resources
 						}
-						formData, _ := d.view().Content(st) // reason: extraction returns the text it could decode
+						formData, r := d.view().Content(st)
+						run.decline(r, "the content of form XObject /"+operands[len(operands)-1].Name, st)
 						d.extractContentText(run, formRes, formData, out, onPath, depth+1)
 						delete(onPath, st)
 					}
@@ -413,6 +574,10 @@ type fontText struct {
 	// vertical is a Type 0 font whose CMap writes down the page (WMode 1),
 	// for which a TJ number moves the pen along y.
 	vertical bool
+	// declined is the font's ToUnicode or encoding CMap when pdf0 declined to
+	// read it, and nil otherwise: text shown in the font is then decoded
+	// without it, and the page that shows it is incomplete.
+	declined *declinedContent
 }
 
 // fontMapsFrom resolves a resource dictionary's /Font entries to their ToUnicode maps.
@@ -430,14 +595,25 @@ func (d *Document) fontMapsFrom(res *object.Dictionary) map[string]fontText {
 		if f == nil {
 			continue
 		}
-		toUnicode, _ := core.ParseToUnicode(d.view(), f) // reason: extraction falls back to the font's encoding without a ToUnicode map
+		toUnicode, r := core.ParseToUnicode(d.view(), f)
 		ft := fontText{toUnicode: toUnicode}
+		if r.Declined() && r != core.ReasonCanceled {
+			st, _ := d.Resolve(f.Get("ToUnicode")).(*object.Stream)
+			ft.declined = &declinedContent{reason: r, what: "the ToUnicode CMap of font /" + string(name), stream: st}
+		}
 		if st, _ := d.view().ResolveName(f.Get("Subtype")); st == "Type0" {
 			ft.composite = true
 			ft.vertical = core.FontWMode(d.view(), f) == 1
 			var ok bool
 			if ft.codes, ok = core.LoadFontCodes(d.view(), f); !ok {
 				ft.codes = core.TwoByteFontCodes()
+				// A CMap pdf0 declined to read cuts codes wrongly, not
+				// merely without a mapping.
+				if cm, isStream := d.Resolve(f.Get("Encoding")).(*object.Stream); isStream && ft.declined == nil {
+					if _, r := d.view().Content(cm); r.Declined() && r != core.ReasonCanceled {
+						ft.declined = &declinedContent{reason: r, what: "the encoding CMap of font /" + string(name), stream: cm}
+					}
+				}
 			}
 		} else {
 			ft.encoding = d.simpleEncoding(f)

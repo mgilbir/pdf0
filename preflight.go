@@ -34,16 +34,31 @@ const maxFieldDepth = 64
 
 // Repair applies a set of safe, well-defined fixes that remove common PDF/A
 // conformance failures at level, and reports what it changed. It mutates the
-// document in place; a subsequent Write emits the repaired file. Repair never
-// touches page content or fonts — it only removes forbidden document-level
-// constructs — so it cannot make a conformant document non-conformant.
+// document in place; a subsequent Write emits the repaired file. Among its
+// fixes it removes encryption, which PDF/A forbids: a document Read decrypted
+// (Encrypted, but not Locked) is written by the next Write in plaintext, with
+// no password. A caller whose output must stay protected cannot have PDF/A,
+// and should not Repair. Repair itself changes only the model, but that next
+// Write rewrites the whole file, so on a document whose file carries
+// signatures it is refused (ErrWouldInvalidateSignatures) unless
+// AllowInvalidatingSignatures was called.
 //
-// What it removes depends on level, and is what the validator reports at that
-// level (pdfa.TriggerEventForbidden): before PDF/A-4 every additional-actions
-// (/AA) dictionary on the catalog, a page, an annotation or a form field; at
-// PDF/A-4 only the trigger events 6.6.3 forbids, keeping the interaction events
-// it permits. Annotations are found through each page's /Annots, direct or
-// indirect, and fields through the AcroForm field tree.
+// Its other fixes are document-level and information-free: it removes the
+// additional actions the level forbids, and adds a file identifier (/ID) to
+// a trailer that has none. It never touches page content or fonts, so it
+// cannot make a conformant document non-conformant.
+//
+// Which additional actions it removes depends on level, and is what the
+// validator reports at that level (pdfa.TriggerEventForbidden): before
+// PDF/A-4 every additional-actions (/AA) dictionary on the catalog, a page, an
+// annotation or a form field; at PDF/A-4 only the trigger events 6.6.3
+// forbids, keeping the interaction events it permits. Annotations are found
+// through each page's /Annots, direct or indirect, and fields through the
+// AcroForm field tree.
+//
+// Each change is reported as a RepairAction: "removed document encryption
+// (/Encrypt)", one per /AA removed or trigger event pruned, and "added a
+// missing file identifier (/ID)".
 //
 // It is not a substitute for validation: run ValidatePDFA afterwards to see what
 // remains (missing embedded fonts, device colour without an output intent, and

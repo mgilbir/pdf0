@@ -1,5 +1,5 @@
 // Command extract_images builds a small PDF holding two image XObjects, writes
-// it, reads it back, and walks the images with the lazy Images iterator.
+// it, reads it back, and walks the images with the lazy ImagesContext iterator.
 //
 // The building half uses the writer this module provides — images.Embed for the
 // XObjects, content.Builder for the drawing, AddPage for the page — so it also
@@ -13,6 +13,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"image"
 	"image/color"
@@ -56,17 +57,7 @@ func grayImage() image.Image {
 
 // buildDoc assembles a one-page document drawing both images.
 func buildDoc() (*pdf.Document, error) {
-	doc := &pdf.Document{Version: "2.0", Objects: map[int]*object.IndirectObject{}}
-
-	pages := &object.Dictionary{}
-	pages.Set("Type", object.Name("Pages"))
-	pages.Set("Kids", object.Array{})
-	pages.Set("Count", object.Integer(0))
-	pagesRef := doc.Add(pages)
-	catalog := &object.Dictionary{}
-	catalog.Set("Type", object.Name("Catalog"))
-	catalog.Set("Pages", pagesRef)
-	doc.Trailer.Set("Root", doc.Add(catalog))
+	doc := pdf.NewDocument()
 
 	rgbRef, err := images.Embed(doc, rgbImage())
 	if err != nil {
@@ -112,12 +103,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 3. Walk the images lazily. Images decodes one image at a time, so a large
-	//    scan document never holds more than one decoded image in memory —
-	//    unlike ExtractImages, which returns every decoded image at once.
+	// 3. Walk the images lazily. ImagesContext decodes one image at a time, so
+	//    a large scan document never holds more than one decoded image in
+	//    memory — unlike ExtractImagesContext, which returns every decoded
+	//    image at once. A walk that stopped early (a cancelled context, a spent
+	//    work budget, a document that could not be decrypted) ends with an
+	//    error, so it cannot be mistaken for a document with fewer images.
 	seen := map[string]bool{}
 	count := 0
-	for img := range doc.Images() {
+	for img, err := range doc.ImagesContext(context.Background()) {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "walking the images: %v\n", err)
+			os.Exit(1)
+		}
 		count++
 		filter := img.Filter
 		if filter == "" {

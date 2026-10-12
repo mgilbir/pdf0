@@ -33,6 +33,10 @@ type Color struct {
 	Components []float64
 	// Pattern is the pattern scn named, when Space is Pattern.
 	Pattern object.Name
+	// Underlying is the device space an uncoloured pattern's components are
+	// in, when Space was selected with SetUncoloredPatternSpace; Pattern is
+	// then the pattern SetUncoloredPatternSpace named, once one is set.
+	Underlying object.Name
 }
 
 // IsDevice reports whether the colour is in DeviceGray, DeviceRGB or
@@ -53,6 +57,10 @@ type tracked struct {
 	hasFont bool
 	fill    Color
 	hasFill bool
+	// strokeUnderlying is the underlying space of the uncoloured pattern
+	// space SetStrokeUncoloredPatternSpace selected for stroking, or "" when
+	// the stroking space is any other.
+	strokeUnderlying object.Name
 }
 
 // Font returns the font name and size the last Tf in this stream selected, as
@@ -81,6 +89,16 @@ func (b *Builder) setFill(c Color) {
 	}
 	b.state.fill = c
 	b.state.hasFill = true
+}
+
+// setStrokeUnderlying records the stroking space an operator has just
+// selected: an uncoloured pattern space's underlying space, or "" for any
+// other.
+func (b *Builder) setStrokeUnderlying(underlying object.Name) {
+	if b.err != nil {
+		return
+	}
+	b.state.strokeUnderlying = underlying
 }
 
 // initialComponents is the colour cs selects with a device space: black in

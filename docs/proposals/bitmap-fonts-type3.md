@@ -1,10 +1,31 @@
 # Bitmap-only fonts as Type 3 fonts — design record
 
-**Status:** implemented. The three stages below are built; the user-facing
-description is [Bitmap-only faces](../fonts.md#bitmap-only-faces) in fonts.md.
-Two things were added while building that this record did not foresee: the
-size's unit (`Face.SetPixelsPerUnit`, because htmlpdf's stream is in CSS
-pixels, not points), and the licence rule for these faces (see fonts.md).
+**Status:** implemented. The three stages below are built; the description of
+what was built is [Bitmap-only faces](../font-embedding.md#bitmap-only-faces)
+in font-embedding.md. The record below is as it was written, and the build
+differs from it in these places:
+
+- **Added:** the size's unit (`Face.SetPixelsPerUnit`, because htmlpdf's
+  stream is in CSS pixels, not points), and the licence rule for these faces,
+  which also writes a face with outlines as Type 3 fonts from its strikes when
+  its licence permits embedding only its bitmaps
+  ([text.md](../text.md#licences)).
+- **Sub-font names** ("Naming and drawing"): the first derived name is `F1.1`,
+  not `F1.2`. `fonts.SubfontName(base, k)` is `base` for the home font and
+  `base.k` for the k-th other one.
+- **Bare codes** ("Naming and drawing"): `Shape`, `ShapeWith` and `Encode`
+  write codes in the home font, not in the sub-font of the first glyph, and
+  count a glyph that font has no code left for as missing.
+- **PDF/A-1** ("Oracles"): greyscale and colour glyphs are not left
+  non-conforming and reported. A document claiming PDF/A-1 writes them without
+  transparency (`fonts.Forms.Opaque`, set by `AddPage` from the claim): a
+  greyscale glyph is a stencil of its coverage and a colour bitmap is painted
+  through a 1-bit `/Mask`, so the output is PDF/A-1 at the cost of
+  anti-aliased edges.
+- **COLR oracle** ("COLR colour glyphs"): every glyph of Google's COLRv1
+  conformance font (`testdata/colrv1`) is held to Skia, through blackrenderer,
+  because HarfBuzz's cairo renderer draws sweeps past a full turn differently;
+  HarfBuzz's `hb-view` is the oracle for Noto Color Emoji's COLRv1 build only.
 
 A font whose glyphs are only bitmaps (EBDT/EBLC, Apple's bdat/bloc, CBDT/CBLC,
 sbix) and that has no glyf, CFF or CFF2 outlines cannot be embedded as a
@@ -134,12 +155,13 @@ glyph, so it keeps its colour and loses its anti-aliasing. This is a known limit
 ## COLR colour glyphs (follow-up)
 
 **Status:** implemented; the user-facing description is
-[Colour glyphs (COLR)](../fonts.md#colour-glyphs-colr). Two things changed
+[Colour glyphs (COLR)](../font-embedding.md#colour-glyphs-colr). Two things changed
 from this design while building it: linear and radial gradients are stitched
 linear functions, not calculator functions, because Ghostscript samples a
 shading's function and draws a repeating one flat; and a group that blends or
 masks is drawn as an isolated group wherever it goes, which the conformance
-font's composite glyphs showed is needed.
+font's composite glyphs showed is needed. The oracle changed too; see the
+status note at the top.
 
 A face with a COLR table has outlines, and used to be embedded as them, so
 its colour glyphs came out in the text colour alone. It is now drawn as Type 3

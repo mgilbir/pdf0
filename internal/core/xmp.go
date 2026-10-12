@@ -42,6 +42,7 @@ type xmpMemoKey struct{}
 type xmpMemoEntry struct {
 	packet *xmp.Packet
 	status XMPStatus
+	reason string // why the packet is XMPMalformed (xmp.MalformedReason), when the parser said
 }
 
 // DocumentXMPPacket returns the document's metadata packet through the one XMP
@@ -70,39 +71,50 @@ func (doc View) XMPPacketOf(stream *object.Stream, objNum int) (*xmp.Packet, XMP
 	if e, ok := (*memo)[stream]; ok {
 		return e.packet, e.status
 	}
-	p, status := doc.parseXMP(stream, objNum)
-	(*memo)[stream] = xmpMemoEntry{p, status}
+	p, status, err := doc.parseXMP(stream, objNum)
+	(*memo)[stream] = xmpMemoEntry{p, status, xmp.MalformedReason(err)}
 	return p, status
 }
 
-func (doc View) parseXMP(stream *object.Stream, objNum int) (*xmp.Packet, XMPStatus) {
+// XMPMalformedReason is why XMPPacketOf finds the packet in stream not
+// well-formed XML, in xmp.MalformedReason's words ("XML syntax error on line
+// 289: illegal character code U+0001"), or "" when it does not, or when it is
+// XMPMalformed because the stream's data does not decode. It asks
+// XMPPacketOf, so the packet is parsed at most once per run whichever is
+// asked first.
+func (doc View) XMPMalformedReason(stream *object.Stream, objNum int) string {
+	doc.XMPPacketOf(stream, objNum)
+	return (*Slot[map[*object.Stream]xmpMemoEntry](doc.Run, xmpMemoKey{}))[stream].reason
+}
+
+func (doc View) parseXMP(stream *object.Stream, objNum int) (*xmp.Packet, XMPStatus, error) {
 	text, r := doc.XMPText(stream)
 	switch {
 	case r.Declined():
 		// Not decoded: over a limit, an unimplemented filter, ciphertext. The
 		// producer recorded the trip; the packet's properties are unknown.
-		return nil, XMPLimit
+		return nil, XMPLimit, nil
 	case r == ReasonMalformed:
 		// The stream's data does not decode, so there is no packet to read: a
 		// fact about the file, reported like a packet that is not XML.
-		return nil, XMPMalformed
+		return nil, XMPMalformed, nil
 	}
 	if text == "" {
-		return nil, XMPAbsent
+		return nil, XMPAbsent, nil
 	}
 	if len(text) > doc.Limits.XMPPacketBytes {
 		doc.Note(GuardXMPPacket, fmt.Sprintf("the XMP packet is %d bytes, above the %d-byte limit, so its properties were not read", len(text), doc.Limits.XMPPacketBytes), objNum)
-		return nil, XMPLimit
+		return nil, XMPLimit, nil
 	}
 	p, err := xmp.Parse([]byte(text))
 	switch {
 	case err == nil:
-		return p, XMPParsed
+		return p, XMPParsed, nil
 	case errors.Is(err, xmp.ErrLimit):
 		doc.Note(GuardXMPDepth, "the XMP packet nests elements more deeply than pdf0 models, so its properties were not read", objNum)
-		return nil, XMPLimit
+		return nil, XMPLimit, nil
 	default:
-		return nil, XMPMalformed
+		return nil, XMPMalformed, err
 	}
 }
 

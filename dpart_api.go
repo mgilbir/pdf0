@@ -21,12 +21,13 @@ import (
 // exactly once in page-tree order (14.12.2/14.12.3), page /DPart back-references
 // (14.12.3), /NodeNameList depth (Table 408), and the types of DPM values
 // (14.12.4.2). DPM keys are deliberately not checked: PDF/VT encodes field
-// names into keys that are not XML name tokens (see dpart.validateDPM).
+// names into keys that are not XML name tokens.
 //
-// The walk visits each node and each page once, but it is not bounded by a
-// work budget of its own: a hierarchy whose leaves each name a large page range
-// costs leaves × pages (audit 2026-09-22 C42, the per-run work meter's to fix),
-// and a context cancelled during the walk does not stop it.
+// The walk charges the run's work meter, so it is bounded by the work budget
+// (WithMaxWork) like every other validator, and a context cancelled during it
+// (ValidateDPartsContext) stops it at the meter's next poll. Either way the
+// result carries a finding under the rule "limit" (IsCheckerFinding), and the
+// findings reported before the stop are kept.
 func ValidateDParts(doc *Document) []dpart.Violation {
 	return validateDParts(core.Canceler{}, doc)
 }
@@ -50,22 +51,23 @@ func validateDParts(cancel core.Canceler, doc *Document) []dpart.Violation {
 	// The hierarchy walk is one traversal rather than a list of independent
 	// checks, so it gets a single recover boundary at the entry point: a panic
 	// on hostile input becomes an "internal" finding instead of crashing the
-	// caller, and the findings reported before it are kept (audit C27). Being one
-	// traversal, it is also the whole of this validator's cancellation
-	// granularity: an already-cancelled run skips it, and a run cancelled during
-	// it completes the walk. The walk reads no content, but its cost is not
-	// bounded by the page and DPart counts alone: each leaf's range is walked,
-	// so it is leaves × pages (C42), which the per-run work meter is to bound.
+	// caller, and the findings reported before it are kept (audit C27). An
+	// already-cancelled run skips it. The walk reads no content, but its cost is
+	// not bounded by the page and DPart counts alone: each leaf's range is
+	// walked, so it is leaves × pages (C42). It charges the run's work meter,
+	// which ends it when the budget is spent or the context is cancelled; the
+	// meter's unwinding is not a fault (finding.Guarded), and the trip is
+	// reported below with the run's others.
 	if !v.view().Cancel.Stopped() {
 		finding.Guarded(add, func() { dpartValidateHierarchy(v.view(), add) })
 	}
 
-	// The walk visits map-ordered structures, so the output order is otherwise
-	// nondeterministic; sort for stable, diffable reports.
 	// Guard trips are reported under their own rule, not as conformance
-	// failures (see limits.go).
+	// failures (see limits_report.go).
 	reportLimits(rd, add)
 
+	// The walk visits map-ordered structures, so the output order is otherwise
+	// nondeterministic; sort for stable, diffable reports.
 	finding.Sort(out)
 	return out
 }

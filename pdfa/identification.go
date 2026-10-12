@@ -17,10 +17,13 @@ import (
 // done by the parser.
 
 // CheckPDFAIDConformance is the Check of the finding that pdfaid:conformance is
-// not one the target level accepts (Level.acceptsConformance). A validator that
-// composes on the PDF/A result and needs to tell that requirement apart from
-// the rest of its clause finds it by this identifier, not by the words of its
-// message.
+// not one the target level accepts. At parts 1 to 3 a level accepts its own
+// letter and those ranked above it (A above U above B; part 1 has no U), so a
+// 2b target accepts B, U and A, and a 2a target only A. At part 4 plain PDF/A-4
+// requires the entry to be absent, and 4e and 4f require exactly E or F. A
+// validator that composes on the PDF/A result and needs to tell that
+// requirement apart from the rest of its clause finds it by this identifier,
+// not by the words of its message.
 const CheckPDFAIDConformance = "pdfaid-conformance"
 
 // pdfaIDPrefix is the prefix ISO 19005 requires for the identification schema

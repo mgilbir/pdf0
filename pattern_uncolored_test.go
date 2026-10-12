@@ -1,6 +1,11 @@
 package pdf0
 
 import (
+	"bytes"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -192,5 +197,71 @@ func TestUncoloredCheckStopsAtACycle(t *testing.T) {
 	b.Draw("Fm0")
 	if _, err := doc.AddTilingPattern(uncolored(&b, map[object.Name]object.Object{"Fm0": selfRef}, nil)); err != nil {
 		t.Errorf("a self-drawing colourless form was refused: %v", err)
+	}
+}
+
+// TestUncoloredPatternPaintsInTheColourGiven paints a page with an uncoloured
+// pattern the way the Builder writes it, and checks the result where a reader
+// would: the content stream carries the components and the pattern name in one
+// scn (ISO 32000-2 8.7.3.3), and poppler, when it is installed, renders the
+// page without an operand-count error and in the colour given. Written as two
+// operators — "0.8 0.1 0.1 scn" then "/P0 scn" — poppler reports "Incorrect
+// number of arguments in 'scn' command" and paints nothing.
+func TestUncoloredPatternPaintsInTheColourGiven(t *testing.T) {
+	doc := NewDocument()
+	var cell content.Builder
+	cell.Rect(0, 0, 10, 10).Fill() // shape only: the cell fills itself
+	pattern, err := doc.AddTilingPattern(TilingPattern{BBox: [4]float64{0, 0, 10, 10}, Uncolored: true, Content: &cell})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b content.Builder
+	b.SetUncoloredPatternSpace("CS0", "DeviceRGB").
+		SetUncoloredPattern("P0", 0.8, 0.1, 0.1).
+		Rect(0, 0, 100, 100).Fill()
+	page, err := doc.AddPage(Page{
+		Width: 100, Height: 100, Content: &b,
+		ColorSpaces: map[object.Name]object.Object{"CS0": UncoloredPatternSpace("DeviceRGB")},
+		Patterns:    map[object.Name]object.Object{"P0": pattern},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, _ := doc.Resolve(doc.ResolveDict(page).Get("Contents")).(*object.Stream)
+	data, err := doc.StreamData(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte("0.8 0.1 0.1 /P0 scn")) {
+		t.Errorf("the page content does not paint the pattern in one scn:\n%s", data)
+	}
+
+	pp, err := exec.LookPath("pdftoppm")
+	if err != nil {
+		t.Skip("pdftoppm not installed; the rendering half does not run")
+	}
+	dir := t.TempDir()
+	file := filepath.Join(dir, "p.pdf")
+	var out bytes.Buffer
+	if err := doc.Write(&out); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, out.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(pp, "-r", "36", "-png", "-singlefile", file, filepath.Join(dir, "page"))
+	msgs, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("pdftoppm: %v\n%s", err, msgs)
+	}
+	if len(bytes.TrimSpace(msgs)) != 0 {
+		t.Errorf("poppler complained about the page:\n%s", msgs)
+	}
+	img := readPNG(t, filepath.Join(dir, "page.png"))
+	bounds := img.Bounds()
+	r, g, bl, _ := img.At(bounds.Dx()/2, bounds.Dy()/2).RGBA()
+	got := fmt.Sprintf("%d,%d,%d", r>>8, g>>8, bl>>8)
+	if r>>8 < 180 || g>>8 > 60 || bl>>8 > 60 {
+		t.Errorf("the page centre renders as rgb(%s); want the pattern's red, about rgb(204,26,26)", got)
 	}
 }

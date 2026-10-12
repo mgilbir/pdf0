@@ -560,8 +560,11 @@ Provisional, per the preamble.
    Stands alone; `examples/` stops hand-typing content streams.~~ **Done**
    (§3.2). All three built, plus a shaping engine that was not foreseen and now
    lives in forme. No example hand-types a content stream.
-2. **Parsers** ← **next** — HTML subset, CSS Syntax L3, cascade, computed values. Reports
-   unsupported everything from the first commit (§6.3).
+2. ~~**Parsers** — HTML subset, CSS Syntax L3, cascade, computed values. Reports
+   unsupported everything from the first commit (§6.3).~~ **Done**, and the
+   engine built on it moved to forme on 2026-08-14 (see the status note at the
+   top). The rest of this list is forme's to sequence, except what is about
+   writing PDF.
 3. **Block and inline layout** — box tree, fragment tree, display list, text
    measurement on `fontprog.go` metrics, UAX #14 line breaking. **The guardrail
    framework and scale-to-fit land here**, not after: a reporting layer retrofitted
@@ -633,6 +636,13 @@ Two mechanisms, and they compose rather than compete.
 render.HTML(src, render.PageSize(render.A4), render.Margin(20*render.MM))
 ```
 
+*Annotation, 2026-10-11:* neither half of this section was built as written.
+There is no `render.HTML` and no `render` package: the call is
+`htmlpdf.Render(layout.Input, layout.Options)`, with the sheet in
+`layout.Options.Page`. And `@page` is not opt-in: the document's `@page`
+rules always apply over the caller's sheet (forme's layout engine has no option
+to ignore them; [htmlpdf.md](../htmlpdf.md) describes the sheet as built).
+
 The CSS Paged Media `@page` rule is the standard, browser-compatible answer and
 makes one HTML+CSS file fully determine the PDF. Its cost is that page geometry
 then arrives from untrusted input and needs bounding like any other length
@@ -647,41 +657,14 @@ home: if pages become elements, `@page` is how each one describes itself.
 
 ## 11a. Where phase 2 starts
 
-Written for whoever picks this up cold.
-
-**Read first:** §1 (honest scope), §3 (the six stages and what passes between
-them), §6.3 (the `unsupported-property` finding — it is the signal that keeps
-reftests from passing vacuously, and §7.1 says why), and §7.1 (the WPT oracle).
-Those four are unchanged by phases 0 and 1 and are the load-bearing design.
-
-**The state of the tree.** Everything phases 0 and 1 built is on
-`feat/write-surface` (pdf0#267), which is **not yet merged**. Phase 2 builds on
-it, so land that first. The branch `feat/html-css-render` holds nothing but an
-older copy of this document and can be deleted.
-
-**What phase 2 is.** The HTML subset parser and CSS Syntax Level 3, the cascade,
-and computed values — §3's stages 1 and 2. Own parsers, no dependencies (§2.3,
-a decision taken and not to be relitigated). Layout is phase 3 and lands
-*together with* the guardrail framework and scale-to-fit, not after (§9); the
-reason is in §6 and it is the difference between a reporting layer and a
-decorative one.
-
-**What phase 1 leaves you.** `content.Builder` for the canvas,
-`fonts.Face.Draw`/`Shape` for text, `fonts.Face.Embed` for the font,
-`Document.AddPage` and `Document.Save`. Shaping, metrics and subsetting come
-from [forme](https://github.com/mgilbir/forme): `shape.Face` measures and
-positions, `font` reads the programs. `examples/text/main.go` is the closest
-thing to a worked example — it measures, breaks lines and draws them.
-
-**What is still open from phase 1**, and would be found the hard way otherwise:
-
-- Metric compatibility (§10). A document naming Arial gets Noto Sans's metrics.
-- `Shape` cannot move the pen across the line, so a span-written mark lands on
-  the baseline; `Draw` places each glyph and does not have that limit. The
-  layout engine should use `Draw`. This is stated on `Shape` itself.
-- No font *fallback* in the layout sense. `shape.Stack` sets text no one face
-  covers by taking each character from the first face that has it, and nothing
-  in pdf0 chooses faces from a CSS `font-family` list yet.
+*Historical (collapsed 2026-10-11).* This section was a hand-over note for
+whoever started phase 2: what to read first, and that the work of phases 0 and
+1 sat on an unmerged branch (pdf0#267) to land first. #267 merged (52ec26b),
+phase 2 was done, and the engine it began moved to forme with everything after
+it; the note is no longer instructions. What it listed as open from phase 1 —
+metric compatibility (§10), `Shape` not moving the pen across the line, no
+font fallback chosen from a CSS `font-family` list — is tracked in forme, which
+owns the layout engine now.
 
 ## 12. Open questions
 

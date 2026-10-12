@@ -8,17 +8,11 @@ import (
 	"github.com/mgilbir/pdf0/object"
 )
 
-// This file validates the structural profile of PDF/R (PDF for Raster, ISO
-// 23504-1) — a constrained profile for raster/scanned documents (a modern
-// replacement for fax). A PDF/R file is a PDF 2.0 file whose every page is a
-// raster image: the page content draws image XObjects only, with no text or
-// vector graphics, using a limited set of image compression filters, and no
-// encryption.
-//
-// ISO 23504 is not openly published, this repository does not hold it, and no
-// conformance corpus is available. What is checked is what the author could
-// state from knowledge of the standard, and each rule is written to be sure
-// of what it reports:
+// This file is the PDF/R validator (the package documentation, doc.go, says
+// what PDF/R is). ISO 23504 is not openly published, this repository does not
+// hold it, and no conformance corpus is available. What is checked is what the
+// author could state from knowledge of the standard, and each rule is written
+// to be sure of what it reports:
 //
 //   - PDF 2.0, read from the header or a later catalog /Version; a version
 //     that cannot be read is a finding, not a pass;
@@ -37,7 +31,10 @@ import (
 // (audit 2026-09-22 C146); what ISO 23504 says about transparency could not be
 // confirmed here, so the claim is withdrawn rather than a rule invented.
 
-// NSPDFRID is the PDF/R identification schema's namespace (see above).
+// NSPDFRID is the namespace of the XMP schema whose pdfrid:part property
+// identifies a file as PDF/R. It follows the AIIM identification schemas of
+// the sibling standards (pdfaid, pdfuaid) and is from knowledge of ISO
+// 23504-1, not checked against its text, which this repository does not hold.
 const NSPDFRID = "http://www.aiim.org/pdfr/ns/id/"
 
 // Violation reports a departure from the PDF/R structural profile.

@@ -8,7 +8,8 @@ import (
 // This file owns the structure-tree side of PDF/UA validation: element
 // parent/child nesting (ISO 14289-1 7.2), Table/L/TOC container
 // well-formedness (ISO 32000-1 14.8.4.3), heading strength (7.4.4), Note
-// identifiers (7.9), /Suspects, and the UA-1 header version. Types are
+// identifiers (7.9), /Suspects, the UA-1 header version, and the one reader
+// of structure attributes, through /A and the class map (ownedAttrs). Types are
 // compared only after /RoleMap resolution, and the tree is flattened once per
 // run into a cached pre-order list so each check iterates that rather than
 // re-descending the tree.
@@ -63,6 +64,69 @@ func structTree(d core.View, cat *object.Dictionary) []structNode {
 
 func walkStructElems(d core.View, cat *object.Dictionary, fn func(elem *object.Dictionary, stdType object.Name)) {
 	core.WalkStructElems(d, cat, fn)
+}
+
+// ownedAttrs returns the attribute objects attached to a structure element
+// whose owner (/O) is owner, in precedence order: those in its /A — one
+// attribute dictionary, or an array of them with the revision numbers ISO
+// 32000-2 14.7.6.3 interleaves, which are skipped — then, for each class its
+// /C names (a name, or an array of names and revision numbers) in order, that
+// class's attribute objects in classMap, the structure tree root's /ClassMap.
+// ISO 32000-2 14.7.6.2 attaches a class's attribute objects to every element
+// naming it "along with those identified in the element's A entry", and gives
+// /A precedence where both specify an attribute; so a reader that takes the
+// first dictionary holding its key reads the attribute as the standard says,
+// and as veraPDF does (AttributeHelper). classMap may be nil. Every array
+// entry and class read is charged to the run's work meter.
+//
+// The table rules (Scope, RowSpan, ColSpan, Headers) and PDF/UA-2's
+// ListNumbering rule read attributes only through here.
+func ownedAttrs(d core.View, elem, classMap *object.Dictionary, owner object.Name) []*object.Dictionary {
+	var out []*object.Dictionary
+	add := func(attrs object.Object) {
+		one := func(o object.Object) {
+			if a := d.ResolveDict(o); a != nil {
+				if o, _ := d.ResolveName(a.Get("O")); o == owner {
+					out = append(out, a)
+				}
+			}
+		}
+		if arr, ok := d.Resolve(attrs).(object.Array); ok {
+			for _, e := range arr {
+				d.Charge(1)
+				one(e)
+			}
+			return
+		}
+		one(attrs)
+	}
+	add(elem.Get("A"))
+	if classMap == nil {
+		return out
+	}
+	classes := object.Array{elem.Get("C")}
+	if arr, ok := d.Resolve(elem.Get("C")).(object.Array); ok {
+		classes = arr
+	}
+	for _, c := range classes {
+		d.Charge(1)
+		if name, ok := d.Resolve(c).(object.Name); ok {
+			add(classMap.Get(name))
+		}
+	}
+	return out
+}
+
+// firstAttrName is key read as a name from the first of attrs that holds a
+// name there (ownedAttrs gives them in precedence order), and whether one
+// did.
+func firstAttrName(d core.View, attrs []*object.Dictionary, key object.Name) (string, bool) {
+	for _, a := range attrs {
+		if v, ok := d.ResolveName(a.Get(key)); ok {
+			return string(v), true
+		}
+	}
+	return "", false
 }
 
 // checkUAStructNesting enforces the structure-element parent/child constraints

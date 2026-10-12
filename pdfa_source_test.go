@@ -64,6 +64,21 @@ func TestAnInMemoryDocumentSaysItsByteRulesDidNotRun(t *testing.T) {
 	}
 }
 
+// TestNoSourceFileMessageNamesTheEOFMarker pins the wording of that finding.
+// The end-of-file marker is "%%EOF" — two percent signs, ISO 32000-2 7.5.5 —
+// and the message is plain text rather than a format string, so it is written
+// with both and prints both. It reads like a Sprintf escape, and a docs audit
+// (2026-10-11 D68) took it for one; halving it would name a marker no PDF has.
+func TestNoSourceFileMessageNamesTheEOFMarker(t *testing.T) {
+	vs := ValidatePDFA(mustPDFADoc(t, pdfa.PDFA2b), pdfa.PDFA2b)
+	if len(vs) != 1 {
+		t.Fatalf("want one finding, got %q", messagesOf(vs))
+	}
+	if msg := vs[0].Message; !strings.Contains(msg, "data after %%EOF,") {
+		t.Errorf("message does not name the %%%%EOF marker: %q", msg)
+	}
+}
+
 // TestByteRulesJudgeTheFileTheDocumentWasReadFrom is C69's scenario. A caller
 // reads a clean file, edits it and validates it. The byte rules used to take
 // the bytes as a parameter and measure them against the offsets Read had

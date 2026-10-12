@@ -26,7 +26,7 @@ cd "$top" || exit 2
 
 # The size ceiling catches the shapes the magic-number test does not: a
 # committed PDF, a zip, a generated corpus. The largest legitimate file here is
-# testdata/spec_examples.json at ~217 KB.
+# pdfa/pdfa.go at ~158 KB.
 limit=$((256 * 1024))
 
 fail=0

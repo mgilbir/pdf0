@@ -61,6 +61,11 @@ import (
 // ReadContext, ReadWithPasswordContext and ParseXRefStream, and the resolved
 // values are inherited by every validator and extractor that runs on the
 // resulting Document.
+//
+// Every limit must be positive. Zero or a negative value does not mean "no
+// limit": the entry point refuses it, before reading anything, with an error
+// wrapping ErrInvalidOption. For no practical limit, pass the type's maximum
+// (math.MaxInt or math.MaxInt64), which is honoured as written.
 type Option interface {
 	apply(*core.Limits) error
 }
@@ -70,8 +75,53 @@ type optionFunc func(*core.Limits) error
 func (f optionFunc) apply(l *core.Limits) error { return f(l) }
 
 // ErrInvalidOption is wrapped by the error an entry point returns for an
-// option whose value it cannot honour.
+// option whose value it cannot honour: for every With* option, a value of
+// zero or less. Nothing is read when it is returned.
 var ErrInvalidOption = errors.New("pdf0: invalid option")
+
+// ErrResourceLimit is matched (errors.Is) by every error in which an
+// extraction or a stream decode reports that a resource limit stopped it:
+//
+//   - ExtractText, ExtractTextContext and ExtractPageText, for a page left out
+//     (its *PageTextError) and for the pages after the work budget ran out;
+//   - ExtractImagesContext and ImagesContext, when the work budget ran out;
+//   - StreamData and StreamDataContext, for a stream that decodes to more
+//     than WithMaxDecodedStreamBytes.
+//
+// The limits behind it are the work budget (WithMaxWork, and the fixed bound
+// on how deep a walk of the document's structure may go) and the decode size
+// limits (WithMaxDecodedStreamBytes, WithMaxContentStreamBytes,
+// WithMaxDecodedContentBytes). The message names the guard that stopped the
+// work and says whether its bound was pdf0's default or the caller's.
+//
+// It does not match a cancelled or expired context (test for context.Canceled
+// and context.DeadlineExceeded), a Locked document (the error wraps
+// LockReason), or an image the image-pixel budget left undecoded: that is
+// reported on the image's Note, not as an error. The validators report a limit
+// as a finding under the "limit" rule instead; see IsCheckerFinding.
+var ErrResourceLimit = errors.New("pdf0: resource limit reached")
+
+// resourceLimitError marks an error as a resource-limit stop, so that it
+// matches ErrResourceLimit, without changing its message or hiding what it
+// wraps.
+type resourceLimitError struct{ err error }
+
+func (e *resourceLimitError) Error() string   { return e.err.Error() }
+func (e *resourceLimitError) Unwrap() []error { return []error{e.err, ErrResourceLimit} }
+
+// markLimit returns err marked to match ErrResourceLimit when it is a
+// resource-limit stop — the run's work meter, or a decode size cap — and err
+// unchanged otherwise. Every exported entry point that hands a caller such an
+// error passes it through here.
+func markLimit(err error) error {
+	if err == nil || errors.Is(err, ErrResourceLimit) {
+		return err
+	}
+	if errors.Is(err, core.ErrWorkLimit) || errors.Is(err, core.ErrDecodeLimit) {
+		return &resourceLimitError{err}
+	}
+	return err
+}
 
 // resolveLimits applies options over the zero struct and fills in defaults. An
 // option with a value it cannot honour is an error, returned by the entry
@@ -122,7 +172,7 @@ func (d *Document) lim() core.Limits {
 }
 
 // WithMaxDecodedStreamBytes caps the decompressed size of any single stream
-// (default 100 MB). This is the decompression-bomb ceiling and applies to every
+// (default 100 MiB). This is the decompression-bomb ceiling and applies to every
 // FlateDecode and LZWDecode stream in the file; lowering it is the main lever
 // for a service accepting untrusted uploads. The largest legitimate stream
 // measured across the veraPDF corpus and a 978-file Common Crawl sample is
@@ -131,21 +181,25 @@ func (d *Document) lim() core.Limits {
 // The write-side object-stream cap derives from this value, so lowering it also
 // makes Write emit smaller object-stream containers that the same configuration
 // can read back.
+//
+// A value of zero or less is refused with ErrInvalidOption (see Option).
 func WithMaxDecodedStreamBytes(n int) Option {
 	return positiveLimit("WithMaxDecodedStreamBytes", n, func(l *core.Limits, n int) { l.DecodedStreamBytes = n })
 }
 
 // WithMaxDecodedContentBytes caps the total decoded content one validation run
-// will materialize (default 512 MB). The per-stream cap stops a single stream
+// will materialize (default 512 MiB). The per-stream cap stops a single stream
 // exploding; this is the only bound on a whole run, and so the knob for "one
 // upload must not exhaust my process". The heaviest real document measured
 // needs 218 MB.
+//
+// A value of zero or less is refused with ErrInvalidOption (see Option).
 func WithMaxDecodedContentBytes(n int64) Option {
 	return positiveLimit("WithMaxDecodedContentBytes", n, func(l *core.Limits, n int64) { l.DecodedContentBytes = n })
 }
 
 // WithMaxObjectStreamBytes caps the memory Read may spend on the objects it
-// unpacks from object streams in one document (default 512 MB): the parser's
+// unpacks from object streams in one document (default 512 MiB): the parser's
 // estimate of every object it builds (syntax.MaterialCost, twice the measured
 // live cost), plus the decoded bytes of the container being unpacked. Object
 // streams are the other compression-amplification path into a document: a
@@ -159,19 +213,25 @@ func WithMaxDecodedContentBytes(n int64) Option {
 // charges 64 MB, so the default leaves eight times that. The bound used to
 // meter decoded bytes instead (the heaviest document then measured needed
 // 9 MB of them), which let the objects take five times the bound in memory.
+//
+// A value of zero or less is refused with ErrInvalidOption (see Option).
 func WithMaxObjectStreamBytes(n int64) Option {
 	return positiveLimit("WithMaxObjectStreamBytes", n, func(l *core.Limits, n int64) { l.ObjectStreamBytes = n })
 }
 
 // WithMaxContentStreamBytes caps the decoded size of a single content stream or
-// image sample buffer that will be scanned (default 64 MB). Larger streams are
+// image sample buffer that will be scanned (default 64 MiB). Larger streams are
 // skipped. The largest real content stream measured is 29 MB.
+//
+// A value of zero or less is refused with ErrInvalidOption (see Option).
 func WithMaxContentStreamBytes(n int) Option {
 	return positiveLimit("WithMaxContentStreamBytes", n, func(l *core.Limits, n int) { l.ContentStreamBytes = n })
 }
 
 // WithMaxICCProfileBytes caps the decoded size of an ICC profile (default
 // 8 MiB). The largest real profile measured is 1.8 MB.
+//
+// A value of zero or less is refused with ErrInvalidOption (see Option).
 func WithMaxICCProfileBytes(n int) Option {
 	return positiveLimit("WithMaxICCProfileBytes", n, func(l *core.Limits, n int) { l.ICCProfileBytes = n })
 }
@@ -185,13 +245,18 @@ func WithMaxICCProfileBytes(n int) Option {
 // 2026-09-22 C40) — but a node per comment or text run adds up: a 4 MiB packet
 // of 520,000 comment-interrupted text runs builds in 0.4 s and holds some
 // 300 MB while it is read. The largest real packet measured is 1.6 MB.
+//
+// A value of zero or less is refused with ErrInvalidOption (see Option).
 func WithMaxXMPPacketBytes(n int) Option {
 	return positiveLimit("WithMaxXMPPacketBytes", n, func(l *core.Limits, n int) { l.XMPPacketBytes = n })
 }
 
 // WithMaxTableGridFills caps the number of grid slots the PDF/UA table checks
 // will fill for one table (default 1<<24), bounding a cell whose /RowSpan and
-// /ColSpan claim a multi-million-slot area.
+// /ColSpan claim a multi-million-slot area. No real-world maximum has been
+// measured for it.
+//
+// A value of zero or less is refused with ErrInvalidOption (see Option).
 func WithMaxTableGridFills(n int64) Option {
 	return positiveLimit("WithMaxTableGridFills", n, func(l *core.Limits, n int64) { l.TableGridFills = n })
 }
@@ -203,10 +268,13 @@ func WithMaxTableGridFills(n int64) Option {
 //
 // A subtable the budget stops is returned as a *prefix* of the font's real
 // coverage, marked partial, and the checks that would otherwise read a missing
-// mapping as "this code has no glyph" decline instead and report the trip (see
-// limits_report.go). Lowering this therefore costs coverage of the
-// glyph-presence rules on large fonts; it never turns them into false
-// positives.
+// mapping as "this code has no glyph" decline instead and report the trip as a
+// finding under the "limit" rule (see IsCheckerFinding). Lowering this
+// therefore costs coverage of the glyph-presence rules on large fonts; it never
+// turns them into false positives. No real-world maximum has been measured for
+// it.
+//
+// A value of zero or less is refused with ErrInvalidOption (see Option).
 func WithMaxCmapWork(n int) Option {
 	return positiveLimit("WithMaxCmapWork", n, func(l *core.Limits, n int) { l.CmapWork = n })
 }
@@ -226,35 +294,51 @@ func WithMaxCmapWork(n int) Option {
 // controls — a shared structure referenced from every element, a function
 // evaluated for every pixel, a chain walked from every referrer. When the run
 // reaches it, the check in progress is abandoned rather than finished on a
-// partial result, no further check runs, and the run reports the trip under
-// "limit" (guard "work"); an extraction stops with an error naming it. A
-// context deadline bounds the same work in time rather than in units; the
-// budget is what bounds a caller who set none.
+// partial result and no further check runs. A validation reports the trip as a
+// finding under "limit" (guard "work"). An extraction stops, and what it says
+// depends on the entry point: ExtractText, ExtractTextContext,
+// ExtractPageText, ExtractImagesContext and ImagesContext return the text or
+// images completed before it alongside an error that names the guard and
+// matches ErrResourceLimit, while ExtractImages and Images, which have no
+// error result, stop silently with the images reached so far. A context deadline bounds the same work in time rather
+// than in units; the budget is what bounds a caller who set none.
 //
 // Across the veraPDF corpus, the PDF/VT, WTPDF, Factur-X and PDF 2.0 example
 // suites and a 1000-file Common Crawl sample, under every validator and both
 // extractors, no run comes within a factor of nine of its default (the
 // measurement is recorded with core.DefaultMaxWork).
+//
+// A value of zero or less is refused with ErrInvalidOption (see Option).
 func WithMaxWork(n int64) Option {
 	return positiveLimit("WithMaxWork", n, func(l *core.Limits, n int64) { l.Work = n })
 }
 
 // WithMaxImagePixels caps the size of an image that extraction will decode
-// (default 1<<26, 67 megapixels — the same bound images.EmbedImage applies to
-// an image a caller embeds, so pdf0 reads back anything it writes). An A4 page
-// scanned at 600 dpi is 35 megapixels.
+// (default 1<<26, 67 megapixels — images.MaxPixels, the bound images.Embed and
+// images.EmbedStencil apply to an image a caller embeds, so pdf0 reads back
+// anything it encodes; images.EmbedJPEG stores the caller's JPEG as it is and
+// is not held to it). An A4 page
+// scanned at 600 dpi is 35 megapixels; no real-world maximum has been
+// measured.
 //
 // It is one budget for every image codec and every buffer sized from an
-// image's geometry: the raw, Flate and LZW sample path, CCITT fax, JBIG2 (whose
-// per-bitmap bound it sets, with four times as much across all the bitmaps one
-// stream decodes), JPEG, JPEG 2000, and the /Mask and /SMask images composited
-// onto them. An image with more than four components is also held to four
-// samples per pixel. The product is computed with overflow checks, so a
-// /Width of 2^60 is refused rather than wrapped.
+// image's geometry: the raw, Flate and LZW sample path, CCITT fax, JBIG2, JPEG,
+// JPEG 2000, and the /Mask and /SMask images composited onto them. An image
+// with more than four components is also held to four samples per pixel. The
+// product is computed with overflow checks, so a /Width of 2^60 is refused
+// rather than wrapped.
+//
+// JBIG2 is the exception to raising it: the option sets JBIG2's per-bitmap
+// bound, and four times as much across all the bitmaps one stream decodes, but
+// only up to the decoder's own ceilings of 1<<26 pixels per bitmap and 1<<28
+// per stream. A larger value raises every other codec's bound and leaves
+// JBIG2's at those ceilings.
 //
 // An image over the budget is not decoded: its ExtractedImage has Decoded
 // false, its encoded bytes, and a Note naming the image-pixels guard, and the
 // walk continues with the next image.
+//
+// A value of zero or less is refused with ErrInvalidOption (see Option).
 func WithMaxImagePixels(n int64) Option {
 	return positiveLimit("WithMaxImagePixels", n, func(l *core.Limits, n int64) { l.ImagePixels = n })
 }

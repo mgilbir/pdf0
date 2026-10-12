@@ -668,6 +668,50 @@ func TestCLIStdoutRedirectedToInput(t *testing.T) {
 	}
 }
 
+// TestCLIStdoutAppendedToInput: with `>> in.pdf` nothing was truncated, and
+// writing would have appended a second PDF to the input. The refusal must say
+// that, not that the shell destroyed the file (docs audit 2026-10-11 D68), and
+// the input must be left as it was.
+func TestCLIStdoutAppendedToInput(t *testing.T) {
+	dir := t.TempDir()
+	orig := pdfBytes(t, nil)
+	in := writeFile(t, filepath.Join(dir, "in.pdf"), orig)
+	f, err := os.OpenFile(in, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	res := runCLI(t, cliRun{args: []string{"repair", in, "-"}, stdoutFile: f})
+	if res.code != 2 || strings.Contains(res.stderr, "truncated") || !strings.Contains(res.stderr, "append") {
+		t.Errorf("stdout appended to the input: want exit 2 saying it would append, got %v", res)
+	}
+	if !bytes.Equal(readFile(t, in), orig) {
+		t.Error("the input changed")
+	}
+}
+
+// TestCLIStdoutOpenedOnInput: `1<> in.pdf` opens the input for writing with
+// neither truncation nor append; the input is intact and would have been
+// overwritten in place, and the refusal says neither "truncated" nor
+// "append".
+func TestCLIStdoutOpenedOnInput(t *testing.T) {
+	dir := t.TempDir()
+	orig := pdfBytes(t, nil)
+	in := writeFile(t, filepath.Join(dir, "in.pdf"), orig)
+	f, err := os.OpenFile(in, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	res := runCLI(t, cliRun{args: []string{"repair", in, "-"}, stdoutFile: f})
+	if res.code != 2 || strings.Contains(res.stderr, "truncated") || strings.Contains(res.stderr, "append") || !strings.Contains(res.stderr, "is the input") {
+		t.Errorf("stdout opened on the input: want exit 2 saying stdout is the input, got %v", res)
+	}
+	if !bytes.Equal(readFile(t, in), orig) {
+		t.Error("the input changed")
+	}
+}
+
 // TestCLIStdoutWriteFailure: a result that cannot be written (stdout on a full
 // device) is an operational error, not a silent exit 0.
 func TestCLIStdoutWriteFailure(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/mgilbir/pdf0"
+	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/pdfa"
 )
@@ -424,5 +425,129 @@ func TestReadLine(t *testing.T) {
 	}
 	if _, err := readLine(strings.NewReader(strings.Repeat("x", maxPasswordLen+1) + "\n")); !errors.Is(err, errPasswordTooLong) {
 		t.Errorf("overlong line: got %v", err)
+	}
+}
+
+// undecodableContent gives doc a page whose content stream uses a filter pdf0
+// does not decode (DCTDecode, an image filter), so every check that reads the
+// page's content declines with a "limit" finding (unsupported-filter): a
+// checker finding of the kind ordinary files produce.
+func undecodableContent(t *testing.T, doc *pdf0.Document) {
+	t.Helper()
+	ref, err := doc.AddPage(pdf0.Page{Width: 612, Height: 792, Content: new(content.Builder).Save().Restore()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cs, ok := doc.Resolve(doc.ResolveDict(ref).Get("Contents")).(*object.Stream)
+	if !ok {
+		t.Fatal("the new page has no content stream")
+	}
+	cs.Dict.Set("Filter", object.Name("DCTDecode"))
+	cs.Data = []byte("not a JPEG")
+}
+
+// writeUADoc writes a document the implemented PDF/UA-1 checks pass — PDF 1.7,
+// tagged, a structure tree, a language, a displayed title and a pdfuaid:part 1
+// identification — after mutate, and returns its path.
+func writeUADoc(t *testing.T, mutate func(*pdf0.Document)) string {
+	t.Helper()
+	doc := pdf0.NewDocument()
+	doc.Version = "1.7"
+	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
+	cat.Set("Lang", object.String{Value: []byte("en-US")})
+	cat.Set("MarkInfo", object.NewDictionary(object.Entry{Key: "Marked", Value: object.Boolean(true)}))
+	cat.Set("ViewerPreferences", object.NewDictionary(object.Entry{Key: "DisplayDocTitle", Value: object.Boolean(true)}))
+	root := &object.Dictionary{}
+	root.Set("Type", object.Name("StructTreeRoot"))
+	doc.Objects[99] = &object.IndirectObject{Number: 99, Value: root}
+	cat.Set("StructTreeRoot", object.IndirectRef{Number: 99})
+	md := &object.Dictionary{}
+	md.Set("Type", object.Name("Metadata"))
+	md.Set("Subtype", object.Name("XML"))
+	doc.Objects[98] = &object.IndirectObject{Number: 98, Value: object.NewStream(md, []byte(`<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:pdfuaid="http://www.aiim.org/pdfua/ns/id/" pdfuaid:part="1"><dc:title xmlns:dc="http://purl.org/dc/elements/1.1/"><rdf:Alt><rdf:li xml:lang="x-default">Title</rdf:li></rdf:Alt></dc:title></rdf:Description></rdf:RDF></x:xmpmeta>`))}
+	cat.Set("Metadata", object.IndirectRef{Number: 98})
+	if mutate != nil {
+		mutate(doc)
+	}
+	var buf bytes.Buffer
+	if err := doc.Write(&buf); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "ua.pdf")
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestFindingsExitCode pins the rule every validating command maps its
+// findings by (follow-up to docs audit 2026-10-11: D64): no finding is
+// success (0); any real violation is 1, checker findings beside it or not;
+// findings that are all checker findings — the rules "limit" and "internal",
+// pdf0.IsCheckerFinding — mean the run could not establish conformance either
+// way, which is 3, the run failed. Before, a checker-only result exited 1, as
+// if the file had been found to break a rule.
+func TestFindingsExitCode(t *testing.T) {
+	dir := t.TempDir()
+	clean2b := writeTestPDF(t, dir, pdfa.PDFA2b, nil)
+	limit2b := writeTestPDF(t, t.TempDir(), pdfa.PDFA2b, func(d *pdf0.Document) { undecodableContent(t, d) })
+	undeclared := filepath.Join(t.TempDir(), "plain.pdf")
+	{
+		var buf bytes.Buffer
+		if err := pdf0.NewDocument().Write(&buf); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(undeclared, buf.Bytes(), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cleanUA := writeUADoc(t, nil)
+	limitUA := writeUADoc(t, func(d *pdf0.Document) { undecodableContent(t, d) })
+	noLang := func(d *pdf0.Document) { d.ResolveDict(d.Trailer.Get("Root")).Delete("Lang") }
+	violationUA := writeUADoc(t, noLang)
+	mixedUA := writeUADoc(t, func(d *pdf0.Document) { undecodableContent(t, d); noLang(d) })
+	out := filepath.Join(t.TempDir(), "out.pdf")
+
+	cases := []struct {
+		name string
+		cmd  func([]string) error
+		args []string
+		want int
+		// lines: what stdout must say, for a run that prints its findings.
+		lines []string
+	}{
+		{"validate, clean", cmdValidate, []string{clean2b}, 0, []string{"no violations found"}},
+		{"validate, violations only", cmdValidate, []string{"-level", "1b", clean2b}, 1, []string{"6.7.11"}},
+		{"validate, checker findings only", cmdValidate, []string{limit2b}, 3, []string{"limit] ", "unsupported-filter"}},
+		{"validate, violations and checker findings", cmdValidate, []string{"-level", "1b", limit2b}, 1, []string{"6.7.11", "unsupported-filter"}},
+		{"validate -level declared, nothing declared", cmdValidate, []string{"-level", "declared", undeclared}, 3, []string{"own declaration"}},
+		{"ua, clean", cmdUA, []string{cleanUA}, 0, []string{"no PDF/UA violations found"}},
+		{"ua, violations only", cmdUA, []string{violationUA}, 1, []string{"/Lang"}},
+		{"ua, checker findings only", cmdUA, []string{limitUA}, 3, []string{"unsupported-filter"}},
+		{"ua, violations and checker findings", cmdUA, []string{mixedUA}, 1, []string{"/Lang", "unsupported-filter"}},
+		{"repair, clean", cmdRepair, []string{"-force", "-level", "2b", clean2b, out}, 0, []string{"0 violation(s) remain"}},
+		{"repair, violations only", cmdRepair, []string{"-force", "-level", "1b", clean2b, out}, 1, []string{"violation(s) remain"}},
+		{"repair, checker findings only", cmdRepair, []string{"-force", "-level", "2b", limit2b, out}, 3, []string{"0 violation(s) remain, 1 checker finding(s)"}},
+		{"repair, violations and checker findings", cmdRepair, []string{"-force", "-level", "1b", limit2b, out}, 1, []string{"violation(s) remain, 1 checker finding(s)"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := captureStdout(t, func() error { return c.cmd(c.args) })
+			if code := exitCode(err); code != c.want {
+				t.Errorf("exit %d (%v), want %d\n%s", code, err, c.want, got)
+			}
+			for _, l := range c.lines {
+				if !strings.Contains(got, l) {
+					t.Errorf("stdout does not say %q:\n%s", l, got)
+				}
+			}
+			// repair writes its output whatever the findings say.
+			if c.args[len(c.args)-1] == out {
+				if fi, err := os.Stat(out); err != nil || fi.Size() == 0 {
+					t.Errorf("repair wrote no output: %v", err)
+				}
+				os.Remove(out)
+			}
+		})
 	}
 }

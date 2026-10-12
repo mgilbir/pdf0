@@ -9,8 +9,9 @@ import (
 )
 
 // buildUA2Doc builds a document conforming to the implemented PDF/UA-2 checks: a
-// PDF 2.0 file that is tagged, has a structure tree, a default language, a shown
-// title, and XMP declaring pdfuaid:part 2.
+// PDF 2.0 file that is tagged, has a structure tree whose root holds one
+// Document element in the PDF 2.0 namespace, a default language, a shown title,
+// and XMP declaring pdfuaid:part 2 and pdfuaid:rev 2024.
 func buildUA2Doc(t *testing.T) *Document {
 	t.Helper()
 	base := buildMinimalPDF()
@@ -27,7 +28,21 @@ func buildUA2Doc(t *testing.T) *Document {
 	structRoot.Set("Type", object.Name("StructTreeRoot"))
 	doc.Objects[99] = &object.IndirectObject{Number: 99, Value: structRoot}
 	cat.Set("StructTreeRoot", object.IndirectRef{Number: 99})
-	meta := &object.Stream{Dict: object.Dictionary{}, Data: []byte(`<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:pdfuaid="http://www.aiim.org/pdfua/ns/id/" pdfuaid:part="2"><dc:title xmlns:dc="http://purl.org/dc/elements/1.1/">Test</dc:title></rdf:Description></rdf:RDF></x:xmpmeta>`)}
+	ns := object.NewDictionary(
+		object.Entry{Key: "Type", Value: object.Name("Namespace")},
+		object.Entry{Key: "NS", Value: object.String{Value: []byte("http://iso.org/pdf2/ssn")}},
+	)
+	doc.Objects[97] = &object.IndirectObject{Number: 97, Value: ns}
+	docElem := object.NewDictionary(
+		object.Entry{Key: "Type", Value: object.Name("StructElem")},
+		object.Entry{Key: "S", Value: object.Name("Document")},
+		object.Entry{Key: "NS", Value: object.IndirectRef{Number: 97}},
+		object.Entry{Key: "P", Value: object.IndirectRef{Number: 99}},
+	)
+	doc.Objects[96] = &object.IndirectObject{Number: 96, Value: docElem}
+	structRoot.Set("K", object.IndirectRef{Number: 96})
+	structRoot.Set("Namespaces", object.Array{object.IndirectRef{Number: 97}})
+	meta := &object.Stream{Dict: object.Dictionary{}, Data: []byte(`<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:pdfuaid="http://www.aiim.org/pdfua/ns/id/" pdfuaid:part="2" pdfuaid:rev="2024"><dc:title xmlns:dc="http://purl.org/dc/elements/1.1/">Test</dc:title></rdf:Description></rdf:RDF></x:xmpmeta>`)}
 	doc.Objects[98] = &object.IndirectObject{Number: 98, Value: meta}
 	cat.Set("Metadata", object.IndirectRef{Number: 98})
 	return doc

@@ -83,3 +83,63 @@ func TestRepairEncryption(t *testing.T) {
 		t.Errorf("repaired document is not writable: %v", err)
 	}
 }
+
+// TestRepairReportsWhatItDoesToTheFile holds the two fixes Repair's
+// documentation names besides the additional actions (docs audit 2026-10-11
+// D16): it removes the encryption of a document Read decrypted, so the next
+// Write is plaintext, and it adds a missing /ID. Each is a RepairAction.
+func TestRepairReportsWhatItDoesToTheFile(t *testing.T) {
+	has := func(actions []RepairAction, desc string) bool {
+		for _, a := range actions {
+			if a.Description == desc {
+				return true
+			}
+		}
+		return false
+	}
+	t.Run("encryption", func(t *testing.T) {
+		doc := readRaw(t, textAndImagePage())
+		if err := doc.SetEncryption("user", "owner"); err != nil {
+			t.Fatal(err)
+		}
+		var enc bytes.Buffer
+		if err := doc.Write(&enc); err != nil {
+			t.Fatal(err)
+		}
+		opened, err := ReadWithPassword(bytes.NewReader(enc.Bytes()), int64(enc.Len()), "user")
+		if err != nil || opened.Locked() {
+			t.Fatalf("ReadWithPassword: %v, locked %v", err, opened.Locked())
+		}
+		actions, err := opened.Repair(pdfa.PDFA2b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !has(actions, "removed document encryption (/Encrypt)") {
+			t.Errorf("actions %v do not report the encryption removed", actions)
+		}
+		var out bytes.Buffer
+		if err := opened.Write(&out); err != nil {
+			t.Fatal(err)
+		}
+		plain := readRaw(t, out.Bytes())
+		if plain.Encrypted || plain.Locked() || plain.Trailer.Has("Encrypt") {
+			t.Fatal("the repaired document was written encrypted")
+		}
+		if text, err := plain.ExtractText(); err != nil || !strings.Contains(text, "Hello") {
+			t.Errorf("the repaired file opens without a password to %q, %v; want its text", text, err)
+		}
+	})
+	t.Run("file identifier", func(t *testing.T) {
+		doc := readRaw(t, buildMinimalPDF())
+		if doc.Trailer.Has("ID") {
+			t.Fatal("the fixture already has an /ID")
+		}
+		actions, err := doc.Repair(pdfa.PDFA2b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !has(actions, "added a missing file identifier (/ID)") || !doc.Trailer.Has("ID") {
+			t.Errorf("actions %v, /ID present %v; want the /ID added and reported", actions, doc.Trailer.Has("ID"))
+		}
+	})
+}

@@ -247,6 +247,52 @@ func TestMalformed(t *testing.T) {
 		if _, err := Parse([]byte(s)); !errors.Is(err, ErrMalformed) {
 			t.Errorf("Parse(%q) = %v, want ErrMalformed", s, err)
 		}
+		if _, err := CheckWellFormed([]byte(s)); !errors.Is(err, ErrMalformed) {
+			t.Errorf("CheckWellFormed(%q) = %v, want ErrMalformed", s, err)
+		}
+	}
+}
+
+// TestMalformedReason: why a packet is not well-formed is said in
+// encoding/xml's words, naming the line, whether the tokenizer refused it or
+// the model's tag matching did; Parse and CheckWellFormed say the same.
+func TestMalformedReason(t *testing.T) {
+	for _, tc := range []struct{ packet, want string }{
+		{"<a>\n\x01</a>", "XML syntax error on line 2: illegal character code U+0001"},
+		{"<a>\n<b>\n</a>", "XML syntax error on line 3: element <b> closed by </a>"},
+		{"<a/>\n</x:b>", "XML syntax error on line 2: unexpected end element </x:b>"},
+		{"<p:a>\n\n", "XML syntax error on line 3: unexpected end of packet inside <p:a>"},
+		{"  ", "no XML content"},
+	} {
+		_, perr := Parse([]byte(tc.packet))
+		_, cerr := CheckWellFormed([]byte(tc.packet))
+		if got := MalformedReason(perr); got != tc.want {
+			t.Errorf("Parse(%q): reason %q, want %q", tc.packet, got, tc.want)
+		}
+		if got := MalformedReason(cerr); got != tc.want {
+			t.Errorf("CheckWellFormed(%q): reason %q, want %q", tc.packet, got, tc.want)
+		}
+	}
+	_, limit := Parse([]byte(strings.Repeat("<a>", MaxDepth+1)))
+	for _, err := range []error{nil, limit, ErrMalformed, ErrNoRDF} {
+		if got := MalformedReason(err); got != "" {
+			t.Errorf("MalformedReason(%v) = %q, want none", err, got)
+		}
+	}
+}
+
+// TestCheckWellFormedHasNoDepthLimit: the verdict-only reader builds no tree
+// and recurses nowhere, so a packet nested past MaxDepth, which Parse
+// declines, is judged — well-formed, and with its rdf:RDF seen at any depth.
+func TestCheckWellFormedHasNoDepthLimit(t *testing.T) {
+	const rdf = `<rdf:RDF xmlns:rdf="` + NSRDF + `"/>`
+	deep := strings.Repeat("<a>", 4*MaxDepth) + rdf + strings.Repeat("</a>", 4*MaxDepth)
+	hasRDF, err := CheckWellFormed([]byte(deep))
+	if err != nil || !hasRDF {
+		t.Errorf("CheckWellFormed of a %d-deep packet = (rdf %v, %v), want (true, nil)", 4*MaxDepth, hasRDF, err)
+	}
+	if _, err := Parse([]byte(deep)); !errors.Is(err, ErrLimit) {
+		t.Errorf("Parse of the same packet = %v, want ErrLimit", err)
 	}
 }
 

@@ -38,6 +38,18 @@ import (
 //     12.8.2.2), and adding signatures in later revisions is the ordinary
 //     multi-signer workflow ETSI EN 319 142-1 and the reference validators
 //     accept.
+//
+// An added signature or time-stamp is permitted only when it is one: its own
+// signature verifies, and it is intact — nothing after it changed in a way it
+// does not permit, its own field and appearance included. Its presence is not
+// enough. A signature field's widget draws on the page like any annotation,
+// so a "signature" whose value is garbage could paint a full-page overlay over
+// the signed content and leave the earlier signature intact (the shadow
+// attack, docs audit 2026-10-11 D2); and one that verifies but whose
+// appearance was replaced afterwards vouches for an appearance nobody signed.
+// A verifying later signature may still draw anything, and its signer may be
+// anyone: its visible widgets are reported (Result.LaterVisibleSignatures),
+// and who signed it is its own Result's question.
 //   - The edits to existing objects that attaching those requires, and nothing
 //     else in them: the catalog gains or changes /DSS and /AcroForm; the
 //     interactive form gains fields at the end of /Fields and signature bits
@@ -128,12 +140,22 @@ type changeClassifier struct {
 	// notes are reasons attached to changes that were recognised but are not
 	// permitted, used in their descriptions.
 	notes map[int]string
+	// vouch says whether the signature dictionary num, added after the
+	// signed revision, holds an intact signature, or why not.
+	vouch func(num int) error
+	// visible are the signature dictionaries of the permitted later
+	// signatures with a widget a reader can see.
+	visible []int
 }
 
 // disallowedChanges returns a description of every change in diff that is not
-// permitted, or nil when all are. An error reading the states is itself
-// reported: the changes are then unknown, which is never "permitted".
-func disallowedChanges(diff *core.RevisionDiff) []string {
+// permitted, or nil when all are, and the signature dictionaries of the
+// permitted later signatures a reader can see, in object-number order. An
+// error reading the states is itself reported: the changes are then unknown,
+// which is never "permitted". vouch says whether a signature dictionary the
+// newest state added holds an intact signature; one that does not makes its
+// field a change that is not permitted.
+func disallowedChanges(diff *core.RevisionDiff, vouch func(num int) error) ([]string, []int) {
 	c := &changeClassifier{
 		old:       &changeState{r: diff.Old},
 		cur:       &changeState{r: diff.New},
@@ -142,6 +164,7 @@ func disallowedChanges(diff *core.RevisionDiff) []string {
 		fields:    map[int]bool{},
 		widgets:   map[int]bool{},
 		notes:     map[int]string{},
+		vouch:     vouch,
 	}
 	for _, ch := range diff.Changes {
 		c.changes[ch.Number] = ch
@@ -183,7 +206,8 @@ func disallowedChanges(diff *core.RevisionDiff) []string {
 			break
 		}
 	}
-	return bad
+	sort.Ints(c.visible)
+	return bad, c.visible
 }
 
 // classify marks every permitted change explained.
@@ -330,6 +354,10 @@ func (c *changeClassifier) addedSignatureField(n int) {
 	default:
 		return
 	}
+	if err := c.vouch(v); err != nil {
+		c.notes[n] = "a signature field added after the signature, whose own signature " + err.Error()
+		return
+	}
 	widgets := []int{}
 	if c.cur.name(fd.Get("Subtype")) == "Widget" {
 		widgets = append(widgets, n)
@@ -360,6 +388,39 @@ func (c *changeClassifier) addedSignatureField(n int) {
 	for _, w := range widgets {
 		c.explained[w], c.widgets[w] = true, true
 	}
+	c.noteVisible(v, fd)
+}
+
+// noteVisible records signature dictionary v, the value of the permitted
+// later signature field fd, when a widget of the field can be seen: the field
+// itself, when it is merged with its widget, or one of its /Kids.
+func (c *changeClassifier) noteVisible(v int, fd *object.Dictionary) {
+	if c.cur.name(fd.Get("Subtype")) == "Widget" && visibleWidget(c.cur, fd) {
+		c.visible = append(c.visible, v)
+		return
+	}
+	for _, k := range c.cur.array(fd.Get("Kids")) {
+		if kd := c.cur.dict(k); kd != nil && c.cur.name(kd.Get("Subtype")) == "Widget" && visibleWidget(c.cur, kd) {
+			c.visible = append(c.visible, v)
+			return
+		}
+	}
+}
+
+// visibleWidget reports whether a widget annotation can be seen: its /Rect is
+// not a zero-area rectangle (one that cannot be read counts as visible),
+// neither its Hidden nor its NoView flag is set (ISO 32000-2 12.5.3, bits 2
+// and 6), and it has a normal appearance to draw (12.5.5).
+func visibleWidget(s *changeState, w *object.Dictionary) bool {
+	if zeroArea(s, w.Get("Rect")) {
+		return false
+	}
+	const hidden, noView = 1 << 1, 1 << 5
+	if f, _ := s.resolve(w.Get("F")).(object.Integer); f&(hidden|noView) != 0 {
+		return false
+	}
+	ap := s.dict(w.Get("AP"))
+	return ap != nil && s.resolve(ap.Get("N")) != nil
 }
 
 // explainNewSubgraph explains every new object reachable from o through new
@@ -652,8 +713,13 @@ func (c *changeClassifier) signedExistingField(n int, oldField, newField *object
 			return false
 		}
 	}
+	if err := c.vouch(v); err != nil {
+		c.notes[n] = "a signature value given to the field after the signature, whose own signature " + err.Error()
+		return false
+	}
 	c.explained[v] = true
 	c.explainNewSubgraph(newField.Get("AP"), map[int]bool{})
+	c.noteVisible(v, newField)
 	return true
 }
 
@@ -814,7 +880,7 @@ func (c *changeClassifier) collectFieldLocks(cat *object.Dictionary) {
 		if t, ok := c.old.resolve(fd.Get("T")).(object.String); ok {
 			part = core.DecodePDFTextString(t.Value)
 		}
-		name := JoinFieldName(prefix, part)
+		name := joinFieldName(prefix, part)
 		if n != 0 {
 			c.names[n] = name
 		}

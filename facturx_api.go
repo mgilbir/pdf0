@@ -78,9 +78,9 @@ func ValidateOrderXContext(ctx context.Context, doc *Document) facturx.OrderXRes
 // document already carries is replaced, so embedding twice leaves one invoice.
 // It returns an error, and leaves doc unchanged, when invoiceXML is empty or
 // not well-formed XML (facturx.ErrNotXML), the profile is unknown, the title
-// cannot be written as XMP text, the document declares a PDF/A part other
-// than 3, or its existing metadata or name tree cannot be edited without
-// guessing. A nil or Locked document is refused too, since the invoice would
+// cannot be written as XMP text (an error wrapping ErrInvalidMetadataText),
+// the document declares a PDF/A part other than 3, or its existing metadata or
+// name tree cannot be edited without guessing. A nil or Locked document is refused too, since the invoice would
 // be written in the clear under its /Encrypt.
 func EmbedFacturX(doc *Document, invoiceXML []byte, profile formalis.Profile, title string) error {
 	if doc == nil {

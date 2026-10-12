@@ -7,21 +7,33 @@ import (
 	"github.com/mgilbir/pdf0/object"
 )
 
-// This file implements validation for the PDF/X levels (ISO 15930): PDF/X-1a,
-// PDF/X-3, PDF/X-4 and -4p, and PDF/X-6. The checks are conservative and
-// structural: identification, the PDF/X output intent and its ICC destination
-// profile, the /Trapped flag, page geometry boxes, font embedding, device
-// colour coverage, forbidden features, transparency where the level predates
-// it, and the prohibition on encryption. What differs between the levels is
-// one table, levels.go; the PDF/X-4 rules are calibrated against the valid Cal
-// Poly PDF/VT-1 test suite, whose files are conforming PDF/X-4.
+// This file is the PDF/X validator (the package documentation, doc.go, says
+// what it checks): the Level and Violation types and the checks themselves.
+// What differs between the levels is not here but in one table, levels.go,
+// which the level-dependent checks read.
 
 // Level identifies a PDF/X conformance level.
+//
+// The zero value is LevelDeclared, which is not a level but an instruction:
+// validate against the level the document itself declares. A level left
+// unset therefore checks the claim the file makes rather than, silently,
+// PDF/X-4. pdfa.Level's zero value, pdfa.LevelDeclared, works the same way
+// for PDF/A.
 type Level int
 
 const (
+	// LevelDeclared asks the validator to take the level from the document's
+	// own GTS_PDFXVersion (and GTS_PDFXConformance) identification: the XMP
+	// pdfxid:GTS_PDFXVersion when it names a level, and otherwise the Info
+	// dictionary's /GTS_PDFXVersion, where PDF/X-1a and PDF/X-3 identify. The
+	// level it names is then validated exactly as if the caller had named it,
+	// identification rule included. A document that declares no level pdf0
+	// checks, or whose declaration cannot be read, is reported with a
+	// finding under the "limit" rule and not validated (IsCheckerFinding in
+	// the root package). It is the zero Level.
+	LevelDeclared Level = iota
 	// PDFX4 is PDF/X-4 with an embedded ICC destination profile (ISO 15930-7).
-	PDFX4 Level = iota
+	PDFX4
 	// PDFX4p is PDF/X-4p, which permits an externally referenced destination
 	// profile instead of an embedded one.
 	PDFX4p
@@ -37,6 +49,8 @@ const (
 
 func (l Level) String() string {
 	switch l {
+	case LevelDeclared:
+		return "PDF/X (as declared)"
 	case PDFX4:
 		return "PDF/X-4"
 	case PDFX4p:
@@ -418,10 +432,11 @@ func rectContains(outer, inner [4]float64) bool {
 // validateView runs the PDF/X checks over a view. The caller starts the run,
 // builds the view, and reports the guards that tripped while the file was read.
 func validateView(v core.View, level Level) []Violation {
-	r, ok := level.rules()
-	if !ok {
-		return []Violation{{Rule: finding.LimitRule, Message: fmt.Sprintf("not validated: %s names no PDF/X level", level)}}
+	level, refused := resolveTarget(v, level)
+	if refused != nil {
+		return refused
 	}
+	r, _ := level.rules()
 	var out []Violation
 	add := func(rule, msg string, obj int) {
 		out = append(out, Violation{Rule: rule, Message: msg, Object: obj})

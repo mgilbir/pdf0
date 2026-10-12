@@ -1,11 +1,10 @@
 // Package content builds PDF content streams: the operator sequences that draw
 // a page (ISO 32000-2 8.2, "Graphics objects").
 //
-// It is the write side of what the rest of this module reads. pdf0 could parse,
-// validate and repair a document long before it could put a mark on a page —
-// the only content streams in the repository were hand-typed string literals in
-// examples/ — and this is what closes that gap. It is useful on its own, and it
-// is what a layout engine would eventually draw through.
+// It is the write side of what the rest of this module reads: a page added
+// with pdf0.Document.AddPage is drawn by a Builder (pdf0.Page.Content), the
+// fonts package sets text into one, and htmlpdf draws a laid-out HTML document
+// through one. It is useful on its own, too.
 //
 // # What it guarantees
 //

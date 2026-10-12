@@ -15,12 +15,16 @@ import (
 	"strings"
 )
 
-// This file is the core of the PDF/A validator: the conformance levels
-// (ISO 19005-1/-2/-3/-4, i.e. 1b/2b/3b/4, plus the entry point into Level A),
-// the validateView dispatcher, and most of the clause-6
-// rule set — file structure (6.1), graphics, colour and fonts (6.2),
-// annotations and font dictionaries (6.3), interactive forms (6.4), actions
-// (6.6) and metadata (6.7). Clause numbering differs between the parts, so a
+// This file is the core of the PDF/A validator: the Violation type, the
+// validateView pipeline every level runs through, and the clause-6 rules that
+// have no file of their own — the object-level file-structure rules (6.1),
+// graphics and colour (6.2), font embedding and subsets, annotations,
+// interactive forms, actions, metadata and output intents, optional content,
+// embedded files and the implementation limits. The levels themselves (parts 1
+// to 4 at their b, u and a levels, and the 4e and 4f variants) are in level.go;
+// the byte-level file-structure rules, the font family, the content-stream
+// rules, Level A, the XMP schemas and the remaining low-frequency rules each
+// have a file of their own. Clause numbering differs between the parts, so a
 // check that spans levels picks its reported rule ID from the level.
 //
 // The rules are calibrated against the veraPDF corpus, which is treated as the
@@ -54,7 +58,10 @@ func sortedReachableObjectNums(doc core.View) []int {
 	return nums
 }
 
-// Violation describes a single PDF/A conformance violation.
+// Violation is one PDF/A finding: a conformance violation under its ISO 19005
+// clause, or a checker finding under the reserved rule "limit" or "internal",
+// which says pdf0 could not finish a check rather than that the document is
+// wrong (pdf0.IsCheckerFinding tells the two apart).
 type Violation struct {
 	Rule    string // e.g., "6.1.3" (ISO 19005 clause)
 	Level   Level  // the level that requires this rule
@@ -1253,7 +1260,7 @@ func checkFontsEmbedded(doc core.View, level Level) []Violation {
 
 	fonts := collectFonts(doc, pagesRef)
 
-	// A font used only for invisible text (rendering mode 3/7) is not
+	// A font used only for invisible text (rendering mode 3) is not
 	// "used for rendering" and need not be embedded (the corpus passes an
 	// unembedded Type1 shown in mode 3).
 	usage := core.CollectFontTextUsage(doc)

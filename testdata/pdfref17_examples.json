@@ -1,0 +1,1024 @@
+[
+  {
+    "example": "3.1",
+    "page": 65,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 3.1, page 65",
+    "content": "7 0 obj\n    << /Length 8 0 R >> % An indirect reference to object 8\nstream\n    BT\n        /F1 12 Tf\n        72 712 Td\n        (A stream with an indirect length) Tj\n    ET\nendstream\nendobj\n8 0 obj\n    77 % The length of the preceding stream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "3.2",
+    "page": 68,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 3.2, page 68",
+    "content": "1 0 obj\n    << /Length 534\n        /Filter [/ASCII85Decode /LZWDecode]\n    >>\nstream\nJ..)6T`?p&<!J9%_[umg\"B7/Z7KNXbN'S+,*Q/&\"OLT'F\nLIDK#!n`$\"<Atdi`\\Vn%b%)&'cA*VnK\\CJY(sF>c!Jnl@\nRM]WM;jjH6Gnc75idkL5]+cPZKEBPWdR>FF(kj1_R%W_d\n&/jS!;iuad7h?[L-F$+]]0A3Ck*$I0KZ?;<)CJtqi65Xb\nVc3\\n5ua:Q/=0$W<#N3U;H,MQKqfg1?:lUpR;6oN[C2E4\nZNr8Udn.'p+?#X+1>0Kuk$bCDF/(3fL5]Oq)^kJZ!C2H1\n'TO]Rl?Q:&'<5&iP!$Rq;BXRecDN[IJB`,)o8XJOSJ9sD\nS]hQ;Rj@!ND)bD_q&C\\g:inYC%)&u#:u,M6Bm%IY!Kb1+\n\":aAa'S`ViJglLb8<W9k6Yl\\\\0McJQkDeLWdPN?9A'jX*\nal>iG1p&i;eVoK&juJHs9%;Xomop\"5KatWRT\"JQ#qYuL,\nJD?M$0QP)lKn06l1apKDC@\\qJ4B!!(5m+j.7F790m(Vj8\n8l8Q:_CZ(Gm1%X\\N1&u!FKHMB~>\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "3.3",
+    "page": 68,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 3.3, page 68",
+    "content": "1 0 obj\n    << /Length 568 >>\nstream\n2 J\nBT\n/F1 12 Tf\n0 Tc\n0 Tw\n72.5 712 TD\n[(Unencoded streams can be read easily) 65 (, )] TJ\n0 -14 TD\n[(b) 20 (ut generally tak) 10 (e more space than \\311)] TJ\nT* (encoded streams.) Tj\n0 -28 TD\n[(Se) 25 (v) 15 (eral encoding methods are a) 20 (v) 25 (ailable in PDF) 80 (.)] TJ\n0 -14 TD\n(Some are used for compression and others simply) Tj\nT* [(to represent binary data in an ) 55 (ASCII format.)] TJ\nT* (Some of the compression encoding methods are \\\nsuitable ) Tj\nT* (for both data and images, while others are \\\nsuitable only ) Tj\nT* (for continuous-tone images.) Tj\nET\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "3.4",
+    "page": 82,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 3.4, page 82",
+    "content": "5 0 obj\n    << /Type /XObject\n        /Subtype /Image\n        /Width 52\n        /Height 66\n        /ColorSpace /DeviceGray\n        /BitsPerComponent 1\n        /Length 224\n        /Filter [/ASCIIHexDecode /JBIG2Decode]\n        /DecodeParms [null << /JBIG2Globals 6 0 R >>]\n    >>\nstream\n000000013000010000001300000034000000420000000000\n00000040000000000002062000010000001e000000340000\n004200000000000000000200100000000231db51ce51ffac>\nendstream\nendobj\n6 0 obj\n    << /Length 126\n        /Filter /ASCIIHexDecode\n    >>\nstream\n0000000000010000000032000003fffdff02fefefe000000\n01000000012ae225aea9a5a538b4d9999c5c8e56ef0f872\n7f2b53d4e37ef795cc5506dffac>\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "3.5",
+    "page": 96,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 3.5, page 96",
+    "content": "xref\n0 6\n0000000003 65535 f\n0000000017 00000 n\n0000000081 00000 n\n0000000000 00007 f\n0000000331 00000 n\n0000000409 00000 n",
+    "type": "pdf_fragment"
+  },
+  {
+    "example": "3.6",
+    "page": 96,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 3.6, page 96",
+    "content": "xref\n0 1\n0000000000 65535 f\n3 1\n0000025325 00000 n\n23 2\n0000025518 00002 n\n0000025635 00000 n\n30 1\n0000025777 00000 n",
+    "type": "pdf_fragment"
+  },
+  {
+    "example": "3.7",
+    "page": 98,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 3.7, page 98",
+    "content": "trailer\n    << /Size 22\n        /Root 2 0 R\n        /Info 1 0 R\n        /ID [ <81b14aafa313db63dbd6f981e49f94f4>\n                <81b14aafa313db63dbd6f981e49f94f4>\n            ]\n    >>\nstartxref\n18799\n%%EOF",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "3.8",
+    "page": 103,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 3.8, page 103",
+    "content": "11 0 obj\n    << /Type /Font\n        /Subtype /TrueType\n        ...other entries...\n        /FontDescriptor 12 0 R\n    >>\nendobj\n12 0 obj\n    << /Type /FontDescriptor\n        /Ascent 891\n        ...other entries...\n        /FontFile2 22 0 R\n    >>\nendobj\n13 0 obj\n    << /Type /Font\n        /Subtype /Type0\n        ...other entries...\n        /ToUnicode 10 0 R\n    >>\nendobj\n...\nxref\n0 32\n0000000000 65535 f\n...\n0000001434 00000 n % Cross-reference entry for object 11\n0000001735 00000 n % Cross-reference entry for object 12\n0000002155 00000 n % Cross-reference entry for object 13\n...\ntrailer\n    << /Size 32\n        /Root ...\n    >>",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "3.9",
+    "page": 104,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 3.9, page 104",
+    "content": "15 0 obj % The object stream\n    << /Type /ObjStm\n        /Length 1856\n        /N 3 % The number of objects in the stream\n        /First 24 % The byte offset of the first object\n    >>\nstream\n    % The object numbers and offsets of the objects, relative to the first\n    11 0 12 547 13 665\n    << /Type /Font\n        /Subtype /TrueType\n        ...other keys...\n        /FontDescriptor 12 0 R\n    >>\n    << /Type /FontDescriptor\n        /Ascent 891\n        ...other keys...\n        /FontFile2 22 0 R\n    >>\n    << /Type /Font\n        /Subtype /Type0\n        ...other keys...\n        /ToUnicode 10 0 R\n    >>\n...\nendstream\nendobj\n99 0 obj % The cross-reference stream\n    << /Type /XRef\n        /Index [0 32] % This section has one subsection with 32 objects\n        /W [1 2 2] % Each entry has 3 fields: 1, 2 and 2 bytes in width,\n                                        % respectively\n        /Filter /ASCIIHexDecode % For readability in this example\n        /Size 32\n        ...\n    >>\nstream\n    00 0000 FFFF % “0 65535 f” in a cross-reference table\n    ...\n    02 000F 0000 % The entry for object 11, the first font\n    02 000F 0001 % The entry for object 12, the font descriptor\n    02 000F 0002 % The entry for object 13, the second font\n    ...\n    01 BA5E 0000 % The entry for object 15, the object stream\n    ...\nendstream\nendobj\nstartxref\n    54321 % The offset of “99 0 obj”\n%%EOF",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "3.10",
+    "page": 106,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 3.10, page 106",
+    "content": "... objects ...\n12 0 obj % Cross-reference stream\n    << /Type /XRef % Cross-reference stream dictionary\n        /Size ...\n        /Root ...\n    >>\nstream\n    ... % Stream data containing cross-reference information\nendstream\nendobj\n... more objects ...\nstartxref\nbyte_offset_of_cross-reference_stream % Points to object 12\n%%EOF",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "3.11",
+    "page": 112,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 3.11, page 112",
+    "content": "1 0 obj % The document root, at offset 23.\n    << /Type /Catalog\n        /StructTreeRoot 3 0 R\n        …\n    >>\nendobj\n12 0 obj\n…\nendobj\n…\n99 0 obj\n…\nendobj\nxref % The main xref section, at offset 2664\n0 100 % This subsection has entries for objects 0 - 99.\n0000000002 65535 f % Entry for object 0\n0000000023 00000 n % Entry for object 1, the root\n0000000003 65535 f % Entry for object 2 (object stream), marked free in this table\n0000000004 65535 f % Entry for object 3, marked free in this table\n0000000005 65535 f % …\n0000000006 65535 f\n0000000007 65535 f\n0000000008 65535 f\n0000000009 65535 f\n0000000010 65535 f\n0000000011 65535 f\n0000000000 65535 f % Entry for object 11 (xref stream), marked free in this table.\n0000000045 00000 n % Entry for object 12, in use.\n0000000179 00000 n % Entry for object 13, in use.\n…\n0000002201 00000 n % Entry for object 99, in use.\ntrailer\n    << /Size 100\n        /Root 1 0 R\n        /ID …\n    >>\nstartxref\n    2664 % Offset of the main xref section\n%%EOF\n2 0 obj % The object stream, at offset 3722\n    << /Length ...\n        /N 8 % This stream contains 8 objects.\n        /First 47 % The stream-offset of the first object\n    >>\nstream\n    3 0 4 50 5 72 … % The numbers and stream-offsets of the 8 objects\n    << /Type /StructTreeRoot % This is object 3.\n        /K 4 0 R\n        /RoleMap 5 0 R\n        /ClassMap 6 0 R\n        /ParentTree 7 0 R\n        /ParentTreeNextKey 8\n    >>\n    << /S /Workbook % This is object 4 (K value from StructTreeRoot).\n        /P 8 0 R\n        /K 9 0 R\n    >>\n    << /Workbook /Div % This is object 5 (RoleMap).\n        /Worksheet /Sect\n        /TextBox /Figure\n        /Shape /Figure\n    >>\n    … % Objects 6 through 10 are defined here.\nendstream\nendobj\n11 0 obj % The cross-reference stream, at offset 4899\n    << /Type /XRef\n        /Index [2 10] % This stream contains entries for objects 2 through 11\n        /Size 100\n        /W [1 2 1] % The byte-widths of each field\n        /Filter /ASCIIHexDecode % For readability only (not supported by Acrobat 6)\n        …\n    >>\nstream\n    01 0E8A 0 % Entry for object 2 (0x0E8A = 3722)\n    02 0002 00 % Entry for object 3 (in object stream 2, index 0)\n    02 0002 01 % Entry for object 4 (in object stream 2, index 1)\n    02 0002 02 % …\n    02 0002 03\n    02 0002 04\n    02 0002 05\n    02 0002 06\n    02 0002 07 % Entry for object 10 (in object stream 2, index 7)\n    01 1323 0 % Entry for object 11 (0x1323 = 4899)\nendstream\nendobj\nxref % The update xref section, at offset 5640\n0 0 % There are no entries in this section.\ntrailer\n    << /Size 100\n        /Prev 2664 % Offset of previous xref section\n        /XRefStm 4899\n        /Root 1 0 R\n        /ID …\n    >>\nstartxref\n5640\n%%EOF",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "3.12",
+    "page": 135,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 3.12, page 135",
+    "content": "%PDF1.5\n1 0 obj % Document catalog\n    << /Type /Catalog\n        /Pages 2 0 R\n        /Metadata 6 0 R\n    >>\nendobj\n2 0 obj % Page tree\n    << /Type /Pages\n        /Kids [3 0 R]\n        /Count 1\n    >>\nendobj\n3 0 obj % 1s t page\n    << /Type /Page\n        /Parent 2 0 R\n        /MediaBox [0 0 612 792]\n        /Contents 4 0 R\n    >>\nendobj\n4 0 obj % Page contents\n    << /Length 35 >>\n    stream\n        *** Encrypted Page-marking operators ***\n    endstream\nendobj\n5 0 obj\n    << /Title ($#*#%*$#^&##) >> % Info dictionary: encrypted text string\nendobj\n6 0 obj\n    << /Type /Metadata\n        /Subtype /XML\n        /Length 15\n        /Filter [/Crypt] % Uses a crypt filter\n        /DecodeParms % with these parameters\n        << /Type /CryptFilterDecodeParms\n            /Name /Identity % Indicates no encryption\n        >>\n    >>\n    stream\n        XML metadata % Unencrypted metadata\n    endstream\nendobj\n8 0 obj % Encryption dictionary\n    << /Filter /MySecurityHandlerName\n        /V 4 % Version 4: allow crypt filters\n        /CF % List of crypt filters\n        << /MyFilter0\n            << /Type /CryptFilter\n                /CFM V2 >> % Uses the standard algorithm\n        >>\n        /StrF /MyFilter0 % Strings are decrypted using /MyFilter0\n        /StmF /MyFilter0 % Streams are decrypted using /MyFilter0\n            ... % Private data for /MySecurityHandlerName\n        /MyUnsecureKey (12345678)\n        /EncryptMetadata false\n    >>\nendobj\nxref\n    ....\ntrailer\n    << /Size 8\n        /Root 1 0 R\n        /Info 5 0 R\n        /Encrypt 8 0 R\n    >>\nstartxref\n495\n%%EOF",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "3.13",
+    "page": 142,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 3.13, page 142",
+    "content": "1 0 obj\n    << /Type /Catalog\n        /Pages 2 0 R\n        /PageMode /UseOutlines\n        /Outlines 3 0 R\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "3.14",
+    "page": 144,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 3.14, page 144",
+    "content": "2 0 obj\n    << /Type /Pages\n        /Kids [ 4 0 R\n                10 0 R\n                24 0 R\n                ]\n        /Count 3\n    >>\nendobj\n4 0 obj\n    << /Type /Page\n        …Additional entries describing the attributes of this page…\n    >>\nendobj\n10 0 obj\n    << /Type /Page\n        …Additional entries describing the attributes of this page…\n    >>\nendobj\n24 0 obj\n    << /Type /Page\n        …Additional entries describing the attributes of this page…\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "3.15",
+    "page": 148,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 3.15, page 148",
+    "content": "3 0 obj\n    << /Type /Page\n        /Parent 4 0 R\n        /MediaBox [0 0 612 792]\n        /Resources << /Font << /F3 7 0 R\n                                        /F5 9 0 R\n                                        /F7 11 0 R\n                                    >>\n                            /ProcSet [/PDF]\n                    >>\n        /Contents 12 0 R\n        /Thumb 14 0 R\n        /Annots [ 23 0 R\n                    24 0 R\n                    ]\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "3.16",
+    "page": 155,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 3.16, page 155",
+    "content": "<< /ProcSet [/PDF /ImageB]\n    /Font << /F5 6 0 R\n                /F6 8 0 R\n                /F7 10 0 R\n                /F8 12 0 R\n            >>\n    /XObject << /Im1 13 0 R\n                    /Im2 15 0 R\n                >>\n>>",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "3.18",
+    "page": 164,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 3.18, page 164",
+    "content": "1 0 obj\n    << /Kids [ 2 0 R % Root node\n                    3 0 R\n                    4 0 R\n                ]\n    >>\nendobj\n2 0 obj\n    << /Limits [(Actinium) (Gold)] % Intermediate node\n        /Kids [ 5 0 R\n                6 0 R\n                7 0 R\n                8 0 R\n                9 0 R\n                10 0 R\n                11 0 R\n                ]\n    >>\nendobj\n3 0 obj\n    << /Limits [(Hafnium) (Protactinium)] % Intermediate node\n        /Kids [ 12 0 R\n                13 0 R\n                14 0 R\n                15 0 R\n                16 0 R\n                17 0 R\n                18 0 R\n                19 0 R\n                ]\n    >>\nendobj\n4 0 obj\n    << /Limits [(Radium) (Zirconium)] % Intermediate node\n        /Kids [ 20 0 R\n                21 0 R\n                22 0 R\n                23 0 R\n                24 0 R\n                ]\n    >>\nendobj\n5 0 obj\n    << /Limits [(Actinium) (Astatine)] % Leaf node\n        /Names [ (Actinium) 25 0 R\n                    (Aluminum) 26 0 R\n                    (Americium) 27 0 R\n                    (Antimony) 28 0 R\n                    (Argon) 29 0 R\n                    (Arsenic) 30 0 R\n                    (Astatine) 31 0 R\n                ]\n    >>\nendobj\n…\n24 0 obj\n    << /Limits [(Xenon) (Zirconium)] % Leaf node\n        /Names [ (Xenon) 129 0 R\n                    (Ytterbium) 130 0 R\n                    (Yttrium) 131 0 R\n                    (Zinc) 132 0 R\n                    (Zirconium) 133 0 R\n                ]\n    >>\nendobj\n25 0 obj\n    89 % Atomic number (Actinium)\nendobj\n…\n133 0 obj\n    40 % Atomic number (Zirconium)\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "3.19",
+    "page": 172,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 3.19, page 172",
+    "content": "14 0 obj\n    << /FunctionType 0\n        /Domain [-1.0 1.0 -1.0 1.0]\n        /Size [21 31]\n        /Encode [0 20 0 30]\n        /BitsPerSample 4\n        /Range [-1.0 1.0]\n        /Decode [-1.0 1.0]\n        /Length …\n        /Filter …\n    >>\nstream\n…651 sample values…\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "3.20",
+    "page": 177,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 3.20, page 177",
+    "content": "10 0 obj\n<< /FunctionType 4\n        /Domain [-1.0 1.0 -1.0 1.0]\n        /Range [-1.0 1.0]\n        /Length 71\n    >>\nstream\n    { 360 mul sin\n    2 div\n    exch 360 mul sin\n    2 div\n    add\n    }\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "3.21",
+    "page": 187,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 3.21, page 187",
+    "content": "10 0 obj % File specification dictionary\n    << /Type /Filespec\n        /DOS (SUNSET.EPS)\n        /Mac (Sunset.eps) % Name of Mac OS file\n        /Unix (Sunset.eps )\n        /EF << /DOS 21 0 R\n                /Mac 31 0 R % Embedded Mac OS file\n                /Unix 41 0 R\n            >>\n        /RF << /Mac 30 0 R >> % Related files array for Mac OS file\n    >>\nendobj\n30 0 obj % Related files array for Mac OS file\n    [ (Sunset.eps) 31 0 R % Includes file Sunset.eps itself\n    (Sunset.C) 32 0 R\n    (Sunset.M) 33 0 R\n    (Sunset.Y) 34 0 R\n    (Sunset.K) 35 0 R\n    ]\nendobj\n31 0 obj % Embedded file stream for Mac OS file\n    << /Type /EmbeddedFile % Sunset.eps\n        /Length …\n        /Filter …\n    >>\nstream\n…Data for Sunset.eps…\nendstream\nendobj\n32 0 obj % Embedded file stream for related file\n    << /Type /EmbeddedFile % Sunset.C\n        /Length …\n        /Filter …\n    >>\nstream\n…Data for Sunset.C…\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "3.22",
+    "page": 188,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 3.22, page 188",
+    "content": "<< /FS /URL\n    /F (ftp://www.beatles.com/Movies/AbbeyRoad.mov)\n>>",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.1",
+    "page": 223,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.1, page 223",
+    "content": "10 0 obj % Page object\n    << /Type /Page\n        /Parent 5 0 R\n        /Resources 20 0 R\n        /Contents 40 0 R\n    >>\nendobj\n20 0 obj % Resource dictionary for page\n    << /ProcSet [/PDF /Text]\n        /Font << /F1 25 0 R >>\n        /ExtGState << /GS1 30 0 R\n                            /GS2 35 0 R\n                    >>\n    >>\nendobj\n30 0 obj % First graphics state parameter dictionary\n    << /Type /ExtGState\n        /SA true\n        /TR 31 0 R\n    >>\nendobj\n31 0 obj % First transfer function\n    << /FunctionType 0\n        /Domain [0.0 1.0]\n        /Range [0.0 1.0]\n        /Size 2\n        /BitsPerSample 8\n        /Length 7\n        /Filter /ASCIIHexDecode\n    >>\nstream\n01 00 >\nendstream\nendobj\n35 0 obj % Second graphics state parameter dictionary\n    << /Type /ExtGState\n        /OP false\n        /TR 36 0 R\n    >>\nendobj\n36 0 obj % Second transfer function\n    << /FunctionType 0\n        /Domain [0.0 1.0]\n        /Range [0.0 1.0]\n        /Size 21\n        /BitsPerSample 8\n        /Length 63\n        /Filter /ASCIIHexDecode\n    >>\nstream\nFF CE A3 7C 5B 3F 28 16 0A 02 00 02 0A 16 28 3F 5B 7C A3 CE FF >\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.2",
+    "page": 242,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.2, page 242",
+    "content": "/DeviceGray CS % Set DeviceGray color space\ngray SC % Set gray level\ngray G % Set both in one operation",
+    "type": "pdf_fragment"
+  },
+  {
+    "example": "4.3",
+    "page": 242,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.3, page 242",
+    "content": "/DeviceRGB CS % Set DeviceRGB color space\nred green blue SC % Set color\nred green blue RG % Set both in one operation",
+    "type": "pdf_fragment"
+  },
+  {
+    "example": "4.4",
+    "page": 243,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.4, page 243",
+    "content": "/DeviceCMYK CS % Set DeviceCMYK color space\ncyan magenta yellow black SC % Set color\ncyan magenta yellow black K % Set both in one operation",
+    "type": "pdf_fragment"
+  },
+  {
+    "example": "4.5",
+    "page": 247,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.5, page 247",
+    "content": "[ /CalGray\n        << /WhitePoint [0.9505 1.0000 1.0890] >>\n]",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.6",
+    "page": 247,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.6, page 247",
+    "content": "[ /CalGray\n        << /WhitePoint [0.9505 1.0000 1.0890]\n            /Gamma 2.222\n        >>\n]",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.7",
+    "page": 249,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.7, page 249",
+    "content": "[ /CalRGB\n        << /WhitePoint [0.9505 1.0000 1.0890]\n            /Gamma [1.8000 1.8000 1.8000]\n            /Matrix [ 0.4497 0.2446 0.0252\n                        0.3163 0.6720 0.1412\n                        0.1845 0.0833 0.9227\n                        ]\n        >>\n]",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.8",
+    "page": 252,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.8, page 252",
+    "content": "[ /Lab\n        << /WhitePoint [0.9505 1.0000 1.0890]\n            /Range [-128 127 -128 127]\n        >>\n]",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.9",
+    "page": 256,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.9, page 256",
+    "content": "10 0 obj % Color space\n    [/ICCBased 15 0 R]\nendobj\n15 0 obj % ICC profile stream\n    << /N 3\n        /Alternate /DeviceRGB\n        /Length 1605\n        /Filter /ASCIIHexDecode\n    >>\nstream\n00 00 02 0C 61 70 70 6C 02 00 00 00 6D 6E 74 72\n52 47 42 20 58 59 5A 20 07 CB 00 02 00 16 00 0E\n00 22 00 2C 61 63 73 70 41 50 50 4C 00 00 00 00\n61 70 70 6C 00 00 04 01 00 00 00 00 00 00 00 02\n00 00 00 00 00 00 F6 D4 00 01 00 00 00 00 D3 2B\n00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00\n00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00\n00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00\n00 00 00 09 64 65 73 63 00 00 00 F0 00 00 00 71\n72 58 59 5A 00 00 01 64 00 00 00 14 67 58 59 5A\n00 00 01 78 00 00 00 14 62 58 59 5A 00 00 01 8C\n00 00 00 14 72 54 52 43 00 00 01 A0 00 00 00 0E\n67 54 52 43 00 00 01 B0 00 00 00 0E 62 54 52 43\n00 00 01 C0 00 00 00 0E 77 74 70 74 00 00 01 D0\n00 00 00 14 63 70 72 74 00 00 01 E4 00 00 00 27\n64 65 73 63 00 00 00 00 00 00 00 17 41 70 70 6C\n65 20 31 33 22 20 52 47 42 20 53 74 61 6E 64 61\n72 64 00 00 00 00 00 00 00 00 00 00 00 17 41 70\n70 6C 65 20 31 33 22 20 52 47 42 20 53 74 61 6E\n64 61 72 64 00 00 00 00 00 00 00 00 00 00 00 00\n00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00\n00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00\n00 58 59 5A 58 59 5A 20 00 00 00 00 00 00 63 0A\n00 00 35 0F 00 00 03 30 58 59 5A 20 00 00 00 00\n00 00 53 3D 00 00 AE 37 00 00 15 76 58 59 5A 20\n00 00 00 00 00 00 40 89 00 00 1C AF 00 00 BA 82\n63 75 72 76 00 00 00 00 00 00 00 01 01 CC 63 75\n63 75 72 76 00 00 00 00 00 00 00 01 01 CC 63 75\n63 75 72 76 00 00 00 00 00 00 00 01 01 CC 58 59\n58 59 5A 20 00 00 00 00 00 00 F3 1B 00 01 00 00\n00 01 67 E7 74 65 78 74 00 00 00 00 20 43 6F 70\n79 72 69 67 68 74 20 41 70 70 6C 65 20 43 6F 6D\n70 75 74 65 72 73 20 31 39 39 34 00 >\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.10",
+    "page": 264,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.10, page 264",
+    "content": "[ /Indexed\n        /DeviceRGB\n        255\n        <000000 FF0000 00FF00 0000FF B57342 …>\n]",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.11",
+    "page": 268,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.11, page 268",
+    "content": "5 0 obj % Color space\n    [ /Separation\n            /LogoGreen\n            /DeviceCMYK\n            12 0 R\n    ]\nendobj\n12 0 obj % Tint transformation function\n    << /FunctionType 4\n        /Domain [0.0 1.0]\n        /Range [0.0 1.0 0.0 1.0 0.0 1.0 0.0 1.0]\n        /Length 62\n    >>\nstream\n    { dup 0.84 mul\n    exch 0.00 exch dup 0.44 mul\n    exch 0.21 mul\n    }\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.12",
+    "page": 276,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.12, page 276",
+    "content": "30 0 obj % Color space\n    [ /DeviceN\n            [/Orange /Green /None]\n            /DeviceCMYK\n            tintTransform1\n            << /Colorants 45 0 R >>\n    ]\nendobj\n45 0 obj % Colorants dictionary\n    << /Orange [ /Separation\n                            /Orange\n                            /DeviceCMYK\n                            tintTransform2\n                    ]\n        /Green [ /Separation\n                        /Green\n                        /DeviceCMYK\n                          tintTransform3\n                ]\n        /PANTONE#20131 [ /Separation\n                                        /PANTONE#20131\n                                        /DeviceCMYK\n                                        tintTransform4\n                                ]\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.13",
+    "page": 277,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.13, page 277",
+    "content": "10 0 obj % Color space\n    [ /DeviceN\n            [/Magenta /Spot1 /Yellow /Spot2]\n            alternateSpace\n            tintTransform1\n            << % Attributes dictionary\n                /Subtype /NChannel\n                /Process\n                    << /ColorSpace [/ICCBased CMYK_ICC profile ]\n                        /Components [/Cyan /Magenta /Yellow /Black]\n                    >>\n                /Colorants\n                    << /Spot1 [/Separation /Spot1 alternateSpace tintTransform2]\n                        /Spot2 [/Separation /Spot2 alternateSpace tintTransform3]\n                    >>\n            >>\n    ]\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.14",
+    "page": 277,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.14, page 277",
+    "content": "10 0 obj % Color space\n    [ /DeviceN\n        [/L /a /b /Spot1 /Spot2]\n        alternateSpace\n        tintTransform1\n        << % Attributes dictionary\n            /Subtype /NChannel\n            /Process\n                << /ColorSpace [ /Lab << /WhitePoint ... /Range ... >> ]\n                    /Components [/L /a /b]\n                >>\n            /Colorants\n                << /Spot1 [/Separation /Spot1 alternateSpace tintTransform2 ]\n                    /Spot2 [/Separation /Spot2 alternateSpace tintTransform3]\n                >>\n        >>\n    ]",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.15",
+    "page": 278,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.15, page 278",
+    "content": "10 0 obj % Color space\n    [ /DeviceN\n        [/ProcessRed /ProcessGreen /ProcessBlue /Red]\n        alternateSpace\n        tintTransform1\n        << % Attributes dictionary\n            /Subtype /NChannel\n            /Process\n                << /ColorSpace [ /ICCBased RGB_ICC profile ]\n                    /Components [/ProcessRed /ProcessGreen /ProcessBlue]\n                >>\n            /Colorants\n                << /Red [/Separation /Red alternateSpace tintTransform2 ] >>\n        >>\n    ]",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.16",
+    "page": 278,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.16, page 278",
+    "content": "10 0 obj % Color space\n    [/DeviceN\n        [/Magenta /Spot1 /Yellow /Spot2]\n        alternateSpace\n        tintTransform1\n        <<\n            /Subtype /NChannel\n            /Process\n                << /ColorSpace [ /ICCBased CMYK_ICC profile ]\n                    /Components [/Cyan /Magenta /Yellow /Black]\n                >>\n            /Colorants\n                << /Spot1 [/Separation /Spot1 alternateSpace tintTransform2 ]\n                    /Spot2 [/Separation /Spot2 alternateSpace tintTransform2 ]\n                >>\n            /MixingHints\n                <<\n                    /Solidities\n                        << /Spot1 1.0\n                            /Spot2 0.0\n                        >>\n                    /DotGain\n                        << /Spot1 function1\n                            /Spot2 function2\n                            /Magenta function3\n                            /Yellow function4\n                        >>\n                    /PrintingOrder [/Magenta /Yellow /Spot1 /Spot2]\n                >>\n        >>\n        ]",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.17",
+    "page": 280,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.17, page 280",
+    "content": "10 0 obj % Color space\n    [ /Indexed\n            [ /DeviceN\n                    [/Cyan /Black]\n                    /DeviceCMYK\n                    15 0 R\n            ]\n            255\n            <6605 6806 6907 6B09 6C0A …>\n    ]\nendobj\n15 0 obj % Tint transformation function\n    << /FunctionType 4\n        /Domain [0.0 1.0 0.0 1.0]\n        /Range [0.0 1.0 0.0 1.0 0.0 1.0 0.0 1.0]\n        /Length 16\n    >>\nstream\n    {0 0 3 -1 roll}\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.18",
+    "page": 280,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.18, page 280",
+    "content": "30 0 obj % Color space\n    [ /Indexed\n            [ /DeviceN\n                    [/Black /Gold]\n                    [ /CalRGB\n                            << /WhitePoint [1.0 1.0 1.0]\n                                /Gamma [2.2 2.2 2.2]\n                            >>\n                    ]\n                    35 0 R % Tint transformation function\n            ]\n            255\n            …Lookup table…\n    ]\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.19",
+    "page": 281,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.19, page 281",
+    "content": "10 0 obj % Color space\n    [ /Indexed\n            [ /DeviceN\n                    [/Black /Gold /None /None /None]\n                    [ /CalRGB\n                            << /WhitePoint [1.0 1.0 1.0]\n                                /Gamma [2.2 2.2 2.2]\n                            >>\n                    ]\n                    20 0 R % Tint transformation function\n            ]\n            255\n            …Lookup table…\n    ]\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.20",
+    "page": 282,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.20, page 282",
+    "content": "20 0 obj % Tint transformation function\n    << /FunctionType 4\n        /Domain [0.0 1.0 0.0 1.0 0.0 1.0 0.0 1.0 0.0 1.0]\n        /Range [0.0 1.0 0.0 1.0 0.0 1.0]\n        /Length 27\n    >>\nstream\n    {5 3 roll pop pop}\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.21",
+    "page": 282,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.21, page 282",
+    "content": "5 0 obj % Image XObject\n    << /Type /XObject\n        /Subtype /Image\n        /Width 288\n        /Height 288\n        /ColorSpace 10 0 R\n        /BitsPerComponent 8\n        /Length 105278\n        /Filter /ASCII85Decode\n    >>\nstream\n…Data for grayscale image…\nendstream\nendobj\n10 0 obj % Indexed color space for image\n    [ /Indexed\n            15 0 R % Base color space\n            255 % Table has 256 entries\n            30 0 R % Lookup table\n    ]\nendobj\n15 0 obj % Base color space (DeviceN) for Indexed space\n    [ /DeviceN\n            [ /Black % Four colorants (black plus three spot colors)\n            /PANTONE#20216#20CVC\n            /PANTONE#20409#20CVC\n            /PANTONE#202985#20CVC\n            /None % Three components for alternate space\n            /None\n            /None\n            ]\n            16 0 R % Alternate color space\n            20 0 R % Tint transformation function\n    ]\nendobj\n16 0 obj % Alternate color space for DeviceN space\n    [ /CalRGB\n            << /WhitePoint [1.0 1.0 1.0] >>\n    ]\nendobj\n20 0 obj % Tint transformation function for DeviceN space\n    << /FunctionType 4\n        /Domain [0.0 1.0 0.0 1.0 0.0 1.0 0.0 1.0 0.0 1.0 0.0 1.0 0.0 1.0]\n        /Range [0.0 1.0 0.0 1.0 0.0 1.0]\n        /Length 44\n    >>\nstream\n    { 7 3 roll % Just discard first four values\n    pop pop pop pop\n    }\nendstream\nendobj\n30 0 obj % Lookup table for Indexed color space\n    << /Length 1975\n        /Filter [/ASCII85Decode /FlateDecode]\n    >>\nstream\n8;T1BB2\"M7*!\"psYBt1k\\gY1T<D&tO]r*F7Hga*\n…Additional data (seven components for each table entry)…\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.22",
+    "page": 285,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.22, page 285",
+    "content": "10 0 obj % Color space\n    [ /DeviceN\n            [/Cyan /Magenta /Black]\n            /DeviceCMYK\n            15 0 R\n    ]\nendobj\n15 0 obj % Tint transformation function\n    << /FunctionType 4\n        /Domain [0.0 1.0 0.0 1.0 0.0 1.0]\n        /Range [0.0 1.0 0.0 1.0 0.0 1.0 0.0 1.0]\n        /Length 13\n    >>\nstream\n    {0 exch}\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.23",
+    "page": 295,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.23, page 295",
+    "content": "5 0 obj % Page object\n    << /Type /Page\n        /Parent 2 0 R\n        /Resources 10 0 R\n        /Contents 30 0 R\n        /CropBox [0 0 225 225]\n    >>\nendobj\n10 0 obj % Resource dictionary for page\n    << /Pattern << /P1 15 0 R >>\n    >>\nendobj\n15 0 obj % Pattern definition\n    << /Type /Pattern\n        /PatternType 1 % Tiling pattern\n        /PaintType 1 % Colored\n        /TilingType 2\n        /BBox [0 0 100 100]\n        /XStep 100\n        /YStep 100\n        /Resources 16 0 R\n        /Matrix [0.4 0.0 0.0 0.4 0.0 0.0]\n        /Length 183\n    >>\nstream\n    BT % Begin text object\n        /F1 1 Tf % Set text font and size\n        64 0 0 64 7.1771 2.4414 Tm % Set text matrix\n        0 Tc % Set character spacing\n        0 Tw % Set word spacing\n        1.0 0.0 0.0 rg % Set nonstroking color to red\n        (\\001) Tj % Show spade glyph\n        0.7478 -0.007 TD % Move text position\n        0.0 1.0 0.0 rg % Set nonstroking color to green\n        (\\002) Tj % Show heart glyph\n        -0.7323 0.7813 TD % Move text position\n        0.0 0.0 1.0 rg % Set nonstroking color to blue\n        (\\003) Tj % Show diamond glyph\n        0.6913 0.007 TD % Move text position\n        0.0 0.0 0.0 rg % Set nonstroking color to black\n        (\\004) Tj % Show club glyph\n    ET % End text object\nendstream\nendobj\n16 0 obj % Resource dictionary for pattern\n    << /Font << /F1 20 0 R >>\n    >>\nendobj\n20 0 obj % Font for pattern\n    << /Type /Font\n        /Subtype /Type1\n        /Encoding 21 0 R\n        /BaseFont /ZapfDingbats\n    >>\nendobj\n21 0 obj % Font encoding\n    << /Type /Encoding\n        /Differences [1 /a109 /a110 /a111 /a112]\n    >>\nendobj\n30 0 obj % Contents of page\n    << /Length 1252 >>\nstream\n    0.0 G % Set stroking color to black\n    1.0 1.0 0.0 rg % Set nonstroking color to yellow\n    25 175 175 -150 re % Construct rectangular path\n    f % Fill path\n    /Pattern cs % Set pattern color space\n    /P1 scn % Set pattern as nonstroking color\n    99.92 49.92 m % Start new path\n    99.92 77.52 77.52 99.92 49.92 99.92 c % Construct lower-left circle\n    22.32 99.92 -0.08 77.52 -0.08 49.92 c\n    -0.08 22.32 22.32 -0.08 49.92 -0.08 c\n    77.52 -0.08 99.92 22.32 99.92 49.92 c\n    B % Fill and stroke path\n    224.96 49.92 m % Start new path\n    224.96 77.52 202.56 99.92 174.96 99.92 c % Construct lower-right circle\n    147.36 99.92 124.96 77.52 124.96 49.92 c\n    124.96 22.32 147.36 -0.08 174.96 -0.08 c\n    202.56 -0.08 224.96 22.32 224.96 49.92 c\n    B % Fill and stroke path\n    87.56 201.70 m % Start new path\n    63.66 187.90 55.46 157.32 69.26 133.40 c % Construct upper circle\n    83.06 109.50 113.66 101.30 137.56 115.10 c\n    161.46 128.90 169.66 159.50 155.86 183.40 c\n    142.06 207.30 111.46 215.50 87.56 201.70 c\n    B % Fill and stroke path\n    50 50 m % Start new path\n    175 50 l % Construct triangular path\n    112.5 158.253 l\n    b % Close, fill, and stroke path\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.24",
+    "page": 299,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.24, page 299",
+    "content": "5 0 obj % Page object\n    << /Type /Page\n        /Parent 2 0 R\n        /Resources 10 0 R\n        /Contents 30 0 R\n        /CropBox [0 0 225 225]\n    >>\nendobj\n10 0 obj % Resource dictionary for page\n    << /ColorSpace << /Cs12 12 0 R >>\n        /Pattern << /P1 15 0 R >>\n    >>\nendobj\n12 0 obj % Color space\n    [/Pattern /DeviceRGB]\nendobj\n15 0 obj % Pattern definition\n    << /Type /Pattern\n        /PatternType 1 % Tiling pattern\n        /PaintType 2 % Uncolored\n        /TilingType 2\n        /BBox [0 0 100 100]\n        /XStep 100\n        /YStep 100\n        /Resources 16 0 R\n        /Matrix [0.4 0.0 0.0 0.4 0.0 0.0]\n        /Length 127\n    >>\nstream\n    BT % Begin text object\n        /F1 1 Tf % Set text font and size\n        64 0 0 64 7.1771 2.4414 Tm % Set text matrix\n        0 Tc % Set character spacing\n        0 Tw % Set word spacing\n        (\\001) Tj % Show spade glyph\n        0.7478 -0.007 TD % Move text position\n        (\\002) Tj % Show heart glyph\n        -0.7323 0.7813 TD % Move text position\n        (\\003) Tj % Show diamond glyph\n        0.6913 0.007 TD % Move text position\n        (\\004) Tj % Show club glyph\n    ET % End text object\nendstream\nendobj\n16 0 obj % Resource dictionary for pattern\n    << /Font << /F1 20 0 R >>\n    >>\nendobj\n20 0 obj % Font for pattern\n    << /Type /Font\n        /Subtype /Type1\n        /Encoding 21 0 R\n        /BaseFont /ZapfDingbats\n    >>\nendobj\n21 0 obj % Font encoding\n    << /Type /Encoding\n        /Differences [1 /a109 /a110 /a111 /a112]\n    >>\nendobj\n30 0 obj % Contents of page\n    << /Length 1316 >>\nstream\n    0.0 G % Set stroking color to black\n    1.0 1.0 0.0 rg % Set nonstroking color to yellow\n    25 175 175 -150 re % Construct rectangular path\n    f % Fill path\n    /Cs12 cs % Set pattern color space\n    0.77 0.20 0.00 /P1 scn % Set nonstroking color and pattern\n    99.92 49.92 m % Start new path\n    99.92 77.52 77.52 99.92 49.92 99.92 c % Construct lower-left circle\n    22.32 99.92 -0.08 77.52 -0.08 49.92 c\n    -0.08 22.32 22.32 -0.08 49.92 -0.08 c\n    77.52 -0.08 99.92 22.32 99.92 49.92 c\n    B % Fill and stroke path\n    0.2 0.8 0.4 /P1 scn % Change nonstroking color\n    224.96 49.92 m % Start new path\n    224.96 77.52 202.56 99.92 174.96 99.92 c % Construct lower-right circle\n    147.36 99.92 124.96 77.52 124.96 49.92 c\n    124.96 22.32 147.36 -0.08 174.96 -0.08 c\n    202.56 -0.08 224.96 22.32 224.96 49.92 c\n    B % Fill and stroke path\n    0.3 0.7 1.0 /P1 scn % Change nonstroking color\n    87.56 201.70 m % Start new path\n    63.66 187.90 55.46 157.30 69.26 133.40 c % Construct upper circle\n    83.06 109.50 113.66 101.30 137.56 115.10 c\n    161.46 128.90 169.66 159.50 155.86 183.40 c\n    142.06 207.30 111.46 215.50 87.56 201.70 c\n    B % Fill and stroke path\n    0.5 0.2 1.0 /P1 scn % Change nonstroking color\n    50 50 m % Start new path\n    175 50 l % Construct triangular path\n    112.5 158.253 l\n    b % Close, fill, and stroke path\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.25",
+    "page": 313,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.25, page 313",
+    "content": "5 0 obj % Shading dictionary\n    << /ShadingType 3\n        /ColorSpace /DeviceCMYK\n        /Coords [0.0 0.0 0.096 0.0 0.0 1.000] % Concentric circles\n        /Function 10 0 R\n        /Extend [true true]\n    >>\nendobj\n10 0 obj % Color function\n    << /FunctionType 3\n        /Domain [0.0 1.0]\n        /Functions [11 0 R 12 0 R]\n        /Bounds [0.708]\n        /Encode [1.0 0.0 0.0 1.0]\n    >>\nendobj\n11 0 obj % First subfunction\n    << /FunctionType 2\n        /Domain [0.0 1.0]\n        /C0 [0.929 0.357 1.000 0.298]\n        /C1 [0.631 0.278 1.000 0.027]\n        /N 1.048\n    >>\nendobj\n12 0 obj % Second subfunction\n    << /FunctionType 2\n        /Domain [0.0 1.0]\n        /C0 [0.929 0.357 1.000 0.298]\n        /C1 [0.941 0.400 1.000 0.102]\n        /N 1.374\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.26",
+    "page": 314,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.26, page 314",
+    "content": "316.789 140.311 m % Move to start of leaf\n303.222 146.388 282.966 136.518 279.122 121.983 c % Curved segment\n277.322 120.182 l % Straight line\n285.125 122.688 291.441 121.716 298.156 119.386 c % Curved segment\n336.448 119.386 l % Straight line\n331.072 128.643 323.346 137.376 316.789 140.311 c % Curved segment\nW n % Set clipping path\nq % Save graphics state\n    27.7843 0.0000 0.0000 -27.7843 310.2461 121.1521 cm % Set matrix\n    /Sh1 sh % Paint shading\nQ % Restore graphics state",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.27",
+    "page": 339,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.27, page 339",
+    "content": "q % Save graphics state\n    1 0 0 1 100 200 cm % Translate\n    0.7071 0.7071 -0.7071 0.7071 0 0 cm % Rotate\n    150 0 0 80 0 0 cm % Scale\n    /Image1 Do % Paint image\nQ % Restore graphics state",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.28",
+    "page": 343,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.28, page 343",
+    "content": "20 0 obj % Page object\n    << /Type /Page\n        /Parent 1 0 R\n        /Resources 21 0 R\n        /MediaBox [0 0 612 792]\n        /Contents 23 0 R\n    >>\nendobj\n21 0 obj % Resource dictionary for page\n    << /ProcSet [/PDF /ImageB]\n        /XObject << /Im1 22 0 R >>\n    >>\nendobj\n22 0 obj % Image XObject\n    << /Type /XObject\n        /Subtype /Image\n        /Width 256\n        /Height 256\n        /ColorSpace /DeviceGray\n        /BitsPerComponent 8\n        /Length 83183\n        /Filter /ASCII85Decode\n    >>\nstream\n9LhZI9h\\GY9i+bb;,p:e;G9SP92/)X9MJ>^:f14d;,U(X8P;cO;G9e];c$=k9Mn\\]\n…Image data representing 65,536 samples…\n8P;cO;G9e];c$=k9Mn\\]~>\nendstream\nendobj\n23 0 obj % Contents of page\n    << /Length 56 >>\nstream\n    q % Save graphics state\n        132 0 0 132 45 140 cm % Translate to (45,140) and scale by 132\n        /Im1 Do % Paint image\n    Q % Restore graphics state\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.29",
+    "page": 348,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.29, page 348",
+    "content": "10 0 obj % Image XObject\n    << /Type /XObject\n        /Subtype /Image\n        /Width 100\n        /Height 200\n        /ColorSpace /DeviceGray\n        /BitsPerComponent 8\n        /Alternates 15 0 R\n        /Length 2167\n        /Filter /DCTDecode\n    >>\nstream\n…Image data…\nendstream\nendobj\n15 0 obj % Alternate images array\n    [ << /Image 16 0 R\n            /DefaultForPrinting true\n    >>\n    ]\nendobj\n16 0 obj % Alternate image\n    << /Type /XObject\n        /Subtype /Image\n        /Width 1000\n        /Height 2000\n        /ColorSpace /DeviceRGB\n        /BitsPerComponent 8\n        /Length 0 % This is an external stream\n        /F << /FS /URL\n                /F (http://www.myserver.mycorp.com/images/exttest.jpg)\n            >>\n        /FFilter /DCTDecode\n    >>\nstream\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.30",
+    "page": 355,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.30, page 355",
+    "content": "q % Save graphics state\n17 0 0 17 298 388 cm % Scale and translate coordinate space\nBI % Begin inline image object\n    /W 17 % Width in samples\n    /H 17 % Height in samples\n    /CS /RGB % Color space\n    /BPC 8 % Bits per component\n    /F [/A85 /LZW] % Filters\nID % Begin image data\nJ1/gKA>.]AN&J?]-<HW]aRVcg*bb.\\eKAdVV%/PcZ\n…Omitted data…\nR.s(4KE3&d&7hb*7[%Ct2HCqC~>\nEI % End inline image object\nQ % Restore graphics state",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.31",
+    "page": 360,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.31, page 360",
+    "content": "6 0 obj % Form XObject\n    << /Type /XObject\n        /Subtype /Form\n        /FormType 1\n        /BBox [0 0 1000 1000]\n        /Matrix [1 0 0 1 0 0]\n        /Resources << /ProcSet [/PDF] >>\n        /Length 58\n    >>\nstream\n    0 0 m\n    0 1000 l\n    1000 1000 l\n    1000 0 l\n    f\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.32",
+    "page": 368,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.32, page 368",
+    "content": "<< /Type /OCMD % Content belonging to this optional content\n                                            % membership dictionary is controlled by the states\n    /OCGs [12 0 R 13 0 R 14 0 R] % of three optional content groups.\n    /P /AllOn % Content is visible only if the state of all three\n>> % groups is ON; otherwise it’s hidden.",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.33",
+    "page": 368,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.33, page 368",
+    "content": "<< /Type /OCMD\n    /VE [/And 12 0 R 13 0 R 14 0 R] % Visibility expression equivalent to Example 4.32.\n>>",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.34",
+    "page": 368,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.34, page 368",
+    "content": "<< /Type /OCMD\n    /VE [/Or % Visibility expression: OR\n            1 0 R % OCG 1\n            [/Not 2 0 R] % NOT OCG 2\n            [/And 3 0 R 4 0 R 5 0 R] % OCG 3 AND OCG 4 AND OCG 5\n        ]\n>>",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.35",
+    "page": 371,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.35, page 371",
+    "content": "% Within a content stream\n...\n/OC /oc1 BDC % Optional content follows\n    BT\n        /F1 1 Tf\n        12 0 0 12 100 600 Tm\n        (Hello) Tj\n    ET\nEMC % End of optional content\n...\n<< % In the resources dictionary\n    /Properties << /oc1 5 0 R >> % This dictionary maps the name oc1 to an\n... % optional content group (object 5)\n>>\n5 0 obj % The OCG controlling the visibility\n<< % of the text.\n    /Type /OCG\n    /Name (Show Greeting)\n>>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.36",
+    "page": 372,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.36, page 372",
+    "content": "% Within a content stream\n...\n/OC /OC2 BDC % Draws a black rectangle frame\n    0 g\n    4 w\n    100 100 412 592 re s\nEMC\n/OC /OC3 BDC % Draws an image XObject\n    q\n    412 0 0 592 100 100 cm\n    /Im3 Do\n    Q\nEMC\n/OC /OC4 BDC % Draws an image XObject\n    q\n    412 0 0 592 100 100 cm\n    /Im4 Do\n    Q\nEMC\n...\n<< % The resource dictionary\n    /Properties << /OC2 20 0 R /OC3 30 0 R /OC4 40 0 R >>\n    /XObject << /lm3 50 0 R /lm4 /60 0 R >>\n>>\n20 0 obj\n<< % Optional content membership dictionary\n    /Type /OCMD\n    /OCGs [30 0 R 40 0 R]\n    /P /AnyOn\n>>\nendobj\n30 0 obj % Optional content group “Image A”\n<<\n    /Type /OCG\n    /Name (Image A)\n>>\nendobj\n40 0 obj % Optional content group “Image B”\n<<\n    /Type /OCG\n    /Name (Image B)\n>>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.37",
+    "page": 378,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.37, page 378",
+    "content": "1 0 obj <</Type /OCG /Name (Skin)>> endobj % Optional content groups\n2 0 obj <</Type /OCG /Name (Bones)>> endobj\n3 0 obj <</Type /OCG /Name (Bark)>> endobj\n4 0 obj <</Type /OCG /Name (Wood)>> endobj\n5 0 obj % Configuration dictionary\n    << /Order [[(Frog Anatomy) 1 0 R 2 0 R] [(Tree Anatomy) 3 0 R 4 0 R] ] >>",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.38",
+    "page": 379,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.38, page 379",
+    "content": "                                                % Page contents\n/OC /L1 BDC % Layer 1\n    /OC /L1a BDC % Sublayer A of layer 1\n        0 0 100 100 re f\n    EMC\n    /OC /L1b BDC % Sublayer B of layer 1\n        0 100 100 100 re f\n    EMC\nEMC\n...\n<< /L1 1 0 R % Resource names\n    /L1a 2 0 R\n    /L1b 3 0 R\n>>\n... %Optional content groups\n1 0 obj <</Type /OCG /Name (Layer 1)>> endobj\n2 0 obj <</Type /OCG /Name (Sublayer A)>> endobj\n3 0 obj <</Type /OCG /Name (Sublayer B)>> endobj\n...\n4 0 obj % Configuration dictionary\n    << /Order [1 0 R [2 0 R 3 0 R]] >>",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "4.39",
+    "page": 384,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 4.39, page 384",
+    "content": "/OCProperties % OCProperties dictionary in document catalog\n    << /OCGs [1 0 R 2 0 R 3 0 R 4 0 R]\n        /D << /BaseState /OFF % The default configuration\n                /ON [1 0 R]\n                /AS [ % Auto state array of usage application dictionaries\n                    << /Event /View /Category [/Zoom] /OCGs [1 0 R 2 0 R 3 0 R 4 0 R] >>\n                    << /Event /Print /Category [/Print] /OCGs [4 0 R] >>\n                    << /Event /Export /Category [/Export] /OCGs [3 0 R 4 0 R] >>\n                    ]\n            >>\n    >>\n...\n1 0 obj\n    << /Type /OCG\n        /Name (20000 foot view)\n        /Usage << /Zoom << /max 1.0 >> >>\n    >>\nendobj\n2 0 obj\n    << /Type /OCG\n        /Name (10000 foot view)\n        /Usage << /Zoom << /min 1.0 /max 2.0 >> >>\n>>\nendobj\n3 0 obj\n    << /Type /OCG\n        /Name (1000 foot view)\n        /Usage << /Zoom << /min 2.0 /max 20.0 >>\n                    /Export << /ExportState /OFF >> >>\n        >>\nendobj\n4 0 obj\n    << /Type /OCG\n        /Name (Copyright notice)\n        /Usage << /Print << /PrintState /ON >>\n                    /Export << /ExportState /ON>> >>\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "5.1",
+    "page": 389,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 5.1, page 389",
+    "content": "BT\n    /F13 12 Tf\n    288 720 Td\n    (ABC) Tj\nET",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "5.2",
+    "page": 390,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 5.2, page 390",
+    "content": "/Resources\n    << /Font << /F13 23 0 R >>\n    >>\n23 0 obj\n    << /Type /Font\n        /Subtype /Type1\n        /BaseFont /Helvetica\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "5.3",
+    "page": 391,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 5.3, page 391",
+    "content": "BT\n    /F13 48 Tf\n    20 40 Td\n    0 Tr\n    0.5 g\n    (ABC) Tj\nET",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "5.4",
+    "page": 392,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 5.4, page 392",
+    "content": "BT\n    /F13 48 Tf\n    20 38 Td\n    1 Tr\n    2 w\n    (ABC) Tj\nET",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "5.5",
+    "page": 393,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 5.5, page 393",
+    "content": "BT\n    /F13 48 Tf\n    20 38 Td\n    7 Tr\n    (ABC) Tj\nET\n…Graphics operators to draw a starburst…",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "5.6",
+    "page": 415,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 5.6, page 415",
+    "content": "14 0 obj\n    << /Type /Font\n        /Subtype /Type1\n        /BaseFont /AGaramond-Semibold\n        /FirstChar 0\n        /LastChar 255\n        /Widths 21 0 R\n        /FontDescriptor 7 0 R\n        /Encoding 25 0 R\n    >>\nendobj\n21 0 obj\n    [ 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255\n    255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255\n    255 280 438 510 510 868 834 248 320 320 420 510 255 320 255 347\n    510 510 510 510 510 510 510 510 510 510 255 255 510 510 510 330\n    781 627 627 694 784 580 533 743 812 354 354 684 560 921 780 792\n    588 792 656 504 682 744 650 968 648 590 638 320 329 320 510 500\n    380 420 510 400 513 409 301 464 522 268 259 484 258 798 533 492\n    516 503 349 346 321 520 434 684 439 448 390 320 255 320 510 255\n    627 627 694 580 780 792 744 420 420 420 420 420 420 402 409 409\n    409 409 268 268 268 268 533 492 492 492 492 492 520 520 520 520\n    486 400 510 510 506 398 520 555 800 800 1044 360 380 549 846 792\n    713 510 549 549 510 522 494 713 823 549 274 354 387 768 615 496\n    330 280 510 549 510 549 612 421 421 1000 255 627 627 792 1016 730\n    500 1000 438 438 248 248 510 494 448 590 100 510 256 256 539 539\n    486 255 248 438 1174 627 580 627 580 580 354 354 354 354 792 792\n    790 792 744 744 744 268 380 380 380 380 380 380 380 380 380 380\n    ]\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "5.7",
+    "page": 417,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 5.7, page 417",
+    "content": "7 0 obj\n    << /Type /Font\n        /Subtype /MMType1\n        /BaseFont /MinionMM_366_465_11_\n        /FirstChar 32\n        /LastChar 255\n        /Widths 19 0 R\n        /FontDescriptor 6 0 R\n        /Encoding 5 0 R\n    >>\nendobj\n19 0 obj\n    [ 187 235 317 430 427 717 607 168 326 326 421 619 219 317 219 282 427\n    …Omitted data…\n    569 0 569 607 607 607 239 400 400 400 400 253 400 400 400 400 400\n    ]\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "5.8",
+    "page": 419,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 5.8, page 419",
+    "content": "17 0 obj\n    << /Type /Font\n        /Subtype /TrueType\n        /BaseFont /NewYork,Bold\n        /FirstChar 0\n        /LastChar 255\n        /Widths 23 0 R\n        /FontDescriptor 7 0 R\n        /Encoding /MacRomanEncoding\n    >>\nendobj\n23 0 obj\n    [ 0 333 333 333 333 333 333 333 0 333 333 333 333 333 333 333 333 333\n    …Omitted data…\n    803 790 803 780 780 780 340 636 636 636 636 636 636 636 636 636 636\n    ]\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "5.9",
+    "page": 428,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 5.9, page 428",
+    "content": "25 0 obj\n    << /Type /Encoding\n        /Differences\n            [ 39 /quotesingle\n                96 /grave\n                128 /Adieresis /Aring /Ccedilla /Eacute /Ntilde /Odieresis /Udieresis\n                    /aacute /agrave /acircumflex /adieresis /atilde /aring /ccedilla\n                    /eacute /egrave /ecircumflex /edieresis /iacute /igrave /icircumflex\n                    /idieresis /ntilde /oacute /ograve /ocircumflex /odieresis /otilde\n                    /uacute /ugrave /ucircumflex /udieresis /dagger /degree /cent\n                    /sterling /section /bullet /paragraph /germandbls /registered\n                    /copyright /trademark /acute /dieresis\n                174 /AE /Oslash\n                177 /plusminus\n                180 /yen /mu\n                187 /ordfeminine /ordmasculine\n                190 /ae /oslash /questiondown /exclamdown /logicalnot\n                196 /florin\n                199 /guillemotleft /guillemotright /ellipsis\n                203 /Agrave /Atilde /Otilde /OE /oe /endash /emdash /quotedblleft\n                    /quotedblright /quoteleft /quoteright /divide\n                216 /ydieresis /Ydieresis /fraction /currency /guilsinglleft /guilsinglright\n                    /fi /fl /daggerdbl /periodcentered /quotesinglbase /quotedblbase\n                    /perthousand /Acircumflex /Ecircumflex /Aacute /Edieresis /Egrave\n                    /Iacute /Icircumflex /Idieresis /Igrave /Oacute /Ocircumflex\n                241 /Ograve /Uacute /Ucircumflex /Ugrave /dotlessi /circumflex /tilde\n                    /macron /breve /dotaccent /ring /cedilla /hungarumlaut /ogonek\n                    /caron\n            ]\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "5.10",
+    "page": 450,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 5.10, page 450",
+    "content": "22 0 obj\n    << /Type /CMap\n        /CMapName /90ms-RKSJ-H\n        /CIDSystemInfo << /Registry (Adobe)\n                                /Ordering (Japan1)\n                                /Supplement 2\n                            >>\n        /WMode 0\n        /Length 23 0 R\n    >>\nstream\n%!PS-Adobe-3.0 Resource-CMap\n%%DocumentNeededResources: ProcSet (CIDInit)\n%%IncludeResource: ProcSet (CIDInit)\n%%BeginResource: CMap (90ms-RKSJ-H)\n%%Title: (90ms-RKSJ-H Adobe Japan1 2)\n%%Version: 10.001\n%%Copyright: Copyright 1990-2001 Adobe Systems Inc.\n%%Copyright: All Rights Reserved.\n%%EndComments\n/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo\n3 dict dup begin\n/Registry (Adobe) def\n/Ordering (Japan1) def\n/Supplement 2 def\nend def\n/CMapName /90ms-RKSJ-H def\n/CMapVersion 10.001 def\n/CMapType 1 def\n/UIDOffset 950 def\n/XUID [1 10 25343] def\n/WMode 0 def\n4 begincodespacerange\n<00> <80>\n<8140> <9FFC>\n<A0> <DF>\n<E040> <FCFC>\nendcodespacerange\n1 beginnotdefrange\n<00> <1F> 231\nendnotdefrange\n100 begincidrange\n<20> <7D> 231\n<7E> <7E> 631\n<8140> <817E> 633\n<8180> <81AC> 696\n<81B8> <81BF> 741\n<81C8> <81CE> 749\n…Additional ranges…\n<FB40> <FB7E> 8518\n<FB80> <FBFC> 8581\n<FC40> <FC4B> 8706\nendcidrange\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n%%EndResource\n%%EOF\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "5.11",
+    "page": 453,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 5.11, page 453",
+    "content": "14 0 obj\n    << /Type /Font\n        /Subtype /Type0\n        /BaseFont /HeiseiMin-W5-90ms-RKSJ-H\n        /Encoding /90ms-RKSJ-H\n        /DescendantFonts [15 0 R]\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "5.12",
+    "page": 460,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 5.12, page 460",
+    "content": "7 0 obj\n    << /Type /FontDescriptor\n        /FontName /AGaramond-Semibold\n        /Flags 262178 % Bits 2, 6, and 19\n        /FontBBox [-177 -269 1123 866]\n        /MissingWidth 255\n        /StemV 105\n        /StemH 45\n        /CapHeight 660\n        /XHeight 394\n        /Ascent 720\n        /Descent -270\n        /Leading 83\n        /MaxWidth 1212\n        /AvgWidth 478\n        /ItalicAngle 0\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "5.13",
+    "page": 464,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 5.13, page 464",
+    "content": "/FD << /Proportional 25 0 R\n        /HKana 26 0 R\n    >>\n25 0 obj\n    << /Type /FontDescriptor\n        /FontName /HeiseiMin-W3-Proportional\n        /Flags 2\n        /AvgWidth 478\n        /MaxWidth 1212\n        /MissingWidth 250\n        /StemV 105\n        /StemH 45\n        /CapHeight 660\n        /XHeight 394\n        /Ascent 720\n        /Descent -270\n        /Leading 83\n    >>\nendobj\n26 0 obj\n    << /Type /FontDescriptor\n        /FontName /HeiseiMin-W3-HKana\n        /Flags 3\n        /AvgWidth 500\n        /MaxWidth 500\n        /MissingWidth 500\n        /StemV 50\n        /StemH 75\n        /Ascent 720\n        /Descent 0\n        /Leading 83\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "5.14",
+    "page": 467,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 5.14, page 467",
+    "content": "12 0 obj\n    << /Filter /ASCII85Decode\n        /Length 41116\n        /Length1 2526\n        /Length2 32393\n        /Length3 570\n    >>\nstream\n,p>`rDKJj'E+LaU0eP.@+AH9dBOu$hFD55nC\n…Omitted data…\nJJQ&Nt')<=^p&mGf(%:%h1%9c//K(/*o=.C>UXkbVGTrr~>\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "5.15",
+    "page": 472,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 5.15, page 472",
+    "content": "14 0 obj\n    << /Type /Font\n        /Subtype /Type0\n        /BaseFont /Ryumin-Light\n        /Encoding /Identity-H\n        /DescendantFonts [15 0 R]\n        /ToUnicode 16 0 R\n    >>\nendobj\n15 0 obj\n    << /Type /Font\n        /Subtype /CIDFontType2\n        /BaseFont /Ryumin-Light\n        /CIDSystemInfo 17 0 R\n        /FontDescriptor 18 0 R\n        /CIDToGIDMap /Identity\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "5.16",
+    "page": 473,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 5.16, page 473",
+    "content": "16 0 obj\n    << /Length 433 >>\nstream\n/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo\n<< /Registry (Adobe)\n/Ordering (UCS)\n/Supplement 0\n>> def\n/CMapName /Adobe-Identity-UCS def\n/CMapType 2 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n2 beginbfrange\n<0000> <005E> <0020>\n<005F> <0061> [<00660066> <00660069> <00660066006C>]\nendbfrange\n1 beginbfchar\n<3A51> <D840DC3E>\nendbfchar\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "6.1",
+    "page": 498,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 6.1, page 498",
+    "content": "28 0 obj\n    << /Type /Halftone\n        /HalftoneType 1\n        /Frequency 120\n        /Angle 30\n        /SpotFunction /CosineDot\n        /TransferFunction /Identity\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "6.2",
+    "page": 506,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 6.2, page 506",
+    "content": "27 0 obj\n    << /Type /Halftone\n        /HalftoneType 5\n        /Cyan 31 0 R\n        /Magenta 32 0 R\n        /Yellow 33 0 R\n        /Black 34 0 R\n        /Default 35 0 R\n    >>\nendobj\n31 0 obj\n    << /Type /Halftone\n        /HalftoneType 1\n        /Frequency 89.827\n        /Angle 15\n        /SpotFunction /Round\n        /AccurateScreens true\n    >>\nendobj\n32 0 obj\n    << /Type /Halftone\n        /HalftoneType 1\n        /Frequency 89.827\n        /Angle 75\n        /SpotFunction /Round\n        /AccurateScreens true\n    >>\nendobj\n33 0 obj\n    << /Type /Halftone\n        /HalftoneType 1\n        /Frequency 90.714\n        /Angle 0\n        /SpotFunction /Round\n        /AccurateScreens true\n    >>\nendobj\n34 0 obj\n    << /Type /Halftone\n        /HalftoneType 1\n        /Frequency 89.803\n        /Angle 45\n        /SpotFunction /Round\n        /AccurateScreens true\n    >>\nendobj\n35 0 obj\n    << /Type /Halftone\n        /HalftoneType 1\n        /Frequency 90.000\n        /Angle 45\n        /SpotFunction /Round\n        /AccurateScreens true\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "8.1",
+    "page": 587,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 8.1, page 587",
+    "content": "21 0 obj\n    << /Count 6\n        /First 22 0 R\n        /Last 29 0 R\n    >>\nendobj\n22 0 obj\n    << /Title (Chapter 1)\n        /Parent 21 0 R\n        /Next 26 0 R\n        /First 23 0 R\n        /Last 25 0 R\n        /Count 3\n        /Dest [3 0 R /XYZ 0 792 0]\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "8.2",
+    "page": 588,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 8.2, page 588",
+    "content": "12 0 obj\n    << /Width 76\n        /Height 99\n        /ColorSpace /DeviceRGB\n        /BitsPerComponent 8\n        /Length 13 0 R\n        /Filter [/ASCII85Decode /DCTDecode]\n    >>\nstream\ns4IA>!\"M;*Ddm8XA,lT0!!3,S!/(=R!<E3%!<N<(!WrK*!WrN,\n…Omitted data…\nendstream\nendobj\n13 0 obj % Length of stream\n    …\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "8.3",
+    "page": 593,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 8.3, page 593",
+    "content": "/Collection <<\n    /Type /Collection\n    /Schema <<\n        /Type /CollectionSchema\n        /from << /Subtype /S /N (From) /O 1 /V true /E false>>\n        /to << /Subtype /S /N (To) /O 2 /V true /E false >>\n        /date << /Subtype /D /N (Date received) /O 3 /V true /E false >>\n        /subject << /Subtype /S /N (Subject) /O 4 /V true /E false >>\n        /size << /Subtype /Size /N (Size) /O 5 /V true /E false >>\n        >>\n    /D (Doc1)\n    /View /D\n    /Sort << /S /date /A false >>\n>>",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "8.4",
+    "page": 593,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 8.4, page 593",
+    "content": "/CI <<\n    /Type /CollectionItem\n    /from (Rob McAfee)\n    /to (Patty McAfee)\n    /subject <<\n        /Type /CollectionSubitem\n        /P (Re:)\n        /D (Let's have lunch on Friday!)\n    >>\n    /date (D:20050621094703-07’00’)\n>>",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "8.5",
+    "page": 595,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 8.5, page 595",
+    "content": "1 0 obj\n    << /Type /Catalog\n        /PageLabels << /Nums [ 0 << /S /r >> % A number tree containing\n                                        4 << /S /D >> % three page label dictionaries\n                                        7 << /S /D\n                                                /P (A-)\n                                                /St 8\n                                        >>\n                                    ]\n                        >>\n        …\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "8.6",
+    "page": 597,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 8.6, page 597",
+    "content": "22 0 obj\n    << /F 23 0 R\n        /I << /Title (Man Bites Dog) >>\n    >>\nendobj\n23 0 obj\n    << /T 22 0 R\n        /N 24 0 R\n        /V 25 0 R\n        /P 8 0 R\n        /R [158 247 318 905]\n    >>\nendobj\n24 0 obj\n    << /T 22 0 R\n        /N 25 0 R\n        /V 23 0 R\n        /P 8 0 R\n        /R [322 246 486 904]\n    >>\nendobj\n25 0 obj\n    << /T 22 0 R\n        /N 23 0 R\n        /V 24 0 R\n        /P 10 0 R\n        /R [157 254 319 903]\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "8.7",
+    "page": 601,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 8.7, page 601",
+    "content": "10 0 obj\n    << /Type /Page\n        /Parent 4 0 R\n        /Contents 16 0 R\n        /Dur 5\n        /Trans << /Type /Trans\n                        /D 3.5\n                        /S /Split\n                        /Dm /V\n                        /M /O\n                >>\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "8.8",
+    "page": 622,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 8.8, page 622",
+    "content": "22 0 obj\n    << /Type /Annot\n        /Subtype /Text\n        /Rect [266 116 430 204]\n        /Contents (The quick brown fox ate the lazy mouse.)\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "8.9",
+    "page": 623,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 8.9, page 623",
+    "content": "93 0 obj\n    << /Type /Annot\n        /Subtype /Link\n        /Rect [71 717 190 734]\n        /Border [16 16 1]\n        /Dest [3 0 R /FitR –4 399 199 533]\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "8.10",
+    "page": 646,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 8.10, page 646",
+    "content": "8 0 obj % Watermark appearance\n    <<\n        /Length ...\n        /Subtype /Form\n        /Resources ...\n        /BBox ...\n    >>\n    stream\n    ...\n        BT\n        /F1 1 Tf\n        36 0 0 36 0 -36 Tm\n        (Do Not Build) Tx\n        ET\n        ...\n    endstream\nendobj\n9 0 obj % Watermark annotation\n    <<\n        /Rect ...\n        /Type /Annot\n        /Subtype /Watermark\n        /FixedPrint 10 0 R\n        /AP <</N 8 0 R>>\n    >>\n% in the page dictionary\n    /Annots [9 0 R]\n10 0 obj % Fixed print dictionary\n    <<\n        /Type /FixedPrint\n        /Matrix [1 0 0 1 72 -72] % Translate one inch right and one inch down\n        /H 0\n        /V 1.0 % Translate the full height of the page vertically\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "8.11",
+    "page": 654,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 8.11, page 654",
+    "content": "93 0 obj\n    << /Type /Annot\n        /Subtype /Link\n        /Rect [71 717 190 734]\n        /Border [16 16 1]\n        /A << /Type /Action\n                /S /GoTo\n                /D [3 0 R /FitR –4 399 199 533]\n            >>\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "8.12",
+    "page": 658,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 8.12, page 658",
+    "content": "1 0 obj % Link to a child\n    << /Type /Action\n        /S /GoToE\n        /D (Chapter 1)\n        /T << /R /C\n                /N (Embedded document) >>\n    >>\nendobj\n2 0 obj % Link to the parent\n    << /Type /Action\n        /S /GoToE\n        /D (Chapter 1)\n        /T << /R /P >>\n    >>\nendobj\n3 0 obj % Link to a sibling\n    << /Type /Action\n        /S /GoToE\n        /D (Chapter 1)\n        /T << /R /P\n                /T << /R /C\n                        /N (Another embedded document) >>\n            >>\n    >>\nendobj\n4 0 obj % Link to an embedded file in an external document\n    << /Type /Action\n        /S /GoToE\n        /D (Chapter 1)\n        /F (someFile.pdf)\n        /T << /R /C\n                /N (Embedded document) >>\n    >>\nendobj\n5 0 obj % Link from an embedded file to a normal file\n    << /Type /Action\n        /S /GoToE\n        /D (Chapter 1)\n        /F (someFile.pdf)\n    >>\nendobj\n6 0 obj % Link to a grandchild\n    << /Type /Action\n        /S /GoToE\n        /D (Chapter 1)\n        /T << /R /C\n                /N (Embedded document)\n                /T << /R /C\n                        /P (A destination name)\n                        /A (annotName)\n                    >>\n            >>\n    >>\nendobj\n7 0 obj % Link to a niece/nephew through the source’s parent\n    << /Type /Action\n        /S /GoToE\n        /D (destination)\n        /T << /R /P\n                /T << /R /C\n                        /N (Embedded document)\n                        /T << /R /C\n                                /P 3\n                                /A (annotName)\n                            >>\n                    >>\n            >>\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "8.13",
+    "page": 668,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 8.13, page 668",
+    "content": "<< /S /SetOCGState\n    /State [/OFF 2 0 R 3 0 R /Toggle 16 0 R 19 0 R /ON 5 0 R]\n>>",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "8.14",
+    "page": 679,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 8.14, page 679",
+    "content": "/Tx BMC % Begin marked content with tag Tx\n    q % Save graphics state\n        …Any required graphics state changes, such as clipping…\n        BT % Begin text object\n            …Default appearance string (DA)…\n            …Text-positioning and text-showing operators to show the variable text…\n        ET % End text object\n    Q % Restore graphics state\nEMC % End marked content",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "8.15",
+    "page": 684,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 8.15, page 684",
+    "content": "/DS (font: 18pt Arial) % Default style string using an abbreviated font\n                                            % descriptor to specify 18pt text using an Arial font\n/RV (<?xml version=\"1.0\"?><body xmlns=\"http://www.w3.org/1999/xtml\"\n        xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"\n        xfa:contentType=\"text/html\" xfa:APIVersion=\"Acrobat:8.0.0\" xfa:spec=\"2.4\">\n        <p style=\"text-align:left\">\n            <b>\n                <i>\n                    Here is some bold italic text\n                </i>\n            </b>\n        </p>\n        <p style= \"font-size:16pt\">\n            This text uses default text state parameters but changes the font size to 16.\n        </p>\n    </body> )",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "8.16",
+    "page": 687,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 8.16, page 687",
+    "content": "1 0 obj\n    << /FT /Btn\n        /T (Urgent)\n        /V /Yes\n        /AS /Yes\n        /AP << /N << /Yes 2 0 R /Off 3 0 R>>\n    >>\nendobj\n2 0 obj\n    << /Resources 20 0 R\n        /Length 104\n    >>\nstream\n    q\n        0 0 1 rg\n        BT\n            /ZaDb 12 Tf\n            0 0 Td\n            (8) Tj\n        ET\n    Q\nendstream\nendobj\n3 0 obj\n    << /Resources 20 0 R\n        /Length 104\n    >>\nstream\n    q\n        0 0 1 rg\n        BT\n            /ZaDb 12 Tf\n            0 0 Td\n            (8) Tj\n        ET\n    Q\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "8.17",
+    "page": 689,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 8.17, page 689",
+    "content": "10 0 obj % Radio button field\n    << /FT /Btn\n        /Ff … % …Radio flag = 1, Pushbutton = 0…\n        /T (Credit card)\n        /V /MasterCard\n        /Kids [ 11 0 R\n                12 0 R\n                ]\n    >>\nendobj\n11 0 obj % First radio button\n    << /Parent 10 0 R\n        /AS /MasterCard\n        /AP << /N << /MasterCard 8 0 R\n                            /Off 9 0 R\n                        >>\n            >>\n    >>\nendobj\n12 0 obj % Second radio button\n    << /Parent 10 0 R\n        /AS /Off\n        /AP << /N << /Visa 8 0 R\n                            /Off 9 0 R\n                        >>\n            >>\n    >>\nendobj\n8 0 obj % Appearance stream for \"on\" state\n    << /Resources 20 0 R\n        /Length 104\n    >>\nstream\n    q\n        0 0 1 rg\n        BT\n            /ZaDb 12 Tf\n            0 0 Td\n            (8) Tj\n        ET\n    Q\nendstream\nendobj\n9 0 obj % Appearance stream for \"off\" state\n    << /Resources 20 0 R\n        /Length 104\n    >>\nstream\n    q\n        0 0 1 rg\n        BT\n            /ZaDb 12 Tf\n            0 0 Td\n            (4) Tj\n        ET\n    Q\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "8.18",
+    "page": 692,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 8.18, page 692",
+    "content": "6 0 obj\n    << /FT /Tx\n        /Ff … % Set Multiline flag\n        /T (Silly prose)\n        /DA (0 0 1 rg /Ti 12 Tf )\n        /V (The quick brown fox ate the lazy mouse)\n        /AP << /N 5 0 R >>\n    >>\nendobj\n5 0 obj\n    << /Resources 21 0 R\n        /Length 172\n    >>\nstream\n    /Tx BMC\n        q\n            BT\n                0 0 1 rg\n                /Ti 12 Tf\n                1 0 0 1 100 100 Tm\n                0 0 Td\n                (The quick brown fox ) Tj\n                0 -13 Td\n                (ate the lazy mouse.) Tj\n            ET\n        Q\n    EMC\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "8.19",
+    "page": 695,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 8.19, page 695",
+    "content": "<< /FT /Ch\n    /Ff …\n    /T (Body Color)\n    /V (Blue)\n    /Opt [ (Red)\n            (My favorite color)\n            (Blue)\n            ]\n>>",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "8.20",
+    "page": 723,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 8.20, page 723",
+    "content": "1 0 obj\n    << /XFA [(xdp:xdp) 10 0 R\n            (template) 11 0 R\n            (datasets) 12 0 R\n            (config) 13 0 R\n            (/xdp:xdp) 14 0 R ]\n    >>\nendobj\n10 0 obj\n    stream\n        <xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\">\n    endstream\n11 0 obj\n    stream\n        <template xmlns=\"http://www.xfa.org/schema/xfa-template/2.4/\">\n        ...remaining contents of template packet...\n        </template>\n    endstream\n12 0 obj\n    stream\n        <xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\">\n        ...contents of datasets packet...\n        </xfa:datasets>\n    endstream\n13 0 obj\n    stream\n        <config xmlns=\"http://www.xfa.org/schema/xci/1.0/\">\n        ...contents of config node of XFA Data Package...\n        <config>\n    endstream\n14 0 obj\n    stream\n        </xdp:xdp>\n    endstream",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "8.21",
+    "page": 724,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 8.21, page 724",
+    "content": "1 0 obj\n    << /XFA 10 0 R >>\nendobj\n10 0 obj\n    stream\n        <xdp:xdp xmlns:xdp=\"http://ns.adobe.com/xdp/\">\n        <template xmlns=\"http://www.xfa.org/schema/xfa-template/2.4/\">\n        ...remaining contents of template packet...\n        </template>\n        <xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\">\n        ...contents of datasets packet...\n        </xfa:datasets>\n        <config xmlns=\"http://www.xfa.org/schema/xci/1.0/\">\n        ...contents of config node of XFA Data Package...\n        <config>\n        </xdp:xdp>\n    endstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "8.22",
+    "page": 751,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 8.22, page 751",
+    "content": "<</Type /Measure\n    /Subtype /RL\n    /R (1in = 0.1 mi)\n    /X [ <</U (mi) % x offset represented in miles\n            /C .00139 % Conversion from user space units to miles\n            /D 100000\n        ]\n    /D [<< /U (mi) /C 1 >> % Distance: initial unit is miles; no conversion needed\n        << /U (ft) /C 5280 >> % Conversion from miles to feet\n        << /U (in) /C 12 % Conversion from feet to inches\n            /F /F /D 8 >> % Fractions of inches rounded to nearest 1/8\n        ]\n    /A [<</U (acres) % Area: measured in acres\n            /C 640 >> % Conversion from square miles to acres\n        ]\n>>",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "9.1",
+    "page": 788,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 9.1, page 788",
+    "content": "1 0 obj\n    <</Type /Catalog\n        /Pages 2 0 R\n        /Names 3 0 R % Indirect reference to name dictionary\n    >>\n...\n3 0 obj % The name dictionary\n    <</AlternatePresentations 4 0 R >>\nendobj\n4 0 obj % The alternate presentations name tree\n    <</Names [(MySlideShow) 5 0 R]>>\nendobj\n5 0 obj % The slideshow definition\n    <</Type /SlideShow\n        /Subtype /Embedded\n        /Resources <</Names [ (mysvg.svg) 31 0R\n            (abc0001.jpg) 35 0 R (abc0002.jpg) 36 0 R\n            (mysvg.js) 61 0 R (mymusic.mp3) 65 0 R ]>>\n        /StartResource (mysvg.svg)\n    >>\n...\n31 0 obj\n    <</Type /Filespec % The root object, which\n        /F (mysvg.svg) % points to an embedded file stream\n        /EF <</F 32 0 R>>\n    >>\nendobj\n32 0 obj % The embedded file stream\n    <</Type /EmbeddedFile\n        /Subtype /image#2Fsvg+xml\n        /Length 72\n    >>\n    stream\n        <?xml version=\"1.0\" standalone=\"no\"?>\n        <svg><!-- Some SVG goes here--></svg>\n    endstream\nendobj\n% ... other objects not shown",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "9.2",
+    "page": 801,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 9.2, page 801",
+    "content": "100 0 obj % 3D annotation 1\n    << /Type /Annot\n        /Subtype /3D\n        /3DD 200 0 R % Reference to the 3D stream containing the 3D artwork\n    >>\nendobj\n101 0 obj % 3D annotation 2\n    << /Type /Annot\n        /Subtype /3D\n        /3DD 201 0 R % Reference to a 3D reference dictionary\n    >>\nendobj\n102 0 obj % 3D annotation 3\n    << /Type /Annot\n        /Subtype /3D\n        /3DD 201 0 R % Reference to the same 3D reference dictionary\n    >>\nendobj\n200 0 obj % The 3D stream\n    << /Type /3D\n        /Subtype /U3D\n        ... other keys related to a stream, such as /Length\n    >>\n    stream\n        ... U3D data...\n    endstream\nendobj\n201 0 obj % 3D reference dictionary\n    << /Type /3DRef\n        /3DD 200 0 R % Reference to the actual 3D artwork.\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "9.3",
+    "page": 821,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 9.3, page 821",
+    "content": "3 0 obj %CrossSection1\n    <<\n        /Type /3DCrossSection\n        /C [0 0 0]\n        /O [null 0 0]\n        /PO 0.35\n        /PC [/DeviceRGB 0.75 0.86 1]\n        /IV true\n        /IC [/DeviceRGB 0 1 0]\n    >>\nendobj\n4 0 obj %CrossSection2\n    <<\n        /Type /3DCrossSection\n        /C [0 0 0]\n        /O [null -30 0]\n        /PO 0.35\n        /PC [/DeviceRGB 0.75 0.86 1]\n        /IV true\n        /IC [/DeviceRGB 0 1 0]\n    >>\nendobj\n5 0 obj %CrossSection3\n    <<\n        /Type /3DCrossSection\n        /C [0 0 0]\n        /O [null 0 30]\n        /PO 0.35\n        /PC [/DeviceRGB 0.75 0.86 1]\n        /IV true\n        /IC [/DeviceRGB 0 1 0]\n    >>\nendobj\n6 0 obj %CrossSection4\n    <<\n        /Type /3DCrossSection\n        /C [0 0 0]\n        /O [null -30 30]\n        /PO 0.35\n        /PC [/DeviceRGB 0.75 0.86 1]\n        /IV true\n        /IC [/DeviceRGB 0 1 0]\n    >>\nendobj\n7 0 obj %View0\n    <<\n        /Type /3DView\n        /XN (NoCrossSection)\n        /SA []\n        ...\n    >>\nendobj\n8 0 obj %View1\n    <<\n        /Type /3DView\n        /XN (CrossSection1)\n        /SA [3 0 R]\n        ...\n    >>\nendobj\n9 0 obj %View2\n    <<\n        /Type /3DView\n        /XN (CrossSection2)\n        /SA [4 0 R]\n        ...\n    >>\nendobj\n10 0 obj %View3\n    <<\n        /Type /3DView\n        /XN (CrossSection3)\n        /SA [5 0 R]\n        ...\n    >>\nendobj\n11 0 obj %View4\n    <<\n        /Type /3DView\n        /XN (CrossSection4)\n        /SA [6 0 R]\n        ...\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "9.4",
+    "page": 830,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 9.4, page 830",
+    "content": "3 0 obj % Default node params with all shapes visible and opaque\n[ << /Type /3DNode\n        /N (Sphere)\n        /O 1\n        /V true\n        /M [...]>>\n    << /Type /3DNode\n        /N (Cone)\n        /O 1\n        /V true >>\n    << /Type /3DNode\n        /N (Cube)\n        /O 1\n        /V true >>\n]\n4 0 obj % Params with the cone hidden and the sphere semi-transparent\n[ << /Type /3DNode\n        /N (Sphere)\n        /O 0.5\n        /V true >>\n    << /Type /3DNode\n        /N (Cone)\n        /O 1\n        /V false >>\n    << /Type /3DNode\n        /N (Cube)\n        /O 1\n        /V true >>\n]\nendobj\n5 0 obj %View1, using the default set of node params\n<<\n    /Type /3DView\n    /XN (View1)\n    /NA 3 0 R\n    ...\n>>\nendobj\n6 0 obj %View2, using the alternate set of node params\n<<\n    /Type /3DView\n    /XN (View2)\n    /NA 4 0 R\n    ...\n>>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "9.5",
+    "page": 836,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 9.5, page 836",
+    "content": "2 0 obj % 3D stream data with two named views\n    <<\n        /Type /3D\n        /Subtype /U3D\n        /VA [4 0 R 5 0 R]\n        ...\n    >>\nstream\n    ...\nendstream\nendobj\n3 0 obj % 3D annotation\n    <<\n        /Type /Annot\n        /Subtype /3D\n        /3DD 2 0 R\n        ...\n    >>\nendobj\n4 0 obj % CommentView1\n    <<\n        /Type /3DView\n        /XN (CommentView1)\n        ...\n    >>\nendobj\n5 0 obj % CommentView2\n    <<\n        /Type /3DView\n        /XN (CommentView2)\n        ...\n    >>\nendobj\n6 0 obj % Cloud comment with no ExData\n    <<\n        /Type /Annot\n        /Subtype /Polygon\n        /IT /PolygonCloud\n        ...\n    >>\nendobj\n7 0 obj % Callout comment on CommentView1\n    <<\n        /Type /Annot\n        /Subtype /FreeText\n        /IT /FreeTextCallout\n        /ExData <<\n            /Type /Markup3D\n            /3DA 3 0 R\n            /3DV 4 0 R\n        >>\n        ...\n    >>\nendobj\n8 0 obj % Dimension comment on CommentView2\n    <<\n        /Type /Annot\n        /Subtype /Line\n        /IT /LineDimension\n        /ExData <<\n            /Type /Markup3D\n            /3DA 3 0 R\n            /3DV 5 0 R\n        >>\n        ...\n    >>\nendobj\n9 0 obj % Stamp comment on CommentView2\n    <<\n        /Type /Annot\n        /Subtype /Stamp\n        /ExData <<\n            /Type /Markup3D\n            /3DA 3 0 R\n            /3DV 5 0 R\n        >>\n        ...\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "10.1",
+    "page": 845,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 10.1, page 845",
+    "content": "1 0 obj\n    << /Title (PostScript Language Reference, Third Edition)\n        /Author (Adobe Systems Incorporated)\n        /Creator (Adobe FrameMaker 5.5.3 for Power Macintosh®)\n        /Producer (Acrobat Distiller 3.01 for Power Macintosh)\n        /CreationDate (D:19970915110347-08'00')\n        /ModDate (D:19990209153925-08'00')\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "10.2",
+    "page": 852,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 10.2, page 852",
+    "content": "/Clip BMC\n    100 100 10 10 re W n % Clipping path\n    (Clip me) Tj % Object to be clipped\nEMC",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "10.3",
+    "page": 853,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 10.3, page 853",
+    "content": "/ClippedText BMC\n    /Clip <<…>>\n        BDC\n            BT\n                7 Tr % Begin text clip mode\n                /Pgf BMC\n                    (Line 1) Tj\n                EMC\n                /Pgf BMC\n                    (Line) '\n                    ( 2) Tj\n                EMC\n            ET % Set current text clip\n        EMC\n    100 100 10 10 re f % Filled path\nEMC",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "10.4",
+    "page": 854,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 10.4, page 854",
+    "content": "/S1 BMC\n    /S2 BMC\n        /S3 BMC\n            0 0 m\n            100 100 l\n            0 100 l W n % Clipping path 1\n            0 0 m\n            200 200 l\n            0 100 l f % Filled path\n        EMC\n        /S4 BMC\n            0 0 m\n            300 300 l\n            0 100 l W n % Clipping path 2\n        EMC\n    EMC\n    100 100 10 10 re f % Filled path\nEMC",
+    "type": "pdf_fragment"
+  },
+  {
+    "example": "10.5",
+    "page": 855,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 10.5, page 855",
+    "content": "/S1 BMC\n    …Clipping path…\n    /S2 BMC\n        /S3 BMC\n        EMC\n        /P1 DP\n    EMC\nEMC",
+    "type": "pdf_fragment"
+  },
+  {
+    "example": "10.6",
+    "page": 855,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 10.6, page 855",
+    "content": "/S1 BMC\n    /S2 BMC\n        /S3 BMC\n        EMC\n    EMC\n    /S4 BMC\n        …Clipping path…\n    EMC\nEMC",
+    "type": "pdf_fragment"
+  },
+  {
+    "example": "10.7",
+    "page": 862,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 10.7, page 862",
+    "content": "2 0 obj % Page object\n    << /Type /Page\n        /Contents 3 0 R % Content stream\n        …\n    >>\nendobj\n3 0 obj % Page's content stream\n    << /Length … >>\nstream\n    …\n    /P << /MCID 0 >> % Start of marked-content sequence\n        BDC\n            …\n            (Here is some text) Tj\n            …\n        EMC % End of marked-content sequence\n    …\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "10.8",
+    "page": 863,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 10.8, page 863",
+    "content": "1 0 obj % Structure element\n    << /Type /StructElem\n        /S /P % Structure type\n        /P … % Parent in structure hierarchy\n        /K << /Type /MCR\n                /Pg 2 0 R % Page containing marked-content sequence\n                /MCID 0 % Marked-content identifier\n            >>\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "10.9",
+    "page": 864,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 10.9, page 864",
+    "content": "1 0 obj % Containing structure element\n    << /Type /StructElem\n        /S /MixedContainer % Structure type\n        /P … % Parent in structure hierarchy\n        /Pg 2 0 R % Page containing marked-content sequence\n        /K [ 4 0 R % Three children: a structure element\n            0 % a marked-content identifier\n            5 0 R % another structure element\n            ]\n    >>\nendobj\n2 0 obj % Page object\n    << /Type /Page\n        /Contents 3 0 R % Content stream\n        …\n    >>\nendobj\n3 0 obj % Page's content stream\n    << /Length … >>\nstream\n    …\n    /P << /MCID 0 >> % Start of marked-content sequence\n        BDC\n            (Here is some text) Tj\n            …\n        EMC % End of marked-content sequence\n    …\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "10.10",
+    "page": 866,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 10.10, page 866",
+    "content": "1 0 obj % Structure element\n    << /Type /StructElem\n        /S /P % Structure type\n        /P … % Parent in structure hierarchy\n        /Pg 2 0 R % Page containing marked-content sequence\n        /K 0 % Marked-content identifier\n    >>\nendobj\n2 0 obj % Page object\n    << /Type /Page\n        /Resources << /XObject << /Fm4 4 0 R >> % Resource dictionary\n                        >> % containing form XObject\n        /Contents 3 0 R % Content stream\n        …\n    >>\nendobj\n3 0 obj % Page's content stream\n    << /Length … >>\nstream\n    …\n    /P << /MCID 0 >> % Start of marked-content sequence\n        BDC\n            /Fm4 Do % Paint form XObject\n        EMC % End of marked-content sequence\n    …\nendstream\nendobj\n4 0 obj % Form XObject\n    << /Type /XObject\n        /Subtype /Form\n        /Length …\n    >>\nstream\n    …\n    (Here is some text) Tj\n    …\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "10.11",
+    "page": 867,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 10.11, page 867",
+    "content": "1 0 obj % Structure element\n    << /Type /StructElem\n        /S /P % Structure type\n        /P … % Parent in structure hierarchy\n        /K << /Type /MCR\n                /Pg 2 0 R % Page containing marked-content sequence\n                /Stm 4 0 R % Stream containing marked-content sequence\n                /MCID 0 % Marked-content identifier\n            >>\n    >>\nendobj\n2 0 obj % Page object\n    << /Type /Page\n        /Resources << /XObject << /Fm4 4 0 R >> % Resource dictionary\n                        >> % containing form XObject\n        /Contents 3 0 R % Content stream\n        …\n    >>\nendobj\n3 0 obj % Page's content stream\n    << /Length … >>\nstream\n    …\n    /Fm4 Do % Paint form XObject\n    …\nendstream\nendobj\n4 0 obj % Form XObject\n    << /Type /XObject\n        /Subtype /Form\n        /Length …\n    >>\nstream\n    …\n    /P << /MCID 0 >> % Start of marked-content sequence\n        BDC\n            …\n            (Here is some text) Tj\n            …\n        EMC % End of marked-content sequence\n    …\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "10.12",
+    "page": 870,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 10.12, page 870",
+    "content": "1 0 obj % Parent structure element\n    << /Type /StructElem\n        …\n        /K << /Type /OBJR % Object reference\n                /Pg 2 0 R % Page containing form XObject\n                /Obj 4 0 R % Reference to form XObject\n            >>\n    >>\nendobj\n2 0 obj % Page object\n    << /Type /Page\n        /Resources << /XObject << /Fm4 4 0 R >> % Resource dictionary\n                        >> % containing form XObject\n        /Contents 3 0 R % Content stream\n        …\n    >>\nendobj\n3 0 obj % Page's content stream\n    << /Length … >>\nstream\n    …\n    /Fm4 Do % Paint form XObject\n    …\nendstream\nendobj\n4 0 obj % Form XObject\n    << /Type /XObject\n        /Subtype /Form\n        /Length …\n        /StructParent 6 % Parent tree key\n    >>\nstream\n    …\nendstream\nendobj\n100 0 obj % Parent tree (accessed from structure tree root)\n    << /Nums [ 0 101 0 R\n                    1 102 0 R\n                    …\n                    6 1 0 R % Entry for page object 2; points back\n                    … % to parent structure element\n                ]\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "10.13",
+    "page": 872,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 10.13, page 872",
+    "content": "1 0 obj % Parent structure element\n    << /Type /StructElem\n        …\n        /Pg 2 0 R % Page containing marked-content sequence\n        /K 0 % Marked-content identifier\n    >>\nendobj\n2 0 obj % Page object\n    << /Type /Page\n        /Contents 3 0 R % Content stream\n        /StructParents 6 % Parent tree key\n        …\n    >>\nendobj\n3 0 obj % Page's content stream\n    << /Length … >>\nstream\n    …\n    /P << /MCID 0 >> % Start of marked-content sequence\n        BDC\n            (Here is some text) TJ\n            …\n        EMC % End of marked-content sequence\n    …\nendstream\nendobj\n100 0 obj % Parent tree (accessed from structure tree root)\n    << /Nums [ 0 101 0 R\n                    1 102 0 R\n                    …\n                    6 [1 0 R] % Entry for page object 2; array element at index 0\n                    … % points back to parent structure element\n                ]\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "10.14",
+    "page": 877,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 10.14, page 877",
+    "content": "100 0 obj\n    << /Type /StructElem\n        /S /Figure % Structure type\n        /P 50 0 R % Parent in structure tree\n        /A << /O /UserProperties % Attribute object\n                /P [ % Array of user properties\n                    << /N (Part Name) /V (Framostat) >>\n                    << /N (Part Number) /V 11603 >>\n                    << /N (Supplier) /V (Just Framostats) /H true >> % Hidden attribute\n                    << /N (Price) /V -37.99 /F ($37.99) >> % Formatted value\n                    ]\n            >>\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "10.15",
+    "page": 878,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 10.15, page 878",
+    "content": "1 0 obj % Document catalog\n    << /Type /Catalog\n        /Pages 100 0 R % Page tree\n        /StructTreeRoot 300 0 R % Structure tree root\n    >>\nendobj\n100 0 obj % Page tree\n    << /Type /Pages\n        /Kids [ 101 1 R % First page object\n                102 0 R % Second page object\n                ]\n        /Count 2 % Page count\n    >>\nendobj\n101 1 obj % First page object\n    << /Type /Page\n        /Parent 100 0 R % Parent is the page tree\n        /Resources << /Font << /F1 6 0 R % Font resources\n                                        /F12 7 0 R\n                                    >>\n                            /ProcSet [/PDF /Text] % Procedure sets\n                        >>\n        /MediaBox [0 0 612 792] % Media box\n        /Contents 201 0 R % Content stream\n        /StructParents 0 % Parent tree key\n    >>\nendobj\n201 0 obj % Content stream for first page\n    << /Length … >>\nstream\n    1 1 1 rg\n    0 0 612 792 re f\n    BT % Start of text object\n        /Head1 << /MCID 0 >> % Start of marked-content sequence 0\n            BDC\n                0 0 0 rg\n                /F1 1 Tf\n                30 0 0 30 18 732 Tm\n                (This is a first level heading. Hello world: ) Tj\n                1.1333 TL\n                T*\n                (goodbye universe.) Tj\n            EMC % End of marked-content sequence 0\n        /Para << /MCID 1 >> % Start of marked-content sequence 1\n            BDC\n                /F12 1 Tf\n                14 0 0 14 18 660.8 Tm\n                (This is the first paragraph, which spans pages. It has four fairly short and \\\nconcise sentences. This is the next to last ) Tj\n            EMC % End of marked-content sequence 1\n    ET % End of text object\nendstream\nendobj\n102 0 obj % Second page object\n    << /Type /Page\n        /Parent 100 0 R % Parent is the page tree\n        /Resources << /Font << /F1 6 0 R % Font resources\n                                        /F12 7 0 R\n                                    >>\n                            /ProcSet [/PDF /Text] % Procedure sets\n                        >>\n        /MediaBox [0 0 612 792] % Media box\n        /Contents 202 0 R % Content stream\n        /StructParents 1 % Parent tree key\n    >>\nendobj\n202 0 obj % Content stream for second page\n    << /Length … >>\nstream\n    1 1 1 rg\n    0 0 612 792 re f\n    BT % Start of text object\n        /Para << /MCID 0 >> % Start of marked-content sequence 0\n            BDC\n                0 0 0 rg\n                /F12 1 Tf\n                14 0 0 14 18 732 Tm\n                (sentence. This is the very last sentence of the first paragraph.) Tj\n            EMC % End of marked-content sequence 0\n        /Para << /MCID 1 >> % Start of marked-content sequence 1\n            BDC\n                /F12 1 Tf\n                14 0 0 14 18 570.8 Tm\n                (This is the second paragraph. It has four fairly short and concise sentences. \\\nThis is the next to last ) Tj\n            EMC % End of marked-content sequence 1\n        /Para << /MCID 2 >> % Start of marked-content sequence 2\n            BDC\n                1.1429 TL\n                T*\n                (sentence. This is the very last sentence of the second paragraph.) Tj\n            EMC % End of marked-content sequence 2\n    ET % End of text object\nendstream\nendobj\n300 0 obj % Structure tree root\n    << /Type /StructTreeRoot\n        /K [ 301 0 R % Two children: a chapter\n            304 0 R % and a paragraph\n            ]\n        /RoleMap << /Chap /Sect % Mapping to standard structure types\n                        /Head1 /H\n                        /Para /P\n                    >>\n        /ClassMap << /Normal 305 0 R >> % Class map containing one attribute class\n        /ParentTree 400 0 R % Number tree for parent elements\n        /ParentTreeNextKey 2 % Next key to use in parent tree\n        /IDTree 403 0 R % Name tree for element identifiers\n    >>\nendobj\n301 0 obj % Structure element for a chapter\n    << /Type /StructElem\n        /S /Chap\n        /ID (Chap1) % Element identifier\n        /T (Chapter 1) % Human-readable title\n        /P 300 0 R % Parent is the structure tree root\n        /K [ 302 0 R % Two children: a section head\n            303 0 R % and a paragraph\n            ]\n    >>\nendobj\n302 0 obj % Structure element for a section head\n    << /Type /StructElem\n        /S /Head1\n        /ID (Sec1.1) % Element identifier\n        /T (Section 1.1) % Human-readable title\n        /P 301 0 R % Parent is the chapter\n        /Pg 101 1 R % Page containing content items\n        /A << /O /Layout % Attribute owned by Layout\n                /SpaceAfter 25\n                /SpaceBefore 0\n                /TextIndent 12.5\n            >>\n        /K 0 % Marked-content sequence 0\n    >>\nendobj\n303 0 obj % Structure element for a paragraph\n    << /Type /StructElem\n        /S /Para\n        /ID (Para1) % Element identifier\n        /P 301 0 R % Parent is the chapter\n        /Pg 101 1 R % Page containing first content item\n        /C /Normal % Class containing this element’s attributes\n        /K [ 1 % Marked-content sequence 1\n                << /Type /MCR % Marked-content reference to 2nd item\n                    /Pg 102 0 R % Page containing second item\n                    /MCID 0 % Marked-content sequence 0\n                >>\n            ]\n    >>\nendobj\n304 0 obj % Structure element for another paragraph\n    << /Type /StructElem\n        /S /Para\n        /ID (Para2) % Element identifier\n        /P 300 0 R % Parent is the structure tree root\n        /Pg 102 0 R % Page containing content items\n        /C /Normal % Class containing this element’s attributes\n        /A << /O /Layout\n                /TextAlign /Justify % Overrides attribute provided by classmap\n            >>\n        /K [1 2] % Marked-content sequences 1 and 2\n    >>\nendobj\n305 0 obj % Attribute class\n    << /O /Layout % Owned by Layout\n        /EndIndent 0\n        /StartIndent 0\n        /WritingMode /LrTb\n        /TextAlign /Start\n    >>\nendobj\n400 0 obj % Parent tree\n    << /Nums [ 0 401 0 R % Parent elements for first page\n                    1 402 0 R % Parent elements for second page\n                ]\n    >>\nendobj\n401 0 obj % Array of parent elements for first page\n    [ 302 0 R % Parent of marked-content sequence 0\n    303 0 R % Parent of marked-content sequence 1\n    ]\nendobj\n402 0 obj % Array of parent elements for second page\n    [ 303 0 R % Parent of marked-content sequence 0\n    304 0 R % Parent of marked-content sequence 1\n    304 0 R % Parent of marked-content sequence 2\n    ]\nendobj\n403 0 obj % ID tree root node\n    << /Kids [404 0 R] >> % Reference to leaf node\nendobj\n404 0 obj % ID tree leaf node\n    << /Limits [ (Chap1) (Sec1.3) ] % Least and greatest keys in tree\n        /Names [ (Chap1) 301 0 R % Mapping from element identifiers\n                    (Sec1.1) 302 0 R % to structure elements\n                    (Sec1.2) 303 0 R\n                    (Sec1.3) 304 0 R\n                    ]\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "10.16",
+    "page": 890,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 10.16, page 890",
+    "content": "/TagSuspect <</TagSuspect /Ordering>>\n    BDC\n        .... % Problem page contents\n    EMC",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "10.17",
+    "page": 908,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 10.17, page 908",
+    "content": "/P << /MCID 0 >> % Marked-content sequence 0 (paragraph)\n    BDC % Begin marked-content sequence\n        BT % Begin text object\n            /T1_0 1 Tf % Set text font and size\n            14 0 0 14 10.000 753.976 Tm % Set text matrix\n            0.0 0.0 0.0 rg % Set nonstroking color to black\n            (Here is some text ) Tj % Show text preceding link\n        ET % End text object\n    EMC % End marked-content sequence\n/Link << /MCID 1 >> % Marked-content sequence 1 (link)\n    BDC % Begin marked-content sequence\n        0.7 w % Set line width\n        [ ] 0 d % Solid dash pattern\n        111.094 751.8587 m % Move to beginning of underline\n        174.486 751.8587 l % Draw underline\n        0.0 0.0 1.0 RG % Set stroking color to blue\n        S % Stroke underline\n        BT % Begin text object\n            14 0 0 14 111.094 753.976 Tm % Set text matrix\n            0.0 0.0 1.0 rg % Set nonstroking color to blue\n            (with a link) Tj % Show text of link\n        ET % End text object\n    EMC % End marked-content sequence\n/P << /MCID 2 >> % Marked-content sequence 2 (paragraph)\n    BDC % Begin marked-content sequence\n        BT % Begin text object\n            14 0 0 14 174.486 753.976 Tm % Set text matrix\n            0.0 0.0 0.0 rg % Set nonstroking color to black\n            ( inside.) Tj % Show text following link\n        ET % End text object\n    EMC % End marked-content sequence",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "10.18",
+    "page": 909,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 10.18, page 909",
+    "content": "501 0 obj % Structure element for paragraph\n    << /Type /StructElem\n        /S /P\n        . . .\n        /K [ 0 % Three children: marked-content sequence 0\n            502 0 R % Link\n            2 % Marked-content sequence 2\n            ]\n    >>\nendobj\n502 0 obj % Structure element for link\n    << /Type /StructElem\n        /S /Link\n        . . .\n        /K [ 1 % Two children: marked-content sequence 1\n            503 0 R % Object reference to link annotation\n            ]\n    >>\nendobj\n503 0 obj % Object reference to link annotation\n    << /Type /OBJR\n        /Obj 600 0 R % Link annotation (not shown)\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "10.19",
+    "page": 939,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 10.19, page 939",
+    "content": "2 0 obj % Page object\n    << /Type /Page\n        /Contents 3 0 R % Content stream\n        …\n    >>\nendobj\n3 0 obj % Page's content stream\n    << /Length … >>\nstream\n    BT\n        (See you later, or as Arnold would say, ) Tj\n        /Span << /Lang (es-MX) >> % Start of marked-content sequence\n            BDC\n                (Hasta la vista.) Tj\n            EMC % End of marked-content sequence\n    ET\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "10.20",
+    "page": 940,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 10.20, page 940",
+    "content": "1 0 obj % Structure element\n    << /Type /StructElem\n        /S /P % Structure type\n        /P … % Parent in structure hierarchy\n        /K << /Type /MCR\n                /Pg 2 0 R % Page containing marked-content sequence\n                /MCID 0 % Marked-content identifier\n            >>\n        /Lang (en-US) % Language specification for this element\n    >>\nendobj\n2 0 obj % Page object\n    << /Type /Page\n        /Contents 3 0 R % Content stream\n        …\n    >>\nendobj\n3 0 obj % Page's content stream\n    << /Length … >>\nstream\n    BT\n        /P << /MCID 0 >> % Start of marked-content sequence\n            BDC\n                (See you later, or as Arnold would say, ) Tj\n                /Span << /Lang (es-MX) >> % Start of nested marked-content sequence\n                    BDC\n                        (Hasta la vista.) Tj\n                    EMC % End of nested marked-content sequence\n            EMC % End of marked-content sequence\n    ET\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "10.21",
+    "page": 941,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 10.21, page 941",
+    "content": "1 0 obj % Structure element\n    << /Type /StructElem\n        /S /P % Structure type\n        /P … % Parent in structure hierarchy\n        /K << /Type /MCR\n                /Pg 2 0 R % Page containing marked-content sequence\n                /MCID 0 % Marked-content identifier\n            >>\n        /Lang (en-US) % Language specification for this element\n    >>\nendobj\n2 0 obj % Page object\n    << /Type /Page\n        /Contents 3 0 R % Content stream\n        …\n    >>\nendobj\n3 0 obj % Page's content stream\n    << /Length … >>\nstream\n    /Span << /Lang (es-MX) >> % Start of marked-content sequence\n        BDC\n            (Hasta la vista, ) Tj\n            /P << /MCID 0 >> % Start of structured marked-content sequence,\n                BDC % to which structure element's language applies\n                    (as Arnold would say. ) Tj\n                EMC % End of structured marked-content sequence\n        EMC % End of marked-content sequence\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "10.22",
+    "page": 942,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 10.22, page 942",
+    "content": "[ (en-US) (My vacation) (fr) (mes vacances) ( ) (default text) ]",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "10.23",
+    "page": 943,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 10.23, page 943",
+    "content": "/Span << /Lang (en-us) /Alt (six-point star) >> BDC (✡) Tj EMC",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "10.24",
+    "page": 944,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 10.24, page 944",
+    "content": "(Dru) Tj\n/Span\n    <</Actual Text (c) >>\n    BDC\n        (k-) Tj\n    EMC\n(ker) '",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "10.25",
+    "page": 945,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 10.25, page 945",
+    "content": "BT\n    /Span << /E (Doctor) >>\n        BDC\n            (Dr. ) Tj\n        EMC\n    (Healwell works at 123 Industrial ) Tj\n    /Span << /E (Drive) >>\n        BDC\n            (Dr.) Tj\n        EMC\nET",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "10.26",
+    "page": 973,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 10.26, page 973",
+    "content": "<< /Type /OutputIntent % Output intent dictionary\n    /S /GTS_PDFX\n    /OutputCondition (CGATS TR 001 (SWOP ))\n    /OutputConditionIdentifier (CGATS TR 001)\n    /RegistryName (http://www.color.org)\n    /DestOutputProfile 100 0 R\n>>\n100 0 obj % ICC profile stream\n    << /N 4\n        /Length 1605\n        /Filter /ASCIIHexDecode\n    >>\nstream\n00 00 02 0C 61 70 … >\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "10.27",
+    "page": 973,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example 10.27, page 973",
+    "content": "<< /Type /OutputIntent % Output intent dictionary\n    /S /GTS_PDFX\n    /OutputCondition (Coated)\n    /OutputConditionIdentifier (Custom)\n    /Info (Coated 150lpi)\n    /DestOutputProfile 100 0 R\n>>\n100 0 obj % ICC profile stream\n    << /N 4\n        /Length 1605\n        /Filter /ASCIIHexDecode\n    >>\nstream\n00 00 02 0C 61 70 … >\nendstream\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "F.1",
+    "page": 1025,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example F.1, page 1025",
+    "content": "Part 1: Header\n%PDF-1.1 % …Binary characters…\nPart 2: Linearization parameter dictionary\n43 0 obj\n    << /Linearized 1.0 % Version\n        /L 54567 % File length\n        /H [475 598] % Primary hint stream offset and length (part 5)\n        /O 45 % Object number of first page’s page object (part 6)\n        /E 5437 % Offset of end of first page\n        /N 11 % Number of pages in document\n        /T 52786 % Offset of first entry in main cross-reference table (part 11)\n    >>\nendobj\nPart 3: First-page cross-reference table and trailer\nxref\n43 14\n0000000052 00000 n\n0000000392 00000 n\n0000001073 00000 n\n…Cross-reference entries for remaining objects in the first page…\n0000000475 00000 n\ntrailer\n    << /Size 57 % Total number of cross-reference table entries in document\n        /Prev 52776 % Offset of main cross-reference table (part 11)\n        /Root 44 0 R % Indirect reference to catalog (part 4)\n        …Any other entries, such as Info and Encrypt… % (part 9)\n    >>\nstartxref\n0 % Dummy cross-reference table offset\n%%EOF\nPart 4: Document catalog and other required document-level objects\n44 0 obj\n    << /Type /Catalog\n        /Pages 42 0 R\n    >>\nendobj\n…Other objects…\nPart 5: Primary hint stream (may precede or follow part 6)\n56 0 obj\n    << /Length 457\n        …Possibly other stream attributes, such as Filter…\n        /S 221 % Position of shared object hint table\n        …Possibly entries for other hint tables…\n    >>\nstream\n    …Page offset hint table…\n    …Shared object hint table…\n    …Possibly other hint tables…\nendstream\nendobj\nPart 6: First-page section (may precede or follow part 5)\n45 0 obj\n    << /Type /Page\n        …\n    >>\nendobj\n…Outline hierarchy (if the PageMode value in the document catalog is UseOutlines)…\n…Objects for first page, including both shared and nonshared objects…\nPart 7: Remaining pages\n1 0 obj\n    << /Type /Page\n        …Other page attributes, such as MediaBox, Parent, and Contents…\n    >>\nendobj\n…Nonshared objects for this page…\n…Each successive page followed by its nonshared objects…\n…Last page followed by its nonshared objects…\nPart 8: Shared objects for all pages except the first\n…Shared objects…\nPart 9: Objects not associated with pages, if any\n…Other objects…\nPart 10: Overflow hint stream (optional)\n…Overflow hint stream…\nPart 11: Main cross-reference table and trailer\nxref\n0 43\n0000000000 65535 f\n…Cross-reference entries for all except first page’s objects…\ntrailer\n    << /Size 43 >> % Trailer need not contain other entries; in particular,\nstartxref % it should not have a Prev entry\n257 % Offset of first-page cross-reference table (part 3)\n%%EOF",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "G.1",
+    "page": 1058,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example G.1, page 1058",
+    "content": "%PDF-1.4\n1 0 obj\n    << /Type /Catalog\n        /Outlines 2 0 R\n        /Pages 3 0 R\n    >>\nendobj\n2 0 obj\n    << /Type Outlines\n        /Count 0\n    >>\nendobj\n3 0 obj\n    << /Type /Pages\n        /Kids [4 0 R]\n        /Count 1\n    >>\nendobj\n4 0 obj\n    << /Type /Page\n        /Parent 3 0 R\n        /MediaBox [0 0 612 792]\n        /Contents 5 0 R\n        /Resources << /ProcSet 6 0 R >>\n    >>\nendobj\n5 0 obj\n    << /Length 35 >>\nstream\n…Page-marking operators…\nendstream\nendobj\n6 0 obj\n    [/PDF]\nendobj\nxref\n0 7\n0000000000 65535 f\n0000000009 00000 n\n0000000074 00000 n\n0000000120 00000 n\n0000000179 00000 n\n0000000300 00000 n\n0000000384 00000 n\ntrailer\n    << /Size 7\n        /Root 1 0 R\n    >>\nstartxref\n408\n%%EOF",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "G.2",
+    "page": 1060,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example G.2, page 1060",
+    "content": "%PDF-1.4\n1 0 obj\n    << /Type /Catalog\n        /Outlines 2 0 R\n        /Pages 3 0 R\n    >>\nendobj\n2 0 obj\n    << /Type /Outlines\n        /Count 0\n    >>\nendobj\n3 0 obj\n    << /Type /Pages\n        /Kids [4 0 R]\n        /Count 1\n    >>\nendobj\n4 0 obj\n    << /Type /Page\n        /Parent 3 0 R\n        /MediaBox [0 0 612 792]\n        /Contents 5 0 R\n        /Resources << /ProcSet 6 0 R\n                            /Font << /F1 7 0 R >>\n                        >>\n    >>\nendobj\n5 0 obj\n    << /Length 73 >>\nstream\n    BT\n        /F1 24 Tf\n        100 100 Td\n        (Hello World) Tj\n    ET\nendstream\nendobj\n6 0 obj\n    [/PDF /Text]\nendobj\n7 0 obj\n    << /Type /Font\n        /Subtype /Type1\n        /Name /F1\n        /BaseFont /Helvetica\n        /Encoding /MacRomanEncoding\n    >>\nendobj\nxref\n0 8\n0000000000 65535 f\n0000000009 00000 n\n0000000074 00000 n\n0000000120 00000 n\n0000000179 00000 n\n0000000364 00000 n\n0000000466 00000 n\n0000000496 00000 n\ntrailer\n    << /Size 8\n        /Root 1 0 R\n    >>\nstartxref\n625\n%%EOF",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "G.3",
+    "page": 1063,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example G.3, page 1063",
+    "content": "%PDF-1.4\n1 0 obj\n    << /Type /Catalog\n        /Outlines 2 0 R\n        /Pages 3 0 R\n    >>\nendobj\n2 0 obj\n    << /Type /Outlines\n        /Count 0\n    >>\nendobj\n3 0 obj\n    << /Type /Pages\n        /Kids [4 0 R]\n        /Count 1\n    >>\nendobj\n4 0 obj\n    << /Type /Page\n        /Parent 3 0 R\n        /MediaBox [0 0 612 792]\n        /Contents 5 0 R\n        /Resources << /ProcSet 6 0 R >>\n    >>\nendobj\n5 0 obj\n    << /Length 883 >>\nstream\n    % Draw a black line segment, using the default line width.\n    150 250 m\n    150 350 l\n    S\n    % Draw a thicker, dashed line segment.\n    4 w % Set line width to 4 points\n    [4 6] 0 d % Set dash pattern to 4 units on, 6 units off\n    150 250 m\n    400 250 l\n    S\n    [] 0 d % Reset dash pattern to a solid line\n    1 w % Reset line width to 1 unit\n    % Draw a rectangle with a 1-unit red border, filled with light blue.\n    1.0 0.0 0.0 RG % Red for stroke color\n    0.5 0.75 1.0 rg % Light blue for fill color\n    200 300 50 75 re\n    B\n    % Draw a curve filled with gray and with a colored border.\n    0.5 0.1 0.2 RG\n    0.7 g\n    300 300 m\n    300 400 400 400 400 300 c\n    b\nendstream\nendobj\n6 0 obj\n    [/PDF]\nendobj\nxref\n0 7\n0000000000 65535 f\n0000000009 00000 n\n0000000074 00000 n\n0000000120 00000 n\n0000000179 00000 n\n0000000300 00000 n\n0000001532 00000 n\ntrailer\n    << /Size 7\n        /Root 1 0 R\n    >>\nstartxref\n1556\n%%EOF",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "G.4",
+    "page": 1066,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example G.4, page 1066",
+    "content": "337 0 obj\n    << /Type /Pages\n        /Kids [ 335 0 R\n                    336 0 R\n                ]\n        /Count 62\n    >>\nendobj\n335 0 obj\n    << /Type /Pages\n        /Parent 337 0 R\n        /Kids [ 4 0 R\n                    43 0 R\n                    77 0 R\n                    108 0 R\n                    139 0 R\n                    170 0 R\n                ]\n        /Count 36\n    >>\nendobj\n336 0 obj\n    << /Type /Pages\n        /Parent 337 0 R\n        /Kids [ 201 0 R\n                    232 0 R\n                    263 0 R\n                    294 0 R\n                    325 0 R\n                ]\n        /Count 26\n    >>\nendobj\n4 0 obj\n    << /Type /Pages\n        /Parent 335 0 R\n        /Kids [ 3 0 R\n                    16 0 R\n                    21 0 R\n                    26 0 R\n                    31 0 R\n                    37 0 R\n                ]\n        /Count 6\n    >>\nendobj\n43 0 obj\n    << /Type /Pages\n        /Parent 335 0 R\n        /Kids [ 42 0 R\n                    48 0 R\n                    53 0 R\n                    58 0 R\n                    63 0 R\n                    70 0 R\n                ]\n        /Count 6\n    >>\nendobj\n77 0 obj\n    << /Type /Pages\n        /Parent 335 0 R\n        /Kids [ 76 0 R\n                    82 0 R\n                    87 0 R\n                    92 0 R\n                    97 0 R\n                    102 0 R\n                ]\n        /Count 6\n    >>\nendobj\n108 0 obj\n    << /Type /Pages\n        /Parent 335 0 R\n        /Kids [ 107 0 R\n                    113 0 R\n                    118 0 R\n                    123 0 R\n                    128 0 R\n                    133 0 R\n                ]\n        /Count 6\n    >>\nendobj\n139 0 obj\n    << /Type /Pages\n        /Parent 335 0 R\n        /Kids [ 138 0 R\n                    144 0 R\n                    149 0 R\n                    154 0 R\n                    159 0 R\n                    164 0 R\n                ]\n        /Count 6\n    >>\nendobj\n170 0 obj\n    << /Type /Pages\n        /Parent 335 0 R\n        /Kids [ 169 0 R\n                    175 0 R\n                    180 0 R\n                    185 0 R\n                    190 0 R\n                    195 0 R\n                ]\n        /Count 6\n    >>\nendobj\n201 0 obj\n    << /Type /Pages\n        /Parent 336 0 R\n        /Kids [ 200 0 R\n                    206 0 R\n                    211 0 R\n                    216 0 R\n                    221 0 R\n                    226 0 R\n                ]\n        /Count 6\n    >>\nendobj\n232 0 obj\n    << /Type /Pages\n        /Parent 336 0 R\n        /Kids [ 231 0 R\n                    237 0 R\n                    242 0 R\n                    247 0 R\n                    252 0 R\n                    257 0 R\n                ]\n        /Count 6\n    >>\nendobj\n263 0 obj\n    << /Type /Pages\n        /Parent 336 0 R\n        /Kids [ 262 0 R\n                    268 0 R\n                    273 0 R\n                    278 0 R\n                    283 0 R\n                    288 0 R\n                ]\n        /Count 6\n    >>\nendobj\n294 0 obj\n    << /Type /Pages\n        /Parent 336 0 R\n        /Kids [ 293 0 R\n                    299 0 R\n                    304 0 R\n                    309 0 R\n                    314 0 R\n                    319 0 R\n                ]\n        /Count 6\n    >>\nendobj\n325 0 obj\n    << /Type /Pages\n        /Parent 336 0 R\n        /Kids [ 324 0 R\n                    330 0 R\n                ]\n        /Count 2\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "G.5",
+    "page": 1071,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example G.5, page 1071",
+    "content": "21 0 obj\n    << /Type /Outlines\n        /First 22 0 R\n        /Last 29 0 R\n        /Count 6\n    >>\nendobj\n22 0 obj\n    << /Title (Document)\n        /Parent 21 0 R\n        /Next 29 0 R\n        /First 25 0 R\n        /Last 28 0 R\n        /Count 4\n        /Dest [3 0 R /XYZ 0 792 0]\n    >>\nendobj\n25 0 obj\n    << /Title (Section 1)\n        /Parent 22 0 R\n        /Next 26 0 R\n        /Dest [3 0 R /XYZ null 701 null]\n    >>\nendobj\n26 0 obj\n    << /Title (Section 2)\n        /Parent 22 0 R\n        /Prev 25 0 R\n        /Next 28 0 R\n        /First 27 0 R\n        /Last 27 0 R\n        /Count 1\n        /Dest [3 0 R /XYZ null 680 null]\n    >>\nendobj\n27 0 obj\n    << /Title (Subsection 1)\n        /Parent 26 0 R\n        /Dest [3 0 R /XYZ null 670 null]\n    >>\nendobj\n28 0 obj\n    << /Title (Section 3)\n        /Parent 22 0 R\n        /Prev 26 0 R\n        /Dest [7 0 R /XYZ null 500 null]\n    >>\nendobj\n29 0 obj\n    << /Title (Summary)\n        /Parent 21 0 R\n        /Prev 22 0 R\n        /Dest [8 0 R /XYZ null 199 null]\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "G.6",
+    "page": 1073,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example G.6, page 1073",
+    "content": "21 0 obj\n    << /Type /Outlines\n        /First 22 0 R\n        /Last 29 0 R\n        /Count 5\n    >>\nendobj\n22 0 obj\n    << /Title (Document)\n        /Parent 21 0 R\n        /Next 29 0 R\n        /First 25 0 R\n        /Last 28 0 R\n        /Count 3\n        /Dest [3 0 R /XYZ 0 792 0]\n    >>\nendobj\n25 0 obj\n    << /Title (Section 1)\n        /Parent 22 0 R\n        /Next 26 0 R\n        /Dest [3 0 R /XYZ null 701 null]\n    >>\nendobj\n26 0 obj\n    << /Title (Section 2)\n        /Parent 22 0 R\n        /Prev 25 0 R\n        /Next 28 0 R\n        /First 27 0 R\n        /Last 27 0 R\n        /Count -1\n        /Dest [3 0 R /XYZ null 680 null]\n    >>\nendobj\n27 0 obj\n    << /Title (Subsection 1)\n        /Parent 26 0 R\n        /Dest [3 0 R /XYZ null 670 null]\n    >>\nendobj\n28 0 obj\n    << /Title (Section 3)\n        /Parent 22 0 R\n        /Prev 26 0 R\n        /Dest [7 0 R /XYZ null 500 null]\n    >>\nendobj\n29 0 obj\n    << /Title (Summary)\n        /Parent 21 0 R\n        /Prev 22 0 R\n        /Dest [8 0 R /XYZ null 199 null]\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "G.7",
+    "page": 1076,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example G.7, page 1076",
+    "content": "4 0 obj\n    << /Type /Page\n        /Parent 3 0 R\n        /MediaBox [0 0 612 792]\n        /Contents 5 0 R\n        /Resources << /ProcSet 6 0 R >>\n        /Annots 7 0 R\n    >>\nendobj\n7 0 obj\n    [ 8 0 R\n    9 0 R\n    10 0 R\n    11 0 R\n    ]\nendobj\n8 0 obj\n    << /Type /Annot\n        /Subtype /Text\n        /Rect [44 616 162 735]\n        /Contents (Text #1)\n        /Open true\n    >>\nendobj\n9 0 obj\n    << /Type /Annot\n        /Subtype /Text\n        /Rect [224 668 457 735]\n        /Contents (Text #2)\n        /Open false\n    >>\nendobj\n10 0 obj\n    << /Type /Annot\n        /Subtype /Text\n        /Rect [239 393 328 622]\n        /Contents (Text #3)\n        /Open true\n    >>\nendobj\n11 0 obj\n    << /Type /Annot\n        /Subtype /Text\n        /Rect [34 398 225 575]\n        /Contents (Text #4)\n        /Open false\n    >>\nendobj\nxref\n0 1\n0000000000 65535 f\n4 1\n0000000632 00000 n\n7 5\n0000000810 00000 n\n0000000883 00000 n\n0000001024 00000 n\n0000001167 00000 n\n0000001309 00000 n\ntrailer\n    << /Size 12\n        /Root 1 0 R\n        /Prev 408\n    >>\nstartxref\n1452\n%%EOF",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "G.8",
+    "page": 1078,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example G.8, page 1078",
+    "content": "10 0 obj\n    << /Type /Annot\n        /Subtype /Text\n        /Rect [239 393 328 622]\n        /Contents (Modified Text #3)\n        /Open true\n    >>\nendobj\nxref\n0 1\n0000000000 65535 f\n10 1\n0000001703 00000 n\ntrailer\n    << /Size 12\n        /Root 1 0 R\n        /Prev 1452\n    >>\nstartxref\n1855\n%%EOF",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "G.9",
+    "page": 1079,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example G.9, page 1079",
+    "content": "7 0 obj\n    [ 10 0 R\n    11 0 R\n    ]\nendobj\nxref\n0 1\n0000000008 65535 f\n7 3\n0000001978 00000 n\n0000000009 00001 f\n0000000000 00001 f\ntrailer\n    << /Size 12\n        /Root 1 0 R\n        /Prev 1855\n    >>\nstartxref\n2027\n%%EOF",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "G.10",
+    "page": 1080,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example G.10, page 1080",
+    "content": "7 0 obj\n    [ 10 0 R\n    11 0 R\n    8 1 R\n    9 1 R\n    12 0 R\n    ]\nendobj\n8 1 obj\n    << /Type /Annot\n        /Subtype /Text\n        /Rect [58 657 172 742]\n        /Contents (New Text #1)\n        /Open true\n    >>\nendobj\n9 1 obj\n    << /Type /Annot\n        /Subtype /Text\n        /Rect [389 459 570 537]\n        /Contents (New Text #2)\n        /Open false\n    >>\nendobj\n12 0 obj\n    << /Type /Annot\n        /Subtype /Text\n        /Rect [44 253 473 337]\n        /Contents (New Text #3\\203a longer text annotation which we will continue \\\nonto a second line)\n        /Open true\n    >>\nendobj\nxref\n0 1\n0000000000 65535 f\n7 3\n0000002216 00000 n\n0000002302 00001 n\n0000002447 00001 n\n12 1\n0000002594 00000 n\ntrailer\n    << /Size 13\n        /Root 1 0 R\n        /Prev 2027\n    >>\nstartxref\n2814\n%%EOF",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "G.11",
+    "page": 1084,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example G.11, page 1084",
+    "content": "4 0 obj\n    << /Type /Page\n        /Contents 5 0 R\n    >>\n5 0 obj\n    << /Length 6 0 R >>\n    stream\n        /P <</MCID 1>> BDC\n            BT T* (TABLE OF CONTENTS) Tj ET EMC\n        /Lbl <</MCID 11>> BDC\n            BT T* (1. ) Tj ET EMC\n        /Reference <</MCID 12>> BDC\n            BT (Chapter One ) Tj ET EMC\n        /NonStruct <</MCID 13>> BDC\n            BT (. . . . . . . . . ) Tj ET EMC\n        /Reference <</MCID 14>> /BDC\n            BT (3 ) Tj ET EMC\n        /Lbl <</MCID 21>> BDC\n            BT T* (1.1 ) Tj ET EMC\n        /Reference <</MCID 22>> BDC\n            BT (Section A ) Tj ET EMC\n        /NonStruct <</MCID 23>> BDC\n            BT (. . . . . . . . ) Tj ET EMC\n        /Reference <</MCID 24>> /BDC\n            BT (4 ) Tj ET EMC\n        /Lbl <</MCID 31>> BDC\n            BT T* (1.2 ) Tj ET EMC\n        /Reference <</MCID 32>> BDC\n            BT (Section B ) Tj ET EMC\n        /NonStruct <</MCID 33>> BDC\n            BT (. . . . . . . . ) Tj ET EMC\n        /Reference <</MCID 34>> /BDC\n            BT (5 ) Tj ET EMC\n        /Lbl <</MCID 41>> BDC\n            BT T* (2. ) Tj ET EMC\n        /Reference <</MCID 42>> BDC\n            BT (Chapter Two ) Tj ET EMC\n        /NonStruct <</MCID 43>> BDC\n            BT (. . . . . . . . . ) Tj ET EMC\n        /Reference <</MCID 44>> /BDC\n            BT (6 ) Tj ET EMC\n        /Lbl <</MCID 51>> BDC\n            BT T* (3. ) Tj ET EMC\n        /Reference <</MCID 52>> BDC\n            BT (Chapter Three ) Tj ET EMC\n        /NonStruct <</MCID 53>> BDC\n            BT (. . . . . . . . ) Tj ET EMC\n        /Reference <</MCID 54>> /BDC\n            BT (7 ) Tj ET EMC\n        /Lbl <</MCID 61>> BDC\n            BT T* (3.1 ) Tj ET EM\n        /Reference <</MCID 62>> BDC\n            BT (Section A ) Tj ET EM\n        /NonStruct <</MCID 63>> BDC\n            BT (. . . . . . . . ) Tj ET EM\n        /Reference <</MCID 64>> /BDC\n            BT (8 ) Tj ET EMC\n    endstream\nendobj\n101 0 obj\n    << /Type /StructElem\n        /S /P\n        /P 201 0 R\n        /Pg 4 0 R\n        /K 1\n    >>\nendobj\n111 0 obj\n    << /Type /StructElem\n        /S /Lbl\n        /P 211 0 R\n        /Pg 4 0 R\n        /K 11\n    >>\nendobj\n112 0 obj\n    << /Type /StructElem\n        /S /Reference\n        /P 211 0 R\n        /Pg 4 0 R\n        /K 12\n    >>\nendobj\n113 0 obj\n    << /Type /StructElem\n        /S /NonStruct\n        /P 211 0 R\n        /Pg 4 0 R\n        /K 13\n    >>\nendobj\n114 0 obj\n    << /Type /StructElem\n        /S /Reference\n        /P 211 0 R\n        /Pg 4 0 R\n        /K 14\n    >>\nendobj\nobjects 121-124, 131-134, 141-144, 151-154 and 161-164 referencing MCIDs 21-24, 31-34, 41-\n44, 51-54, and 61-64 are omitted in the interest of space.\n201 0 obj\n    << /Type /StructElem\n        /S /Caption\n        /P 400 0 R\n        /K [101 0 R]\n    >>\nendobj\n211 0 obj\n    << /Type /StructElem\n        /S /TOCI\n        /P 400 0 R\n        /K [111 0 R 112 0 R 113 0 R 114 0 R]\n    >>\nendobj\n212 0 obj\n    << /Type /StructElem\n        /S /TOCI\n        /P 301 0 R\n        /K [121 0 R 122 0 R 123 0 R 124 0 R]\n    >>\nendobj\n213 0 obj\n    << /Type /StructElem\n        /S /TOCI\n        /P 301 0 R\n        /K [131 0 R 132 0 R 133 0 R 134 0 R]\n    >>\nendobj\n214 0 obj\n    << /Type /StructElem\n        /S /TOCI\n        /P 400 0 R\n        /K [141 0 R 142 0 R 143 0 R 144 0 R]\n    >>\nendobj\n215 0 obj\n    << /Type /StructElem\n        /S /TOCI\n        /P 400 0 R\n        /K [151 0 R 152 0 R 153 0 R 154 0 R]\n    >>\nendobj\n216 0 obj\n    << /Type /StructElem\n        /S /TOCI\n        /P 302 0 R\n        /K [161 0 R 162 0 R 163 0 R 164 0 R]\n    >>\nendobj\n301 0 obj\n    << /Type /StructElem\n        /S /TOC\n        /P 400 0 R\n        /K [212 0 R 213 0 R]\n    >>\nendobj\n302 0 obj\n    << /Type /StructElem\n        /S /TOC\n        /P 400 0 R\n        /K [216 0 R]\n    >>\nendobj\n400 0 obj\n    << /Type /StructElem\n        /S TOC\n        /K [201 0 R 211 0 R 301 0 R 214 0 R 215 0 R 302 0 R]\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "G.12",
+    "page": 1090,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example G.12, page 1090",
+    "content": "4 0 obj\n    << /Type /Page\n        /Contents 5 0 R\n    >>\nendobj\n5 0 obj\n    << /Length 6 0 R >>\n    stream\n        /P <</MCID 1>> BDC\n            BT T* (INDEX) Tj ET EMC\n        /Lbl <</MCID 11>> BDC\n            BT T* (1. ) Tj ET EMC\n        /LBody <</MCID 12>> /BDC\n            BT (Cats ) Tj ET EMC\n        /Lbl <</MCID 21>> BDC\n            BT T* (a. ) Tj ET EMC\n        /LBody <</MCID 22>> /BDC\n            BT (Lions ) Tj ET EMC\n        /Lbl <</MCID 31>> BDC\n            BT T* (b. ) Tj ET EMC\n        /LBody <</MCID 32>> /BDC\n            BT (Tigers ) Tj ET EMC\n        /Lbl <</MCID 41>> BDC\n            BT T* (2. ) Tj ET EMC\n        /LBody <</MCID 42>> /BDC\n            BT (Bears ) Tj ET EMC\n        /Lbl <</MCID 51>> BDC\n            BT T* (3. ) Tj ET EM\n        /LBody <</MCID 52>> /BDC\n            BT (Canines ) Tj ET EMC\n        /Lbl <</MCID 61>> BDC\n            BT T* (a. ) Tj ET EM\n        /LBody <</MCID 62>> /BDC\n            BT (Wolves ) Tj ET EMC\n    endstream\nendobj\n101 0 obj\n    << /Type /StructElem\n        /S /P\n        /P 201 0 R\n        /Pg 4 0 R\n        /K 1\n    >>\nendobj\n111 0 obj\n    << /Type /StructElem\n        /S /Lbl\n        /P 211 0 R\n        /Pg 4 0 R\n        /K 11\n    >>\nendobj\n112 0 obj\n    << /Type /StructElem\n        /S /LBody\n        /P 211 0 R\n        /Pg 4 0 R\n        /K 12\n    >>\nendobj\nobjects 121-122, 131-132, 141-142, 151-152 and 161-162 referencing MCIDs 21-22, 31-32, 41-\n42, 51-52, and 61-62 are omitted in the interest of space.\n201 0 obj\n    << /Type /StructElem\n        /S /Caption\n        /P 400 0 R\n        /K [101 0 R]\n    >>\nendobj\n211 0 obj\n    << /Type /StructElem\n        /S /LI\n        /P 400 0 R\n        /K [111 0 R 112 0 R]\n    >>\nendobj\n212 0 obj\n    << /Type /StructElem\n        /S /LI\n        /P 301 0 R\n        /K [121 0 R 122 0 R]\n    >>\nendobj\n213 0 obj\n    << /Type /StructElem\n        /S /LI\n        /P 301 0 R\n        /K [131 0 R 132 0 R]\n    >>\nendobj\n214 0 obj\n    << /Type /StructElem\n        /S /LI\n        /P 400 0 R\n        /K [141 0 R 142 0 R]\n    >>\nendobj\n215 0 obj\n    << /Type /StructElem\n        /S /LI\n        /P 400 0 R\n        /K [151 0 R 152 0 R]\n    >>\nendobj\n216 0 obj\n    << /Type /StructElem\n        /S /LI\n        /P 302 0 R\n        /K [161 0 R 162 0 R]\n    >>\nendobj\n301 0 obj\n    << /Type /StructElem\n        /S /L\n        /P 400 0 R\n        /K [212 0 R 213 0 R]\n    >>\n302 0 obj\n    << /Type /StructElem\n        /S /L\n        /P 400 0 R\n        /K [216 0 R]\n    >>\nendobj\n400 0 obj\n    << /Type /StructElem\n        /S /L\n        /K [201 0 R 211 0 R 301 0 R 214 0 R 215 0 R 302 0 R]\n    >>\nendobj",
+    "type": "pdf_syntax"
+  },
+  {
+    "example": "H.1",
+    "page": 1106,
+    "source": "PDF Reference, sixth edition, version 1.7 (Adobe, November 2006), Example H.1, page 1106",
+    "content": "13 0 obj <<\n    /Type /XObject\n    /Subtype /Image\n    /F 12 0 R\n    …\n>> stream endstream endobj\n12 0 obj <<\n    /Type /Filespec\n    /EF <</F 10 0 R>>\n>> endobj\n10 0 obj <<\n    /Type /EmbeddedFile\n    …\n>> stream … endstream endobj",
+    "type": "pdf_syntax"
+  }
+]

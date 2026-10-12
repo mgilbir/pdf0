@@ -42,9 +42,8 @@ import (
 // IsCheckerFinding reports whether a finding describes a problem in the checker
 // rather than a non-conformance of the document. Two rule identifiers are
 // reserved for this: "internal" (a check panicked and was recovered) and
-// "limit" (a resource guard tripped, so a check could not be completed). A
-// caller that wants "is this file conformant?" should treat a checker finding
-// as "unknown", not as a failure:
+// "limit" (a check could not be completed). A caller that wants "is this file
+// conformant?" should treat a checker finding as "unknown", never as a failure:
 //
 //	var real []pdf0.Violation
 //	for _, e := range pdf0.ValidatePDFA(doc, pdfa.PDFA2b) {
@@ -53,18 +52,55 @@ import (
 //		}
 //	}
 //
-// Neither kind fires on any file in the veraPDF corpus; both mean the input is
-// adversarial or the checker has a bug.
+// An "internal" finding means pdf0 has a bug. A "limit" finding is not, on its
+// own, a sign of a hostile file: its message names the guard that stopped the
+// check, and the guards are of two kinds.
+//
+//   - Resource budgets — the work meter, size and depth caps, the content and
+//     object-stream budgets. Under the defaults, one trips on adversarial or
+//     unusually large input; it also trips whenever the caller lowered the bound
+//     (WithMaxWork and the other With* options), and the message then says the
+//     bound was configured by the caller.
+//   - Coverage gaps, which ordinary documents and callers produce. A document
+//     built or edited in memory and validated before it was written has no
+//     file for the byte-level rules to read ("no-source-file"); one that was
+//     not decrypted is ciphertext ("not-decrypted"); a font using a predefined
+//     CJK CMap has no code-to-CID data in this module ("predefined-cmap"), as
+//     one file of the veraPDF Isartor suite does; a stream may use a filter
+//     pdf0 does not implement ("unsupported-filter"); and a run whose context
+//     ended reports itself here too ("context-canceled").
+//
+// docs/limits.md describes each guard.
 func IsCheckerFinding(v Violation) bool { return finding.IsCheckerFinding(v) }
 
 // Guard identifiers. These are stable strings: they appear in the message of a
 // "limit" finding, so a caller can key on the specific guard. They are named
 // after the constant that bounds the work, not after the rule that was skipped
 // — one guard can cost several rules.
-// Each is annotated with the limits field that bounds it and the With* option
-// that configures it, because every guard that can report a trip is also one a
-// caller can move: a trip on a lowered bound is the caller's own configuration
-// answering back, and the message says so (see core.LimitBound).
+//
+// Every guard name is a core.Guard* constant, declared in internal/core next to
+// the guard that raises it, so that every package that reports one and every
+// test that asserts on one names the same constant. They are, by kind:
+//
+//   - resource budgets a caller can move: core.GuardWork ("work"),
+//     GuardContentStream, GuardContentTotal, GuardDecodedStream, GuardObjStmTotal,
+//     GuardCmapWork, GuardGridFills, GuardImagePixels, GuardICCProfile,
+//     GuardXMPPacket;
+//   - fixed bounds with no knob: GuardWalkDepth, GuardGraphNesting
+//     ("graph-nesting", direct objects nested past the reachability walk's
+//     bound), GuardXMPDepth, GuardCMapSize, GuardContentState;
+//   - GuardEmbeddedPDFA: an embedded PDF nested too deep, past the shared
+//     embedded-file budget, or whose own validation did not complete;
+//   - coverage gaps, not resource guards: GuardNoSourceFile ("no-source-file"),
+//     GuardLocked, GuardPredefinedCMap, GuardEmbeddedCMap,
+//     GuardUnsupportedFilter, GuardCanceled;
+//   - GuardReportOverflow: the recorder saying it dropped distinct trips.
+//
+// The four aliases below are the ones this package raises by name. Each is
+// annotated with the limits field that bounds it and the With* option that
+// configures it, because every guard that can report a trip on a budget is also
+// one a caller can move: a trip on a lowered bound is the caller's own
+// configuration answering back, and the message says so (see core.LimitBound).
 const (
 	limitCmapWork      = core.GuardCmapWork      // Limits.CmapWork, WithMaxCmapWork — internal/font
 	limitContentStream = core.GuardContentStream // Limits.ContentStreamBytes, WithMaxContentStreamBytes — pdfa

@@ -72,6 +72,8 @@ var notGoNames = map[string]string{
 	"anyExtendedKeyUsage": "RFC 5280 extended key usage",
 	"nextUpdate":          "RFC 5280 CRL field / RFC 6960 OCSP field",
 	"ETSI.CAdES.detached": "a PDF signature /SubFilter value",
+	// An environment variable only a shell script reads (testdata/cc/sweep.sh).
+	"CORPUSPROBE": "environment variable of testdata/cc/sweep.sh",
 	// Glyph-name conventions (Adobe Glyph List specification).
 	"uniXXXX": "AGL glyph-name form",
 	"uXXXX":   "AGL glyph-name form",

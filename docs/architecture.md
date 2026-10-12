@@ -12,13 +12,17 @@ Each subsystem built on that core has its own map:
 | The validator family (PDF/A, PDF/UA, PDF/X, PDF/VT, PDF/R, DPart, Factur-X) | [validators.md](validators.md) |
 | Inside the PDF/A rule engine | [pdfa.md](pdfa.md) |
 | PDF/UA accessibility validation | [pdfua.md](pdfua.md) |
-| Fonts and font programs | [fonts.md](fonts.md) |
+| Setting text with a font | [text.md](text.md) |
+| What the font writer puts in a file | [font-embedding.md](font-embedding.md) |
+| Font validation and font programs | [fonts.md](fonts.md) |
 | XMP metadata | [xmp.md](xmp.md) |
 | Encryption (standard security handler) | [encryption.md](encryption.md) |
 | Signing, verification, PAdES, timestamps, revocation | [signing.md](signing.md) |
 | Image extraction and the codec stack | [images.md](images.md) |
 | `cmd/pdf0`, the command-line dev aid | [cli.md](cli.md) |
 | Test data, oracles, fuzzing and CI | [testing.md](testing.md) |
+| Reading untrusted input: limits, deadlines, `limit` findings | [untrusted-input.md](untrusted-input.md) |
+| Every resource guard, and how a trip is reported | [limits.md](limits.md) |
 | Symptom-first troubleshooting | [troubleshooting.md](troubleshooting.md) |
 | Decisions that keep coming up | [adr/](adr/README.md) |
 
@@ -95,6 +99,34 @@ on pkg.go.dev as API nobody can call (it was, about thirty times over: audit
 installs them in `internal/bridge` from an `init` function. The root package
 resolves each one into a typed variable of its own when it is initialised
 (`bridge.go`), and so does `pdfvt` for the PDF/X and DPart passes it builds on.
+The dependencies all point down, and `Document` sits on top
+([ADR 0011](adr/0011-view-and-bridge.md)):
+
+```mermaid
+flowchart TB
+    CALLER(["a caller"]) --> ROOT
+    subgraph public["public packages"]
+        ROOT["pdf0, the root package<br/>Document, Read, Write, ValidatePDFA, ..."]
+        SUB["pdfa, pdfua, pdfx, pdfr, dpart,<br/>facturx, sign, images<br/>rules over a core.View, unexported"]
+        VT["pdfvt<br/>built on the PDF/X and DPart passes"]
+        MODEL["object, syntax<br/>values, and bytes to values"]
+    end
+    subgraph internals["internal packages"]
+        BRIDGE["internal/bridge<br/>one Entry per unexported entry point"]
+        CORE["internal/core<br/>core.View, core.Run, limits,<br/>filters, content scanning"]
+    end
+    SUB -->|"init: Install"| BRIDGE
+    VT -->|"init: Install"| BRIDGE
+    VT -->|"init: Resolve the PDF/X and DPart passes"| BRIDGE
+    ROOT -->|"init: Resolve into typed variables"| BRIDGE
+    ROOT -->|"Document.view()"| CORE
+    SUB --> CORE
+    VT --> CORE
+    ROOT --> SUB
+    ROOT --> VT
+    CORE --> MODEL
+    ROOT --> MODEL
+```
 
 The entries are typed `any` inside the bridge, because the signatures carry the
 public packages' own types and the bridge cannot import the packages that import
@@ -126,6 +158,90 @@ finding types are declared in their own packages and satisfy it structurally, by
 carrying `Error`, `RuleID` and `ObjectNum` — so no validator package imports its
 own caller.
 
+### Where the code is
+
+Each subsystem, the files that hold it, and the doc that maps it. The root
+package's files are named one by one, except `doc.go`, which holds the package
+documentation; a subpackage is named whole.
+
+| Subsystem | Where | Map |
+|-----------|-------|-----|
+| Core object model, parser, serializer | `object/`, `syntax/`, `document.go`, `xref.go`, `objstm.go`, `objstm_write.go`, `source.go`, `incremental.go`, `compare.go`, `object_api.go` (the object-model aliases), `streamdata.go` (decoding a stream for a caller), `internal/core/filters.go` | this doc |
+| Resource limits and cancellation | `limits.go` (the options), `limits_report.go` (a trip reported as a finding), `cancel.go`, `internal/core/meter.go` (the work meter) | [untrusted-input.md](untrusted-input.md), [limits.md](limits.md) |
+| What every validator shares | `violations.go`, `validator_guard.go` (the answer to a nil document), `runcache.go` (the per-run cache), `bridge.go` (the root's side of `internal/bridge`), `internal/finding` | [validators.md](validators.md) |
+| PDF/A validation | `pdfa/` (rules in `pdfa/pdfa.go`, `pdfa/final_rules.go`, `pdfa/fonts.go`, `pdfa/content_operators.go`, `pdfa/filestructure.go`, `pdfa/pdfa_levela.go`; the builder in `pdfa/create.go`), with `pdfa_api.go`, `embedded.go`, `preflight.go` and `save.go` in the root | [pdfa.md](pdfa.md) |
+| The other validators | `pdfua/`, `pdfx/`, `pdfvt/`, `pdfr/`, `dpart/`, `facturx/`, with `pdfua_api.go`, `pdfx_api.go`, `pdfvt_api.go`, `pdfr_api.go`, `dpart_api.go` and `facturx_api.go` in the root | [validators.md](validators.md), [pdfua.md](pdfua.md) |
+| Building documents | `content/`, `create.go`, `page_add.go`, `builderinput.go` (the input checks every builder shares), `form.go`, `pattern.go`, `pattern_uncolored.go`, `shading.go`, `softmask.go`, `outline.go`, `annotation.go`, `structure.go` | [building.md](building.md) |
+| Pages: listing, extracting, appending | `pages.go`, `pagetree.go`, `pageimport.go` | the godoc of `Document.ExtractPages` and `Document.AppendPages` |
+| Setting text and embedding fonts | `fonts/`, `simplefont/`, `faceembed.go`, with shaping and program parsing in [forme](https://github.com/mgilbir/forme) | [text.md](text.md), [font-embedding.md](font-embedding.md) |
+| Font validation | `pdfa/fonts.go`, `internal/core/fontuse.go` (which fonts the content shows text in) | [fonts.md](fonts.md) |
+| HTML and CSS to PDF | `htmlpdf/`, with the whole layout engine in [forme](https://github.com/mgilbir/forme) | [htmlpdf.md](htmlpdf.md), [htmlpdf-backend.md](htmlpdf-backend.md) |
+| XMP metadata | `internal/xmp` (the model every writer edits), `pdfa/xmp.go`, `pdfa/xmp_schemas.go` (the validator's reading) | [xmp.md](xmp.md) |
+| Signatures and PAdES | `sign/`, with `sign.go`, `sign_api.go`, `signedfile.go` and `doctimestamp.go` in the root | [signing.md](signing.md) |
+| Encryption (standard security handler) | `crypt_api.go`, `internal/crypt`, `internal/saslprep`, `internal/pdfdoc` | [encryption.md](encryption.md) |
+| Images and codecs | `images/`, `images_api.go`, `internal/ccitt`, `internal/jbig2`, `internal/core/function.go` (PDF functions) | [images.md](images.md) |
+| Text extraction | `text.go`, `internal/core/tounicode.go`, `internal/core/cmap.go` | [text.md](text.md#getting-the-text-back) |
+| Command-line front end (dev aid, not the supported surface) | `cmd/pdf0` | [cli.md](cli.md) |
+
+## Document lifecycle
+
+A `Document` is in one of three encryption states, and that state — not
+`Encrypted`, which stays true on a decrypted file — decides what the other
+methods do with it:
+
+```mermaid
+stateDiagram-v2
+    state "Plain: no /Encrypt" as Plain
+    state "Encrypting: plaintext, with a security handler" as Enc
+    state "Locked: strings and streams are ciphertext" as Locked
+    [*] --> Plain: NewDocument, NewPDFADocument, or Read with no /Encrypt
+    [*] --> Enc: Read decrypts it
+    [*] --> Locked: Read cannot decrypt it
+    Plain --> Enc: SetEncryption
+    Enc --> Plain: RemoveEncryption, Repair
+    Plain --> Plain: AddPage, AppendPages, Repair, edits
+    Enc --> Enc: edits
+    Plain --> [*]: Write, Save, WriteIncremental, WriteSigned
+    Enc --> [*]: Write re-encrypts with the key
+    Locked --> [*]: Write carries the ciphertext
+    note left of Enc
+        Read from a signed file, a document leaves
+        by Write, Save or SetEncryption only with
+        AllowInvalidatingSignatures; the incremental
+        writers keep its signatures.
+    end note
+    note right of Plain
+        Built in memory, it has no source file:
+        PDF/A validation reports no-source-file,
+        and WriteIncremental refuses it.
+    end note
+    note right of Locked
+        Validators report not-decrypted.
+        Extractors return an error, or no images.
+        SetEncryption and Repair refuse it.
+    end note
+```
+
+Validation is not a transition: every validator works on a shallow copy of the
+document with its own per-run cache (`validationCache`, `core.Run`), so it
+never changes the caller's `Document`, and two validations of one document can
+run at once. Each ends by appending the run's limit trips
+([limits.md](limits.md#how-a-trip-reaches-the-caller)).
+
+Leaving a state is writing it. `Write` regenerates the file in any state
+(below) — unless the document was read from a file that carries signatures or
+document time-stamps, which regenerating it would invalidate: `Write`, `Save`
+and `SetEncryption` then refuse (`ErrWouldInvalidateSignatures`) until the
+caller consents with `AllowInvalidatingSignatures`
+([ADR 0019](adr/0019-signature-consent-on-the-document.md)). `Save` is `Write`
+that refuses a document failing the PDF/A level it claims;
+`WriteIncremental` appends to the file a document was read from, so it refuses
+one built in memory, one whose table was rebuilt, any encrypted one, and one
+read from an encrypted file even after `RemoveEncryption`; and the signing
+writers refuse an encrypted document. A Locked `Write` keeps the
+ciphertext under the file's own `/Encrypt` and `/ID`, regenerating the layout
+([ADR 0014](adr/0014-read-never-fails-on-encrypt.md)).
+
 ## The object model
 
 Every PDF value implements the `object.Object` interface: `Boolean`, `Integer`, `Real`, `String`,
@@ -153,22 +269,25 @@ escaping the parse is recovered and returned as an error.
 
 ```mermaid
 flowchart TD
-    A[Read bytes + size] --> B[parseHeader: version + headerOffset]
+    O["resolve the options<br/>(ErrInvalidOption before anything is read)"] --> A
+    A["syntax.ReadSource: bytes + size"] --> B[parseHeader: version + headerOffset]
     B --> C[locateXRef: last 1KB, then whole file]
     C --> D{xref offset valid?<br/>absolute vs header-relative probe}
     D -->|no startxref, or outside file| E2[rebuild table by scan]
     D --> E["parse xref sections, follow /Prev<br/>hybrid /XRefStm merged into its section<br/>visited-set guards cycles<br/>(recovery ladder below)"]
     E --> F[load uncompressed objects<br/>xref key is the object number]
+    E2 --> F
     F --> G["validate /Encrypt, derive the key<br/>decrypt strings + /ObjStm containers<br/>(or record why it stays Locked)"]
     G --> H[loadCompressedObjects<br/>materialize /ObjStm entries]
     H -->|decode fails, container missing<br/>or not a stream| H2[record brokenObjStms<br/>non-fatal]
     H -->|budget, limit, filter<br/>or ciphertext| H3[record skippedObjStms<br/>+ a limit trip, non-fatal]
-    H --> G2["decrypt the remaining streams<br/>(their crypt filter can depend on the whole graph)"]
+    H --> R["a rebuilt table with no /Root:<br/>synthesize it from a catalog"]
+    R --> G2["decrypt the remaining streams<br/>(their crypt filter can depend on the whole graph)"]
     G2 --> S[source record: high-water mark,<br/>/Size, sections, revisions]
     S --> I[normalizeStructure<br/>drop XRef/ObjStm objects + their offsets]
     I --> J[set Encrypted from /Encrypt]
     J --> K[(Document)]
-    A -.panic anywhere.-> R[recover -> error, never crash]
+    A -.panic anywhere.-> P[recover -> error, never crash]
 ```
 
 **Decryption of strings and object-stream containers runs before object streams
@@ -195,50 +314,76 @@ it is never reported as malformed. Both leave objects missing, so Write
 refuses either.
 
 The cross-reference table has the deepest recovery, because a damaged xref is the
-most common way a real-world file is broken. `Read` escalates through a ladder
-and only fails when every rung is exhausted:
+most common way a real-world file is broken. `Read` (`readDocument` in
+`document.go`) escalates through a ladder and fails only when every rung is
+exhausted. Its steps are numbered in the code as below; a cancelled context
+stops it at any step, with an error.
 
 ```mermaid
 flowchart TD
-    ST["locateXRef → offset<br/>(last 1KB, then whole file;<br/>probe absolute vs header-relative)"] --> PS[parseXRefSection]
-    ST -->|"no startxref,<br/>or outside the file"| RB
-    PS -->|ok| MERGE["merge section, follow /Prev<br/>visited-set guards cycles"]
-    PS -->|error| PK["precedingXrefKeyword:<br/>nearest standalone 'xref' at or before the offset<br/>(producers point INTO the table)"]
-    PK -->|reparsed| MERGE
-    PK -->|"still failing<br/>(older section)"| TOL[tolerate: keep what newer sections gave]
-    PK -->|"still failing<br/>(newest section)"| RB["rebuildXRefByScan:<br/>scan the file for 'N G obj' headers<br/>+ findTrailerByScan"]
-    RB -->|no table recoverable| ERR[return error]
+    SRC["1. syntax.ReadSource"] -->|"an error from r, or<br/>a size larger than r holds"| ERR[return an error]
+    SRC --> HDR["2. parseHeader:<br/>%PDF- in the first 1024 bytes"]
+    HDR -->|none| ERR
+    HDR --> LX["3. locateXRef<br/>last 1KB, then the whole file<br/>probe absolute vs header-relative"]
+    LX --> WALK["walkXRefChain, newest section first<br/>a section that fails is retried from<br/>precedingXrefKeyword: the nearest 'xref'<br/>at or before it (producers point INTO the table)"]
+    WALK -->|every section parses| MERGE["merge the sections, follow /Prev<br/>visited-set guards cycles<br/>trailer from the newest"]
+    WALK -->|an older section fails| CUT["cut the chain there, keep the newer ones<br/>a limit trip if pdf0 declined it<br/>(a limit, an unsupported filter),<br/>none if it is malformed"]
+    CUT --> MERGE
+    WALK -->|the newest section fails| RB
+    LX -->|"no startxref,<br/>or outside the file"| RB["rebuildXRefByScan: scan for 'N G obj'<br/>(rebuilt; a limit trip if pdf0 declined<br/>the newest section), then the trailer<br/>from findTrailerByScan"]
+    RB -->|no object header anywhere| ERR
 
-    MERGE --> LOAD["loadObjectsFromXref<br/>(strict: a file-supplied table is authoritative)"]
-    TOL --> LOAD
-    RB --> LOADL["loadObjectsFromXref<br/>(lenient: unparseable entries dropped —<br/>a header-shaped run inside a stream can fabricate one)"]
+    MERGE --> LOAD["4. loadObjectsFromXref<br/>(strict: a file-supplied table is authoritative)"]
+    RB --> LOADL["4. loadObjectsFromXref<br/>(lenient: unparseable entries dropped,<br/>a header-shaped run inside a stream can fabricate one)"]
+    LOAD -->|fails| RB2["RB2: rebuildXRefByScan,<br/>reload leniently (rebuilt),<br/>keep the chain's trailer"]
+    RB2 -->|no object header anywhere| ERR
+    LOADL --> T41["4.1: the trailer is the newest of the scanned one<br/>and a loaded /XRef stream dictionary with /Root"]
 
-    LOAD -->|error| RB2[rebuildXRefByScan retry, lenient]
-    RB2 -->|fails| ERR
-    RB2 --> ROOT
-    LOAD --> ROOT
-    LOADL --> OBJSTM["materializeScannedObjStms<br/>(a scanned table has no type-2 entries)"]
-    OBJSTM --> ROOT{rebuilt and no /Root?}
-
-    ROOT -->|yes| SYN["synthesize /Root from the<br/>first /Type /Catalog object"]
+    LOAD --> DEC["4.5: decrypt strings and /ObjStm containers<br/>(never fails: a document it cannot decrypt is Locked)"]
+    RB2 --> DEC
+    T41 --> DEC
+    DEC --> OBJSTM["5: loadCompressedObjects (type-2 entries),<br/>then, if rebuilt, materializeScannedObjStms<br/>(a scanned table has no type-2 entries)"]
+    OBJSTM -->|"an entry's index names<br/>a different object"| ERR
+    OBJSTM --> ROOT{"5.1: rebuilt,<br/>and no /Root?"}
+    ROOT -->|yes| SYN["synthesize /Root from the lowest-numbered<br/>/Type /Catalog, compressed objects included"]
     SYN -->|none found| ERR
-    ROOT -->|no| OK[(objects loaded)]
-    SYN --> OK
+    SYN --> DEC2
+    ROOT -->|no| DEC2["5.5: decrypt the remaining streams"]
+    DEC2 --> FIN["6: source record, normalizeStructure, Encrypted"]
+    FIN --> OK[(Document)]
 ```
 
-**What is actually fatal.** `Read` returns an error only when: the header cannot
-be found; the cross-reference data is unusable (no `startxref`, one outside the
-file, or a newest section that does not parse) *and* a full rebuild by scanning
-finds no usable table; a rebuilt document contains no `/Type /Catalog` to
-synthesize `/Root` from; the input is short (a truncated read would otherwise
-look like trailing whitespace); or a type-2 entry's index names a different
-object in its object stream's own index. That last one is deliberate: it is not
-missing data but two parts of the file disagreeing about which object is object
-N, and choosing either is a guess a crafted file could steer. A parse failure on
-an individual uncompressed object is fatal only for a table the file itself
-supplied — it triggers the scan-rebuild first. A section whose cross-reference
-stream decodes to more in-use entries than the file could hold (one per four
-bytes, plus 4096) counts as unparseable.
+**What is actually fatal.** `Read` returns an error, and no `Document`, only
+when:
+
+- an option value is zero or negative: an error wrapping `ErrInvalidOption`,
+  before anything is read;
+- `r` returns an error, or holds fewer bytes than `size` claims, or `size` is
+  negative (a truncated read would otherwise look like trailing whitespace);
+- there is no `%PDF-` header in the first 1024 bytes;
+- the cross-reference data is unusable — no `startxref`, one outside the file,
+  or a newest section that does not parse — *and* the scan finds no object
+  header in the whole file. A failure to load the objects of a table the file
+  supplied triggers the same scan, and is fatal only if it finds nothing;
+- a rebuilt document has no `/Type /Catalog` to synthesize `/Root` from, among
+  its compressed objects either. The error is the cross-reference failure that
+  led to the rebuild, or else `rebuilt cross-reference table found no document
+  catalog`;
+- a type-2 entry's index names a different object in its object stream's own
+  index. That one is deliberate: it is not missing data but two parts of the
+  file disagreeing about which object is object N, and choosing either is a
+  guess a crafted file could steer
+  ([ADR 0015](adr/0015-objstm-index-mismatch-is-fatal.md));
+- the context of `ReadContext` or `ReadWithPasswordContext` ends, at any step:
+  an error wrapping `ctx.Err()`, never a partial document
+  ([ADR 0016](adr/0016-readcontext-returns-nil.md));
+- a panic, recovered and returned as an error.
+
+An `/Encrypt` dictionary never fails the read
+([ADR 0014](adr/0014-read-never-fails-on-encrypt.md)), and neither does a
+section whose cross-reference stream decodes to more in-use entries than the
+file could hold (one per four bytes, plus 4096): it counts as unparseable, and
+the ladder takes over. A rebuilt read is reported by `Source().Rebuilt`.
 
 This depth is deliberate: it lets the PDF/A validator *report* a malformation
 instead of failing to open the file. A validator that cannot read a broken file
@@ -246,26 +391,46 @@ cannot tell you why it is broken.
 
 ## Write
 
-`Document.Write` (`document.go`) regenerates a clean file. It refuses documents
-it cannot faithfully serialize, re-encrypts a document decrypted on Read, writes
+`Document.Write` (`document.go`) regenerates a clean file. It refuses first a
+document whose source file carries signatures, unless the caller consented with
+`AllowInvalidatingSignatures` (the rewrite would invalidate them), then documents
+it cannot faithfully serialize; it re-encrypts a document decrypted on Read, writes
 a Locked one's ciphertext back unchanged under its original `/Encrypt` and `/ID`
 (so the result opens with the right password, and `Write` returns nil), and
 regenerates the cross-reference section in the same form the source used — a
-cross-reference stream, or a traditional table.
+cross-reference stream, or a traditional table. Every refusal comes before
+anything is written; its godoc lists them.
 
 ```mermaid
 flowchart TD
-    A[Document.Write] --> B{in-use object 0,<br/>broken or skipped ObjStms,<br/>objects that did not decrypt,<br/>or Locked with an unresolvable /Encrypt?}
-    B -->|yes| X[return error]
-    B -->|no| C[compute indirect /Length overrides<br/>re-encrypt if a handler is retained<br/>a Locked document's ciphertext is kept as it is]
-    C --> D[write header + binary comment]
-    D --> E[write objects sorted by number<br/>rewrite stale /Length targets]
+    A[Document.Write] --> SIG{"the source file carries signatures,<br/>and no AllowInvalidatingSignatures?"}
+    SIG -->|"yes: ErrWouldInvalidateSignatures"| X
+    SIG -->|no| L{Locked?}
+    L -->|"yes, and /Encrypt does not resolve,<br/>or Read left objects missing"| X[return an error,<br/>nothing written]
+    L --> B{"an entry under object 0,<br/>a nil entry, a negative number,<br/>Read left objects missing<br/>(broken or skipped ObjStms),<br/>or DecryptFailures?"}
+    B -->|yes| X
+    B -->|no| WS["buildWriteSet: with an xref stream,<br/>pack eligible objects into /ObjStm<br/>(never when Locked; never /Encrypt and what it reaches,<br/>streams, /Length targets or signature dictionaries)"]
+    WS -->|an object does not serialize| X
+    WS --> ENC{"a security handler?"}
+    ENC -->|"yes: EncryptCopy,<br/>the caller's objects stay plaintext"| LEN
+    ENC -->|a stream names a crypt filter<br/>the handler cannot apply| X
+    ENC -->|no| LEN["compute indirect /Length overrides<br/>after encryption: AES padding changes lengths"]
+    LEN -->|"two streams share a /Length target<br/>with different lengths"| X
+    LEN --> D[write header + binary comment]
+    D --> E[write objects sorted by number<br/>stale /Length targets rewritten]
     E --> F{source used<br/>an xref stream?}
-    F -->|yes| G1[write xref stream]
-    F -->|no| G2[write traditional xref<br/>20-byte entries]
-    G1 --> H[trailer / startxref + %%EOF]
+    F -->|yes| G1[write xref stream,<br/>type-2 entries for packed objects]
+    F -->|no| G2[write traditional xref<br/>20-byte entries + trailer]
+    G1 --> H[startxref + %%EOF]
     G2 --> H
 ```
+
+The order of the middle three steps is load-bearing: the write set is built
+first so that what is encrypted is what is written, and `/Length` is computed
+last because encryption changes the length of the data it describes. An object
+that does not serialize (a NaN or an infinite number) can still fail the write
+once objects are being written, as can an error from `w`, and the output is
+then partial.
 
 `Write` is idempotent: `Read → Write → Read → Write` produces byte-identical
 output (guarded by `TestWriteIsIdempotent`).
@@ -283,223 +448,44 @@ below the file's, and its second `/ID` string is refreshed.
 ## Validate
 
 Validation reads the object model and reports findings; it never mutates the
-document. Each standard has its own validator, and the PDF/A engine has its own dispatch,
-executed-content model and rule-file map — all of that lives in
-[validators.md](validators.md).
+document. Each standard has its own validator: which entry point to call and how
+to read its result is [validators.md](validators.md); the PDF/A engine's
+dispatch, executed-content model and rule-file map are
+[pdfa.md](pdfa.md).
 
 ## Resource limits
 
 pdf0 parses untrusted input, so every unbounded loop and every allocation sized
-by a number the file supplies is capped. Those caps are defaults chosen to be
-safe: **a caller who configures nothing gets exactly the behaviour pdf0 has
-always had.**
+by a number the file supplies is capped, with defaults safe for hostile input.
+The caps worth tuning are `With*` options on `Read`, resolved once into a
+`core.Limits` stored on the `Document` and passed to the code that enforces
+them, so every validator and extractor run on the document inherits them. A
+guard that trips never becomes a verdict: a validator reports it under the
+reserved rule `limit`, and an extractor as an error.
 
-A fixed number cannot be right for every caller, though. A batch converter on a
-workstation and a public upload endpoint want genuinely different answers to
-"how much may one untrusted document cost me". The limits worth tuning are
-therefore settable per document, as variadic options on `Read`,
-`ReadWithPassword`, their `…Context` variants and `ParseXRefStream`. Each
-option's documentation gives the largest real value measured, and a cap below
-it refuses real documents; these are stricter than the defaults and still above
-it:
-
-```go
-doc, err := pdf0.Read(r, size,
-	pdf0.WithMaxDecodedStreamBytes(48<<20),   // bomb ceiling
-	pdf0.WithMaxDecodedContentBytes(256<<20), // whole-run budget
-)
-```
-
-`Option` values resolve once at the entry point into an unexported struct that
-is stored on the `Document`, so every validator and extractor run on that
-document inherits the same configuration. "Everything" is meant literally: the
-file's own cross-reference streams during `Read`, and any PDF embedded in it
-that PDF/A-4 clause 6.9 sends pdf0 back into. Both are Flate streams the file
-controls, so both answer to the caller's ceiling rather than to pdf0's default.
-The struct travels by value and is never mutated after resolution, so validating
-one `Document` from several goroutines stays safe — the property package-level
-`var`s would have lost.
-
-The options, generated from their documentation in `limits.go`:
-
-<!-- BEGIN GENERATED: options. From the With* functions in limits.go by TestGeneratedDocSections; regenerate with `go test ./internal/lint -run TestGeneratedDocSections -update`. -->
-
-| Option | Caps | Default |
-|---|---|---|
-| `WithMaxDecodedStreamBytes` | the decompressed size of any single stream | 100 MB |
-| `WithMaxDecodedContentBytes` | the total decoded content one validation run will materialize | 512 MB |
-| `WithMaxObjectStreamBytes` | the memory Read may spend on the objects it unpacks from object streams in one document: the parser's estimate of every object it builds (syntax.MaterialCost, twice the measured live cost), plus the decoded bytes of the container being unpacked | 512 MB |
-| `WithMaxContentStreamBytes` | the decoded size of a single content stream or image sample buffer that will be scanned | 64 MB |
-| `WithMaxICCProfileBytes` | the decoded size of an ICC profile | 8 MiB |
-| `WithMaxXMPPacketBytes` | the size of an XMP packet that the property checks will build a node tree for | 4 MiB |
-| `WithMaxTableGridFills` | the number of grid slots the PDF/UA table checks will fill for one table, bounding a cell whose /RowSpan and /ColSpan claim a multi-million-slot area | 1<<24 |
-| `WithMaxCmapWork` | the work spent expanding one TrueType cmap subtable of an expanding format — 4 or 12 | 1<<18 |
-| `WithMaxWork` | the work one run may do | 2^28 units plus 512 for every byte of the file the document was read from |
-| `WithMaxImagePixels` | the size of an image that extraction will decode | 1<<26 |
-
-<!-- END GENERATED: options -->
-
-Every value must be positive: `Read` (and `ParseXRefStream`) returns an error
-wrapping `ErrInvalidOption` for 0 or a negative value, which could only mean
-something surprising. The type's maximum (`math.MaxInt`, `math.MaxInt64`) is
-honoured as "no practical limit".
-
-Defaults are evidence-based where the evidence exists: the figures come from
-measuring the veraPDF corpus (2,907 files) and a 978-file Common Crawl sample.
-No real file in either comes within 2x of any of these.
-
-Two things are deliberately *not* knobs:
-
-- **The write-side object-stream cap derives from `WithMaxDecodedStreamBytes`**
-  rather than being settable on its own. A container the writer emits but the
-  reader then refuses loses every object it holds, and setting the two
-  independently is exactly how that happens. The writer follows the reader by
-  construction.
-- **Depth caps** (`maxParseDepth`, `maxPageTreeDepth`, the serializer and
-  compare depths, the 64-hop `Resolve` bound) stay internal. They guard against
-  exhausting the goroutine stack, which is an *uncatchable* fatal error, so
-  raising one trades a clean error for a process abort. No real file comes close:
-  the deepest object nesting measured is 6 of 1000, the deepest page tree 4 of 64.
-
-The JBIG2 pixel budgets and the lexer's token-gap bound are also internal, for
-threading cost rather than principle;
-[proposals/configurable-limits.md](proposals/configurable-limits.md) records the
-measurement behind each decision.
-
-Configuring a limit is only half the story: a caller also has to be able to tell
-that one fired. A guard that trips leaves a check with an incomplete result, and
-the rule the package follows is that **no check may assert a violation on the
-basis of one**. Instead the trip is reported as its own finding under the
-reserved rule identifier `"limit"`, which `IsCheckerFinding` distinguishes from a
-real non-conformance; the message names the guard and says whether the bound it
-hit was pdf0's default or one the caller set. [limits.md](limits.md) classifies
-every guard in the package on exactly this axis.
+- How to set them, the generated table of options and defaults, and how to
+  read a `limit` finding: [untrusted-input.md](untrusted-input.md).
+- Every guard in the package and how a trip is reported:
+  [limits.md](limits.md).
+- Why options rather than a struct or a context:
+  [ADR 0009](adr/0009-functional-options.md); the measurements behind the
+  defaults and the limits left internal:
+  [proposals/configurable-limits.md](proposals/configurable-limits.md).
 
 ## Cancellation
 
-A limit answers "how much may one document cost me". It does not answer "I need
-an answer within five seconds, whatever it costs". That is what a
-`context.Context` is for, and `cancel.go` is where it lives.
+A limit bounds what a document may cost; a context bounds how long one
+operation may take. The entry points whose cost is the document's have a
+`…Context` variant taking `ctx` as their first parameter. The signal rides on
+the operation — a validation's per-run state, or a parameter threaded through
+`Read`'s and `Write`'s loops — and is never stored on the `Document`. It is
+polled at layered boundaries, coarsest first: per check, per page and content
+stream, per `core.CancelScanBytes` of content tokenized, per
+`core.CancelReadChunk` decompressed, and per object in `Read` and `Write`.
 
-The motivating case was pdf0's own `internal/cmd/corpusprobe`, which ran each file in a
-goroutine and gave up on it with `select`/`time.After`. Giving up on a goroutine
-is not stopping it: the work carried on burning a core and holding its memory
-until it finished by itself. With eight workers and a 25-second file that is
-real leakage, and there was nothing a caller could do about it.
-
-### The shape: `…Context` variants, not an option
-
-pdf0 already has variadic functional options, so `WithContext(ctx)` was
-available and would have been the smaller change. It was rejected:
-
-- An `Option` is *stored*. Options resolve into a struct that lives on the
-  `Document` and is inherited by every later call — the right lifetime for a
-  limit ("what this document may cost") and the wrong one for a context ("how
-  long this operation may take"). A context captured at `Read` would still
-  govern a validation started minutes later. This is the case the Go
-  documentation has in mind when it says not to store a `Context` in a struct.
-- It would hide cancellation from the call site. `ValidatePDFA(doc, level)`
-  would be cancellable or not depending on an argument to a `Read` twenty lines
-  earlier.
-
-So `ctx` is an explicit first parameter, and the two mechanisms stay separate.
-Adding the variants changed no existing signature.
-
-### Which entry points have one
-
-The line is **cost proportional to the document's content** — bytes, pages,
-images — rather than to a bounded structural count.
-
-| Has a `…Context` variant | Deliberately does not | Why not |
-|---|---|---|
-| `Read`, `ReadWithPassword` | `PageList`, `PageCount`, `Resolve`, `object.Equal`, `DocumentEqual`, `Repair`, `ExtractPages`, `AppendPages` | Structural walks over objects already in memory: no decompression, no content scanning. Microseconds to low milliseconds. |
-| `Write` | `WriteIncremental`, `SetEncryption` | Bounded by the changed-object set. |
-| Every validator (`ValidatePDFA`, `ValidatePDFUA`, `ValidatePDFUA2`, `ValidatePDFX`, `ValidatePDFVT`, `ValidatePDFVT2`, `ValidatePDFR`, `ValidateDParts`, `ValidateFacturX`, `ValidateOrderX`) | — | The two invoice containers were the exception until `formalis` v0.2.0, and on two counts, both now lapsed: their findings were `formalis.Violation` values, which could not satisfy `pdf0.Violation` and so were outside `IsCheckerFinding`, and the invoice half of the work was a rule engine that took no context. The findings are `facturx.Violation` / `facturx.OrderXViolation` now and the engine takes one, so both halves honour `ctx` and a cancelled run reports `limit` like every other validator. |
-| `ExtractText`, `ExtractImages` | `ExtractPageText` | One page *is* the unit of work; a caller iterating pages already has a loop to check a context in. Like `ExtractText`, it returns an error for a page it had to leave out. |
-| | `Images` | An iterator is already cancellable by `break`, and because each image is decoded only as it is yielded, breaking after image N skips exactly what a context checked between images would have. |
-| | `VerifySignatures`, `ValidatePAdES`, `WriteSigned*` | Linear in the file: every signed range is hashed where it lies, with the prefix the signatures share hashed once, and the revision comparison behind the allowed-changes analysis has a work budget, past which the changes are reported unknown (never permitted). |
-
-The rule that falls out of the third row is worth stating on its own: **an entry
-point gets a `…Context` variant only if it has somewhere honest to report the
-cancellation.** For the validators that is a finding under the reserved
-rule `limit`; for `Read` and `Write` it is a returned error; for the two
-extractors it is a partial result *plus* an error. Nothing is given a variant
-that would have to swallow the fact.
-
-`ValidateFacturX` and `ValidateOrderX` are the one place that rule has to hold
-across a module boundary. `formalis.RuleLimit` and pdf0's `finding.LimitRule` are both
-the string `"limit"`, deliberately, so a caller draining one mixed slice of
-container and invoice findings has one name to look for; the adoption seam
-(`adoptInvoiceFindings`) therefore takes the rule engine's identifiers verbatim,
-exactly as `adoptPDFAFindings` passes the reserved ones through unprefixed. A
-`pdfa-3/limit` — or an `invoice/limit` — would be invisible to a caller keying on
-`limit`, which is the single failure the reserved identifier exists to prevent.
-
-The two halves each report a cancellation they saw, in their own words. Neither
-covers the container checks between them, nor a container with no embedded XML to
-hand over, so the entry point polls once on the way out and speaks only when
-neither half has (`finding.ReportCancellation`).
-
-### Where the check happens, and what latency that buys
-
-`ctx.Err()` in the innermost loop is not free: tokenising content
-(`core.ContentLexer`) is most of a large document's validation time. The check
-is therefore layered, coarsest first:
-
-| Boundary | Unit of work between checks | Implied latency |
-|---|---|---|
-| Per check | one PDF/A or PDF/UA check | seconds on a large file — never sufficient alone |
-| Per page / per content stream / per embedded PDF | one stream's scan | tens of ms |
-| Per `core.CancelScanBytes` (1 MiB) inside the content lexer | ~1 MiB tokenized | ~10 ms |
-| Per `core.CancelReadChunk` (1 MiB) inside flate and LZW decoding | ~1 MiB inflated | ~10 ms |
-| Per object in `Read`'s load loops and `Write`'s emit loop | one object | sub-ms |
-
-The scanner check is gated on the scan position, not on a token counter: one
-comparison of the loop index against a local `int` per token, with the poll
-itself once per megabyte. The poll is a non-blocking receive on a `ctx.Done()`
-channel hoisted at construction, because both `Done` and `Err` take the
-context's mutex on a cancellable context; a run that cannot be cancelled has a
-nil channel, so the `default` case is taken.
-
-The scanners do **not** branch on "is this cancellable" to skip the bookkeeping,
-and that is deliberate. The obvious version — set the gate past the end of the
-data when the signal can never fire, so the comparison never succeeds — added
-two statements to the then content tokenizer's loop and pushed its inline cost from under
-the compiler's 800-node budget to 805. The range-over-func closure then stopped
-being inlined into its consumers, and PDF/UA validation of a 71 MB file slowed
-by 5% — far more than the one nil-channel poll per megabyte it was avoiding.
-The lesson generalises: in these loops, check `go build -gcflags=-m=2` for
-"function too complex" before trusting a wall-clock measurement. With the
-smaller version, PDF/A and PDF/UA on that file are indistinguishable from the
-pre-cancellation code (PDF/A 10.24 s vs 10.57 s, PDF/UA 2.70 s vs 2.76 s;
-medians of six runs, the difference within run-to-run noise).
-
-Measured on a 71 MB, 1256-page real-world file whose full PDF/A validation takes
-10.7 s: **cancellation takes effect in about 60 ms**, and an already-cancelled
-context returns in about 10 µs. The decompression layer was worth having — with
-only the scanner checks in place the same measurement was 903 ms, essentially
-all of it one 100 MB stream inflating uninterruptibly.
-
-### What a cancelled run returns
-
-The same thing a tripped resource guard returns, through the same machinery: a
-finding under the rule identifier `"limit"`, which `IsCheckerFinding` reports as
-a checker finding. The reasoning of [limits.md](limits.md) transfers unchanged —
-the checker stopped before it had seen everything, so the honest answer is
-"unknown", not "conformant" — and routing cancellation through `runLimitTrips`
-gives every validator the finding without any of them learning a second
-mechanism.
-
-The findings gathered before the cancellation are kept. They are true, just
-incomplete. What cannot happen is an empty result: **a cancelled validation
-never looks like a clean bill of health**, so a caller testing `len(result) == 0`
-gets "not clean" and a caller filtering with `IsCheckerFinding` gets "unknown".
-
-`Read`, `Write`, `ExtractTextContext` and `ExtractImagesContext` instead return
-an error wrapping `ctx.Err()` — the "loud" class of [limits.md](limits.md) —
-because they have no finding channel. `ReadContext` returns a nil `Document`
-rather than a partial one: a document missing an arbitrary subset of its objects
-is indistinguishable from one whose file genuinely lacks them, and every
-validator would then report the absence as a conformance failure. The extractors
-return their partial result *and* the error, because discarding the work would
-be as dishonest as presenting it as complete.
+- Every variant, generated from the API, and what each returns when stopped:
+  [untrusted-input.md](untrusted-input.md#bounding-time-the-context-variants).
+- Why variants and not an option: [ADR 0010](adr/0010-context-variants.md);
+  why a cancelled read returns nil: [ADR 0016](adr/0016-readcontext-returns-nil.md).
+- Where the checks sit, what they cost, and the measured latency: the design
+  comment in `cancel.go`.

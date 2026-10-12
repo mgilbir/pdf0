@@ -22,7 +22,8 @@ import (
 // The original bytes, the section the update chains to, the numbers the file
 // already uses and its /Size all come from the document's source record (see
 // Source); an update is always an update of the file the document was read
-// from. Encrypted documents are refused.
+// from. Encrypted documents, and documents read from an encrypted file, are
+// refused.
 
 // WriteIncremental writes an incremental update of the file d was read from:
 // that file's bytes verbatim, followed by the objects listed in changed, a new
@@ -59,9 +60,11 @@ import (
 // part of the output behind.
 //
 // d must have been read from a file (it has a non-empty Source), not rebuilt by
-// scan (Source.Rebuilt), and not encrypted. An update is appended to the file d
-// was read from, not to the output of an earlier WriteIncremental; read that
-// output back to update it again.
+// scan (Source.Rebuilt), and not encrypted. Nor may that file be: after
+// RemoveEncryption the document is in the clear but the file's bytes, which
+// the update keeps, are not, so an update is refused there too. An update is
+// appended to the file d was read from, not to the output of an earlier
+// WriteIncremental; read that output back to update it again.
 func (d *Document) WriteIncremental(w io.Writer, changed []int) error {
 	update, err := d.incrementalUpdate(changed)
 	if err != nil {
@@ -87,6 +90,18 @@ func (d *Document) incrementalBytes(changed []int) ([]byte, error) {
 	return append(out, update...), nil
 }
 
+// fileEncrypted reports whether any trailer of the file declares /Encrypt —
+// whether the bytes an update would keep are ciphertext, whatever has since
+// been done to the document.
+func (s *Source) fileEncrypted() bool {
+	for _, sec := range s.sections {
+		if sec.trailer != nil && sec.trailer.Get("Encrypt") != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // xrefUpdateEntry is one entry of an update's cross-reference section.
 type xrefUpdateEntry struct {
 	num  int
@@ -107,6 +122,13 @@ func (d *Document) incrementalUpdate(changed []int) ([]byte, error) {
 	}
 	if d.security != nil || d.Encrypted {
 		return nil, errors.New("incremental update of an encrypted document is not supported")
+	}
+	if src.fileEncrypted() {
+		// RemoveEncryption decrypted the document, not the file. The update
+		// would keep the file's ciphertext and drop /Encrypt from the new
+		// trailer, and every reader would then take that ciphertext for
+		// content (a signature over it still verifying).
+		return nil, errors.New("incremental update of an encrypted file is not supported, even after RemoveEncryption: the update keeps the file's bytes, which stay encrypted; write the decrypted document whole with Write instead")
 	}
 	if len(changed) == 0 {
 		return nil, errors.New("incremental update with no changed objects")

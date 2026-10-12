@@ -123,12 +123,14 @@ func TestUA2StructureNamespaces(t *testing.T) {
 
 	// The resolved type is what every check reads: a custom heading mapped
 	// to H1 in the PDF 2.0 namespace is the first heading, and one mapped to
-	// H3 after it skips a level.
+	// H3 after it skips a level. The heading-sequence rule is PDF/UA-1's
+	// (ISO 14289-2 8.2.5.12 NOTE 2), so the PDF/UA-1 run is the probe; the
+	// structure tree is resolved the same way for both parts.
 	d := taggedFixture(t, "", root, "5 0 R 6 0 R", mergeObjs(map[int]string{
 		5: "<< /Type /StructElem /S /Heading /NS 11 0 R /P 4 0 R >>",
 		6: "<< /Type /StructElem /S /H3 /NS 10 0 R /P 4 0 R >>",
 	}, spaces))
-	if got := messages(ValidatePDFUA2(d)); !strings.Contains(got, "heading level H3 follows H1") {
+	if got := messages(ValidatePDFUA(d)); !strings.Contains(got, "heading level H3 follows H1") {
 		t.Errorf("the namespaced headings were not read as H1 then H3:\n%s", got)
 	}
 }

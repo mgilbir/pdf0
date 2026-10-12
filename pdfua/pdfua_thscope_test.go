@@ -6,71 +6,27 @@ import (
 	"testing"
 )
 
-func TestUATableTHScope(t *testing.T) {
-	mk := func(scope string, hasID bool) (core.View, *object.Dictionary) {
-		doc := mkView(map[int]*object.IndirectObject{}, nil)
-		th := &object.Dictionary{}
-		th.Set("S", object.Name("TH"))
-		if scope != "" {
-			attr := &object.Dictionary{}
-			attr.Set("O", object.Name("Table"))
-			attr.Set("Scope", object.Name(scope))
-			th.Set("A", attr)
-		}
-		if hasID {
-			th.Set("ID", object.String{Value: []byte("h1")})
-		}
-		doc.Objects[30] = &object.IndirectObject{Number: 30, Value: th}
-		tr := &object.Dictionary{}
-		tr.Set("S", object.Name("TR"))
-		tr.Set("K", object.Array{object.IndirectRef{Number: 30}})
-		doc.Objects[20] = &object.IndirectObject{Number: 20, Value: tr}
-		table := &object.Dictionary{}
-		table.Set("S", object.Name("Table"))
-		table.Set("K", object.IndirectRef{Number: 20})
-		doc.Objects[10] = &object.IndirectObject{Number: 10, Value: table}
-		root := &object.Dictionary{}
-		root.Set("Type", object.Name("StructTreeRoot"))
-		root.Set("K", object.IndirectRef{Number: 10})
-		doc.Objects[2] = &object.IndirectObject{Number: 2, Value: root}
-		cat := &object.Dictionary{}
-		cat.Set("StructTreeRoot", object.IndirectRef{Number: 2})
-		doc.Objects[1] = &object.IndirectObject{Number: 1, Value: cat}
-		return doc, cat
-	}
-	// No scope, no ID -> flagged.
-	d, cat := mk("", false)
-	if len(checkUATableTHScope(d, cat)) == 0 {
-		t.Error("TH without Scope or ID not flagged")
-	}
-	// Scope present -> clean.
-	d, cat = mk("Column", false)
-	if len(checkUATableTHScope(d, cat)) != 0 {
-		t.Error("TH with Scope wrongly flagged")
-	}
-	// ID present (no scope) -> clean.
-	d, cat = mk("", true)
-	if len(checkUATableTHScope(d, cat)) != 0 {
-		t.Error("TH with ID wrongly flagged")
-	}
-}
-
-// TestUATableTHScopeDirectCells: header cells written directly in their row
-// are each reported, at no object — not merged into one report under the
-// "object -1" every direct cell used to share (audit 2026-09-22 C138).
-func TestUATableTHScopeDirectCells(t *testing.T) {
+// TestUATableHeadersDirectCells: data cells written directly in their row are
+// each reported, at no object — not merged into one report under the "object
+// -1" every direct cell used to share (audit 2026-09-22 C138). The header rule
+// is checkUATableGrid's (tableHeaderDefects); TestUATableHeaderAssociation
+// holds its boundaries.
+func TestUATableHeadersDirectCells(t *testing.T) {
 	doc := mkView(map[int]*object.IndirectObject{}, nil)
-	th := func() *object.Dictionary {
+	cell := func(s string) *object.Dictionary {
 		d := &object.Dictionary{}
-		d.Set("S", object.Name("TH"))
+		d.Set("S", object.Name(s))
 		return d
 	}
-	tr := &object.Dictionary{}
-	tr.Set("S", object.Name("TR"))
-	tr.Set("K", object.Array{th(), th(), th()})
+	head := &object.Dictionary{}
+	head.Set("S", object.Name("TR"))
+	head.Set("K", object.Array{cell("TH"), cell("TH"), cell("TH")})
+	body := &object.Dictionary{}
+	body.Set("S", object.Name("TR"))
+	body.Set("K", object.Array{cell("TD"), cell("TD"), cell("TD")})
 	table := &object.Dictionary{}
 	table.Set("S", object.Name("Table"))
-	table.Set("K", tr)
+	table.Set("K", object.Array{head, body})
 	root := &object.Dictionary{}
 	root.Set("Type", object.Name("StructTreeRoot"))
 	root.Set("K", table)
@@ -79,13 +35,40 @@ func TestUATableTHScopeDirectCells(t *testing.T) {
 	cat.Set("StructTreeRoot", object.IndirectRef{Number: 2})
 	doc.Objects[1] = &object.IndirectObject{Number: 1, Value: cat}
 
-	v := checkUATableTHScope(doc, cat)
+	var v []Violation
+	for _, e := range checkUATableGrid(doc, cat, "1") {
+		if e.Clause == "7.5" {
+			v = append(v, e)
+		}
+	}
 	if len(v) != 3 {
-		t.Fatalf("three direct header cells without Scope: want three findings, got %v", v)
+		t.Fatalf("three direct data cells naming no headers under unscoped THs: want three findings, got %v", v)
 	}
 	for _, e := range v {
 		if e.Object != 0 {
 			t.Errorf("a direct cell anchored to object %d, want 0: %v", e.Object, e)
+		}
+	}
+}
+
+// TestPositionalHeadersFindsTheHeader: in PDF/UA-2 every data cell under an
+// unscoped header row finds that header by position, however far down the
+// column it is. The search carries its state down each column (and along
+// each row) rather than walking back from every cell.
+func TestPositionalHeadersFindsTheHeader(t *testing.T) {
+	const n = 1000
+	rows := []tableRow{{{rowSpan: 1, colSpan: 1, th: true, elem: &object.Dictionary{}}}}
+	for i := 0; i < n; i++ {
+		rows = append(rows, tableRow{{rowSpan: 1, colSpan: 1, elem: &object.Dictionary{}}})
+	}
+	l := layoutTable(rows, core.DefaultMaxTableGridFills)
+	if !l.complete || len(l.defects) != 0 {
+		t.Fatalf("layout: complete=%v defects=%v", l.complete, l.defects)
+	}
+	got := positionalHeaders(mkView(nil, nil), l)
+	for i, c := range l.cells {
+		if !c.th && !got[i] {
+			t.Fatalf("data cell in row %d did not find the header above it", c.row)
 		}
 	}
 }
