@@ -54,7 +54,10 @@ rules:
 - PDF/A-1 only: `/CharSet` and `/CIDSet` *presence* on subset fonts, the
   CMap-must-be-embedded rule, and the font file's kind — PDF 1.4 names two
   `/FontFile3` subtypes, `/Type1C` and `/CIDFontType0C`, so a `/FontFile3
-  /OpenType` program is a finding under the `general` concept (6.3.2).
+  /OpenType` program is a finding under the `general` concept (6.3.2). And a
+  non-symbolic TrueType font's `/Encoding` dictionary may not carry a
+  `/Differences` entry at all, even an empty one (6.3.7); from PDF/A-2 on, the
+  array is allowed if it names only Adobe Glyph List glyphs.
 - PDF/A-4 only: the forbidden ToUnicode targets U+0000, U+FEFF and U+FFFE.
 - Everywhere but PDF/A-4, which has neither clause: the CID ≤ 65535
   implementation limit, and every `/CharSet` and `/CIDSet` rule (see
@@ -221,6 +224,8 @@ Glyph List, Version 2.0 (September 2002)" ISO 32000-1 cites. It is exactly the
 list's 4,281 names plus `.notdef`, which is how veraPDF reads "listed in the
 Adobe Glyph List": a `uniXXXX` name, and the ZapfDingbats `a1`…`a205` (a
 separate list), are not listed. A name the array repeats is reported once.
+PDF/A-1 has no list at all: ISO 19005-1 6.3.7 forbids `/Differences` in such a
+font outright.
 
 Two readings are pdf0's own. `.notdef` is accepted, as veraPDF accepts it. And
 the names are tested whether or not the font program is embedded, because the

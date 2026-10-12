@@ -318,11 +318,12 @@ func checkCMapEmbedded(doc core.View, level Level) []Violation {
 }
 
 // checkTrueTypeEncoding enforces the PDF/A TrueType encoding rules
-// (ISO 19005-2/-3, 6.2.11.6; -4, 6.2.10.6; grounded in ISO 32000-1,
-// 9.6.6.4): a symbolic TrueType font shall have no Encoding entry; a
+// (ISO 19005-1, 6.3.7; -2/-3, 6.2.11.6; -4, 6.2.10.6; grounded in ISO
+// 32000-1, 9.6.6.4): a symbolic TrueType font shall have no Encoding entry; a
 // non-symbolic one shall specify WinAnsiEncoding or MacRomanEncoding —
-// directly or as BaseEncoding — and Differences names must be listed in the
-// Adobe Glyph List: ISO 32000-1 cites "Adobe Glyph List, Version 2.0
+// directly or as BaseEncoding. An Encoding dictionary shall have no
+// Differences entry at all at PDF/A-1; from PDF/A-2 on, its names must be
+// listed in the Adobe Glyph List: ISO 32000-1 cites "Adobe Glyph List, Version 2.0
 // (September 2002)", which is glyphlist.txt, and fontcheck.AGLListed reads it
 // as veraPDF does — its 4,281 names and .notdef; not the ITC Zapf Dingbats
 // list, and not a uniXXXX name the list does not carry. PDF/UA's rule reads
@@ -377,13 +378,24 @@ func checkTrueTypeEncoding(doc core.View, level Level, rule string, fontDict *ob
 		} else if base != "WinAnsiEncoding" && base != "MacRomanEncoding" {
 			bad("non-symbolic TrueType font BaseEncoding must be WinAnsiEncoding or MacRomanEncoding, got /%s", string(base))
 		}
-		if diffs, ok := doc.Resolve(enc.Get("Differences")).(object.Array); ok {
-			// One finding per name, however often the array repeats it.
-			reported := map[object.Name]bool{}
-			for _, el := range diffs {
-				if name, ok := doc.ResolveName(el); ok && !reported[name] && !fontcheck.AGLListed(string(name)) {
-					reported[name] = true
-					bad("Differences glyph name /%s is not in the Adobe Glyph List", string(name))
+		switch {
+		case !enc.Has("Differences"):
+		case level.Part() == 1:
+			// ISO 19005-1 6.3.7: "If the value of the Encoding entry is a
+			// dictionary, it shall not contain a Differences entry." PDF/A-1
+			// has no Adobe Glyph List exception; that arrived with ISO
+			// 19005-2. The key's presence is the test, as veraPDF reads it —
+			// an empty array included.
+			bad("non-symbolic TrueType font Encoding dictionary must not contain a Differences entry")
+		default:
+			if diffs, ok := doc.Resolve(enc.Get("Differences")).(object.Array); ok {
+				// One finding per name, however often the array repeats it.
+				reported := map[object.Name]bool{}
+				for _, el := range diffs {
+					if name, ok := doc.ResolveName(el); ok && !reported[name] && !fontcheck.AGLListed(string(name)) {
+						reported[name] = true
+						bad("Differences glyph name /%s is not in the Adobe Glyph List", string(name))
+					}
 				}
 			}
 		}

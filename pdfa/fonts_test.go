@@ -511,3 +511,31 @@ func TestDifferencesNamesAreAGLListed(t *testing.T) {
 		}
 	}
 }
+
+// TestPDFA1ForbidsDifferences: ISO 19005-1 6.3.7 says of a non-symbolic
+// TrueType font, "If the value of the Encoding entry is a dictionary, it shall
+// not contain a Differences entry". PDF/A-1 has no Adobe Glyph List exception
+// — that arrived with ISO 19005-2 — so the key's presence is the finding,
+// whatever the array names and even when it is empty, as veraPDF's 6.3.7-1
+// reads it (corpus PDF_A-2b 6-2-11-6-t02-pass-d is a pass at 2b and a 6.3.7
+// failure at 1b). Each is one finding, and PDF/A-2 accepts both.
+func TestPDFA1ForbidsDifferences(t *testing.T) {
+	for _, diffs := range []object.Array{{object.Integer(96), object.Name("grave")}, {}} {
+		doc, font, u := encodingTestFont(false, differencesEncoding(diffs), nil)
+		for _, lv := range []Level{PDFA1a, PDFA1b} {
+			if got := checkTrueTypeEncoding(doc, lv, "", font, u); len(got) != 1 || got[0].Rule != "6.3.7" {
+				t.Errorf("%s: Differences %v: got %v, want one 6.3.7 finding", lv, diffs, got)
+			}
+		}
+		if got := checkTrueTypeEncoding(doc, PDFA2b, "", font, u); len(got) != 0 {
+			t.Errorf("PDF/A-2b: Differences %v of listed names: got %v, want none", diffs, got)
+		}
+	}
+	// An Encoding dictionary without Differences is not this rule's.
+	e := &object.Dictionary{}
+	e.Set("BaseEncoding", object.Name("WinAnsiEncoding"))
+	doc, font, u := encodingTestFont(false, e, nil)
+	if got := checkTrueTypeEncoding(doc, PDFA1b, "", font, u); len(got) != 0 {
+		t.Errorf("PDF/A-1b: BaseEncoding alone: got %v, want none", got)
+	}
+}
