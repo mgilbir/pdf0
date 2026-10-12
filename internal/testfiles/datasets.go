@@ -117,7 +117,7 @@ var (
 		Name:   "ISO 32000-2 PDF",
 		Dir:    "spec/pdf2.0",
 		Fetch:  "it is copyrighted and placed by hand",
-		Proves: "Guards the spec-example pipeline: the committed JSON must still be exactly what the extractor produces from `spec/pdf2.0/ISO_32000-2_sponsored-ec2.pdf` (also needs `pdftotext` and `python3`)",
+		Proves: "The ISO 32000-2 spec-example tests, over every EXAMPLE of `spec/pdf2.0/ISO_32000-2_sponsored-ec2.pdf` as `cmd/extract_spec_examples` extracts it on the spot into `testdata/spec-examples/` (needs `pdftotext` and `python3`): they lex and parse each, logging what does not, and round-trip each single complete object. The examples are ISO's and are not committed",
 		Source: "ISO; copyrighted, never committed",
 	}
 	SpecPDF17 = Dataset{
@@ -126,5 +126,15 @@ var (
 		Fetch:  "it is copyrighted and placed by hand",
 		Proves: "As for ISO 32000-2, from `spec/pdf1.7/PDF32000_2008.pdf`",
 		Source: "ISO / Adobe; copyrighted, never committed",
+	}
+	// Freely downloadable, but 32 MB that only a guard needs, so it is
+	// placed by hand like the ISO PDFs rather than fetched in CI.
+	PDFReference17 = Dataset{
+		Name:   "Adobe PDF Reference 1.7",
+		Dir:    "spec/pdfref1.7",
+		Env:    "PDF_REFERENCE_17",
+		Fetch:  "download it from Adobe and place it by hand (see docs/testing.md)",
+		Proves: "Guards the committed `testdata/pdfref17_examples.json`: it must be exactly what `cmd/extract_spec_examples/pdfref17.py` makes of `pdfreference1.7old.pdf` (also needs `pdftohtml`, `pdftotext` and `python3`)",
+		Source: "[Adobe](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/pdfreference1.7old.pdf); copyrighted, never committed; its example code is licensed by its section 1.4 (THIRD_PARTY_NOTICES)",
 	}
 )

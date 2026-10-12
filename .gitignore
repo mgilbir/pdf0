@@ -59,6 +59,9 @@ testdata/pdf20examples/
 
 # ISO spec PDFs (copyrighted)
 spec/
+# The examples the spec-example tests extract from them: ISO's text, which is
+# not redistributed (THIRD_PARTY_NOTICES), kept here between runs.
+testdata/spec-examples/
 
 # Generated example output. The examples write to stdout now — or, for the one
 # that produces several documents, to a directory it is told about — so nothing

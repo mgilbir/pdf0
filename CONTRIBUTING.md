@@ -19,8 +19,9 @@ CI fetches every data set that has a make target and runs the whole suite over
 it, so the conformance ratchets, the Arlington oracle, the decode oracles and
 the rule-coverage ratchet all run on every pull request. What it cannot run is
 the data that is not redistributable: the tests over the Cal Poly suite, the
-PDF/UA reference files, the Order-X examples and the ISO PDFs skip there, and
-run only on a machine where someone has placed that data by hand. A green check
+PDF/UA reference files, the Order-X examples and the ISO PDFs (the ISO 32000
+spec-example tests among them) skip there, and run only on a machine where
+someone has placed that data by hand. A green check
 says nothing about those; run them yourself when you touch what they cover.
 
 The section below is generated from `.github/workflows/ci.yml` and
@@ -78,6 +79,7 @@ has the data.
 | Order-X examples | `spec/order-x/Order-X100_EN/05-ORDER-X EXAMPLES` | They come with the Order-X specification bundle and are placed by hand | **no**: local only |
 | ISO 32000-2 PDF | `spec/pdf2.0` | It is copyrighted and placed by hand | **no**: local only |
 | ISO 32000-1 PDF | `spec/pdf1.7` | It is copyrighted and placed by hand | **no**: local only |
+| Adobe PDF Reference 1.7 | `spec/pdfref1.7` | Download it from Adobe and place it by hand | **no**: local only |
 
 <!-- END GENERATED: ci -->
 

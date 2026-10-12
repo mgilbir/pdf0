@@ -48,15 +48,16 @@ var testEnvironment = []struct {
 	{name: "PATH", what: "where the programs below are found; the CLI transcripts put the command they built first", without: "—"},
 	{name: "CORPUSPROBE", readBy: "testdata/cc/sweep.sh", what: "the built `corpusprobe` the Common Crawl sweep runs; `make cc-sweep-limited` sets it", without: "the sweep runs `testdata/cc/run/corpusprobe`, which `make cc-sweep` builds"},
 	{name: "go", tool: true, what: "the Go command: it builds what the CLI, example and developer-tool tests execute, and lists the packages the lints read", without: "those tests fail"},
-	{name: "git", tool: true, what: "checks that no binary is committed, that `.gitignore` covers every command's output, and that THIRD_PARTY_NOTICES names every committed file that may be someone else's", without: "those tests fail"},
+	{name: "git", tool: true, what: "checks that no binary is committed, that `.gitignore` covers every command's output, that THIRD_PARTY_NOTICES names every committed file that may be someone else's, and that what it marks local is ignored and uncommitted", without: "those tests fail"},
 	{name: "bash", tool: true, what: "runs `scripts/check-no-binaries.sh` under its test", without: "that test fails"},
 	{name: "/bin/sh", tool: true, what: "runs the CLI transcripts in `docs/cli.md` and the CLI tests that need a redirect or a limit", without: "those tests fail; the transcript test skips on Windows"},
 	{name: "gs", tool: true, what: "Ghostscript: renders the pages the bitmap-font, colour-glyph and htmlpdf tests compare with what should be there", without: "the comparisons run with whichever of gs and pdftoppm is present, and skip with neither; htmlpdf's vertical-text ink check needs gs itself and skips"},
 	{name: "pdftoppm", tool: true, what: "poppler's renderer, the second rasteriser beside Ghostscript", without: "as for gs"},
-	{name: "pdftotext", tool: true, what: "poppler's text extractor: the spec-example pipeline, a table checked against ISO 32000-2's text, and htmlpdf's vertical text", without: "those tests skip"},
+	{name: "pdftotext", tool: true, what: "poppler's text extractor: it extracts the ISO 32000 examples from the hand-placed specifications for the spec-example tests, and reads a table checked against ISO 32000-2's text, the Adobe fixture's guard, and htmlpdf's vertical text", without: "those tests skip"},
+	{name: "pdftohtml", tool: true, what: "poppler's layout reader: the guard that the committed PDF Reference 1.7 example code is what its extractor makes of the Reference", without: "that guard skips"},
 	{name: "pdfinfo", tool: true, what: "poppler's reader, as an outside opinion of the documents the encryption tests write", without: "those interop checks skip"},
 	{name: "hb-view", tool: true, what: "HarfBuzz's renderer: a second opinion on how a COLRv1 emoji is painted", without: "that comparison skips"},
-	{name: "python3", tool: true, what: "the spec-example extractors, the stringprep cross-check (Python's own tables) and, with PyMuPDF installed, MuPDF's opinion of an encrypted file's passwords", without: "those tests skip"},
+	{name: "python3", tool: true, what: "the spec-example extractors (`cmd/extract_spec_examples`), the stringprep cross-check (Python's own tables) and, with PyMuPDF installed, MuPDF's opinion of an encrypted file's passwords", without: "those tests skip"},
 }
 
 // TestTestEnvironmentIsDocumented: every environment variable a test reads

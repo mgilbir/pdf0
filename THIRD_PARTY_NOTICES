@@ -10,14 +10,18 @@ established, the entry says so.
 
 Each entry names its files under "Files:", as paths or globs. A path
 followed by a name in brackets is a file that is mostly this repository's
-own code, holding one table that is not; the name is the table.
+own code, holding one table that is not; the name is the table. An entry
+whose material may not be passed on names, under "Local:", the files the
+tests make from it on a developer's machine instead: those are never
+committed.
 
 internal/lint/notices_test.go holds the file to the repository: every file
 an entry names exists, every named table is declared in its file, and every
 committed file that could be someone else's — anything under testdata/, any
 generated file, any binary file — is named by an entry here or is on that
-test's list of this repository's own files. A notice quoted from a file
-this repository keeps is checked against that file, letter for letter, white
+test's list of this repository's own files; and every "Local:" file is
+ignored by git and not committed. A notice quoted from a file this
+repository keeps is checked against that file, letter for letter, white
 space aside; a notice quoted from upstream names the URL and the pin it was
 read at.
 
@@ -252,17 +256,20 @@ Quoted from testdata/colrv1/LICENSE:
 Examples from ISO 32000
 ============================================================================
 
-Files:   testdata/spec_examples.json
-         testdata/spec_examples_17.json
-Source:  extracted by cmd/extract_spec_examples (main.py, main17.py) from
-         ISO 32000-2:2020, the PDF Association's sponsored edition with
-         errata to 20 July 2024, and from PDF32000_2008.pdf, Adobe's copy of
-         ISO 32000-1:2008
-Licence: none established — see below
+Local:   testdata/spec-examples/*.json
+Source:  extracted by cmd/extract_spec_examples (main.py, main17.py), on
+         the machine that runs the tests, from ISO 32000-2:2020, the PDF
+         Association's sponsored edition with errata to 20 July 2024, and
+         from PDF32000_2008.pdf, Adobe's copy of ISO 32000-1:2008, both
+         placed by hand under spec/
+Licence: none established — see below; not redistributed
 
 Every EXAMPLE block of the two specifications, with the section and page it
 is on and the sentence that describes it: PDF syntax, fragments of it, and
-some prose. The spec-example tests parse them. The two documents state:
+some prose. The spec-example tests parse them. They are not part of this
+repository: the tests extract them from the specifications into
+testdata/spec-examples/, which git ignores, and they must not be committed
+or passed on. The two documents state:
 
 Quoted from ISO 32000-2:2020, page ii:
 
@@ -281,9 +288,52 @@ Quoted from PDF32000_2008.pdf, page ii:
     preserved. Requests for permission to reproduce this document for any purpose should be arranged with ISO.
 
 No licence or permission to redistribute these extracts has been found, and
-none is claimed. Whether "required in the context of its implementation"
-covers them has not been established. This is an open question for the
-maintainer.
+none is claimed.
+
+============================================================================
+Example code from Adobe's PDF Reference, version 1.7
+============================================================================
+
+Files:   testdata/pdfref17_examples.json
+Source:  https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/pdfreference1.7old.pdf
+         (PDF Reference, sixth edition, version 1.7, Adobe Systems
+         Incorporated, November 2006; SHA-256
+         4aa598e7e2cc88867565fae793db38c140a10ca2b5551dccdb45e2124282ce29),
+         extracted by cmd/extract_spec_examples/pdfref17.py
+Licence: the permission given in the Reference's section 1.4, quoted below
+
+The code of 146 of the Reference's 147 examples, each with its example
+number and the page it is printed on, and nothing else: no caption, title
+or prose (the one example left out, 3.17, is an outline, not code). The
+spec-example tests parse it. The code is as the Reference prints it, with
+two changes: minus signs set as U+2212 are written as "-", and a few lines
+of prose set among the code (in Examples 4.37, 4.38, 8.20 and 8.21) are
+left out. The Reference is not committed; the extractor downloads it, or
+reads a copy, and refuses one whose SHA-256 is not the one above. The
+permission, with its footnote (the typeset text's line-end hyphens
+removed, and its superscript footnote mark written as "¹"):
+
+Quoted from PDF Reference, sixth edition, version 1.7, section 1.4, page 32:
+
+    Adobe owns copyrights in the PDF Reference. Adobe will enforce its
+    copyrights. One reason Adobe must retain its copyrights in the PDF
+    Reference is to maintain the integrity of the Portable Document Format
+    standard and ensure that the public can distinguish between the Portable
+    Document Format and other interchange formats for electronic documents.
+    Nonetheless, Adobe desires to promote the use of the Portable Document
+    Format for information interchange among diverse products and
+    applications. Accordingly, Adobe gives permission to everyone under its
+    copyrights to copy, modify, and distribute any example code in the
+    written specification, to the extent necessary to implement the Portable
+    Document Format in a manner compliant with the PDF Reference.¹
+
+    1. This example code includes, but is not limited to, the copyrighted
+    list of data structures, operators, and PostScript language function
+    definitions, that were referenced in PDF Reference, fifth edition,
+    version 1.6, Section 1.5 (Intellectual Property).
+
+pdf0 implements the Portable Document Format, and the fixture is the
+example code its parser and serializer are tested against.
 
 ============================================================================
 sRGB ICC profiles

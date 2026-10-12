@@ -2,11 +2,13 @@ package lint
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -30,7 +32,10 @@ import (
 //     testdata directory, any generated file, any binary file — is named by an
 //     entry, or is on ownFiles below, this repository's own;
 //   - a notice quoted from a file this repository keeps is that file's text,
-//     letter for letter, white space and comment marks aside.
+//     letter for letter, white space and comment marks aside;
+//   - what an entry names under "Local:" — made on a developer's machine from
+//     someone else's work that may not be redistributed — is ignored by git
+//     and committed nowhere.
 //
 // A table transcribed by hand into a source file cannot be told apart from
 // code by looking; those are found by reading, and once listed are held to
@@ -54,12 +59,14 @@ var ownFiles = []struct{ glob, why string }{
 	{"cmd/pdf0/testdata/signpdf/main.go", "signs a PDF with a key made on the spot, for the CLI's signed-input transcripts"},
 }
 
-// noticeEntry is one entry of the file: a title, the files it covers, where
+// noticeEntry is one entry of the file: a title, the files it covers (or,
+// under local, the files made from it that must never be committed), where
 // they came from, their licence, and the quotations under it.
 type noticeEntry struct {
 	title   string
 	line    int
 	files   []noticeFile
+	local   []noticeFile
 	source  string
 	licence string
 	quotes  []noticeQuote
@@ -105,6 +112,9 @@ func parseNotices(data string) []noticeEntry {
 		case strings.HasPrefix(l, "Files:"):
 			field = "files"
 			cur.files = append(cur.files, noticeFile{glob: strings.TrimSpace(strings.TrimPrefix(l, "Files:")), line: i + 1})
+		case strings.HasPrefix(l, "Local:"):
+			field = "local"
+			cur.local = append(cur.local, noticeFile{glob: strings.TrimSpace(strings.TrimPrefix(l, "Local:")), line: i + 1})
 		case strings.HasPrefix(l, "Source:"):
 			field = "source"
 			cur.source += strings.TrimSpace(strings.TrimPrefix(l, "Source:")) + "\n"
@@ -115,6 +125,8 @@ func parseNotices(data string) []noticeEntry {
 			switch field {
 			case "files":
 				cur.files = append(cur.files, noticeFile{glob: strings.TrimSpace(l), line: i + 1})
+			case "local":
+				cur.local = append(cur.local, noticeFile{glob: strings.TrimSpace(l), line: i + 1})
 			case "source":
 				cur.source += strings.TrimSpace(l) + "\n"
 			case "licence":
@@ -166,10 +178,10 @@ func readNotices(t *testing.T, root string) []noticeEntry {
 	quotes := 0
 	for _, e := range entries {
 		quotes += len(e.quotes)
-		if len(e.files) == 0 || e.source == "" || e.licence == "" {
-			t.Errorf("%s:%d: the entry %q has no Files, Source or Licence this could read", noticesFile, e.line, e.title)
+		if len(e.files)+len(e.local) == 0 || e.source == "" || e.licence == "" {
+			t.Errorf("%s:%d: the entry %q has no Files or Local, or no Source or Licence, this could read", noticesFile, e.line, e.title)
 		}
-		for _, f := range e.files {
+		for _, f := range append(slices.Clip(e.files), e.local...) {
 			if !noticeFileLine.MatchString(f.glob) || strings.ContainsAny(f.glob, " ()") {
 				t.Errorf("%s:%d: %q is not a path or glob, optionally followed by a table's name in brackets", noticesFile, f.line, f.glob)
 			}
@@ -319,6 +331,47 @@ func TestEveryThirdPartyFileHasANotice(t *testing.T) {
 	}
 }
 
+// TestLocalFilesAreNeverCommitted. An entry's "Local:" names what is made on
+// a developer's machine from someone else's work that may not be passed on:
+// the ISO 32000 examples, extracted from the hand-placed specifications into
+// testdata/spec-examples/ (they were committed, and shipped in every module
+// zip, until 2026-10). Each must be ignored by git, so that `git add -A`
+// cannot take it, and no committed file may be one.
+func TestLocalFilesAreNeverCommitted(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Fatalf("git is required to check .gitignore: %v", err)
+	}
+	root := testfiles.Root(t)
+	files := committedFiles(t, root)
+	n := 0
+	for _, e := range readNotices(t, root) {
+		for _, l := range e.local {
+			n++
+			for _, f := range files {
+				if ok, _ := path.Match(l.glob, f); ok {
+					t.Errorf("%s:%d: %s is committed, and the entry %q says what %s names must never be", noticesFile, l.line, f, e.title, l.glob)
+				}
+			}
+			// A path the glob names: each wildcard made a letter.
+			p := strings.NewReplacer("*", "x", "?", "x").Replace(l.glob)
+			cmd := exec.Command("git", "check-ignore", "-q", "--no-index", "--", p)
+			cmd.Dir = root
+			err := cmd.Run()
+			var exit *exec.ExitError
+			switch {
+			case err == nil:
+			case errors.As(err, &exit) && exit.ExitCode() == 1:
+				t.Errorf("%s:%d: the entry %q says %s must never be committed, and .gitignore does not cover it (%s)", noticesFile, l.line, e.title, l.glob, p)
+			default:
+				t.Fatalf("git check-ignore %s: %v", p, err)
+			}
+		}
+	}
+	if n == 0 {
+		t.Fatalf("no entry of %s names a Local file; the ISO examples' entry does, so this has stopped reading them", noticesFile)
+	}
+}
+
 // TestEveryNoticeQuotedFromHereIsWhatTheFileSays. A quotation whose source is
 // a file this repository keeps is checked against it. One quoted from upstream
 // names a URL and a pin, which a test without the network cannot read; those
@@ -392,12 +445,14 @@ func TestTheNoticesParserReadsWhatIsThere(t *testing.T) {
 		"Source:  https://example.org,\n         at abc\n" +
 		"Licence: MIT\n\nBody text.\n\nQuoted from c/x.txt:\n\n    one\n\n    two\nAfter.\n\n" +
 		rule + "\nSecond\n" + rule + "\n\n" +
-		"Files:   d.bin\nSource:  here\nLicence: none\n         stated\n"
+		"Files:   d.bin\nSource:  here\nLicence: none\n         stated\n\n" +
+		rule + "\nThird\n" + rule + "\n\n" +
+		"Local:   gen/*.json\n         gen2/x\nSource:  made here\nLicence: none\n"
 	got := parseNotices(data)
-	if len(got) != 2 {
-		t.Fatalf("read %d entries, want 2: %+v", len(got), got)
+	if len(got) != 3 {
+		t.Fatalf("read %d entries, want 3: %+v", len(got), got)
 	}
-	a, b := got[0], got[1]
+	a, b, c := got[0], got[1], got[2]
 	if a.title != "First" || len(a.files) != 2 || a.files[0].glob != "a/b.go" || a.files[0].table != "tableA" ||
 		a.files[1].glob != "c/*.txt" || a.files[1].table != "" {
 		t.Errorf("first entry's files read as %+v", a.files)
@@ -408,7 +463,11 @@ func TestTheNoticesParserReadsWhatIsThere(t *testing.T) {
 	if len(a.quotes) != 1 || a.quotes[0].from != "c/x.txt" || squeezeNotice(a.quotes[0].text) != "onetwo" {
 		t.Errorf("first entry's quotations read as %+v", a.quotes)
 	}
-	if b.title != "Second" || len(b.files) != 1 || b.files[0].glob != "d.bin" || b.licence != "none\nstated\n" || len(b.quotes) != 0 {
+	if b.title != "Second" || len(b.files) != 1 || b.files[0].glob != "d.bin" || b.licence != "none\nstated\n" || len(b.quotes) != 0 || len(b.local) != 0 {
 		t.Errorf("second entry read as %+v", b)
+	}
+	if c.title != "Third" || len(c.files) != 0 || len(c.local) != 2 || c.local[0].glob != "gen/*.json" || c.local[1].glob != "gen2/x" ||
+		c.source != "made here\n" {
+		t.Errorf("third entry read as %+v", c)
 	}
 }

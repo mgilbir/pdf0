@@ -34,7 +34,8 @@ differ is the machine:
 | the parser or serializer | `make refpdfs arlington`, then `make test-corpus` (the Arlington oracle and the round trips run inside it) |
 | an image codec | its sample set (`make ccitt`, `make jbig2`), then `go test ./...` |
 | font writing, Type 3 or colour glyphs, rendering | the programs and variables under [Tools and environment](#tools-and-environment): Ghostscript or poppler, `hb-view`, `PDF0_VERAPDF`, `PDF0_SKIA_PYTHON`; CI's corpus job has them all |
-| PDF/VT, PDF/X, DPart, PDF/UA, Order-X, the spec-example pipeline | the hand-placed data their oracles read ([External datasets](#external-datasets)); CI never has it |
+| PDF/VT, PDF/X, DPart, PDF/UA, Order-X, the ISO spec-example tests or their extractors | the hand-placed data their oracles read ([External datasets](#external-datasets)); CI never has it |
+| `cmd/extract_spec_examples/pdfref17.py`, or the PDF Reference fixture | the Reference, for `TestPDFRef17ExamplesRegenerate` ([the committed fixture](#the-pdf-reference-fixture)) |
 | a fuzz target or the parser's input handling | `make fuzz FUZZTIME=60s`, as CI does (see [Fuzzing](#fuzzing)) |
 
 `go test -v ./... 2>&1 | grep SKIP` lists what did not run.
@@ -42,10 +43,14 @@ differ is the machine:
 ## The tiers
 
 **Tier 1 — always runs.** `go test ./...` on a fresh clone runs the parser,
-serializer, encryption, validator, font, XMP and CLI unit tests, plus the PDF 1.7
-and PDF 2.0 spec-example tests. The spec examples *are* committed
-(`testdata/spec_examples.json`, `testdata/spec_examples_17.json`), as are the
-vendored XMP RelaxNG schemas (`testdata/xmp-rng/`), so those tiers never skip.
+serializer, encryption, validator, font, XMP and CLI unit tests, plus the tests
+over the example code of Adobe's PDF Reference 1.7, which is committed
+(`testdata/pdfref17_examples.json`), as are the vendored XMP RelaxNG schemas
+(`testdata/xmp-rng/`), so those never skip. The tests over the examples of ISO
+32000-1 and ISO 32000-2 are in Tier 2: the examples are ISO's and are not
+committed, so they are extracted from the hand-placed specifications on the
+machine that runs them, and skip where those are absent (see
+[External datasets](#external-datasets)).
 
 A committed data file that a test cannot find fails the test: it is part of the
 repository, so its absence means a broken checkout or a wrong path, never an
@@ -64,8 +69,8 @@ a pass:
   make target writes it last, and only when every file arrived), so a fetch that
   was interrupted skips with a message saying so;
 - an environment override (`VERAPDF_CORPUS`, `ARLINGTON_MODEL`,
-  `VERAPDF_PROFILES`) that names something without its stamp, or nothing at all,
-  fails;
+  `VERAPDF_PROFILES`, `PDF_REFERENCE_17`) that names something without its
+  stamp, or nothing at all, fails;
 - a present data set in which the test finds zero files fails;
 - a named fixture missing from a present data set fails: the sets are pinned,
   so that is a layout change, not a missing download.
@@ -75,7 +80,7 @@ How `internal/testfiles` decides, for a test that asks for a data set
 
 ```mermaid
 flowchart TD
-    A["a test asks for a data set"] --> E{"its override variable set?<br/>(VERAPDF_CORPUS, ARLINGTON_MODEL, VERAPDF_PROFILES)"}
+    A["a test asks for a data set"] --> E{"its override variable set?<br/>(VERAPDF_CORPUS, ARLINGTON_MODEL, VERAPDF_PROFILES, PDF_REFERENCE_17)"}
     E -->|no| D{"a directory at the default location?"}
     E -->|yes| C{"a directory where it points?"}
     D -->|no| SKIP1["SKIP: never fetched or placed<br/>(the message says how to fetch or place it)"]
@@ -92,9 +97,9 @@ flowchart TD
 ```
 
 Data placed by hand (the Cal Poly suite, the PDF/UA reference files, the
-Order-X examples, the ISO PDFs) has no stamp; the directory's presence is the
-signal, and present-but-empty fails. That is the point of the tier, and skipping
-is also its hazard:
+Order-X examples, the ISO PDFs, the PDF Reference) has no stamp; the
+directory's presence is the signal, and present-but-empty fails. That is the
+point of the tier, and skipping is also its hazard:
 
 > **A green `go test ./...` does not mean your change is covered.** On a fresh
 > clone every test over a data set skips, including the entire PDF/A conformance
@@ -151,14 +156,28 @@ list the tests resolve data sets through) and from the tests themselves:
 | Cal Poly PDF/VT-1 suite | FP=0 oracle for PDF/VT, PDF/X and DPart: conforming files must report zero violations | Cal Poly Graphic Communications PDF/VT-1 Test File Suite; copyrighted test content, not redistributable | `testdata/pdfvt` | — | by hand | `TestCorpusContentStateMemoSound`, `TestValidateDPartsCalPolySuite`, `TestValidatePDFVTCalPolySuite`, `TestValidatePDFXCalPolySuite`, `TestWorkMeterHeadroom` |
 | PDFUA-Reference-Files | FP=0 oracle for PDF/UA: conformant reference documents must report zero violations | PDFUA-Reference-Files suite from pdfa.org | `spec/pdfua/reference-files` | — | by hand | `TestUAReferenceFilesNoFalsePositives` |
 | Order-X examples | Order-X container checks against the conforming examples | Order-X specification bundle | `spec/order-x/Order-X100_EN/05-ORDER-X EXAMPLES` | — | by hand | `TestValidateOrderXCorpus` |
-| ISO 32000-2 PDF | Guards the spec-example pipeline: the committed JSON must still be exactly what the extractor produces from `spec/pdf2.0/ISO_32000-2_sponsored-ec2.pdf` (also needs `pdftotext` and `python3`) | ISO; copyrighted, never committed | `spec/pdf2.0` | — | by hand | `TestSpecExamplesRegenerate` |
-| ISO 32000-1 PDF | As for ISO 32000-2, from `spec/pdf1.7/PDF32000_2008.pdf` | ISO / Adobe; copyrighted, never committed | `spec/pdf1.7` | — | by hand | `TestSpecExamplesRegenerate` |
+| ISO 32000-2 PDF | The ISO 32000-2 spec-example tests, over every EXAMPLE of `spec/pdf2.0/ISO_32000-2_sponsored-ec2.pdf` as `cmd/extract_spec_examples` extracts it on the spot into `testdata/spec-examples/` (needs `pdftotext` and `python3`): they lex and parse each, logging what does not, and round-trip each single complete object. The examples are ISO's and are not committed | ISO; copyrighted, never committed | `spec/pdf2.0` | — | by hand | `TestSpecExampleCount`, `TestSpecExamplesLex`, `TestSpecExamplesParse`, `TestSpecExamplesRoundTrip` |
+| ISO 32000-1 PDF | As for ISO 32000-2, from `spec/pdf1.7/PDF32000_2008.pdf` | ISO / Adobe; copyrighted, never committed | `spec/pdf1.7` | — | by hand | `TestSpec17ExampleCount`, `TestSpec17ExamplesLex`, `TestSpec17ExamplesParse`, `TestSpec17ExamplesRoundTrip` |
+| Adobe PDF Reference 1.7 | Guards the committed `testdata/pdfref17_examples.json`: it must be exactly what `cmd/extract_spec_examples/pdfref17.py` makes of `pdfreference1.7old.pdf` (also needs `pdftohtml`, `pdftotext` and `python3`) | [Adobe](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/pdfreference1.7old.pdf); copyrighted, never committed; its example code is licensed by its section 1.4 (THIRD_PARTY_NOTICES) | `spec/pdfref1.7` | `PDF_REFERENCE_17` | by hand | `TestPDFRef17ExamplesRegenerate` |
 
 <!-- END GENERATED: datasets -->
 
 `spec/` as a whole is gitignored, so anything you drop under it stays out of git.
-The two ISO PDFs must have exactly the names the spec-example test opens:
+The two ISO PDFs must have exactly the names the spec-example tests open:
 `spec/pdf2.0/ISO_32000-2_sponsored-ec2.pdf` and `spec/pdf1.7/PDF32000_2008.pdf`.
+Where one is placed, its tests run `cmd/extract_spec_examples` over it
+(`pdftotext -layout`, then `main.py` or `main17.py`) and keep the JSON in
+`testdata/spec-examples/`, which git ignores, under a name made from a digest of
+the PDF, the extractor and the pdftotext and python3 versions. The first run
+takes about fifteen seconds; later ones read the kept file, and any change to
+those inputs makes a new one, so there is no copy to go stale. The JSON is ISO's
+text: never commit it or pass it on (THIRD_PARTY_NOTICES). Without `pdftotext`
+or `python3` the tests skip; with them, an extraction that fails or finds fewer
+examples than the edition has fails.
+
+The PDF Reference goes in `spec/pdfref1.7/pdfreference1.7old.pdf`, or anywhere
+`PDF_REFERENCE_17` names the directory of; it is only needed to make
+[the committed fixture](#the-pdf-reference-fixture) again.
 
 One more data set is not in the table, because no `go test` reads it: the
 **Common Crawl PDFs** (digitalcorpora `CC-MAIN-2021-31-PDF-UNTRUNCATED`, about
@@ -193,10 +212,9 @@ the repository's scripts and manifests:
 
 - `testdata/xmp-rng/` — ISO 16684 RelaxNG schemas, MIT or the ISO 16684-2
   schema terms, used by `TestXMPTablesMatchRNG`;
-- the spec-example JSON (`testdata/spec_examples.json`,
-  `testdata/spec_examples_17.json`) — the examples of ISO 32000-2 and
-  ISO 32000-1. No licence to redistribute them has been established; the
-  notice says so;
+- `testdata/pdfref17_examples.json` — the example code of Adobe's PDF
+  Reference 1.7, under the permission its section 1.4 gives (the notice quotes
+  it); see [below](#the-pdf-reference-fixture);
 - `testdata/shaping/corpus.txt` — 12,475 strings, a copy of forme's shaping
   corpus, over which `Shape`, `Draw` and `MeasureShaped` have to agree with
   each other, which is a self-consistency check and needs no oracle beside it;
@@ -216,6 +234,35 @@ Makefiles; pdf0 has no targets for either. The EN 16931 / CIUS data
 HarfBuzz's answers over six fonts, Unicode's UAX #9 conformance suites,
 CoreText, and the Universal Shaping Engine's category corrections — are
 `github.com/mgilbir/forme`', along with the engine they judge.
+
+### The PDF Reference fixture
+
+`testdata/pdfref17_examples.json` is the code of 146 of the 147 examples of
+Adobe's *PDF Reference*, sixth edition, version 1.7 (2006), each with its
+example number, the page it is printed on and a `source` naming both, and
+nothing else: no caption, title or prose. Adobe permits copying and
+distributing the Reference's example code (its section 1.4, quoted in
+THIRD_PARTY_NOTICES); the ISO editions grant nothing of the kind, which is why
+their examples are not committed. `TestPDFRef17Examples` lexes, parses, writes
+and parses again every complete indirect object written out in PDF in it (250),
+every example that is one bare object (11) and both cross-reference sections,
+and fails on any that does not come back as it went in; the four objects the
+Reference misprints are listed, and must fail. It runs everywhere, CI
+included.
+
+To make the fixture again, after changing the extractor:
+
+```
+python3 cmd/extract_spec_examples/pdfref17.py > testdata/pdfref17_examples.json
+```
+
+It downloads the Reference from
+<https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/pdfreference1.7old.pdf>,
+or reads a copy given with `--pdf`, refuses any file whose SHA-256 is not the
+one it pins, and needs `pdftohtml` and `pdftotext` (poppler). Review the
+difference before committing it. With the Reference placed (above),
+`TestPDFRef17ExamplesRegenerate` runs the extractor and fails unless it writes
+the committed file byte for byte.
 
 ## Tools and environment
 
@@ -250,15 +297,16 @@ program the list does not describe.
 | Program | What for | Without it | Run by |
 |---|---|---|---|
 | `go` | the Go command: it builds what the CLI, example and developer-tool tests execute, and lists the packages the lints read | those tests fail | tests in `cmd/pdf0`, `htmlpdf`, `internal/cmd`, `internal/cmd/corpusprobe`, `internal/cmd/corpustime`, `internal/lint` |
-| `git` | checks that no binary is committed, that `.gitignore` covers every command's output, and that THIRD_PARTY_NOTICES names every committed file that may be someone else's | those tests fail | `internal/lint: TestEveryNoticeQuotedFromHereIsWhatTheFileSays`, `internal/lint: TestEveryThirdPartyFileHasANotice`, `internal/lint: TestGitignoreCoversEveryCommand`, `scripts: TestCheckNoBinariesReadsTheIndex` |
+| `git` | checks that no binary is committed, that `.gitignore` covers every command's output, that THIRD_PARTY_NOTICES names every committed file that may be someone else's, and that what it marks local is ignored and uncommitted | those tests fail | `internal/lint: TestEveryNoticeQuotedFromHereIsWhatTheFileSays`, `internal/lint: TestEveryThirdPartyFileHasANotice`, `internal/lint: TestGitignoreCoversEveryCommand`, `internal/lint: TestLocalFilesAreNeverCommitted`, `scripts: TestCheckNoBinariesReadsTheIndex` |
 | `bash` | runs `scripts/check-no-binaries.sh` under its test | that test fails | `scripts: TestCheckNoBinariesReadsTheIndex` |
 | `/bin/sh` | runs the CLI transcripts in `docs/cli.md` and the CLI tests that need a redirect or a limit | those tests fail; the transcript test skips on Windows | tests in `cmd/pdf0` |
 | `gs` | Ghostscript: renders the pages the bitmap-font, colour-glyph and htmlpdf tests compare with what should be there | the comparisons run with whichever of gs and pdftoppm is present, and skip with neither; htmlpdf's vertical-text ink check needs gs itself and skips | tests in the root package, `htmlpdf` |
 | `pdftoppm` | poppler's renderer, the second rasteriser beside Ghostscript | as for gs | tests in the root package, `htmlpdf` |
-| `pdftotext` | poppler's text extractor: the spec-example pipeline, a table checked against ISO 32000-2's text, and htmlpdf's vertical text | those tests skip | `TestSpecExamplesRegenerate`, `htmlpdf: TestAStretchedOperatorIsItsGlyphsAndItsCharacterOnce`, `htmlpdf: TestATextShadowIsDrawnAndIsNotText`, `htmlpdf: TestAnEmphasisMarkIsDrawnAndIsNotText`, `htmlpdf: TestUprightTextInAFaceWithoutVerticalMetricsIsSetOnEmBoxes`, `htmlpdf: TestUprightTextIsDrawnByItsVerticalMetrics`, `internal/pdfdoc: TestTableMatchesSpec` |
+| `pdftotext` | poppler's text extractor: it extracts the ISO 32000 examples from the hand-placed specifications for the spec-example tests, and reads a table checked against ISO 32000-2's text, the Adobe fixture's guard, and htmlpdf's vertical text | those tests skip | tests in the root package, `htmlpdf`, `internal/pdfdoc` |
+| `pdftohtml` | poppler's layout reader: the guard that the committed PDF Reference 1.7 example code is what its extractor makes of the Reference | that guard skips | `TestPDFRef17ExamplesRegenerate` |
 | `pdfinfo` | poppler's reader, as an outside opinion of the documents the encryption tests write | those interop checks skip | `TestEmptyOwnerPasswordDoesNotOpen`, `TestR3OwnerPasswordShortKey`, `TestR6PasswordInterop` |
 | `hb-view` | HarfBuzz's renderer: a second opinion on how a COLRv1 emoji is painted | that comparison skips | `TestAColourGlyphTakesTheTextColour`, `TestColourEmojiAreWhatHarfBuzzPaints` |
-| `python3` | the spec-example extractors, the stringprep cross-check (Python's own tables) and, with PyMuPDF installed, MuPDF's opinion of an encrypted file's passwords | those tests skip | `TestR3OwnerPasswordShortKey`, `TestR4PasswordPDFDocEncoding`, `TestR6PasswordInterop`, `TestSpecExamplesRegenerate`, `internal/saslprep: TestNFKCMatchesUnicode32`, `internal/saslprep: TestPrepareMatchesPythonReference`, `internal/saslprep: TestTablesMatchPythonStringprep` |
+| `python3` | the spec-example extractors (`cmd/extract_spec_examples`), the stringprep cross-check (Python's own tables) and, with PyMuPDF installed, MuPDF's opinion of an encrypted file's passwords | those tests skip | tests in the root package, `internal/saslprep` |
 
 <!-- END GENERATED: testenv -->
 
@@ -438,13 +486,13 @@ and must return an error instead.
   command (`internal/cmd/corpusprobe/main_test.go` and its sibling carry no tag, so `go test ./...` runs
   them); `rulecoverage`'s measurement lives in `internal/rulecov`, tested there
   and by `TestRuleCoverage`.
-- **`cmd/extract_spec_examples`** — the two Python extractors (`main.py` for
-  ISO 32000-2:2020, `main17.py` for ISO 32000-1:2008) that turn `pdftotext
-  -layout` output of a spec PDF into the committed
-  `testdata/spec_examples*.json`. You only need these when updating the spec
-  fixtures; `TestSpecExamplesRegenerate` re-runs them and diffs against the
-  committed JSON whenever the spec PDFs, `pdftotext` and `python3` are all
-  present.
+- **`cmd/extract_spec_examples`** — the Python extractors of the spec
+  examples. `main.py` (ISO 32000-2:2020) and `main17.py` (ISO 32000-1:2008)
+  turn `pdftotext -layout` output of a spec PDF into JSON; the ISO
+  spec-example tests run them on the spot and keep the result in the gitignored
+  `testdata/spec-examples/` ([External datasets](#external-datasets)).
+  `pdfref17.py` writes the committed `testdata/pdfref17_examples.json` from
+  Adobe's PDF Reference 1.7 ([the fixture](#the-pdf-reference-fixture)).
 
 ## Rule coverage
 
@@ -507,9 +555,12 @@ corpus to prove you closed them. See
 CI fetches every data set with a make target, counts what arrived, and runs the
 whole suite over it; it also fuzzes every target for a minute. What no CI run
 can cover is the hand-placed data — the Cal Poly suite, the PDF/UA reference
-files, the Order-X examples and the ISO PDFs — whose tests skip there. Before
-you propose a change those cover (PDF/VT, PDF/X, DPart, PDF/UA, Order-X, the
-spec-example pipeline), run them on a machine that has the data.
+files, the Order-X examples, the ISO PDFs and the PDF Reference — whose tests
+skip there: so CI runs the tests over the PDF Reference's committed example
+code, but not those over the ISO 32000 examples, nor the guard that the
+committed code is what its extractor makes. Before you propose a change those
+cover (PDF/VT, PDF/X, DPart, PDF/UA, Order-X, the spec-example extractors),
+run them on a machine that has the data.
 
 What each job runs, generated from `.github/workflows/ci.yml`:
 
@@ -565,5 +616,6 @@ has the data.
 | Order-X examples | `spec/order-x/Order-X100_EN/05-ORDER-X EXAMPLES` | They come with the Order-X specification bundle and are placed by hand | **no**: local only |
 | ISO 32000-2 PDF | `spec/pdf2.0` | It is copyrighted and placed by hand | **no**: local only |
 | ISO 32000-1 PDF | `spec/pdf1.7` | It is copyrighted and placed by hand | **no**: local only |
+| Adobe PDF Reference 1.7 | `spec/pdfref1.7` | Download it from Adobe and place it by hand | **no**: local only |
 
 <!-- END GENERATED: ci -->
