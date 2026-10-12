@@ -146,6 +146,26 @@ v0.6.0.
   (8.14.1). A document that passed may now get these findings. With the font
   rules above, every fail file of veraPDF's PDF/UA-1 and PDF/UA-2 suites is
   caught and none of their pass files is reported.
+- **`ValidatePDFA` reads a non-symbolic TrueType font's `/Differences` names
+  against Adobe's glyphlist.txt itself** (PDF/A-2/3/4), as veraPDF does: new
+  findings for names not on it — `uniXXXX`/`uXXXX`, the ZapfDingbats
+  `a1`–`a205`, `bracket`, `isinferior` — and none any more for names it carries
+  (for example `afii10017`) or for `.notdef`; each unlisted name is reported
+  once per array. An unembedded font is still checked, as the clause reads
+  (veraPDF checks embedded fonts only).
+- **PDF/A-1 forbids `/Differences` in a non-symbolic TrueType font** (6.3.7):
+  the key's presence, even an empty array, is the finding; the per-name findings
+  are no longer made at part 1.
+- **PDF/A-2/3/4 require a (3,1) cmap subtable** in the embedded program of a
+  non-symbolic TrueType font with `/Differences` (6.2.11.6 / 6.2.10.6).
+- **Rendering mode 7 is no longer exempt** from the font embedding,
+  glyph-coverage, width, damaged-program, PDF/A-1 CIDSet-completeness and Type 3
+  checks; only mode 3 (invisible text) is.
+- **The width rule** (PDF/A 6.3.6 / 6.2.11.5 / 6.2.10.5, PDF/UA 7.21.5) compares
+  a glyph the program lacks at the width of the glyph drawn in its place
+  (.notdef, or CID 0 under Identity-H/V), a code outside `/Widths` against the
+  descriptor's `/MissingWidth` (0 by default), and now checks codes an Identity
+  CMap maps to no CID. New findings are possible.
 
 ### Signatures
 
@@ -324,3 +344,13 @@ v0.6.0.
 - **The developer tools under `internal/cmd` answer `-h`** (#340) rather than
   run: `genicc` and `gensaslprep` regenerated their files, and `gensaslprep`
   fetched the RFC, when asked for help.
+- **A symbolic TrueType font's cmap is judged by each PDF/A part's own rule.**
+  PDF/A-2/3 accept several subtables when one is (3,0); PDF/A-4 requires a (3,0)
+  or (1,0) (a font with only (3,1) is a new finding there). A (1,0)+(3,0) font
+  is no longer reported at PDF/A-2 to -4.
+- **A non-symbolic TrueType font's codes left undefined by its Encoding
+  dictionary are named from StandardEncoding** (ISO 32000-1 9.6.6.4), removing
+  false glyph-missing, `.notdef` and width findings in `ValidatePDFA`,
+  `ValidatePDFUA` and `ValidatePDFUA2` (for example under `/BaseEncoding
+  /Identity`). PDF/UA 7.21.5 now also compares a code that selects `.notdef`
+  against `.notdef`'s width.
