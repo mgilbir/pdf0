@@ -17,7 +17,7 @@ import (
 // "Glyphs that are referenced only with rendering mode 3". Mode 7 adds the
 // glyph outlines to the clipping path, which decides what is painted after it,
 // and veraPDF's embedding, glyph-presence and width tests all exempt
-// renderingMode == 3 and nothing else.
+// rendering mode 3 and nothing else.
 
 // TestRendersVisiblyExemptsMode3Only is the predicate every gate reads.
 func TestRendersVisiblyExemptsMode3Only(t *testing.T) {
