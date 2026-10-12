@@ -229,6 +229,21 @@ v0.6.0.
 - **`make check` is CI's build-test job**, in its order (#340), and
   `make check-examples` runs every example; `TestMakeTargetsAreWhatCIRuns` holds
   both to CI.
+- **The ISO 32000 spec-example tests need the hand-placed spec PDFs.**
+  `TestSpecExamples*` and `TestSpec17Examples*` extract the examples on the spot
+  from `spec/pdf2.0/ISO_32000-2_sponsored-ec2.pdf` and
+  `spec/pdf1.7/PDF32000_2008.pdf` (with `pdftotext` and `python3`) into the
+  gitignored `testdata/spec-examples/`, and skip without them.
+  `testdata/spec_examples.json` and `testdata/spec_examples_17.json` are no
+  longer in the repository or the module zip: they held ISO text there is no
+  permission to redistribute.
+- **`testdata/pdfref17_examples.json`** holds the example code of Adobe's PDF
+  Reference 1.7, committed under that book's §1.4 permission;
+  `TestPDFRef17Examples` round-trips 250 objects, 11 bare objects and 2 xref
+  sections from it on every run, CI included.
+  `cmd/extract_spec_examples/pdfref17.py` regenerates it; the optional
+  `PDF_REFERENCE_17` / `spec/pdfref1.7` dataset enables
+  `TestPDFRef17ExamplesRegenerate`.
 
 ## Added
 
