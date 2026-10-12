@@ -603,3 +603,42 @@ func TestDifferencesNeedCmap31(t *testing.T) {
 		}
 	}
 }
+
+// TestIncompleteCIDCodeIsWidthChecked: the odd byte that ends an Identity-H
+// string maps to no CID, and is drawn with CID 0's glyph (ISO 32000-1
+// 9.7.6.3), advancing by its width; that width is held to the declared one
+// like any other glyph's (corpus PDF_A-2b 6-2-11-4-1-t02-fail-e, which veraPDF
+// fails under 6.2.11.5).
+func TestIncompleteCIDCodeIsWidthChecked(t *testing.T) {
+	for _, c := range []struct {
+		dw   int
+		want bool
+	}{{1000, true}, {0, false}} {
+		desc := object.NewDictionary(
+			object.Entry{Key: "Subtype", Value: object.Name("CIDFontType2")},
+			object.Entry{Key: "CIDToGIDMap", Value: object.Name("Identity")},
+			object.Entry{Key: "DW", Value: object.Integer(c.dw)},
+			object.Entry{Key: "W", Value: object.Array{object.Integer(1), object.Array{object.Integer(500)}}},
+			object.Entry{Key: "FontDescriptor", Value: object.NewDictionary(object.Entry{Key: "FontFile2", Value: object.IndirectRef{Number: 9}})},
+		)
+		font := object.NewDictionary(
+			object.Entry{Key: "Subtype", Value: object.Name("Type0")},
+			object.Entry{Key: "Encoding", Value: object.Name("Identity-H")},
+			object.Entry{Key: "DescendantFonts", Value: object.Array{desc}},
+		)
+		doc := mkV(core.View{Objects: map[int]*object.IndirectObject{
+			1: {Number: 1, Value: font},
+			9: {Number: 9, Value: object.NewStream(&object.Dictionary{}, fonttest.SFNT(fonttest.SFNTOptions{Glyphs: []fonttest.Glyph{{Rune: 'A', Advance: 500, HasShape: true}}}))},
+		}})
+		u := &core.FontTextUsage{ObjNum: 1, Strings: [][]byte{{0, 1, 0}}, Modes: map[int]bool{0: true}}
+		got := false
+		for _, m := range errMessages(checkCIDFontConsistency(doc, PDFA2b, "", font, u)) {
+			if strings.Contains(m, "width information") {
+				got = true
+			}
+		}
+		if got != c.want {
+			t.Errorf("/DW %d: width finding = %v, want %v", c.dw, got, c.want)
+		}
+	}
+}

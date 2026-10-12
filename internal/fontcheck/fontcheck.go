@@ -108,6 +108,37 @@ func SimpleFontCodeToName(doc core.View, fontDict *object.Dictionary, symbolic b
 	return table
 }
 
+// BaseEncodingModelled reports whether the base encoding under the table
+// SimpleFontCodeToName builds is one this package has a table for. When it is
+// not — a symbolic font whose base is the font program's own built-in
+// encoding, or a predefined encoding outside ISO 32000-1 Annex D.2 such as
+// MacExpertEncoding — a code absent from the table is "unknown", not
+// "unencoded": only the Differences entries are trustworthy. When it is,
+// absence is real and the code selects .notdef (ISO 32000-1, 9.6.6).
+func BaseEncodingModelled(doc core.View, fontDict *object.Dictionary, symbolic bool) bool {
+	modelled := func(n object.Name) bool {
+		switch n {
+		case "WinAnsiEncoding", "MacRomanEncoding", "StandardEncoding":
+			return true
+		}
+		return false
+	}
+	switch enc := doc.Resolve(fontDict.Get("Encoding")).(type) {
+	case object.Name:
+		return modelled(enc)
+	case *object.Dictionary:
+		if base, ok := doc.Resolve(enc.Get("BaseEncoding")).(object.Name); ok {
+			return modelled(base)
+		}
+		// No BaseEncoding: a non-symbolic font falls back to
+		// StandardEncoding, a symbolic one to its built-in encoding.
+		return !symbolic
+	case nil:
+		return !symbolic
+	}
+	return false
+}
+
 // Simple is a simple font — TrueType, Type 1 or CFF — read for checking the
 // glyphs it shows: its embedded program, its encoding, and the widths its
 // dictionary declares. A Type 3 font has no program; Type3WidthDiffers is its
@@ -118,9 +149,13 @@ type Simple struct {
 	Symbolic bool
 	// Encoding is SimpleFontCodeToName's table for the font.
 	Encoding map[byte]string
+	// EncodingModelled is BaseEncodingModelled's answer: whether a code
+	// Encoding has no name for selects .notdef, or is unknown.
+	EncodingModelled bool
 
 	firstChar    int
 	widths       object.Array
+	haveWidths   bool
 	missingWidth float64
 }
 
@@ -134,20 +169,36 @@ func LoadSimple(doc core.View, fontDict *object.Dictionary) (*Simple, *object.Di
 	if fp == nil {
 		return nil, fd, r
 	}
+	return newSimple(doc, fontDict, fd, fp), fd, core.ReasonOK
+}
+
+// newSimple reads the font dictionary and descriptor around a program
+// already read.
+func newSimple(doc core.View, fontDict, fd *object.Dictionary, fp *font.Program) *Simple {
 	s := &Simple{Program: fp, Symbolic: Symbolic(doc, fd)}
 	s.Subtype, _ = doc.ResolveName(fontDict.Get("Subtype"))
 	s.Encoding = SimpleFontCodeToName(doc, fontDict, s.Symbolic)
+	s.EncodingModelled = BaseEncodingModelled(doc, fontDict, s.Symbolic)
 	s.firstChar = intVal(doc, fontDict.Get("FirstChar"))
-	s.widths, _ = doc.Resolve(fontDict.Get("Widths")).(object.Array)
+	s.widths, s.haveWidths = doc.Resolve(fontDict.Get("Widths")).(object.Array)
 	if fd != nil {
 		s.missingWidth = numVal(doc, fd.Get("MissingWidth"))
 	}
-	return s, fd, core.ReasonOK
+	return s
 }
 
-// ProgramWidth is the embedded program's advance width for a code, in
-// thousandths of text space: by glyph index through the cmap for TrueType, by
-// glyph name for Type 1 and CFF.
+// ProgramWidth is the advance width the embedded program draws a code with,
+// in thousandths of text space: by glyph index through the cmap for TrueType,
+// by glyph name for Type 1 and CFF.
+//
+// A Type 1 or CFF code whose name the program does not define, or that the
+// encoding names no glyph for, draws .notdef: "If an encoding maps to a
+// character name that does not exist in the Type 1 font program, the .notdef
+// glyph shall be substituted" (ISO 32000-1 9.6.6.2). Its width is .notdef's.
+// A code without a name when the base encoding is the program's own, which
+// pdf0 does not read (EncodingModelled), names a glyph pdf0 cannot know, and
+// has no width. (TrueType gets .notdef from simplefont.TrueTypeGlyph, as glyph
+// 0.)
 func (s *Simple) ProgramWidth(code byte) (float64, bool) {
 	name := s.Encoding[code]
 	if s.Subtype == "TrueType" {
@@ -157,7 +208,11 @@ func (s *Simple) ProgramWidth(code byte) (float64, bool) {
 		}
 		return s.Program.WidthByGID[gid], true
 	}
-	if name == "" {
+	switch {
+	case name != "" && s.Program.GlyphNames[name]:
+	case name != "" || s.EncodingModelled:
+		name = ".notdef"
+	default:
 		return 0, false
 	}
 	w, ok := s.Program.WidthByName[name]
@@ -165,9 +220,11 @@ func (s *Simple) ProgramWidth(code byte) (float64, bool) {
 }
 
 // DeclaredWidth is the width the font dictionary declares for a code:
-// Widths[code-FirstChar] when in range, else a non-zero /MissingWidth.
+// Widths[code-FirstChar] when in range, else the descriptor's /MissingWidth —
+// 0 when it has none (ISO 32000-1 Tables 111 and 122). A dictionary with no
+// /Widths array declares a width only through a non-zero /MissingWidth.
 func (s *Simple) DeclaredWidth(doc core.View, code byte) (float64, bool) {
-	return declaredWidth(doc, s.widths, s.firstChar, code, s.missingWidth)
+	return declaredWidth(doc, s.widths, s.haveWidths, s.firstChar, code, s.missingWidth)
 }
 
 // WidthDiffers reports whether the program and the dictionary both give a
@@ -266,14 +323,44 @@ func (c *CID) DeclaredWidth(cid int) (float64, bool) {
 	return c.dw, c.wComplete
 }
 
-// WidthDiffers reports whether a mapped glyph's declared and program widths
-// are both known and differ by more than WidthTolerance. The answer depends on
-// the CID alone, so a caller may ask once per CID.
-func (c *CID) WidthDiffers(g CIDGlyph) bool {
-	if !g.Code.Mapped || !g.KeyKnown {
-		return false
+// ProgramWidth is the advance width the embedded program draws a shown code
+// with, in thousandths of text space.
+//
+// A code the CMap maps to no CID, and a CID whose glyph the program lacks, are
+// drawn with a substitute: the CID a notdef mapping in the CMap names, and
+// failing that "the glyph for CID 0" (ISO 32000-1 9.7.6.3). Identity-H and -V
+// have no notdef mappings, so under them the substitute is CID 0's glyph, and
+// its width is the program's. A CMap of the document's own may have notdef
+// mappings, which are not consulted for a missing glyph here, so under one the
+// substitute is not known and there is no width. A map pdf0 could not read
+// names no glyph, and has no width either.
+func (c *CID) ProgramWidth(g CIDGlyph) (float64, bool) {
+	if g.Code.Mapped {
+		if !g.KeyKnown {
+			return 0, false
+		}
+		if w, ok := c.GlyphMap.Width(c.Program, g.Key); ok {
+			return w, true
+		}
 	}
-	progW, haveProg := c.GlyphMap.Width(c.Program, g.Key)
+	if !c.CMap.Identity() {
+		return 0, false
+	}
+	key, ok := c.GlyphMap.Glyph(0)
+	if !ok {
+		return 0, false
+	}
+	return c.GlyphMap.Width(c.Program, key)
+}
+
+// WidthDiffers reports whether a shown glyph's declared and program widths
+// (ProgramWidth) are both known and differ by more than WidthTolerance. The
+// declared width is the code's CID's — CID 0's for a code the CMap maps to
+// none. The answer depends on the CID alone, and is the same for every code
+// the CMap leaves unmapped, so a caller may ask once per CID, and once for the
+// unmapped codes.
+func (c *CID) WidthDiffers(g CIDGlyph) bool {
+	progW, haveProg := c.ProgramWidth(g)
 	if !haveProg {
 		return false
 	}
@@ -311,7 +398,11 @@ func Type3WidthDiffers(doc core.View, fontDict *object.Dictionary, u *core.FontT
 	}
 	enc := SimpleFontCodeToName(doc, fontDict, false)
 	firstChar := intVal(doc, fontDict.Get("FirstChar"))
-	widths, _ := doc.Resolve(fontDict.Get("Widths")).(object.Array)
+	widths, haveWidths := doc.Resolve(fontDict.Get("Widths")).(object.Array)
+	var missingWidth float64 // a Type 3 font's descriptor is optional
+	if fd := doc.ResolveDict(fontDict.Get("FontDescriptor")); fd != nil {
+		missingWidth = numVal(doc, fd.Get("MissingWidth"))
+	}
 	fm := parseFontMatrix(doc, fontDict.Get("FontMatrix"))
 	unit := math.Hypot(fm[0], fm[1]) // text-space length of one glyph-space x unit
 	if unit == 0 || math.IsNaN(unit) || math.IsInf(unit, 0) {
@@ -330,7 +421,7 @@ func Type3WidthDiffers(doc core.View, fontDict *object.Dictionary, u *core.FontT
 			if !ok {
 				continue
 			}
-			pdfW, havePDF := declaredWidth(doc, widths, firstChar, code, 0)
+			pdfW, havePDF := declaredWidth(doc, widths, haveWidths, firstChar, code, missingWidth)
 			if havePDF && math.Abs(pdfW-glyphW) > tolerance {
 				differs = true
 			}
@@ -340,14 +431,17 @@ func Type3WidthDiffers(doc core.View, fontDict *object.Dictionary, u *core.FontT
 }
 
 // declaredWidth returns the width a simple font's dictionary declares for a
-// code: Widths[code-FirstChar] when in range, else missingWidth when it is not
-// zero.
-func declaredWidth(doc core.View, widths object.Array, firstChar int, code byte, missingWidth float64) (float64, bool) {
+// code: Widths[code-FirstChar] when in range; else missingWidth, which is 0
+// when the descriptor gives none, when the dictionary has a /Widths array
+// (haveWidths) — "For character codes outside the range FirstChar to
+// LastChar, the value of MissingWidth ... shall be used" (ISO 32000-1 Table
+// 111) — or, without one, when missingWidth is not zero.
+func declaredWidth(doc core.View, widths object.Array, haveWidths bool, firstChar int, code byte, missingWidth float64) (float64, bool) {
 	idx := int(code) - firstChar
 	if idx >= 0 && idx < len(widths) {
 		return numVal(doc, widths[idx]), true
 	}
-	if missingWidth != 0 {
+	if haveWidths || missingWidth != 0 {
 		return missingWidth, true
 	}
 	return 0, false

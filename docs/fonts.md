@@ -219,6 +219,25 @@ visibly, `damagedFontProgramError` reports it under the `embed` clause rather
 than silently exempting the font — across the corpus every valid embedded
 program parses, so this raises no false positive.
 
+**A glyph the program lacks is still compared**, because a reader still draws
+something in its place and advances by that glyph's width. A Type 1 or CFF
+code whose name the program does not define, or that a modelled base encoding
+names no glyph for, draws `.notdef` (ISO 32000-1 9.6.6.2), so
+`Simple.ProgramWidth` is `.notdef`'s width; under a base encoding pdf0 does not
+read (the program's own) a nameless code has no width. A CIDFont code whose
+CID has no glyph, or that the CMap maps to no CID, draws CID 0's glyph
+(9.7.6.3) — after any notdef mapping in the CMap, which Identity-H and -V do
+not have; `CID.ProgramWidth` substitutes CID 0 under those two only, and under
+a CMap of the document's own declines. The declared side follows Table 111: a
+code outside `/Widths` takes the descriptor's `/MissingWidth`, 0 when there is
+none, so a dictionary that leaves a shown code out of `/Widths` declares it 0
+wide; a dictionary with no `/Widths` at all declares only a non-zero
+`/MissingWidth`. Type 3 reads its optional descriptor's `/MissingWidth` the
+same way. veraPDF compares the same pairs for TrueType, CIDFontType2 and
+`/Type1C` programs; for a Type 1 `/FontFile` program and a CID-keyed CFF it
+compares a missing glyph against `/MissingWidth` instead of `.notdef`'s width,
+which can disagree with pdf0 when the two widths differ.
+
 ## Encodings and character mapping
 
 Two generated tables in forme back the encoding machinery, and their headers

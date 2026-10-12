@@ -56,14 +56,23 @@ func uaWidthDiffers(d core.View, fontDict *object.Dictionary, u *core.FontTextUs
 			return subtype, false
 		}
 		// The answer is the CID's, so each is asked once: a long document
-		// shows the same few thousand CIDs over and over.
+		// shows the same few thousand CIDs over and over. Every code the
+		// CMap maps to no CID has the same answer too.
 		asked := map[int]bool{}
+		askedUnmapped := false
 		for _, s := range u.Strings {
 			for g := range c.Shown(s) {
-				if !g.Code.Mapped || asked[g.Code.CID] {
-					continue
+				if g.Code.Mapped {
+					if asked[g.Code.CID] {
+						continue
+					}
+					asked[g.Code.CID] = true
+				} else {
+					if askedUnmapped {
+						continue
+					}
+					askedUnmapped = true
 				}
-				asked[g.Code.CID] = true
 				if c.WidthDiffers(g) {
 					return c.Subtype, true
 				}

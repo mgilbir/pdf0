@@ -170,35 +170,40 @@ func TestUAGlyphWidthsTrueTypeNameTable(t *testing.T) {
 	}
 }
 
+// identityType2Font is an Identity-H Type 0 font over a CIDFontType2 on
+// widthProgram (object 7) — .notdef 0 wide, CID 1 500, CID 2 600 — with
+// CIDToGIDMap Identity, /DW dw and, when not nil, /W w.
+func identityType2Font(w object.Object, dw int) *object.Dictionary {
+	fd := object.NewDictionary(
+		object.Entry{Key: "Type", Value: object.Name("FontDescriptor")},
+		object.Entry{Key: "FontName", Value: object.Name("Test")},
+		object.Entry{Key: "Flags", Value: object.Integer(4)},
+		object.Entry{Key: "FontFile2", Value: object.IndirectRef{Number: 7}},
+	)
+	desc := object.NewDictionary(
+		object.Entry{Key: "Type", Value: object.Name("Font")},
+		object.Entry{Key: "Subtype", Value: object.Name("CIDFontType2")},
+		object.Entry{Key: "BaseFont", Value: object.Name("Test")},
+		object.Entry{Key: "FontDescriptor", Value: fd},
+		object.Entry{Key: "CIDToGIDMap", Value: object.Name("Identity")},
+		object.Entry{Key: "DW", Value: object.Integer(dw)},
+	)
+	if w != nil {
+		desc.Set("W", w)
+	}
+	return object.NewDictionary(
+		object.Entry{Key: "Type", Value: object.Name("Font")},
+		object.Entry{Key: "Subtype", Value: object.Name("Type0")},
+		object.Entry{Key: "BaseFont", Value: object.Name("Test")},
+		object.Entry{Key: "Encoding", Value: object.Name("Identity-H")},
+		object.Entry{Key: "DescendantFonts", Value: object.Array{desc}},
+	)
+}
+
 // TestUAGlyphWidthsCIDFont: the same rule for a composite font, where the
 // declared width is the CIDFont's /W entry for the CID, or /DW.
 func TestUAGlyphWidthsCIDFont(t *testing.T) {
-	mk := func(w object.Object, dw int) *object.Dictionary {
-		fd := object.NewDictionary(
-			object.Entry{Key: "Type", Value: object.Name("FontDescriptor")},
-			object.Entry{Key: "FontName", Value: object.Name("Test")},
-			object.Entry{Key: "Flags", Value: object.Integer(4)},
-			object.Entry{Key: "FontFile2", Value: object.IndirectRef{Number: 7}},
-		)
-		desc := object.NewDictionary(
-			object.Entry{Key: "Type", Value: object.Name("Font")},
-			object.Entry{Key: "Subtype", Value: object.Name("CIDFontType2")},
-			object.Entry{Key: "BaseFont", Value: object.Name("Test")},
-			object.Entry{Key: "FontDescriptor", Value: fd},
-			object.Entry{Key: "CIDToGIDMap", Value: object.Name("Identity")},
-			object.Entry{Key: "DW", Value: object.Integer(dw)},
-		)
-		if w != nil {
-			desc.Set("W", w)
-		}
-		return object.NewDictionary(
-			object.Entry{Key: "Type", Value: object.Name("Font")},
-			object.Entry{Key: "Subtype", Value: object.Name("Type0")},
-			object.Entry{Key: "BaseFont", Value: object.Name("Test")},
-			object.Entry{Key: "Encoding", Value: object.Name("Identity-H")},
-			object.Entry{Key: "DescendantFonts", Value: object.Array{desc}},
-		)
-	}
+	mk := identityType2Font
 	prog := map[int]object.Object{7: object.NewStream(&object.Dictionary{}, widthProgram())}
 	cases := []struct {
 		name string
@@ -368,5 +373,36 @@ func TestUAGlyphWidthsAskEachCIDOnce(t *testing.T) {
 	ua1, _ := clauseFindings(t, func() core.View { return fontPage(font, "BT /F1 12 Tf <4341> Tj ET", extra) }, "7.21.5")
 	if len(ua1) == 0 {
 		t.Error("CID 0, shown after a code the CMap does not define, was not compared")
+	}
+}
+
+// TestUAGlyphWidthsSubstituteCID0: a code the CMap maps to no CID — here the
+// odd byte that ends an Identity-H string — and a CID the program has no glyph
+// for are drawn with CID 0's glyph (ISO 32000-1 9.7.6.3), and advance by its
+// width. veraPDF compares that width with the declared one, and so does pdf0.
+func TestUAGlyphWidthsSubstituteCID0(t *testing.T) {
+	prog := map[int]object.Object{7: object.NewStream(&object.Dictionary{}, widthProgram())}
+	w := object.Array{object.Integer(1), object.Array{object.Integer(500), object.Integer(600)}}
+	cases := []struct {
+		name    string
+		dw      int
+		content string
+		want    bool
+	}{
+		{"an incomplete code, .notdef's 0 against /DW 1000", 1000, "BT /F1 12 Tf <000100> Tj ET", true},
+		{"an incomplete code, /DW 0", 0, "BT /F1 12 Tf <000100> Tj ET", false},
+		{"CID 9, which the program lacks, against /DW 1000", 1000, "BT /F1 12 Tf <0009> Tj ET", true},
+		{"CID 9, /DW 0", 0, "BT /F1 12 Tf <0009> Tj ET", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ua1, ua2 := clauseFindings(t, func() core.View { return fontPage(identityType2Font(w, c.dw), c.content, prog) }, "7.21.5")
+			if got := len(ua1) > 0; got != c.want {
+				t.Errorf("PDF/UA-1: reported = %v, want %v (%v)", got, c.want, ua1)
+			}
+			if got := len(ua2) > 0; got != c.want {
+				t.Errorf("PDF/UA-2: reported = %v, want %v (%v)", got, c.want, ua2)
+			}
+		})
 	}
 }

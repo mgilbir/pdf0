@@ -462,35 +462,12 @@ func simpleFontCodeToName(doc core.View, fontDict *object.Dictionary, symbolic b
 	return fontcheck.SimpleFontCodeToName(doc, fontDict, symbolic)
 }
 
-// simpleFontBaseEncodingModelled reports whether the base encoding under the
-// table simpleFontCodeToName builds is one this package actually has a table
-// for. When it is not — a symbolic font whose base is the font program's own
-// built-in encoding, or a predefined encoding outside Annex D.2 such as
-// MacExpertEncoding — a code absent from the table means "unknown", not
-// "unencoded": only the Differences entries are trustworthy. When it is,
-// absence is real and the code selects .notdef (ISO 32000-1, 9.6.6.4).
+// simpleFontBaseEncodingModelled is fontcheck.BaseEncodingModelled: whether a
+// code simpleFontCodeToName leaves unnamed selects .notdef (the base encoding
+// is one pdf0 has a table for) or is unknown (the program's own, or one
+// outside ISO 32000-1 Annex D.2).
 func simpleFontBaseEncodingModelled(doc core.View, fontDict *object.Dictionary, symbolic bool) bool {
-	modelled := func(n object.Name) bool {
-		switch n {
-		case "WinAnsiEncoding", "MacRomanEncoding", "StandardEncoding":
-			return true
-		}
-		return false
-	}
-	switch enc := doc.Resolve(fontDict.Get("Encoding")).(type) {
-	case object.Name:
-		return modelled(enc)
-	case *object.Dictionary:
-		if base, ok := doc.Resolve(enc.Get("BaseEncoding")).(object.Name); ok {
-			return modelled(base)
-		}
-		// No BaseEncoding: a non-symbolic font falls back to
-		// StandardEncoding, a symbolic one to its built-in encoding.
-		return !symbolic
-	case nil:
-		return !symbolic
-	}
-	return false
+	return fontcheck.BaseEncodingModelled(doc, fontDict, symbolic)
 }
 
 // --- glyph-name to Unicode (for TrueType cmap lookup) ---
@@ -677,6 +654,12 @@ func checkCIDFontConsistency(doc core.View, level Level, rule string, fontDict *
 				// by accident rather than because the page asked for .notdef.
 				if renders {
 					report("glyph", fmt.Sprintf("embedded %s font does not define a glyph referenced for rendering (character code %d is outside the font's CMap)", string(cidSub), code.Value))
+				}
+				// It is still drawn, with CID 0's glyph (ISO 32000-1
+				// 9.7.6.3), and advances by that glyph's width; CID.WidthDiffers
+				// says when that substitute is known.
+				if renders && cf.WidthDiffers(g) {
+					report("width", fmt.Sprintf("width information for glyphs used for rendering is inconsistent in %s font", string(cidSub)))
 				}
 				continue
 			}
