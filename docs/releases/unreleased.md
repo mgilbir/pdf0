@@ -330,7 +330,7 @@ v0.6.0.
 
 ## Added
 
-- **`htmlpdf.Options.PDFA`** (#PR), a `pdfa.SkeletonOptions`: with its
+- **`htmlpdf.Options.PDFA`** (#369), a `pdfa.SkeletonOptions`: with its
   `Level` set, `Render` returns a PDF/A document made by
   `NewPDFADocumentWith`, its page added as `RenderInto` adds one, every font
   embedded and the layout unchanged. #357's page (an `@font-face` TrueType
