@@ -266,7 +266,9 @@ between runs. The sRGB profile carried its own creation timestamp, which
 embedding fixed. The file identifier is the other, and it is *meant* to vary —
 it exists to tell this file from every other — so it is offered rather than
 removed: set `pdfa.SkeletonOptions.FileID` and the bytes become a function of the
-content alone. A digest of that content is the usual choice.
+content alone. A digest of that content is the usual choice. The creation date
+(`pdfa.SkeletonOptions.Created`, written as `xmp:CreateDate`) is the clock's
+when left zero, so a reproducible build sets it too.
 
 <!-- snippet
 var contentDigest [32]byte
@@ -275,11 +277,12 @@ var contentDigest [32]byte
 doc, err := pdf0.NewPDFADocumentWith(pdfa.SkeletonOptions{
     Level:        pdfa.PDFA4,
     FileID:       contentDigest[:16],
+    Created:      time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC),
     OutputIntent: pdfa.OutputIntentSpec{ICCProfile: myProfile, OutputConditionIdentifier: "FOGRA51"},
 })
 ```
 
-With both set, two builds of the same document are byte-identical — asserted in
+With all three set, two builds of the same document are byte-identical — asserted in
 `pdfa_reproducible_test.go`, along with the other direction: without a pinned
 `FileID` the output *must* vary, or the first assertion is proving nothing.
 
