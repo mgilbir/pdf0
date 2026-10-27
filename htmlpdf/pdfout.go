@@ -209,24 +209,11 @@ func (e *RefusedError) Error() string {
 // sheet is the one the document laid out on — the caller's, with the
 // document's own @page rules applied.
 //
-// opts.TransformGroups is set to true whatever the caller passed. It tells
-// forme that the backend draws a TransformGroup, which this one does, so a
-// rotated or skewed box is drawn through its matrix rather than reported and
-// drawn untransformed; it is a fact about the backend, not a choice about the
-// document.
-func Render(in layout.Input, opts layout.Options) (Result, error) {
-	return finish(layout.Compose(in, drawing(opts)), in)
-}
-
-// drawing is the options a document is composed under: the caller's, with
-// what this backend draws said. It draws a TransformGroup, so a transform at
-// any angle is drawn through its matrix rather than reported and drawn
-// untransformed; layout.Options.TransformGroups is set whatever the caller
-// set it to, since it is a fact about the backend, not a choice about the
-// document.
-func drawing(opts layout.Options) layout.Options {
-	opts.TransformGroups = true
-	return opts
+// With opts.EmbedAllFonts, every font the page shows is embedded: see
+// Options.EmbedAllFonts for what that lays the document out in, and what it
+// refuses.
+func Render(in Input, opts Options) (Result, error) {
+	return finish(layout.Compose(opts.layoutInput(in), opts.layoutOptions()), in, opts)
 }
 
 // RenderContext is Render for a document a caller does not control: the
@@ -241,20 +228,20 @@ func drawing(opts layout.Options) layout.Options {
 // error, or one wrapping ErrRunLimit, and a zero Result: no document, and no
 // findings from a composition that stopped part way. Otherwise it returns
 // what Render returns for the document, the same bytes, and the work charged
-// in Result.ShapingWork. Like Render, it sets opts.TransformGroups.
-func RenderContext(ctx context.Context, in layout.Input, opts layout.Options, limits RunLimits) (Result, error) {
-	composed, err := layout.ComposeContext(ctx, in, drawing(opts), limits)
+// in Result.ShapingWork.
+func RenderContext(ctx context.Context, in Input, opts Options, limits RunLimits) (Result, error) {
+	composed, err := layout.ComposeContext(ctx, opts.layoutInput(in), opts.layoutOptions(), limits)
 	if err != nil {
 		return Result{}, err
 	}
-	out, err := finish(composed, in)
+	out, err := finish(composed, in, opts)
 	out.ShapingWork = composed.ShapingWork
 	return out, err
 }
 
 // finish checks a composition and writes it: the part of Render that follows
 // laying the document out.
-func finish(composed layout.Composed, in layout.Input) (Result, error) {
+func finish(composed layout.Composed, in Input, opts Options) (Result, error) {
 	out := Result{
 		Scale:       composed.Scale,
 		NaturalSize: composed.NaturalSize,
@@ -265,7 +252,7 @@ func finish(composed layout.Composed, in layout.Input) (Result, error) {
 	// before anything is written: a page that would say something else is
 	// refused the way the engine refuses one, unless the caller's policy says
 	// the loss is acceptable.
-	backend, refused := checkDrawable(composed, in.Policy)
+	backend, refused := checkDrawable(composed, in.Policy, opts.EmbedAllFonts)
 	out.Findings = append(out.Findings, backend...)
 	if composed.Refused || refused {
 		return out, &RefusedError{
@@ -289,7 +276,10 @@ func finish(composed layout.Composed, in layout.Input) (Result, error) {
 //
 // One finding per rule, however many operations raised it: a vertical page is
 // one fact about the document, and a line per run would bury it.
-func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, bool) {
+//
+// embedAll is Options.EmbedAllFonts, under which a standard face anywhere in
+// the display list is RuleStandardFont, at Error whatever the policy says.
+func checkDrawable(c layout.Composed, policy layout.Policy, embedAll bool) ([]layout.Finding, bool) {
 	counts := map[layout.Rule]int{}
 	// The first instance of each rule, and why: the links a document cannot
 	// carry are usually all one kind — every relative reference in it — and
@@ -301,6 +291,14 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 		}
 		counts[rule]++
 	}
+	// The standard faces drawn, by name, for the one finding that lists them.
+	standard := map[string]bool{}
+	face := func(f *shape.Face) {
+		if embedAll && f != nil && f.IsStandard() {
+			standard[f.Name()] = true
+			note(RuleStandardFont, "")
+		}
+	}
 	// curved is whether the operations are inside a ClipPath, and m the
 	// matrices of the TransformGroups around them, multiplied.
 	var visit func(ops []layout.Op, curved bool, m [6]float64)
@@ -311,18 +309,22 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 			}
 			switch v := op.(type) {
 			case layout.DrawText:
+				face(v.Face)
 				if !drawableTurn(v) {
 					note(RuleVerticalText, "")
 				}
 			case layout.DrawTextShadow:
+				face(v.Run.Face)
 				if !drawableTurn(v.Run) {
 					note(RuleVerticalText, "")
 				}
 			case layout.DrawEmphasisMark:
+				face(v.Mark.Face)
 				if !drawableTurn(v.Mark) {
 					note(RuleVerticalText, "")
 				}
 			case layout.DrawGlyphs:
+				face(v.Face)
 			case layout.Link:
 				if _, err := linkTarget(v.Href); err != nil {
 					note(RuleLinkDropped, err.Error())
@@ -354,6 +356,11 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 	}
 	visit(c.Ops, false, identityMatrix)
 	firstLink, firstUndrawable := first[RuleLinkDropped], first[RuleUndrawable]
+	standardNames := make([]string, 0, len(standard))
+	for name := range standard {
+		standardNames = append(standardNames, name)
+	}
+	sort.Strings(standardNames)
 
 	messages := map[layout.Rule]string{
 		RuleVerticalText: "%d run(s) of text are turned in a way layout does not turn " +
@@ -365,18 +372,22 @@ func checkDrawable(c layout.Composed, policy layout.Policy) ([]layout.Finding, b
 			"know, which a newer layout engine added; the page would be missing them",
 		RuleUndrawable: "%d operation(s) ask for what a PDF page cannot say as the display list " +
 			"states it, so the page would be missing them; the first: " + firstUndrawable,
+		RuleStandardFont: "%d run(s) of text are in a standard font, which the file would name " +
+			"rather than embed, and every font is to be embedded (Options.EmbedAllFonts): " +
+			strings.Join(standardNames, ", ") + ", from Input.Fonts; supply embedded faces " +
+			"for those families",
 	}
 	var (
 		out     []layout.Finding
 		refused bool
 	)
-	for _, rule := range []layout.Rule{RuleVerticalText, RuleLinkDropped, RuleUnknownOp, RuleUndrawable} {
+	for _, rule := range []layout.Rule{RuleVerticalText, RuleLinkDropped, RuleUnknownOp, RuleUndrawable, RuleStandardFont} {
 		n := counts[rule]
 		if n == 0 {
 			continue
 		}
 		sev := layout.Error
-		if s, ok := policy[rule]; ok {
+		if s, ok := policy[rule]; ok && rule != RuleStandardFont {
 			sev = s
 		}
 		if sev == layout.Ignore {

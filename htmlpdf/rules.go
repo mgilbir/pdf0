@@ -43,4 +43,14 @@ const (
 	// Leaving it out, or drawing an approximation of it, would put a page in
 	// the file other than the one layout composed.
 	RuleUndrawable layout.Rule = "backend-undrawable"
+
+	// RuleStandardFont is text set in one of the fourteen standard fonts on a
+	// page whose every font is to be embedded (Options.EmbedAllFonts). Such a
+	// font is a name in the file and a program on the reader's machine, so the
+	// page would carry it unembedded. It only fires with that option, and only
+	// for a face a caller's Input.Fonts returned: with the option, a nil set
+	// lays nothing out in the standard fonts. It is the one rule here that
+	// Input.Policy does not lower, since the option is the caller already
+	// having said what such a page is worth.
+	RuleStandardFont layout.Rule = "backend-standard-font"
 )

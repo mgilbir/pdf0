@@ -25,7 +25,7 @@ import (
 // look like each other's symptom — and testing them together would give that
 // separation away.
 
-func renderOf(t *testing.T, htmlSrc string, opts layout.Options, cssSrc ...string) Result {
+func renderOf(t *testing.T, htmlSrc string, opts Options, cssSrc ...string) Result {
 	t.Helper()
 	in := layout.Input{HTML: htmlSrc}
 	for _, c := range cssSrc {
@@ -46,7 +46,7 @@ func renderOf(t *testing.T, htmlSrc string, opts layout.Options, cssSrc ...strin
 // class of emission faults that make a file unopenable, which is worth having
 // before anything subtler.
 func TestRenderProducesAReadablePDF(t *testing.T) {
-	got := renderOf(t, `<h1>A heading</h1><p>Some text in a paragraph.</p>`, layout.Options{})
+	got := renderOf(t, `<h1>A heading</h1><p>Some text in a paragraph.</p>`, Options{})
 	if got.Document == nil {
 		t.Fatalf("no document was produced: %v", got.Findings)
 	}
@@ -80,7 +80,7 @@ func TestRenderProducesAReadablePDF(t *testing.T) {
 // TestPageGeometry pins the page a document lands on, in points, since that is
 // what a PDF records.
 func TestPageGeometry(t *testing.T) {
-	got := renderOf(t, `<p>x</p>`, layout.Options{Page: layout.A4})
+	got := renderOf(t, `<p>x</p>`, Options{Page: layout.A4})
 	if got.Document == nil {
 		t.Fatalf("no document: %v", got.Findings)
 	}
@@ -127,7 +127,7 @@ func mediaBoxOf(t *testing.T, doc *pdf0.Document, page *object.Dictionary) [4]fl
 
 // contentStreamOf renders a document and returns the bytes of its page's content
 // stream, which is the only place the coordinate transform is visible.
-func contentStreamOf(t *testing.T, htmlSrc string, opts layout.Options, cssSrc ...string) string {
+func contentStreamOf(t *testing.T, htmlSrc string, opts Options, cssSrc ...string) string {
 	t.Helper()
 	got := renderOf(t, htmlSrc, opts, cssSrc...)
 	if got.Document == nil {
@@ -165,7 +165,7 @@ func contentStreamOf(t *testing.T, htmlSrc string, opts layout.Options, cssSrc .
 // defect showed that inverting it, dropping the unit conversion, dropping the
 // scale and dropping the page margin all left every other test passing.
 func TestTheTransformIsWrittenOnce(t *testing.T) {
-	stream := contentStreamOf(t, `<div id="a"></div>`, layout.Options{Page: layout.A4},
+	stream := contentStreamOf(t, `<div id="a"></div>`, Options{Page: layout.A4},
 		noDefaults+"#a { height: 10px }")
 
 	m := firstMatrix(t, stream)
@@ -208,7 +208,7 @@ func TestTheTransformIsWrittenOnce(t *testing.T) {
 func TestTheTransformCarriesTheScale(t *testing.T) {
 	avail := layout.A4.Content()
 	stream := contentStreamOf(t, `<div id="a"></div>`,
-		layout.Options{Page: layout.A4, MinScale: 0.1},
+		Options{Page: layout.A4, MinScale: 0.1},
 		noDefaults+"#a { height: "+ftoa(avail.H.Px()*2)+"px }")
 
 	m := firstMatrix(t, stream)
@@ -228,7 +228,7 @@ func TestTheTransformCarriesTheScale(t *testing.T) {
 // out mirrored; the text matrix inverts it again locally, which leaves the
 // glyphs upright while the position still comes from the flipped system.
 func TestTextIsNotMirrored(t *testing.T) {
-	stream := contentStreamOf(t, `<p>text</p>`, layout.Options{Page: layout.A4},
+	stream := contentStreamOf(t, `<p>text</p>`, Options{Page: layout.A4},
 		noDefaults+"p { font-size: 20px; font-family: Helvetica }")
 
 	var found bool
@@ -261,7 +261,7 @@ func TestTextIsNotMirrored(t *testing.T) {
 // or one that is off by the page height, which is not.
 func TestCoordinatesFlipExactlyOnce(t *testing.T) {
 	// Two boxes, one at the top and one far below it.
-	got := renderOf(t, `<div id="top"></div><div id="bottom"></div>`, layout.Options{Page: layout.A4},
+	got := renderOf(t, `<div id="top"></div><div id="bottom"></div>`, Options{Page: layout.A4},
 		noDefaults+"#top { height: 20px } #bottom { height: 20px; margin-top: 400px }")
 	if got.Document == nil {
 		t.Fatalf("no document: %v", got.Findings)
@@ -360,7 +360,7 @@ func TestRenderIsTotal(t *testing.T) {
 		for _, s := range sheets {
 			for _, page := range pages {
 				in := layout.Input{HTML: d, CSS: []layout.Stylesheet{{Source: s}}}
-				got, err := Render(in, layout.Options{Page: page, MinScale: 0.001})
+				got, err := Render(in, Options{Page: page, MinScale: 0.001})
 				if err != nil {
 					continue
 				}
@@ -400,7 +400,7 @@ func TestRenderIsDeterministic(t *testing.T) {
 	// would move them.
 	render := func() int {
 		got, err := Render(layout.Input{HTML: src, CSS: []layout.Stylesheet{{Source: sheet}}},
-			layout.Options{Page: layout.A4})
+			Options{Page: layout.A4})
 		if err != nil || got.Document == nil {
 			t.Fatalf("rendering: %v %v", err, got.Findings)
 		}
@@ -612,7 +612,7 @@ func TestHTMLAndCSSAndAPageSizeMakeAPDF(t *testing.T) {
 			td { border-bottom: 0.5pt solid #cccccc }
 			.n { text-align: right }
 			.note { font-size: 9pt; color: #666666 }`}},
-	}, layout.Options{Page: page})
+	}, Options{Page: page})
 	if err != nil {
 		t.Fatalf("rendering: %v", err)
 	}
@@ -661,7 +661,7 @@ func TestHTMLAndCSSAndAPageSizeMakeAPDF(t *testing.T) {
 	// it is what the first version of this test did, and planting the fault
 	// found it green.
 	stream := contentStreamOf(t, `<h1>Aurora</h1><p class="note">Payment within 30 days.</p>`,
-		layout.Options{Page: page}, `
+		Options{Page: page}, `
 			body { font-family: Helvetica; font-size: 11pt }
 			h1 { font-size: 20pt; border-bottom: 2pt solid #b8860b }
 			.note { font-size: 9pt }`)

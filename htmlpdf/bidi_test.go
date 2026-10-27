@@ -536,7 +536,7 @@ func TestRightToLeftRunIsShapedInVisualOrder(t *testing.T) {
 // operator can express; the run carries its text as an /ActualText, so they
 // come out in the order they were written too. They used to come out reversed.
 func TestExtractedTextKeepsTheRunsInReadingOrder(t *testing.T) {
-	got := renderOf(t, `<p>one <bdo dir="rtl">abc def</bdo> two</p>`, layout.Options{})
+	got := renderOf(t, `<p>one <bdo dir="rtl">abc def</bdo> two</p>`, Options{})
 	if got.Document == nil {
 		t.Fatalf("no document was produced: %v", got.Findings)
 	}

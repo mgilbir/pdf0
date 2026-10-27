@@ -504,12 +504,12 @@ func TestEachVerticalFlagIsJudgedOnItsOwn(t *testing.T) {
 		{"Anticlockwise+Upright", layout.DrawText{Anticlockwise: true, Upright: true}, true},
 		{"all three", layout.DrawText{Sideways: true, Anticlockwise: true, Upright: true}, true},
 	} {
-		findings, refused := checkDrawable(layout.Composed{Ops: []layout.Op{tc.op}}, nil)
+		findings, refused := checkDrawable(layout.Composed{Ops: []layout.Op{tc.op}}, nil, false)
 		if refused != tc.refused || hasRule(findings, RuleVerticalText, layout.Error) != tc.refused {
 			t.Errorf("%s: refused=%v with %v; want refused=%v", tc.name, refused, findings, tc.refused)
 		}
 		lowered, refused := checkDrawable(layout.Composed{Ops: []layout.Op{tc.op}},
-			layout.Policy{RuleVerticalText: layout.Warn})
+			layout.Policy{RuleVerticalText: layout.Warn}, false)
 		if refused || hasRule(lowered, RuleVerticalText, layout.Warn) != tc.refused {
 			t.Errorf("%s lowered to Warn: refused=%v with %v", tc.name, refused, lowered)
 		}

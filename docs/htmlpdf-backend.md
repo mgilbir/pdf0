@@ -120,8 +120,8 @@ Everything else in the display list is written, as follows.
   `TransformGroup`, which htmlpdf draws by concatenating its matrix (`cm`,
   ISO 32000-2 8.4.4) around the box's marks, after the clip of whatever cuts
   the box from outside; a group inside a group concatenates again. htmlpdf
-  sets forme's `Options.TransformGroups` itself, whatever the caller passed,
-  since it says what the backend draws. What PDF states against a stream's
+  sets forme's `Options.TransformGroups` itself, and its own `Options` has no
+  such field, since it says what the backend draws. What PDF states against a stream's
   default coordinates rather than the current ones takes the matrix with it:
   a tiling pattern's `/Matrix`, and the bounding box of the form a filter
   draws into, which is the sheet as the group's coordinates see it. A link

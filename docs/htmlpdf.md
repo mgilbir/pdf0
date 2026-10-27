@@ -209,6 +209,42 @@ func renderInvoice(w io.Writer, document string, regularTTF, boldTTF []byte, ass
   become a face (a container forme does not unwrap, bytes that are not a font
   program) is `font-undecodable`, at warning severity, and the text falls back
   as above.
+- **`Options.EmbedAllFonts`** makes every font on the page an embedded one, for
+  a file that must render the same everywhere or that a standard forbids the
+  standard fonts in (PDF/A). The page is laid out in the caller's set and the
+  document's `@font-face` faces and nothing else: with it, a nil set is an
+  empty one rather than the standard faces, so a document that brings its own
+  faces renders and one that names a family nothing supplies is refused
+  (`no-face`). A standard face a caller's own set returns is refused when the
+  page is written (`RuleStandardFont`), and `Input.Policy` does not lower that
+  rule. `notosans.Face` is an embedded face that needs no file:
+
+<!-- snippet
+import "github.com/mgilbir/forme/fonts/notosans"
+import "github.com/mgilbir/forme/shape"
+-->
+```go
+// everyFamily answers every family with one face: monospace too, in a
+// proportional face, which is a choice a real set makes per family.
+type everyFamily struct{ face *shape.Face }
+
+func (s everyFamily) Face(string, bool, bool) (*shape.Face, bool) { return s.face, true }
+
+func renderEmbedded(w io.Writer, document string) error {
+	noto, err := notosans.Face()
+	if err != nil {
+		return err
+	}
+	out, err := htmlpdf.Render(htmlpdf.Input{
+		HTML:  document,
+		Fonts: everyFamily{noto},
+	}, htmlpdf.Options{Page: htmlpdf.A4, EmbedAllFonts: true})
+	if err != nil {
+		return err
+	}
+	return out.Document.Write(w)
+}
+```
 
 ### Images, stylesheets and webfonts
 
@@ -294,16 +330,17 @@ import:
 | `Render`, `RenderContext` | the call, and the call under a context and a shaping budget |
 | `Result`, `RefusedError` | what a render produced, and why it would not |
 | `Input`, `Stylesheet` | the document and its stylesheets |
-| `Options`, `PageSize`, `PageSizePt` | the sheet and the refusal thresholds |
+| `Options` | the sheet, the refusal thresholds, and what the PDF must be (`EmbedAllFonts`) |
+| `PageSize`, `PageSizePt` | the sheet |
 | `A4`, `A5`, `Letter` | named sheets, each with a margin already |
 | `Finding`, `Size` | what `Result` carries |
 | `Severity`, `Ignore`, `Warn`, `Error` | how much a finding matters, for reading one or writing a policy |
-| `RuleVerticalText`, `RuleLinkDropped`, `RuleUnknownOp`, `RuleUndrawable` | the rules the backend raises itself |
+| `RuleVerticalText`, `RuleLinkDropped`, `RuleUnknownOp`, `RuleUndrawable`, `RuleStandardFont` | the rules the backend raises itself |
 | `RunLimits`, `ErrRunLimit` | the bounds `RenderContext` renders under, and what it fails with past them |
 
-`Render`, `RenderContext`, `Result`, `RefusedError` and the four rules are this
-package's own, since what a render produced and why it would not are its
-business rather than the engine's.
+`Render`, `RenderContext`, `Result`, `RefusedError`, `Options` and the five
+rules are this package's own, since what a render produced, why it would not,
+and what the PDF is asked to be are its business rather than the engine's.
 
 The rest are **aliases**, not wrappers: the same types and values
 `github.com/mgilbir/forme/layout` declares (`RunLimits` and `ErrRunLimit` are
@@ -311,10 +348,14 @@ The rest are **aliases**, not wrappers: the same types and values
 set, a severity policy (`layout.Policy`), the display list itself — imports
 `layout` and finds every value already fits. See `htmlpdf/api.go`.
 
-`Render` and `RenderContext` set forme's `Options.TransformGroups` themselves,
-whatever the caller passed: it says the backend draws a rotated or skewed box
-through its matrix, which this one does, so it is a fact about the backend and
-not a choice about the document.
+`Options` used to be an alias of forme's `layout.Options` too. It is not one,
+because that type mixes two things: the sheet and the thresholds, which are the
+caller's, and what the backend can draw (`TransformGroups`), which is not a
+caller's to state and which htmlpdf used to overwrite whatever was passed.
+htmlpdf's `Options` holds the first, passed to forme unchanged, and what the
+caller asks of the file; htmlpdf states the second itself. A test holds every
+field of `layout.Options` to one or the other, so a field a newer forme adds is
+decided, not left at its zero value.
 
 ## Where the work happens
 

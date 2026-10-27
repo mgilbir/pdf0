@@ -23,7 +23,7 @@ import (
 func TestABoldRunIsEmbeddedAsTheBoldInstance(t *testing.T) {
 	bold := boldOracle(t)
 	in := Input{HTML: `<p>AVATAR <b>AVATAR</b></p>`, Fonts: notoSansSet(t)}
-	c := layout.Compose(in, Options{})
+	c := layout.Compose(in, layout.Options{})
 	var runs []layout.DrawText
 	for _, op := range c.Ops {
 		if v, ok := op.(layout.DrawText); ok && strings.TrimSpace(v.Text) != "" {

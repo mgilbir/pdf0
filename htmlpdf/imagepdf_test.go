@@ -37,7 +37,7 @@ func renderWithImages(t *testing.T, htmlSrc string, cssSrc ...string) Result {
 	for _, c := range cssSrc {
 		in.CSS = append(in.CSS, layout.Stylesheet{Source: c})
 	}
-	got, err := Render(in, layout.Options{})
+	got, err := Render(in, Options{})
 	if err != nil {
 		t.Fatalf("rendering: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestImageWithTransparencyGetsASoftMask(t *testing.T) {
 		HTML:      `<div><img src="fade.png"></div>`,
 		CSS:       []layout.Stylesheet{{Source: noDefaults}},
 		Resources: res,
-	}, layout.Options{})
+	}, Options{})
 	if err != nil {
 		t.Fatalf("rendering: %v", err)
 	}

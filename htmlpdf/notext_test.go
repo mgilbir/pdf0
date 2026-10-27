@@ -36,7 +36,7 @@ func opsOf[T layout.Op](c layout.Composed) []T {
 // is where forme put the shadow's run.
 func TestATextShadowIsDrawnAndIsNotText(t *testing.T) {
 	in := Input{HTML: `<p style="text-shadow: 2px 3px rgb(255,0,0)">shadowed words</p>`, Fonts: notoSansSet(t)}
-	c := layout.Compose(in, Options{})
+	c := layout.Compose(in, layout.Options{})
 	shadows := opsOf[layout.DrawTextShadow](c)
 	runs := opsOf[layout.DrawText](c)
 	if len(shadows) == 0 || len(runs) == 0 {
@@ -105,7 +105,7 @@ func TestATextShadowIsDrawnAndIsNotText(t *testing.T) {
 // words, with no dot among them.
 func TestAnEmphasisMarkIsDrawnAndIsNotText(t *testing.T) {
 	in := Input{HTML: `<p style="text-emphasis: dot rgb(255,0,0)">emphasis</p>`, Fonts: notoSansSet(t)}
-	c := layout.Compose(in, Options{})
+	c := layout.Compose(in, layout.Options{})
 	marks := opsOf[layout.DrawEmphasisMark](c)
 	if len(marks) != len("emphasis") {
 		t.Fatalf("layout drew %d emphasis marks for %d characters", len(marks), len("emphasis"))
@@ -191,7 +191,7 @@ func TestAStretchedOperatorIsItsGlyphsAndItsCharacterOnce(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			set := mathSet(t)
 			in := Input{HTML: tc.html, Fonts: set}
-			c := layout.Compose(in, Options{})
+			c := layout.Compose(in, layout.Options{})
 			drawn := opsOf[layout.DrawGlyphs](c)
 			if len(drawn) != 1 || drawn[0].Text != tc.text {
 				t.Fatalf("layout drew %d glyph operations (%+v); the case needs one for %q", len(drawn), drawn, tc.text)

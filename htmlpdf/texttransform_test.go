@@ -137,7 +137,7 @@ func TestTextTransformReachesTheExtractedText(t *testing.T) {
 	res, err := Render(layout.Input{
 		HTML: `<div id="p">quiet</div>`,
 		CSS:  []layout.Stylesheet{{Source: `#p { text-transform: uppercase }`}},
-	}, layout.Options{})
+	}, Options{})
 	if err != nil {
 		t.Fatalf("rendering: %v", err)
 	}

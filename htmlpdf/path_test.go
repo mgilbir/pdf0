@@ -79,7 +79,7 @@ func TestAPathIsItsShape(t *testing.T) {
 	for _, tc := range pathCases {
 		t.Run(tc.name, func(t *testing.T) {
 			in := Input{HTML: tc.html}
-			c := layout.Compose(in, Options{})
+			c := layout.Compose(in, layout.Options{})
 			path, op := theShape(t, c)
 			doc, _ := roundTrip(t, in, Options{})
 			var got *writtenPath
@@ -122,7 +122,7 @@ func TestAPathIsDrawnAsItsShape(t *testing.T) {
 	for _, tc := range pathCases {
 		t.Run(tc.name, func(t *testing.T) {
 			in := Input{HTML: tc.html}
-			c := layout.Compose(in, Options{})
+			c := layout.Compose(in, layout.Options{})
 			path, _ := theShape(t, c)
 			doc, _ := roundTrip(t, in, Options{})
 			b := path.Bounds()
@@ -231,7 +231,7 @@ func TestAPathThatCannotBeWrittenIsRefused(t *testing.T) {
 		Path: layout.Path{{Op: layout.MoveTo}, {Op: layout.LineTo, Point: layout.Point{X: u(10), Y: u(10)}}},
 		Ops:  []layout.Op{layout.Link{Rects: []layout.Rect{{W: u(5), H: u(5)}}, Href: "https://example.com/"}},
 	}}}
-	findings, refused := checkDrawable(composed, nil)
+	findings, refused := checkDrawable(composed, nil, false)
 	if !refused || len(findings) != 1 || findings[0].Rule != RuleUndrawable ||
 		!strings.Contains(findings[0].Message, "link inside a clip") {
 		t.Errorf("a link inside a curved clip: refused %v, findings %+v", refused, findings)

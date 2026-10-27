@@ -75,7 +75,7 @@ func pageLinks(t *testing.T, doc *pdf0.Document) []annotation {
 // pdf0.LinkURI makes of its href.
 func expectedLinks(t *testing.T, in Input, opts Options) []annotation {
 	t.Helper()
-	c := layout.Compose(in, opts)
+	c := layout.Compose(opts.layoutInput(in), opts.layoutOptions())
 	const pxToPt = 72.0 / 96.0
 	k := pxToPt * c.Scale
 	tx := c.Page.Margin.Left.Pt()
@@ -154,7 +154,7 @@ func TestALinkIsALinkAnnotation(t *testing.T) {
 // starts: its pen position through the page transform.
 func textOrigin(t *testing.T, in Input, prefix string) [2]float64 {
 	t.Helper()
-	c := layout.Compose(in, Options{})
+	c := layout.Compose(in, layout.Options{})
 	k := 72.0 / 96.0 * c.Scale
 	tx := c.Page.Margin.Left.Pt()
 	ty := c.Page.Height.Pt() - c.Page.Margin.Top.Pt()

@@ -53,6 +53,19 @@ v0.6.0.
   trust — is `sign.Result.Valid`, made over the signature's byte range, with
   trust reported beside it in `TrustedChain`, `ChainErr` and `Revocation`.
 
+### `htmlpdf`
+
+- **htmlpdf.Options is its own struct, not an alias of forme's layout.Options,
+  and has no TransformGroups field** (#PR). `layout.Options` describes the
+  backend as well as the document, and htmlpdf overwrote the field it
+  described the backend with whatever a caller passed. `Render` and
+  `RenderContext` take the new type. *Migration:* a literal such as
+  `htmlpdf.Options{Page: htmlpdf.A4}` compiles unchanged: `Page`, `MinScale`,
+  `MinFontSizePt` and `AllowScaleUp` keep their names and meanings. Code that
+  passes a `layout.Options` value to `Render` or `RenderContext` builds an
+  `htmlpdf.Options` from the same four fields. Code that set TransformGroups
+  drops it; it had no effect.
+
 ### Behaviour that breaks callers (not reported by gorelease)
 
 - **`Write`, `WriteContext`, `Save` and `SaveContext` refuse a signed
@@ -288,6 +301,15 @@ v0.6.0.
   `TestPDFRef17ExamplesRegenerate`.
 
 ## Added
+
+- **`htmlpdf.Options.EmbedAllFonts`** (#PR): every font on the page is
+  embedded, with none of the fourteen standard fonts. The page is laid out in
+  the caller's `Input.Fonts` and the document's `@font-face` faces only. A nil
+  set is read as an empty one rather than as the standard fonts, and a family
+  nothing supplies refuses the document (`no-face`). A standard face from a
+  caller's own set is refused under `htmlpdf.RuleStandardFont`
+  (`backend-standard-font`), which `Input.Policy` does not lower. Without the
+  option, output is unchanged byte for byte.
 
 - **`pdfx.LevelDeclared`** (#346), the zero `pdfx.Level`: validate against the level
   the document declares.
