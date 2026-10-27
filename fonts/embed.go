@@ -3,6 +3,7 @@ package fonts
 import (
 	"bytes"
 	"errors"
+	"math"
 	"sort"
 	"strconv"
 
@@ -275,7 +276,14 @@ func (f *Face) embedComposite(doc Allocator, forms Forms) (Embedded, error) {
 	descriptorRef := doc.Add(descriptor)
 
 	advances := f.GlyphAdvances()
-	defaultWidth := mostCommonWidth(advances)
+	// /DW is an integer (ISO 32000-2 9.7.4.3 types it so), and the shared advance
+	// is not one on any program whose em is not a thousand units: 1139 of 2048 is
+	// 556.15234375. poppler takes /DW only when it is an integer and otherwise
+	// falls back to its own default, which draws the text with the wrong spacing.
+	// So the default is rounded here; widthsArray compares exact advances against
+	// it, so every glyph the rounding moved is listed in /W with its exact width,
+	// which is what PDF/A compares against the program.
+	defaultWidth := math.Round(mostCommonWidth(advances))
 	cidFont := &object.Dictionary{}
 	cidFont.Set("Type", object.Name("Font"))
 	if f.IsCFF() {
@@ -591,8 +599,9 @@ func widthNumber(w float64) object.Object {
 	return object.Real(w)
 }
 
-// mostCommonWidth picks /DW: the advance shared by the most glyphs, so /W
-// carries the exceptions rather than the rule.
+// mostCommonWidth picks the advance shared by the most glyphs, so /W carries
+// the exceptions rather than the rule. It is the exact advance; /DW is that
+// rounded to an integer by the caller, since /DW cannot be fractional.
 func mostCommonWidth(advances []float64) float64 {
 	counts := map[float64]int{}
 	for _, w := range advances {

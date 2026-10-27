@@ -100,3 +100,64 @@ func widthIn(t *testing.T, cid *object.Dictionary, code int) float64 {
 	}
 	return num(cid.Get("DW"))
 }
+
+// TestDWIsAnIntegerWhateverTheEm pins that /DW is written as an integer, and
+// that the rounding does not move any glyph's width: a program whose em is not
+// a thousand units has advances that are fractional in the thousandths PDF
+// states them in (1139 of 2048 is 556.15234375), and /DW is typed as an integer
+// (ISO 32000-2 9.7.4.3). poppler accepts /DW only as an integer and otherwise
+// uses its own default, so a fractional one draws the text with the wrong
+// advances in pdftoppm.
+//
+// The default is rounded, and a glyph is left out of /W only when its exact
+// advance is the default, so every glyph the rounding moved is listed in /W
+// with its exact width, which is what PDF/A compares to the program. The test
+// reads each kept glyph's width as a reader would, /W where listed and /DW
+// otherwise, and requires the program's own advance.
+func TestDWIsAnIntegerWhateverTheEm(t *testing.T) {
+	const upem = 2048
+	// Three glyphs share 1139 (556.15...), which makes it the default; the
+	// others are one that is exactly a width of its own, one that rounds to the
+	// same integer as the default but is not it, and one that is far from it.
+	advance := map[rune]int{'a': 1139, 'b': 1139, 'c': 1139, 'd': 1024, 'e': 1140, 'f': 1138}
+	var glyphs []fonttest.Glyph
+	for _, r := range "abcdef" {
+		glyphs = append(glyphs, fonttest.Glyph{Rune: r, Advance: advance[r], HasShape: true})
+	}
+	f, err := Load(fonttest.SFNT(fonttest.SFNTOptions{
+		Name:       "Dw",
+		UnitsPerEm: upem,
+		Ascent:     upem * 4 / 5,
+		Descent:    -upem / 5,
+		Glyphs:     glyphs,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.ShapeGlyphs("abcdef")
+	doc := &allocator{}
+	ref, err := f.Embed(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cid := doc.dict(t, doc.dict(t, ref).Get("DescendantFonts").(object.Array)[0])
+	if dw, ok := cid.Get("DW").(object.Integer); !ok {
+		t.Errorf("/DW is %v (%T), want an integer", cid.Get("DW"), cid.Get("DW"))
+	} else if dw != 556 {
+		t.Errorf("/DW is %d, want 556", dw)
+	}
+	advances := f.GlyphAdvances()
+	for r, units := range advance {
+		gid, ok := f.GlyphID(r)
+		if !ok {
+			t.Fatalf("%q has no glyph", r)
+		}
+		want := float64(units) * 1000 / upem
+		if advances[gid] != want {
+			t.Fatalf("%q: the program's advance is %v, the fixture means %v", r, advances[gid], want)
+		}
+		if got := widthIn(t, cid, gid); got != want {
+			t.Errorf("%q is %v wide as the font dictionary states it, want %v", r, got, want)
+		}
+	}
+}
