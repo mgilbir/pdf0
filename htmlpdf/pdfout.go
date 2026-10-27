@@ -24,11 +24,14 @@ package htmlpdf
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mgilbir/forme/layout"
 	"github.com/mgilbir/forme/paragraph"
@@ -37,6 +40,7 @@ import (
 	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
+	"github.com/mgilbir/pdf0/pdfa"
 )
 
 // From a display list to a PDF page.
@@ -98,6 +102,11 @@ type Result struct {
 	// shaping, for a caller keeping a budget across documents. Render
 	// charges none and reports 0.
 	ShapingWork int64
+
+	// imported is what AppendPages reported adding RenderInto's page, which
+	// TestRenderIntoCarriesThePageWhole holds to the scratch document's own
+	// catalog: anything else omitted would be part of the page lost.
+	imported pdf0.ImportReport
 }
 
 // RefusedError is the engine, or this backend, declining to produce a document.
@@ -213,7 +222,7 @@ func (e *RefusedError) Error() string {
 // Options.EmbedAllFonts for what that lays the document out in, and what it
 // refuses.
 func Render(in Input, opts Options) (Result, error) {
-	return finish(layout.Compose(opts.layoutInput(in), opts.layoutOptions()), in, opts)
+	return finish(layout.Compose(opts.layoutInput(in), opts.layoutOptions()), in, opts, nil)
 }
 
 // RenderContext is Render for a document a caller does not control: the
@@ -234,14 +243,149 @@ func RenderContext(ctx context.Context, in Input, opts Options, limits RunLimits
 	if err != nil {
 		return Result{}, err
 	}
-	out, err := finish(composed, in, opts)
+	out, err := finish(composed, in, opts, nil)
 	out.ShapingWork = composed.ShapingWork
 	return out, err
 }
 
+// ErrUnsupportedLevel is RenderInto given a document claiming a PDF/A level
+// this package does not write pages for.
+var ErrUnsupportedLevel = errors.New("htmlpdf: the document claims a PDF/A level htmlpdf does not write pages for")
+
+// RenderInto lays a document out and adds it to doc as a page, after the
+// pages doc has. It is Render for a caller who has a document already: one
+// being assembled from several sources, one read from a file, or one made
+// with pdf0.NewPDFADocumentWith to be PDF/A. Result.Document is doc.
+//
+// The page is what Render would make, written into doc the way
+// pdf0.Document.AppendPages adds a page: the page is self-contained, and doc's
+// own /OutputIntents and /Lang apply to it.
+//
+// A document that claims a PDF/A level (pdf0.Document.Conformance) gets a page
+// that keeps the claim. Every font on it is embedded, whatever
+// opts.EmbedAllFonts says (see Options.EmbedAllFonts). The levels are PDF/A-2
+// and -3 at b and u, and PDF/A-4 with its e and f variants. PDF/A-1 is refused
+// with ErrUnsupportedLevel, because PDF 1.4 has no transparency, and so are
+// the a levels, which need a tagged structure this package does not write.
+// The claim is the document's, so it is pdf0.Document.Save, which writes only
+// a document that passes the level it claims, that says whether the whole
+// document does.
+//
+// doc is changed only if the render succeeds. A refusal, a failure to write
+// (an image that cannot be embedded, a font whose licence forbids it) and an
+// unsupported level all leave doc as it was, because the page is written
+// into a document of its own and added to doc only once it is complete.
+//
+// A page drawn with transparency needs PDF 1.4, so a document that claims no
+// level and has an older version has it raised to 1.4, again only on success.
+// A nil document, and a Locked one, are refused.
+func RenderInto(doc *pdf0.Document, in Input, opts Options) (Result, error) {
+	opts, err := into(doc, opts)
+	if err != nil {
+		return Result{}, err
+	}
+	return finish(layout.Compose(opts.layoutInput(in), opts.layoutOptions()), in, opts, doc)
+}
+
+// RenderIntoContext is RenderInto under a context and a shaping budget, as
+// RenderContext is Render.
+func RenderIntoContext(ctx context.Context, doc *pdf0.Document, in Input, opts Options, limits RunLimits) (Result, error) {
+	opts, err := into(doc, opts)
+	if err != nil {
+		return Result{}, err
+	}
+	composed, err := layout.ComposeContext(ctx, opts.layoutInput(in), opts.layoutOptions(), limits)
+	if err != nil {
+		return Result{}, err
+	}
+	out, err := finish(composed, in, opts, doc)
+	out.ShapingWork = composed.ShapingWork
+	return out, err
+}
+
+// into checks doc before anything is laid out, and returns the options the
+// page is composed under: the caller's, with every font embedded when doc
+// claims a PDF/A level.
+func into(doc *pdf0.Document, opts Options) (Options, error) {
+	if doc == nil {
+		return opts, errors.New("htmlpdf: RenderInto was given a nil document")
+	}
+	if doc.Locked() {
+		return opts, errors.New("htmlpdf: the document is encrypted and not decrypted, so a page cannot be added to it")
+	}
+	level, claimed := doc.Conformance()
+	if !claimed {
+		return opts, nil
+	}
+	switch level {
+	case pdfa.PDFA2b, pdfa.PDFA2u, pdfa.PDFA3b, pdfa.PDFA3u, pdfa.PDFA4, pdfa.PDFA4E, pdfa.PDFA4F:
+	default:
+		return opts, fmt.Errorf("%w: %s", ErrUnsupportedLevel, level)
+	}
+	opts.EmbedAllFonts = true
+	return opts, nil
+}
+
+// scratchFor is the document a page for target is written into first: one
+// claiming target's PDF/A level, so that everything AddPage decides by the
+// claim is decided as it would be in target, and a plain one otherwise. Its
+// date and identifier are fixed rather than read from the clock and the random
+// source, since nothing of it but the page reaches target.
+//
+// Its version is the one target is to have, because AppendPages raises the
+// target to the later of the two: target's own when it claims a level, which
+// fixes it, and otherwise target's raised to 1.4 if it is older (atLeastPDF14).
+// So the raise happens inside AppendPages, and only when it succeeds.
+func scratchFor(target *pdf0.Document) (*pdf0.Document, error) {
+	if target == nil {
+		return pdf0.NewDocument(), nil
+	}
+	level, claimed := target.Conformance()
+	if !claimed {
+		scratch := pdf0.NewDocument()
+		scratch.Version = atLeastPDF14(target.Version)
+		return scratch, nil
+	}
+	scratch, err := pdf0.NewPDFADocumentWith(pdfa.SkeletonOptions{
+		Level:   level,
+		Created: time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
+		FileID:  []byte("htmlpdf scratch "),
+	})
+	if err != nil {
+		return nil, err
+	}
+	scratch.Version = target.Version
+	return scratch, nil
+}
+
+// atLeastPDF14 is the version a document must have for a page this package
+// writes, which may use transparency (ISO 32000-1 11, PDF 1.4): v when it is
+// 1.4 or later, or not a version, and "1.4" otherwise. An empty v is "1.4" too:
+// a document with no version written is read as having none to keep.
+func atLeastPDF14(v string) string {
+	major, minor, ok := strings.Cut(v, ".")
+	if !ok {
+		if v == "" {
+			return "1.4"
+		}
+		return v
+	}
+	ma, err1 := strconv.Atoi(major)
+	mi, err2 := strconv.Atoi(minor)
+	if err1 != nil || err2 != nil || ma > 1 || (ma == 1 && mi >= 4) {
+		return v
+	}
+	return "1.4"
+}
+
 // finish checks a composition and writes it: the part of Render that follows
 // laying the document out.
-func finish(composed layout.Composed, in Input, opts Options) (Result, error) {
+//
+// target is RenderInto's document, or nil for Render. The page is written
+// into a scratch document either way (scratchFor), so a write that fails part
+// way leaves target as it was, and for Render the scratch document is the
+// result.
+func finish(composed layout.Composed, in Input, opts Options, target *pdf0.Document) (Result, error) {
 	out := Result{
 		Scale:       composed.Scale,
 		NaturalSize: composed.NaturalSize,
@@ -261,11 +405,24 @@ func finish(composed layout.Composed, in Input, opts Options) (Result, error) {
 		}
 	}
 
-	doc, err := writePage(composed.Ops, composed.Page, composed.Scale)
+	scratch, err := scratchFor(target)
 	if err != nil {
 		return out, err
 	}
-	out.Document = doc
+	doc, err := writePageTo(scratch, composed.Ops, composed.Page, composed.Scale)
+	if err != nil {
+		return out, err
+	}
+	if target == nil {
+		out.Document = doc
+		return out, nil
+	}
+	report, err := target.AppendPages(doc)
+	if err != nil {
+		return out, err
+	}
+	out.imported = report
+	out.Document = target
 	return out, nil
 }
 
