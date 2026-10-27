@@ -112,7 +112,7 @@ v0.6.0.
 ### PDF/A documents are dated
 
 - **Every document from `NewPDFADocument`, `NewPDFADocumentWithInfo` and
-  `NewPDFADocumentWith` carries `xmp:CreateDate`** (#PR), the moment it was
+  `NewPDFADocumentWith` carries `xmp:CreateDate`** (#367), the moment it was
   built unless `SkeletonOptions.Created` says otherwise. No PDF/A level
   requires one, but an archived document without a date is less use. A build
   that must be byte-identical pins `Created` along with `FileID`; with only
@@ -331,7 +331,7 @@ v0.6.0.
 ## Added
 
 - **`pdfa.SkeletonOptions.Created` and `pdfa.SkeletonOptions.Language`**
-  (#PR), so a document made by `NewPDFADocumentWith` is dated and has a
+  (#367), so a document made by `NewPDFADocumentWith` is dated and has a
   language from the start. `Created` is written as `xmp:CreateDate`. Left
   zero, it is the moment the document is built, and the Unix epoch is refused
   with `pdfa.ErrEpochCreated`, because that is what an unset integer
