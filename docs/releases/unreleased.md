@@ -330,7 +330,7 @@ v0.6.0.
 
 ## Added
 
-- **`htmlpdf.RenderInto` and `htmlpdf.RenderIntoContext`** (#PR): lay an HTML
+- **`htmlpdf.RenderInto` and `htmlpdf.RenderIntoContext`** (#368): lay an HTML
   document out as a page added to a `*pdf0.Document` of the caller's, after its
   pages, so several HTML documents become one PDF and an HTML page can join
   pages from elsewhere. The document is changed only if the render succeeds. A
