@@ -330,6 +330,15 @@ v0.6.0.
 
 ## Added
 
+- **`htmlpdf.Options.PDFA`** (#PR), a `pdfa.SkeletonOptions`: with its
+  `Level` set, `Render` returns a PDF/A document made by
+  `NewPDFADocumentWith`, its page added as `RenderInto` adds one, every font
+  embedded and the layout unchanged. #357's page (an `@font-face` TrueType
+  face, sans-serif and monospace runs, a translucent fill, a PNG with alpha)
+  passes `ValidatePDFA` and veraPDF at PDF/A-2b. Fields set with no `Level` are
+  `htmlpdf.ErrPDFAWithoutLevel`. Left zero, `Render`'s output is unchanged
+  byte for byte.
+
 - **`htmlpdf.RenderInto` and `htmlpdf.RenderIntoContext`** (#368): lay an HTML
   document out as a page added to a `*pdf0.Document` of the caller's, after its
   pages, so several HTML documents become one PDF and an HTML page can join

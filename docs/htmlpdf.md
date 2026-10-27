@@ -289,6 +289,42 @@ scales it to fit (next section) rather than paginating it, so there is no
 second page to write; a document too long to fit legibly is refused by
 `min-scale` or `min-font-size`, not continued.
 
+## PDF/A
+
+`Options.PDFA` makes the document `Render` returns a PDF/A one. Set its `Level`
+and the rest of a `pdfa.SkeletonOptions`, and the document is made by
+`pdf0.NewPDFADocumentWith` and gets its page as `RenderInto` adds one, below:
+
+<!-- snippet
+var invoice string
+var issued time.Time
+-->
+```go
+func archive(w io.Writer) error {
+	out, err := htmlpdf.Render(htmlpdf.Input{HTML: invoice}, htmlpdf.Options{
+		Page: htmlpdf.A4,
+		PDFA: pdfa.SkeletonOptions{
+			Level: pdfa.PDFA2b, Title: "Invoice 2026-0042", Language: "nl",
+			Created: issued, // zero would be the time of the render
+		},
+	})
+	if err != nil {
+		return err
+	}
+	return out.Document.Save(w) // written only if it passes PDF/A-2b
+}
+```
+
+Every font is then embedded, as under `Options.EmbedAllFonts`: supply faces for
+the families the document names, or let its `@font-face` rules bring them.
+The levels are the ones `RenderInto` writes. A `PDFA` with fields set and no
+`Level` is `ErrPDFAWithoutLevel`, not a plain document. The page is drawn
+exactly as the plain render draws it: the same layout, only in a document
+that claims a level.
+
+The metadata is the caller's. The HTML's own `<title>` and `lang` are not
+read into it.
+
 ## Into a document you have
 
 `RenderInto` adds the page to a `*pdf0.Document` of the caller's, after the
@@ -383,9 +419,10 @@ import:
 |---|---|
 | `Render`, `RenderContext` | the call, and the call under a context and a shaping budget |
 | `RenderInto`, `RenderIntoContext`, `ErrUnsupportedLevel` | the call into a document of the caller's, and the PDF/A level it does not write |
+| `ErrPDFAWithoutLevel` | an `Options.PDFA` with fields set and no `Level` |
 | `Result`, `RefusedError` | what a render produced, and why it would not |
 | `Input`, `Stylesheet` | the document and its stylesheets |
-| `Options` | the sheet, the refusal thresholds, and what the PDF must be (`EmbedAllFonts`) |
+| `Options` | the sheet, the refusal thresholds, and what the PDF must be (`EmbedAllFonts`, `PDFA`) |
 | `PageSize`, `PageSizePt` | the sheet |
 | `A4`, `A5`, `Letter` | named sheets, each with a margin already |
 | `Finding`, `Size` | what `Result` carries |
@@ -394,7 +431,7 @@ import:
 | `RunLimits`, `ErrRunLimit` | the bounds `RenderContext` renders under, and what it fails with past them |
 
 `Render`, `RenderContext`, `RenderInto`, `RenderIntoContext`, `Result`,
-`RefusedError`, `ErrUnsupportedLevel`, `Options` and the five
+`RefusedError`, `ErrUnsupportedLevel`, `ErrPDFAWithoutLevel`, `Options` and the five
 rules are this package's own, since what a render produced, why it would not,
 and what the PDF is asked to be are its business rather than the engine's.
 
