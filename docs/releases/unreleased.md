@@ -111,7 +111,7 @@ v0.6.0.
 
 ### htmlpdf
 
-- **forme v0.11.0** (#PR). A page refused for a font nothing supplies now gets
+- **forme v0.11.0** (#366). A page refused for a font nothing supplies now gets
   one `no-face` finding per face to supply. Each names the families the
   element asked for and points at that element, and `Finding.Font` holds the
   families, weight, style and characters as a `layout.FontNeed`. Before, one
