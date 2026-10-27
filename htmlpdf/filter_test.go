@@ -99,7 +99,7 @@ func TestAnOpacityGroupFadesItsMarksTogether(t *testing.T) {
 	in := Input{HTML: `<div style="filter: opacity(0.5)">` +
 		`<div style="background:rgb(255,0,0);width:50px;height:50px"></div>` +
 		`<div style="background:rgb(0,0,255);width:50px;height:50px;margin-top:-25px"></div></div>`}
-	c := layout.Compose(in, Options{})
+	c := layout.Compose(in, layout.Options{})
 	g := theFilterGroup(t, c)
 	if len(g.Filters) != 1 || g.Filters[0].Kind != layout.FilterOpacity {
 		t.Fatalf("the group's filters are %+v; the case needs one opacity", g.Filters)
@@ -140,7 +140,7 @@ func TestAnOpacityGroupFadesItsMarksTogether(t *testing.T) {
 // in the shadow's colour at its alpha, under the picture.
 func TestASharpDropShadowIsTheGroupsAlphaMoved(t *testing.T) {
 	in := filterInput(t, `<img src="half.png" style="filter: drop-shadow(6px 6px 0 rgba(0,0,0,0.5))">`)
-	c := layout.Compose(in, Options{})
+	c := layout.Compose(in, layout.Options{})
 	g := theFilterGroup(t, c)
 	if len(g.Filters) != 1 || g.Filters[0].Kind != layout.FilterDropShadow || g.Filters[0].StdDev != 0 {
 		t.Fatalf("the group's filters are %+v; the case needs one sharp drop shadow", g.Filters)

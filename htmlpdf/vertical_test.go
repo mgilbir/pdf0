@@ -126,7 +126,7 @@ func TestSidewaysTextIsTurned(t *testing.T) {
 				CSS:   []Stylesheet{{Source: `html { writing-mode: ` + tc.mode + ` } p { margin: 0 }`}},
 				Fonts: set,
 			}
-			c := layout.Compose(in, Options{})
+			c := layout.Compose(in, layout.Options{})
 			var runs []layout.DrawText
 			for _, op := range c.Ops {
 				if d, ok := op.(layout.DrawText); ok && d.Text != "" {
@@ -293,7 +293,7 @@ func TestUprightTextIsDrawnByItsVerticalMetrics(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			text := tc.text
 			in := Input{HTML: `<p>` + text + `</p>`, CSS: []Stylesheet{{Source: tc.css}}, Fonts: set}
-			c := layout.Compose(in, Options{})
+			c := layout.Compose(in, layout.Options{})
 			runs := uprightOps(t, c)
 
 			doc, raw := roundTrip(t, in, Options{})
@@ -447,7 +447,7 @@ func TestUprightTextInAFaceWithoutVerticalMetricsIsSetOnEmBoxes(t *testing.T) {
 				css += fmt.Sprintf(` p { letter-spacing: %gpx }`, tc.spacing)
 			}
 			in := Input{HTML: `<p>` + tc.text + `</p>`, CSS: []Stylesheet{{Source: css}}, Fonts: tc.fonts}
-			c := layout.Compose(in, Options{})
+			c := layout.Compose(in, layout.Options{})
 			runs := uprightOps(t, c)
 			if len(runs) != 1 {
 				t.Fatalf("layout set %d runs; the case expects one", len(runs))

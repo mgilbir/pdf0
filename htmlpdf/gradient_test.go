@@ -302,7 +302,7 @@ func TestAGradientIsItsColours(t *testing.T) {
 	for _, tc := range gradientCases {
 		t.Run(tc.name, func(t *testing.T) {
 			in := gradientDoc(tc.background)
-			c := layout.Compose(in, Options{})
+			c := layout.Compose(in, layout.Options{})
 			v := theGradient(t, c)
 			doc, _ := roundTrip(t, in, Options{})
 			page := doc.PageList()[0]
@@ -350,7 +350,7 @@ func TestAGradientIsDrawnAsItsColours(t *testing.T) {
 	for _, tc := range gradientCases {
 		t.Run(tc.name, func(t *testing.T) {
 			in := gradientDoc(tc.background)
-			c := layout.Compose(in, Options{})
+			c := layout.Compose(in, layout.Options{})
 			v := theGradient(t, c)
 			doc, _ := roundTrip(t, in, Options{})
 			tx, ty := v.Tile.X.Px(), v.Tile.Y.Px()

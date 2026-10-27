@@ -94,7 +94,7 @@ func TestATransformAtAnyAngleIsDrawnThroughItsMatrix(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			in := Input{HTML: tc.html}
-			c := layout.Compose(in, drawing(Options{}))
+			c := layout.Compose(in, Options{}.layoutOptions())
 			if n := transformGroups(c.Ops); n != tc.groups {
 				t.Fatalf("the display list holds %d TransformGroups; the case needs %d", n, tc.groups)
 			}
@@ -172,8 +172,8 @@ func TestATransformGroupTurnsPatternsAndFormsWithIt(t *testing.T) {
 	grouped := filterInput(t, strings.Replace(box, "%s", picture, 1))
 	turned := filterInput(t, strings.Replace(box, "%s", "", 1))
 
-	cg := layout.Compose(grouped, drawing(Options{}))
-	ct := layout.Compose(turned, drawing(Options{}))
+	cg := layout.Compose(grouped, Options{}.layoutOptions())
+	ct := layout.Compose(turned, Options{}.layoutOptions())
 	if n := transformGroups(cg.Ops); n != 1 {
 		t.Fatalf("with the picture the display list holds %d TransformGroups; the case needs one", n)
 	}
@@ -246,7 +246,7 @@ func TestADropShadowIsDrawnInsideATransformGroup(t *testing.T) {
 	in := filterInput(t, `<div style="position:absolute; left:800px; top:100px; width:120px; height:60px; `+
 		`transform: translate(-700px, 0) rotate(30deg)">`+
 		`<img src="half.png" style="display:block; width:80px; height:40px; filter: drop-shadow(10px 10px 0 rgb(0,0,0))"></div>`)
-	c := layout.Compose(in, drawing(Options{}))
+	c := layout.Compose(in, Options{}.layoutOptions())
 	shadows := 0
 	for _, op := range c.Ops {
 		if g, ok := op.(layout.TransformGroup); ok {
@@ -312,7 +312,7 @@ func TestADropShadowIsDrawnInsideATransformGroup(t *testing.T) {
 // text.
 func TestATurnedRunStillExtracts(t *testing.T) {
 	in := Input{HTML: `<p style="position:absolute; left:100px; top:200px; margin:0; transform: rotate(30deg)">Turned text</p>`, Fonts: notoSansSet(t)}
-	if n := transformGroups(layout.Compose(in, drawing(Options{})).Ops); n != 1 {
+	if n := transformGroups(layout.Compose(in, Options{}.layoutOptions()).Ops); n != 1 {
 		t.Fatalf("the display list holds %d TransformGroups; the case needs one", n)
 	}
 	out, err := Render(in, Options{})
@@ -331,8 +331,8 @@ func TestATurnedRunStillExtracts(t *testing.T) {
 // TestATransformPastWhatAReaderCarriesIsRefused: a scale of less than a
 // millionth is refused under RuleUndrawable, its group and all in it; a
 // matrix that is not invertible draws nothing, as CSS Transforms 1 §6 says;
-// and a caller's TransformGroups of false does not stop a turn being drawn,
-// since it says what this backend draws.
+// and a turn is drawn under the zero Options, since what this backend draws
+// is not a caller's to say.
 func TestATransformPastWhatAReaderCarriesIsRefused(t *testing.T) {
 	in := Input{HTML: `<div style="position:absolute; left:100px; top:100px; width:200px; height:60px; ` +
 		`background:red; transform: rotate(30deg) scale(0.0000001)"></div>`}
@@ -390,7 +390,7 @@ func TestATransformPastWhatAReaderCarriesIsRefused(t *testing.T) {
 	turn := [6]float64{0, 1, -1, 0, 50 / style.Unit(1).Px(), 0}
 	link := layout.Link{Rects: []layout.Rect{{W: u(20), H: u(10)}}, Href: "https://example.com/"}
 	group := layout.TransformGroup{Matrix: turn, Ops: []layout.Op{link}}
-	if findings, refused := checkDrawable(layout.Composed{Ops: []layout.Op{group}}, nil); refused {
+	if findings, refused := checkDrawable(layout.Composed{Ops: []layout.Op{group}}, nil, false); refused {
 		t.Errorf("a link in a group is refused: %+v", findings)
 	}
 	doc, err := writePage([]layout.Op{group}, page, 1)
@@ -511,7 +511,7 @@ func TestABitmapStrikeIsTheOneTheTransformShowsTheTextAt(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			in := Input{HTML: tc.html, Fonts: set}
-			if n := transformGroups(layout.Compose(in, drawing(Options{})).Ops); n != tc.groups {
+			if n := transformGroups(layout.Compose(in, Options{}.layoutOptions()).Ops); n != tc.groups {
 				t.Fatalf("the display list holds %d TransformGroups; the case needs %d", n, tc.groups)
 			}
 			doc, _ := roundTrip(t, in, Options{})

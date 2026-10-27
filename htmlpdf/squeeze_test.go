@@ -48,7 +48,7 @@ func TestACombinedRunIsSqueezedIntoItsEm(t *testing.T) {
 			`p { margin: 0; text-combine-upright: all }`}},
 		Fonts: set,
 	}
-	c := layout.Compose(in, Options{})
+	c := layout.Compose(in, layout.Options{})
 	run := squeezedRun(t, c)
 	if run.Sideways || run.Upright || !(run.WidthScale < 1) {
 		t.Fatalf("the composition is Sideways=%v Upright=%v squeezed by %v; the case expects a horizontal run squeezed",
