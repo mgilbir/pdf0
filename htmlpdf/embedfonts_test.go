@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -163,30 +164,42 @@ func TestEmbedAllFontsLaysOutInTheDocumentsOwnFaces(t *testing.T) {
 	}
 }
 
-// TestEmbedAllFontsRefusesAFamilyNothingSupplies: with no font set and a
-// family the document brings no face for, the page is refused, not set in a
-// standard font.
+// TestEmbedAllFontsRefusesAFamilyNothingSupplies: with no font set, a page
+// whose families the document brings no face for is refused rather than set in
+// a standard font, and the refusal says what to supply: one no-face finding per
+// family, naming it in its message and in Font.Families, and pointing at the
+// element that asked for it (#363). The four families share one page, because
+// every one of them has to be supplied and every one has to be reported.
 func TestEmbedAllFontsRefusesAFamilyNothingSupplies(t *testing.T) {
 	res := bytesResolver{"noto.ttf": notoSansBytes(t)}
-	for _, family := range []string{"sans-serif", "monospace", "Helvetica", "Courier"} {
-		in := Input{
-			HTML:      notoFace + `<p style="font-family: Doc">covered</p><p style="font-family: ` + family + `">not</p>`,
-			Resources: res,
-		}
-		out, err := Render(in, Options{Page: A4, EmbedAllFonts: true})
-		var refused *RefusedError
-		if !errors.As(err, &refused) {
-			t.Errorf("%s: rendered (%v, fonts %v); want a refusal", family, err, fontsIfAny(t, out))
-			continue
-		}
-		found := false
-		for _, f := range refused.Findings {
-			if f.Rule == layout.RuleNoFace && f.Severity == layout.Error {
-				found = true
+	families := []string{"sans-serif", "monospace", "Helvetica", "Courier"}
+	html := notoFace + `<p style="font-family: Doc">covered</p>`
+	for _, family := range families {
+		html += `<p style="font-family: ` + family + `">not</p>`
+	}
+	_, err := Render(Input{HTML: html, Resources: res}, Options{Page: A4, EmbedAllFonts: true})
+	var refused *RefusedError
+	if !errors.As(err, &refused) {
+		t.Fatalf("rendered (%v); want a refusal", err)
+	}
+	for _, family := range families {
+		element := strings.Index(html, `<p style="font-family: `+family+`"`)
+		var named *layout.Finding
+		for i, f := range refused.Findings {
+			if f.Rule == layout.RuleNoFace && f.Font != nil && slices.Contains(f.Font.Families, family) {
+				named = &refused.Findings[i]
 			}
 		}
-		if !found {
-			t.Errorf("%s: refused with %v; want %s", family, refused.Findings, layout.RuleNoFace)
+		switch {
+		case named == nil:
+			t.Errorf("%s: no %s finding names it in Font.Families: %v", family, layout.RuleNoFace, refused.Findings)
+		case named.Severity != layout.Error:
+			t.Errorf("%s: %s is %v; want %v", family, layout.RuleNoFace, named.Severity, layout.Error)
+		case !strings.Contains(named.Message, `"`+family+`"`):
+			t.Errorf("%s: the message does not name it: %q", family, named.Message)
+		case named.Source.HTMLOffset < element || named.Source.HTMLOffset > element+len(`<p`):
+			t.Errorf("%s: the finding points at HTML byte %d; its element starts at %d",
+				family, named.Source.HTMLOffset, element)
 		}
 	}
 }

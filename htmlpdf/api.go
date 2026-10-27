@@ -105,7 +105,8 @@ type Options struct {
 	// Input.Fonts would be forme's standard set, so with this on a nil set is
 	// an empty one instead: a document that brings its own faces renders, and
 	// one that asks for a family nothing supplies is refused, by forme's
-	// no-face rule. A family a non-empty set lacks is set in the set's own
+	// no-face rule, whose findings name each family to supply and the element
+	// that asked for it, in the message and as data in Finding.Font. A family a non-empty set lacks is set in the set's own
 	// default and reported under font-fallback, as it always is; the font
 	// shown is embedded either way. github.com/mgilbir/forme/fonts/notosans
 	// is a face that needs no file.
