@@ -109,6 +109,18 @@ v0.6.0.
 
 ## Behaviour changes
 
+### htmlpdf
+
+- **forme v0.11.0** (#366). A page refused for a font nothing supplies now gets
+  one `no-face` finding per face to supply. Each names the families the
+  element asked for and points at that element, and `Finding.Font` holds the
+  families, weight, style and characters as a `layout.FontNeed`. Before, one
+  finding per document quoted "serif" and pointed at nothing. Together with
+  `Options.EmbedAllFonts` (#364), a caller learns exactly which faces to
+  supply. forme's layout fixes also change some pages: segment breaks across
+  element boundaries, the letter-spacing at the end of aligned and
+  right-to-left lines, and floats around formatting characters.
+
 ### Validation
 
 - **`ValidatePDFX` with an unset level validates what the document declares** (#346)

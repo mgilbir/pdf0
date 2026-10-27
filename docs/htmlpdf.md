@@ -215,7 +215,10 @@ func renderInvoice(w io.Writer, document string, regularTTF, boldTTF []byte, ass
   document's `@font-face` faces and nothing else: with it, a nil set is an
   empty one rather than the standard faces, so a document that brings its own
   faces renders and one that names a family nothing supplies is refused
-  (`no-face`). A standard face a caller's own set returns is refused when the
+  (`no-face`), with one finding per face to supply: it names the families and
+  the element that asked for them, and its `Font` field holds them as data
+  (`layout.FontNeed`), so a caller can supply those faces and render again. A
+  standard face a caller's own set returns is refused when the
   page is written (`RuleStandardFont`), and `Input.Policy` does not lower that
   rule. `notosans.Face` is an embedded face that needs no file:
 
