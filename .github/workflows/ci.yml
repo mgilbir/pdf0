@@ -19,7 +19,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.26.x'
+          go-version-file: go.mod
 
       - name: gofmt
         run: |
@@ -107,7 +107,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.26.x'
+          go-version-file: go.mod
 
       # Keyed on the pinned revisions in the Makefile and on the download
       # manifests and scripts, so the key changes only when the data is meant
@@ -219,7 +219,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: '1.26.x'
+          go-version-file: go.mod
           cache: true
 
       # The corpus Go generates lives in the build cache, so carrying it between

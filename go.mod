@@ -1,6 +1,8 @@
 module github.com/mgilbir/pdf0
 
-go 1.26
+go 1.27
+
+toolchain go1.27.3
 
 require github.com/mgilbir/formalis v0.3.1
 

@@ -55,6 +55,13 @@ v0.6.0.
 
 ### Behaviour that breaks callers (not reported by gorelease)
 
+- **pdf0 needs Go 1.27** (#365). go.mod's `go` line is 1.27, up from 1.26, and
+  its `toolchain` line, which CI builds and tests with, is go1.27.3. forme's
+  main branch names Go 1.27, so its next release does too, and pdf0 has to
+  match to take it.
+  *Migration:* build with Go 1.27 or later. The `toolchain` line has no effect
+  on a module that imports pdf0.
+
 - **`Write`, `WriteContext`, `Save` and `SaveContext` refuse a signed
   document.** (#347) A document read from a file that carries a signature or document
   time-stamp is refused with an error wrapping `ErrWouldInvalidateSignatures`,

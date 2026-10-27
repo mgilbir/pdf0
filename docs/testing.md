@@ -19,10 +19,12 @@ no-binaries checks, and every example (`make check-examples`).
 `TestMakeTargetsAreWhatCIRuns` fails if the two drift apart. What can still
 differ is the machine:
 
-- **The Go version.** CI uses the Go named in the [CI section](#ci); a newer
-  local gofmt can flag a file CI accepts. `make check` runs the toolchain's own
-  gofmt, so `GOTOOLCHAIN=go1.26.6 make check` (any release of CI's minor
-  version) formats exactly as CI does.
+- **The Go version.** CI uses the Go named in the [CI section](#ci), which is
+  go.mod's `toolchain` line; a local `go` of that minor version or older
+  switches to it by itself (`GOTOOLCHAIN=auto`, the default). A newer local Go
+  stays the newer one, and its gofmt can flag a file CI accepts. `make check`
+  runs the toolchain's own gofmt, so `GOTOOLCHAIN=go1.27.3 make check` formats
+  exactly as CI does.
 - **The Mermaid check** needs node and npx, and fetches its pinned
   mermaid-cli from npm the first time it runs.
 - **The data.** On a fresh clone every test over a data set skips (see
@@ -568,7 +570,7 @@ What each job runs, generated from `.github/workflows/ci.yml`:
 
 CI runs on every `push` (branches: [main]) and every `pull_request`, as 3 jobs.
 
-**`build-test`** (Go `1.26.x`):
+**`build-test`** (Go `1.27.3`):
 
 1. gofmt: `gofmt -l .`
 2. go vet: `go vet ./...`
@@ -581,7 +583,7 @@ CI runs on every `push` (branches: [main]) and every `pull_request`, as 3 jobs.
 9. no binaries in the tree: `./scripts/check-no-binaries.sh`
 10. example runs: `make check-examples`
 
-**`corpus`** (Go `1.26.x`):
+**`corpus`** (Go `1.27.3`):
 
 1. restore corpora: `testdata/verapdf-corpus`, `testdata/arlington-pdf-model`, `testdata/pdf20examples`, `spec/verapdf-profiles`, `testdata/notocjk`, `testdata/notoemoji`, `testdata/facturx/*.pdf`, `testdata/facturx/.ok`, `testdata/wtpdf/*.pdf`, `testdata/wtpdf/.ok`, `testdata/ccitt/*.pdf`, `testdata/ccitt/.ok`, `testdata/jbig2/*.pdf`, `testdata/jbig2/.ok`
 2. fetch corpora (only if `steps.corpora.outputs.cache-hit != 'true'`): `make corpus arlington refpdfs facturx profiles wtpdf ccitt jbig2 notocjk notoemoji`
@@ -589,7 +591,7 @@ CI runs on every `push` (branches: [main]) and every `pull_request`, as 3 jobs.
 4. install the renderers
 5. conformance ratchets: `go test ./... -count=1`
 
-**`fuzz`** (Go `1.26.x`):
+**`fuzz`** (Go `1.27.3`):
 
 1. restore the fuzz corpus: `~/.cache/go-build/fuzz`
 2. fuzz: `make fuzz FUZZTIME=60s`

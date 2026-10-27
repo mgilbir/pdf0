@@ -224,6 +224,30 @@ func (w *workflow) cached(dir string) bool {
 // parseWorkflow reads the subset of YAML ci.yml is written in: two-space
 // indentation, a job per key under jobs:, a step per "- " item under steps:,
 // and run: either inline or as a "|" block.
+// goVersionIn is the Go a job given go-version-file runs: the go.mod's
+// toolchain line when it has one, since actions/setup-go reads that in
+// preference to the go line, and the go line otherwise.
+func goVersionIn(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	version := ""
+	for _, line := range strings.Split(string(b), "\n") {
+		switch f := strings.Fields(line); {
+		case len(f) == 2 && f[0] == "toolchain":
+			return strings.TrimPrefix(f[1], "go")
+		case len(f) == 2 && f[0] == "go":
+			version = f[1]
+		}
+	}
+	if version == "" {
+		t.Fatalf("%s names no Go version", path)
+	}
+	return version
+}
+
 func parseWorkflow(t *testing.T, root string) *workflow {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "ci.yml"))
@@ -302,6 +326,8 @@ func parseWorkflow(t *testing.T, root string) *workflow {
 			step.cond = val
 		case "go-version":
 			job.goVersion = strings.Trim(val, `'"`)
+		case "go-version-file":
+			job.goVersion = goVersionIn(t, filepath.Join(root, strings.Trim(val, `'"`)))
 		case "run":
 			if val == "|" {
 				step.run = block()
