@@ -56,7 +56,7 @@ v0.6.0.
 ### `htmlpdf`
 
 - **htmlpdf.Options is its own struct, not an alias of forme's layout.Options,
-  and has no TransformGroups field** (#PR). `layout.Options` describes the
+  and has no TransformGroups field** (#364). `layout.Options` describes the
   backend as well as the document, and htmlpdf overwrote the field it
   described the backend with whatever a caller passed. `Render` and
   `RenderContext` take the new type. *Migration:* a literal such as
@@ -302,7 +302,7 @@ v0.6.0.
 
 ## Added
 
-- **`htmlpdf.Options.EmbedAllFonts`** (#PR): every font on the page is
+- **`htmlpdf.Options.EmbedAllFonts`** (#364): every font on the page is
   embedded, with none of the fourteen standard fonts. The page is laid out in
   the caller's `Input.Fonts` and the document's `@font-face` faces only. A nil
   set is read as an empty one rather than as the standard fonts, and a family
