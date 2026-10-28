@@ -313,7 +313,7 @@ v0.6.0.
   reference on every branch. Ghostscript and poppler drew pdf0's page the same
   on both images. Move the pin deliberately, with the oracles checked against
   each other.
-- **A symlinked data set is ignored** (#PR). `.gitignore` names each fetched
+- **A symlinked data set is ignored** (#373). `.gitignore` names each fetched
   data directory without a trailing slash, so a data set linked to another
   checkout's copy no longer shows as untracked for `git add -A` to commit.
   `TestGitignoreCoversASymlinkedDataSet` holds every data set to it.
