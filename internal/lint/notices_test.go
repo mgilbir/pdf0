@@ -56,6 +56,7 @@ var ownFiles = []struct{ glob, why string }{
 	{"testdata/colrv1/requirements.txt", "the Python packages skia_render.py needs"},
 	{"testdata/fontinstance/oracle.py", "writes oracle.txt"},
 	{"testdata/verapdf/verapdf-docker.sh", "runs veraPDF's docker image"},
+	{"testdata/arlington-corpus-expected.tsv", "the findings pdf0's Arlington test makes on conformant corpus files: file names and pdf0's messages, none of the files' content"},
 	{"cmd/pdf0/testdata/signpdf/main.go", "signs a PDF with a key made on the spot, for the CLI's signed-input transcripts"},
 }
 
