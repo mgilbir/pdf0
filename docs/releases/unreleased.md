@@ -306,6 +306,18 @@ v0.6.0.
 
 ### For contributors
 
+- **CI runs on `ubuntu-24.04`, not `ubuntu-latest`** (#372). The rendering
+  oracles are the image's packages. When `ubuntu-latest` became 26.04 they
+  moved with it, and its HarfBuzz 12.3.2 paints Noto's Spanish flag without its
+  shading, so `TestColourEmojiAreWhatHarfBuzzPaints` failed against the wrong
+  reference on every branch. Ghostscript and poppler drew pdf0's page the same
+  on both images. Move the pin deliberately, with the oracles checked against
+  each other.
+- **A symlinked data set is ignored** (#373). `.gitignore` names each fetched
+  data directory without a trailing slash, so a data set linked to another
+  checkout's copy no longer shows as untracked for `git add -A` to commit.
+  `TestGitignoreCoversASymlinkedDataSet` holds every data set to it.
+
 - **The Arlington oracle reaches the whole file, and its ratchet is a list**
   (#370). It now enters resource maps, walks name and number trees to their
   values, honours inheritance from the page tree and null entries, and judges
