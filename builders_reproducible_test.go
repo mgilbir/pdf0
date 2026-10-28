@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"testing"
+	"time"
 
 	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/fonts"
@@ -22,6 +23,7 @@ func everyBuilderDoc(t *testing.T) []byte {
 	t.Helper()
 	doc, err := NewPDFADocumentWith(pdfa.SkeletonOptions{
 		Level: pdfa.PDFA2b, Title: "Repro", FileID: []byte("0123456789abcdef"),
+		Created: time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC),
 	})
 	if err != nil {
 		t.Fatal(err)

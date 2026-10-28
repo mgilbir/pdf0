@@ -2,8 +2,10 @@ package pdfa
 
 import (
 	_ "embed"
+	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	lcms2 "github.com/mgilbir/golittlecms"
 	"github.com/mgilbir/pdf0/internal/core"
@@ -54,14 +56,45 @@ type SkeletonOptions struct {
 	//
 	// Supply one when the output has to be reproducible — the same inputs
 	// giving the same bytes, so a build can be compared, cached or signed for.
-	// It is the last thing in a generated document that varies between runs;
-	// with it set and an ICCProfile supplied, two builds are byte-identical.
-	// A digest of the content is the usual choice.
+	// It and Created are the two things in a generated document that vary
+	// between runs; with both set and an ICCProfile supplied, two builds are
+	// byte-identical. A digest of the content is the usual choice.
 	//
 	// Sixteen bytes is conventional (ISO 32000-2 14.4) and nothing enforces it.
 	// The bytes are copied, so the caller may reuse the slice.
 	FileID []byte
+
+	// Created is when the document was made, written as xmp:CreateDate. The
+	// zero value means now: a document being built is being created, and one
+	// with no date is less use to an archive than one with today's.
+	//
+	// The Unix epoch is refused (ErrEpochCreated): 1970-01-01 is what an unset
+	// integer timestamp becomes, and a document dated then is almost always a
+	// field nobody filled in rather than a date anybody meant.
+	//
+	// No PDF/A level requires a creation date, and the skeleton has no
+	// information dictionary, so this is the one place it is written: PDF/A-1
+	// asks only that an Info /CreationDate, where there is one, matches
+	// xmp:CreateDate, and PDF/A-4 forbids one in Info (Document.SetDocumentInfo
+	// keeps both rules). For reproducible output supply it along with FileID:
+	// a date taken from the clock differs between two builds.
+	Created time.Time
+
+	// Language is the natural language of the document's text, as a language
+	// tag such as "nl" or "en-GB", written as the catalog's /Lang, as
+	// Document.SetDocumentInfo writes it. Empty writes none. It must be a
+	// language tag by the grammar the validators judge /Lang by: a primary
+	// tag of 1-8 letters, then hyphen-separated subtags of 1-8 letters or
+	// digits, letters only at PDF/A-1 (RFC 1766).
+	Language string
 }
+
+// ErrEpochCreated is SkeletonOptions.Created set to the Unix epoch.
+var ErrEpochCreated = errors.New("pdfa: the creation date is the Unix epoch, which is what an unset timestamp becomes; leave Created zero for now, or set the date meant")
+
+// now is the clock Created's zero value reads. A variable so that a test can
+// stand a fixed instant in for it.
+var now = time.Now
 
 // SkeletonWith is Skeleton with the output intent under the caller's control:
 // their profile, their output-condition identifier, and no claim by pdf0 about
@@ -87,6 +120,22 @@ func SkeletonWith(opts SkeletonOptions) (map[int]*object.IndirectObject, object.
 	}
 	version := pdfaVersion(level)
 
+	created := opts.Created
+	switch {
+	case created.IsZero():
+		created = now()
+	case created.Equal(time.Unix(0, 0)):
+		return nil, object.Dictionary{}, "", ErrEpochCreated
+	}
+	if lang := opts.Language; lang != "" && !core.ValidLanguageTag(lang, level.Part() != 1) {
+		kind := "letters or digits"
+		if level.Part() == 1 {
+			kind = "letters (PDF/A-1 follows RFC 1766)"
+		}
+		return nil, object.Dictionary{}, "", fmt.Errorf("pdfa: Language %q is not a language tag: "+
+			"a primary tag of 1-8 letters, then hyphen-separated subtags of 1-8 %s", lang, kind)
+	}
+
 	// The file identifier. A caller who supplies one gets a document whose
 	// bytes depend on nothing but its content; otherwise it is random, for the
 	// reasons on core.RandomFileID.
@@ -101,6 +150,10 @@ func SkeletonWith(opts SkeletonOptions) (map[int]*object.IndirectObject, object.
 	catalog.Set("Pages", object.IndirectRef{Number: 2})
 	catalog.Set("Metadata", object.IndirectRef{Number: 3})
 	catalog.Set("OutputIntents", object.Array{object.IndirectRef{Number: 4}})
+	if opts.Language != "" {
+		// Validated above, so it is ASCII: the same bytes in PDFDocEncoding.
+		catalog.Set("Lang", object.String{Value: []byte(opts.Language)})
+	}
 	if level.IsA() {
 		// A Level A file is a Tagged PDF with a logical structure tree. The empty
 		// page tree carries no content, so a minimal marked, empty structure tree
@@ -133,7 +186,7 @@ func SkeletonWith(opts SkeletonOptions) (map[int]*object.IndirectObject, object.
 	pages.Set("Count", object.Integer(0))
 
 	// Object 3: Metadata stream (XMP, unfiltered)
-	xmpData, err := GenerateXMPMetadata(level, title, author)
+	xmpData, err := generateXMP(level, title, author, created)
 	if err != nil {
 		return nil, object.Dictionary{}, "", err
 	}
@@ -197,6 +250,12 @@ func pdfaVersion(level Level) string {
 // through (or its control characters silently dropped), which produced a packet
 // that was not well-formed and a document that failed its own level.
 func GenerateXMPMetadata(level Level, title, author string) ([]byte, error) {
+	return generateXMP(level, title, author, time.Time{})
+}
+
+// generateXMP is GenerateXMPMetadata with xmp:CreateDate when created is not
+// zero, in the form Document.SetDocumentInfo writes it (RFC 3339).
+func generateXMP(level Level, title, author string, created time.Time) ([]byte, error) {
 	p := xmp.New()
 	if err := setPDFAIdentification(p, level); err != nil {
 		return nil, err
@@ -216,6 +275,11 @@ func GenerateXMPMetadata(level Level, title, author string) ([]byte, error) {
 	}
 	if err := p.SetText(xmp.NSXMP, "xmp", "CreatorTool", "pdf0"); err != nil {
 		return nil, err
+	}
+	if !created.IsZero() {
+		if err := p.SetText(xmp.NSXMP, "xmp", "CreateDate", created.Format(time.RFC3339)); err != nil {
+			return nil, err
+		}
 	}
 	return p.Bytes()
 }

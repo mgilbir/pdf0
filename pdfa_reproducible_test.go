@@ -3,6 +3,7 @@ package pdf0
 import (
 	"bytes"
 	"testing"
+	"time"
 
 	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/object"
@@ -15,7 +16,9 @@ import (
 // profile carried its creation timestamp, which embedding fixed. The file
 // identifier is the other, and it is meant to vary — it exists to tell this
 // file from every other — so it is not fixed, it is *offered*: a caller who
-// needs the bytes to be a function of the content supplies one.
+// needs the bytes to be a function of the content supplies one. The creation
+// date is offered the same way: left zero it is the clock's, so a reproducible
+// build pins it too.
 
 // reproDoc builds the same document twice over, varying only what the caller
 // controls.
@@ -40,10 +43,11 @@ func reproDoc(t *testing.T, opts pdfa.SkeletonOptions) []byte {
 
 func TestAPinnedFileIDMakesTheOutputReproducible(t *testing.T) {
 	opts := pdfa.SkeletonOptions{
-		Level:  pdfa.PDFA2b,
-		Title:  "Invoice",
-		Author: "pdf0",
-		FileID: []byte("0123456789abcdef"),
+		Level:   pdfa.PDFA2b,
+		Title:   "Invoice",
+		Author:  "pdf0",
+		FileID:  []byte("0123456789abcdef"),
+		Created: time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC),
 	}
 
 	a, b := reproDoc(t, opts), reproDoc(t, opts)

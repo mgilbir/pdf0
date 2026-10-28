@@ -109,6 +109,15 @@ v0.6.0.
 
 ## Behaviour changes
 
+### PDF/A documents are dated
+
+- **Every document from `NewPDFADocument`, `NewPDFADocumentWithInfo` and
+  `NewPDFADocumentWith` carries `xmp:CreateDate`** (#367), the moment it was
+  built unless `SkeletonOptions.Created` says otherwise. No PDF/A level
+  requires one, but an archived document without a date is less use. A build
+  that must be byte-identical pins `Created` along with `FileID`; with only
+  `FileID` pinned, two builds now differ in the date.
+
 ### htmlpdf
 
 - **forme v0.11.0** (#366). A page refused for a font nothing supplies now gets
@@ -320,6 +329,14 @@ v0.6.0.
   `TestPDFRef17ExamplesRegenerate`.
 
 ## Added
+
+- **`pdfa.SkeletonOptions.Created` and `pdfa.SkeletonOptions.Language`**
+  (#367), so a document made by `NewPDFADocumentWith` is dated and has a
+  language from the start. `Created` is written as `xmp:CreateDate`. Left
+  zero, it is the moment the document is built, and the Unix epoch is refused
+  with `pdfa.ErrEpochCreated`, because that is what an unset integer
+  timestamp becomes. `Language` is written as the catalog's `/Lang`, under the
+  same rules as `SetDocumentInfo`.
 
 - **`htmlpdf.Options.EmbedAllFonts`** (#364): every font on the page is
   embedded, with none of the fourteen standard fonts. The page is laid out in
