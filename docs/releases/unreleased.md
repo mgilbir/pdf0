@@ -339,7 +339,7 @@ v0.6.0.
 
 ## Added
 
-- **A PDF/A render takes its metadata from the HTML** (#PR). Under
+- **A PDF/A render takes its metadata from the HTML** (#374). Under
   `htmlpdf.Options.PDFA`, a blank `Title`, `Author` or `Language` is filled
   from the document's `<title>`, first `<meta name="author">` and root
   language, as forme v0.12.0 reports them. The caller's values win. A value the
