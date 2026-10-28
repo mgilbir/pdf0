@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -222,7 +223,26 @@ func (e *RefusedError) Error() string {
 // Options.EmbedAllFonts for what that lays the document out in, and what it
 // refuses.
 func Render(in Input, opts Options) (Result, error) {
+	target, err := opts.pdfaTarget()
+	if err != nil {
+		return Result{}, err
+	}
+	if target != nil {
+		return renderInto(target, in, opts)
+	}
 	return finish(layout.Compose(opts.layoutInput(in), opts.layoutOptions()), in, opts, nil)
+}
+
+// pdfaTarget is the document Options.PDFA asks Render to make, or nil when it
+// is zero.
+func (o Options) pdfaTarget() (*pdf0.Document, error) {
+	if reflect.ValueOf(o.PDFA).IsZero() {
+		return nil, nil
+	}
+	if o.PDFA.Level == pdfa.LevelDeclared {
+		return nil, ErrPDFAWithoutLevel
+	}
+	return pdf0.NewPDFADocumentWith(o.PDFA)
 }
 
 // RenderContext is Render for a document a caller does not control: the
@@ -239,6 +259,13 @@ func Render(in Input, opts Options) (Result, error) {
 // what Render returns for the document, the same bytes, and the work charged
 // in Result.ShapingWork.
 func RenderContext(ctx context.Context, in Input, opts Options, limits RunLimits) (Result, error) {
+	target, err := opts.pdfaTarget()
+	if err != nil {
+		return Result{}, err
+	}
+	if target != nil {
+		return renderIntoContext(ctx, target, in, opts, limits)
+	}
 	composed, err := layout.ComposeContext(ctx, opts.layoutInput(in), opts.layoutOptions(), limits)
 	if err != nil {
 		return Result{}, err
@@ -280,6 +307,17 @@ var ErrUnsupportedLevel = errors.New("htmlpdf: the document claims a PDF/A level
 // level and has an older version has it raised to 1.4, again only on success.
 // A nil document, and a Locked one, are refused.
 func RenderInto(doc *pdf0.Document, in Input, opts Options) (Result, error) {
+	if !reflect.ValueOf(opts.PDFA).IsZero() {
+		return Result{}, errPDFAForRenderInto
+	}
+	return renderInto(doc, in, opts)
+}
+
+// errPDFAForRenderInto is a set Options.PDFA passed to RenderInto, whose
+// document already claims what it claims.
+var errPDFAForRenderInto = errors.New("htmlpdf: Options.PDFA describes the document Render makes; RenderInto adds to a document of the caller's, which claims what it claims — make it with pdf0.NewPDFADocumentWith instead")
+
+func renderInto(doc *pdf0.Document, in Input, opts Options) (Result, error) {
 	opts, err := into(doc, opts)
 	if err != nil {
 		return Result{}, err
@@ -290,6 +328,13 @@ func RenderInto(doc *pdf0.Document, in Input, opts Options) (Result, error) {
 // RenderIntoContext is RenderInto under a context and a shaping budget, as
 // RenderContext is Render.
 func RenderIntoContext(ctx context.Context, doc *pdf0.Document, in Input, opts Options, limits RunLimits) (Result, error) {
+	if !reflect.ValueOf(opts.PDFA).IsZero() {
+		return Result{}, errPDFAForRenderInto
+	}
+	return renderIntoContext(ctx, doc, in, opts, limits)
+}
+
+func renderIntoContext(ctx context.Context, doc *pdf0.Document, in Input, opts Options, limits RunLimits) (Result, error) {
 	opts, err := into(doc, opts)
 	if err != nil {
 		return Result{}, err
@@ -317,13 +362,21 @@ func into(doc *pdf0.Document, opts Options) (Options, error) {
 	if !claimed {
 		return opts, nil
 	}
-	switch level {
-	case pdfa.PDFA2b, pdfa.PDFA2u, pdfa.PDFA3b, pdfa.PDFA3u, pdfa.PDFA4, pdfa.PDFA4E, pdfa.PDFA4F:
-	default:
+	if !writesPagesFor(level) {
 		return opts, fmt.Errorf("%w: %s", ErrUnsupportedLevel, level)
 	}
 	opts.EmbedAllFonts = true
 	return opts, nil
+}
+
+// writesPagesFor is whether RenderInto writes pages for a document claiming
+// level: PDF/A-2 and -3 at b and u, and PDF/A-4 with e and f.
+func writesPagesFor(level pdfa.Level) bool {
+	switch level {
+	case pdfa.PDFA2b, pdfa.PDFA2u, pdfa.PDFA3b, pdfa.PDFA3u, pdfa.PDFA4, pdfa.PDFA4E, pdfa.PDFA4F:
+		return true
+	}
+	return false
 }
 
 // scratchFor is the document a page for target is written into first: one

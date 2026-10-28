@@ -1,8 +1,11 @@
 package htmlpdf
 
 import (
+	"errors"
+
 	"github.com/mgilbir/forme/layout"
 	"github.com/mgilbir/forme/shape"
+	"github.com/mgilbir/pdf0/pdfa"
 )
 
 // The names a caller needs to render HTML, gathered here so that the common
@@ -116,7 +119,27 @@ type Options struct {
 	// lower: a caller who asked for every font to be embedded has said what
 	// a page that names one is worth.
 	EmbedAllFonts bool
+
+	// PDFA, with its Level set, makes the document Render returns a PDF/A
+	// one: it is made by pdf0.NewPDFADocumentWith(PDFA), with its XMP
+	// identification, output intent, title, author, language and creation
+	// date, and the page is added to it as RenderInto adds one, every font
+	// embedded. The levels and what each refuses are RenderInto's. Left zero,
+	// Render's document is the plain one it always was, byte for byte.
+	//
+	// A PDFA with fields set and no Level is an error (ErrPDFAWithoutLevel),
+	// not a plain document: a title or a profile given for a PDF/A file that
+	// then is not one is a mistake to report. RenderInto refuses a set PDFA
+	// too, since its document was made by the caller and claims what it
+	// claims.
+	//
+	// The metadata is the caller's. The HTML's own <title> and lang are not
+	// read into it.
+	PDFA pdfa.SkeletonOptions
 }
+
+// ErrPDFAWithoutLevel is an Options.PDFA with fields set and no Level.
+var ErrPDFAWithoutLevel = errors.New("htmlpdf: Options.PDFA is set but has no Level, so it describes a PDF/A document without saying which; set Level, or leave PDFA zero for a plain document")
 
 // layoutOptions is the options forme composes under: the caller's sheet and
 // thresholds, and what this backend draws. TransformGroups is set because this
