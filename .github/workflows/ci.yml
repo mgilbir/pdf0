@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   build-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
@@ -101,7 +101,7 @@ jobs:
   #
   # It is a separate job so a cache miss cannot delay the fast signal above.
   corpus:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
@@ -187,6 +187,15 @@ jobs:
       # what HarfBuzz (hb-view) and Skia (blackrenderer, testdata/colrv1)
       # paint for a colour glyph. The tests skip where a renderer is not
       # installed, which a runner image is not promised to have.
+      #
+      # They are the image's packages, so the image is pinned: every job runs
+      # on ubuntu-24.04, not ubuntu-latest. When ubuntu-latest moved to 26.04
+      # (2026-10-28) the oracles moved with it, and its HarfBuzz 12.3.2 paints
+      # Noto's Spanish flag without its shading, which 8.3.0 (24.04) and 14.6.0
+      # paint. TestColourEmojiAreWhatHarfBuzzPaints then failed against the
+      # wrong reference, while Ghostscript and poppler drew pdf0's page the
+      # same in both images. Move the pin on purpose, with the oracles checked
+      # against each other first.
       - name: install the renderers
         run: |
           sudo apt-get update -q
@@ -213,7 +222,7 @@ jobs:
   # regression that panics on the next commit rather than to search the space
   # — a long hunt is `make fuzz` with its default FUZZTIME.
   fuzz:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 

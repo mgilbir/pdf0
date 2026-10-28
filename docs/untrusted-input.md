@@ -157,6 +157,7 @@ Every one, generated from the exported API:
 | `fonts.Face.ShapeContext` | `fonts.Face.Shape` | `([]content.TextSpan, int, error)` |
 | `fonts.Face.ShapeWithContext` | `fonts.Face.ShapeWith` | `([]content.TextSpan, int, error)` |
 | `htmlpdf.RenderContext` | `htmlpdf.Render` | `(htmlpdf.Result, error)` |
+| `htmlpdf.RenderIntoContext` | `htmlpdf.RenderInto` | `(htmlpdf.Result, error)` |
 
 <!-- END GENERATED: contexts -->
 

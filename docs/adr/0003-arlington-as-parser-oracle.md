@@ -44,3 +44,15 @@ guard almost nothing.
   the tests at it; they skip when it is absent, like every other external oracle.
 - Conservatism is the price: rules gated on predicates are not enforced, so a
   clean run is evidence of faithfulness, not proof of it.
+- The reach was narrower than the null result made it look. Until 2026-10-28 the
+  walker read every grammar keyed `*` as an array's, so it never entered a
+  resource map (fonts, images, patterns, graphics states). It walked a name or
+  number tree's root as if it were one of the tree's values, read an inherited
+  page attribute only when the ancestor's own grammar listed it, and judged a
+  1.x file by the PDF 2.0 grammar. Three of the five findings it then accepted
+  as facts about the input were its own. With all four fixed, each file is held
+  to the grammar of the version it declares. One row where the model contradicts
+  ISO 32000 (a form XObject's `/Resources`, which the model requires and both
+  editions call optional) is excused by `arlModelDeviations`. The ratchet is now
+  a list, `testdata/arlington-corpus-expected.tsv`: 40 findings in 31 files, each
+  checked against the file's raw bytes, and still no parser bug among them.

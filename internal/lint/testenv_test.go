@@ -37,7 +37,7 @@ var testEnvironment = []struct {
 	// reads itself.
 	readBy string
 }{
-	{name: "PDF0_VERAPDF", what: "the veraPDF command the Type 3 and CIDSet tests validate their documents with; [testdata/verapdf/verapdf-docker.sh](../testdata/verapdf/README.md) runs the official image (needs docker)", without: "those checks skip"},
+	{name: "PDF0_VERAPDF", what: "the veraPDF command the Type 3, CIDSet, RenderInto and PDF/A render tests validate their documents with; [testdata/verapdf/verapdf-docker.sh](../testdata/verapdf/README.md) runs the official image (needs docker)", without: "those checks skip"},
 	{name: "PDF0_SKIA_PYTHON", what: "a Python with the packages in `testdata/colrv1/requirements.txt`, which renders COLR glyphs with Skia ([testdata/colrv1/README.md](../testdata/colrv1/README.md))", without: "the Skia comparison skips"},
 	{name: "PDF0_CLI_BIN", what: "a prebuilt `pdf0` command for the CLI's black-box tests, to point them at an older build and watch them fail", without: "the tests build the command from the checkout"},
 	{name: "PDF0_LARGE_PDF", what: "a large real PDF to measure cancellation latency on", without: "the measurement skips"},

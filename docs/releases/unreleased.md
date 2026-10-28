@@ -109,6 +109,15 @@ v0.6.0.
 
 ## Behaviour changes
 
+### PDF/A documents are dated
+
+- **Every document from `NewPDFADocument`, `NewPDFADocumentWithInfo` and
+  `NewPDFADocumentWith` carries `xmp:CreateDate`** (#367), the moment it was
+  built unless `SkeletonOptions.Created` says otherwise. No PDF/A level
+  requires one, but an archived document without a date is less use. A build
+  that must be byte-identical pins `Created` along with `FileID`; with only
+  `FileID` pinned, two builds now differ in the date.
+
 ### htmlpdf
 
 - **forme v0.11.0** (#366). A page refused for a font nothing supplies now gets
@@ -297,6 +306,15 @@ v0.6.0.
 
 ### For contributors
 
+- **The Arlington oracle reaches the whole file, and its ratchet is a list**
+  (#370). It now enters resource maps, walks name and number trees to their
+  values, honours inheritance from the page tree and null entries, and judges
+  each file by the grammar of its declared version. Three of the five findings
+  it used to accept were its own errors. The 40 findings it makes on conformant
+  corpus files are listed in `testdata/arlington-corpus-expected.tsv`, each one
+  checked against the file's bytes. The test fails on one it does not list,
+  and on one it lists that is no longer made.
+
 - **`make test-corpus` runs what CI's corpus job runs** (#340): `go test ./...`
   with the corpus named, then `TestCorpus`'s counts. It ran only
   `-run TestCorpus`, which missed the corpus tests named otherwise.
@@ -320,6 +338,32 @@ v0.6.0.
   `TestPDFRef17ExamplesRegenerate`.
 
 ## Added
+
+- **`htmlpdf.Options.PDFA`** (#369), a `pdfa.SkeletonOptions`: with its
+  `Level` set, `Render` returns a PDF/A document made by
+  `NewPDFADocumentWith`, its page added as `RenderInto` adds one, every font
+  embedded and the layout unchanged. #357's page (an `@font-face` TrueType
+  face, sans-serif and monospace runs, a translucent fill, a PNG with alpha)
+  passes `ValidatePDFA` and veraPDF at PDF/A-2b. Fields set with no `Level` are
+  `htmlpdf.ErrPDFAWithoutLevel`. Left zero, `Render`'s output is unchanged
+  byte for byte.
+
+- **`htmlpdf.RenderInto` and `htmlpdf.RenderIntoContext`** (#368): lay an HTML
+  document out as a page added to a `*pdf0.Document` of the caller's, after its
+  pages, so several HTML documents become one PDF and an HTML page can join
+  pages from elsewhere. The document is changed only if the render succeeds. A
+  document claiming PDF/A-2b, 2u, 3b, 3u, 4, 4e or 4f keeps its claim (every
+  font embedded, its own output intents applying); PDF/A-1 and the a levels are
+  refused with `htmlpdf.ErrUnsupportedLevel`. A document claiming no level
+  and older than PDF 1.4 is raised to 1.4.
+
+- **`pdfa.SkeletonOptions.Created` and `pdfa.SkeletonOptions.Language`**
+  (#367), so a document made by `NewPDFADocumentWith` is dated and has a
+  language from the start. `Created` is written as `xmp:CreateDate`. Left
+  zero, it is the moment the document is built, and the Unix epoch is refused
+  with `pdfa.ErrEpochCreated`, because that is what an unset integer
+  timestamp becomes. `Language` is written as the catalog's `/Lang`, under the
+  same rules as `SetDocumentInfo`.
 
 - **`htmlpdf.Options.EmbedAllFonts`** (#364): every font on the page is
   embedded, with none of the fourteen standard fonts. The page is laid out in
