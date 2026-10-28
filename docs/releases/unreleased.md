@@ -330,6 +330,15 @@ v0.6.0.
 
 ## Added
 
+- **`htmlpdf.RenderInto` and `htmlpdf.RenderIntoContext`** (#368): lay an HTML
+  document out as a page added to a `*pdf0.Document` of the caller's, after its
+  pages, so several HTML documents become one PDF and an HTML page can join
+  pages from elsewhere. The document is changed only if the render succeeds. A
+  document claiming PDF/A-2b, 2u, 3b, 3u, 4, 4e or 4f keeps its claim (every
+  font embedded, its own output intents applying); PDF/A-1 and the a levels are
+  refused with `htmlpdf.ErrUnsupportedLevel`. A document claiming no level
+  and older than PDF 1.4 is raised to 1.4.
+
 - **`pdfa.SkeletonOptions.Created` and `pdfa.SkeletonOptions.Language`**
   (#367), so a document made by `NewPDFADocumentWith` is dated and has a
   language from the start. `Created` is written as `xmp:CreateDate`. Left

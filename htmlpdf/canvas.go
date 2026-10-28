@@ -27,6 +27,14 @@ import (
 // checkDrawable before this runs; drawnFields lists which, and a test holds
 // that list against the operations layout declares.
 func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Document, error) {
+	return writePageTo(pdf0.NewDocument(), ops, page, scale)
+}
+
+// writePageTo is writePage into a document of the caller's: the page is added
+// to doc, and so are the images, patterns and functions it draws, as it goes.
+// A failure part way leaves them there, so doc is a scratch document that is
+// thrown away on error (see RenderInto), never the caller's own.
+func writePageTo(doc *pdf0.Document, ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Document, error) {
 	// The one transform. Reading it right to left: layout units become points,
 	// the y axis is inverted, the whole thing is scaled to fit, and the result
 	// is placed inside the page's margin.
@@ -39,7 +47,7 @@ func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Docu
 	tx := page.Margin.Left.Pt()
 	ty := page.Height.Pt() - page.Margin.Top.Pt()
 	w := &pageWriter{
-		doc:    pdf0.NewDocument(),
+		doc:    doc,
 		toPage: pageTransform{k: k, tx: tx, ty: ty},
 		faces:  map[*shape.Face]*fonts.Face{},
 		images: map[string]object.Object{},

@@ -76,6 +76,13 @@ type arlValidator struct {
 	m        *arlModel
 	findings []string
 	visited  map[*object.Dictionary]bool
+	// strict also reports what the model does not have: a key no row of the
+	// object's grammar names, and a link to an object no candidate grammar
+	// describes. Over a version's directory (tsv/1.7) that is what the version
+	// lacks, which is how arlVersionFindings asks whether a file fits it. Off
+	// for the faithfulness tests, where an unknown key is a private extension
+	// and not a defect.
+	strict bool
 }
 
 const arlMaxDepth = 50
@@ -224,11 +231,20 @@ func (v *arlValidator) walk(o object.Object, specName, path string, depth int, i
 	}
 	o = v.doc.Resolve(o)
 
-	if arlIsArraySpec(spec) {
-		arr, ok := o.(object.Array)
-		if !ok {
-			return
-		}
+	// "*" is the key of an array grammar's every element and of a map
+	// grammar's every entry (FontMap, XObjectMap, ...). The faithfulness tests
+	// read every "*" grammar as an array's and so never enter a map; strict mode
+	// walks a dictionary as one, its "*" row describing each entry no other row
+	// names, so that a version check reaches the fonts, images and patterns a
+	// page names. Doing the same for the faithfulness tests is not a one-line
+	// change: the model's number trees and structure elements use "*" in other
+	// senses, and over the corpus it raises 308 conformant files with findings
+	// that are the walker's, not the files'.
+	arr, isArr := o.(object.Array)
+	if arlIsArraySpec(spec) && !isArr && !v.strict {
+		return
+	}
+	if isArr && arlIsArraySpec(spec) {
 		var wild *arlRow
 		for i := range spec {
 			if spec[i].key == "*" {
@@ -276,6 +292,32 @@ func (v *arlValidator) walk(o object.Object, specName, path string, depth int, i
 		}
 	}
 
+	named := map[string]bool{}
+	var wild *arlRow
+	for i, r := range spec {
+		named[r.key] = true
+		if r.key == "*" {
+			wild = &spec[i]
+		}
+	}
+	for k, raw := range d.All() {
+		if named[string(k)] {
+			continue
+		}
+		if wild == nil {
+			if v.strict {
+				v.add(path, "/"+string(k)+" is not a key of "+specName)
+			}
+			continue
+		}
+		res := v.doc.Resolve(raw)
+		if wild.types != "" && !strings.Contains(wild.types, "fn:") && !arlTypeMatch(res, wild.types) {
+			v.add(path, "/"+string(k)+" type "+arlTypeName(res)+", want "+wild.types)
+		}
+		if wild.links != "" {
+			v.follow(res, wild.links, path+"/"+string(k), depth+1, child)
+		}
+	}
 	for _, r := range spec {
 		raw := d.Get(object.Name(r.key))
 		if raw == nil {
@@ -305,6 +347,18 @@ func (v *arlValidator) follow(o object.Object, links, path string, depth int, in
 		return
 	}
 	o = v.doc.Resolve(o)
+	if v.strict {
+		known := false
+		for _, c := range cands {
+			if v.m.spec(c) != nil {
+				known = true
+			}
+		}
+		if !known {
+			v.add(path, "an object of a kind the model does not have ("+strings.Join(cands, ", ")+")")
+			return
+		}
+	}
 	if sn := v.pick(cands, o); sn != "" {
 		v.walk(o, sn, path, depth, inh)
 	}
@@ -366,6 +420,24 @@ func (v *arlValidator) pick(cands []string, o object.Object) string {
 
 // arlValidate walks a document from the catalog and returns its structural
 // findings against the grammar.
+// arlVersionFindings walks a file against the Arlington grammar of one PDF
+// version, strictly: every key and object the file uses that the version does
+// not have is a finding. version names a directory of the model ("1.7").
+func arlVersionFindings(t *testing.T, data []byte, version string) []string {
+	t.Helper()
+	m := loadArlModel(filepath.Join(filepath.Dir(arlModelDir(t)), version))
+	if m.spec("Catalog") == nil {
+		t.Fatalf("the Arlington model has no PDF %s grammar", version)
+	}
+	doc, err := Read(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := &arlValidator{doc: doc, m: m, visited: map[*object.Dictionary]bool{}, strict: true}
+	v.walk(doc.Trailer.Get("Root"), "Catalog", "Catalog", 0, map[string]bool{})
+	return v.findings
+}
+
 func arlValidate(m *arlModel, data []byte) (findings []string, readErr error) {
 	doc, err := Read(bytes.NewReader(data), int64(len(data)))
 	if err != nil {

@@ -289,6 +289,57 @@ scales it to fit (next section) rather than paginating it, so there is no
 second page to write; a document too long to fit legibly is refused by
 `min-scale` or `min-font-size`, not continued.
 
+## Into a document you have
+
+`RenderInto` adds the page to a `*pdf0.Document` of the caller's, after the
+pages it has, rather than making a document of its own. Each call is another
+page, so several HTML documents become one PDF, and an HTML page can follow
+pages that came from somewhere else: a file that was read, or pages pdf0 drew
+itself. `RenderIntoContext` is `RenderInto` with a context and a shaping
+budget, as `RenderContext` is `Render`.
+
+<!-- snippet
+var cover, terms string
+-->
+```go
+func contract(w io.Writer) error {
+	doc, err := pdf0.NewPDFADocumentWith(pdfa.SkeletonOptions{
+		Level: pdfa.PDFA2b, Title: "Contract", Language: "nl",
+	})
+	if err != nil {
+		return err
+	}
+	for _, page := range []string{cover, terms} {
+		if _, err := htmlpdf.RenderInto(doc, htmlpdf.Input{HTML: page}, htmlpdf.Options{Page: htmlpdf.A4}); err != nil {
+			return err
+		}
+	}
+	return doc.Save(w) // written only if it passes PDF/A-2b
+}
+```
+
+What the page does to the document:
+
+- **It keeps the document's claim.** In a document that claims a PDF/A level
+  (`Document.Conformance`), every font on the page is embedded, whatever
+  `Options.EmbedAllFonts` says, and the document's own output intents and
+  `/Lang` apply to the page. The levels written are PDF/A-2 and -3 at b and u,
+  and PDF/A-4 with e and f. PDF/A-1 is refused with `ErrUnsupportedLevel`,
+  because its PDF 1.4 has no transparency, and so are the a levels, which need
+  a tagged structure htmlpdf does not write. `Document.Save` then writes the
+  document only if all of it passes the level, so a page from elsewhere that
+  breaks the claim stops the file rather than slipping into it.
+- **It changes nothing if it fails.** The page is written into a document of
+  its own and added to the caller's only once it is complete, so a refusal,
+  an image or font that cannot be embedded, and an unsupported level all leave
+  the caller's document as it was.
+- **It may raise the version, never lower it.** A page can use transparency,
+  which is PDF 1.4, so a document claiming no level and older than 1.4 is
+  raised to it. Every key a page writes is in PDF 1.4's grammar, checked
+  against the Arlington PDF model by
+  `TestAnHTMLPageFitsTheVersionOfTheDocumentItIsAddedTo`. A document claiming a
+  level keeps its version, which the level fixes.
+
 ## Scale to fit
 
 Content wider or taller than the sheet is scaled down rather than cropped, and
@@ -331,6 +382,7 @@ import:
 | name | is |
 |---|---|
 | `Render`, `RenderContext` | the call, and the call under a context and a shaping budget |
+| `RenderInto`, `RenderIntoContext`, `ErrUnsupportedLevel` | the call into a document of the caller's, and the PDF/A level it does not write |
 | `Result`, `RefusedError` | what a render produced, and why it would not |
 | `Input`, `Stylesheet` | the document and its stylesheets |
 | `Options` | the sheet, the refusal thresholds, and what the PDF must be (`EmbedAllFonts`) |
@@ -341,7 +393,8 @@ import:
 | `RuleVerticalText`, `RuleLinkDropped`, `RuleUnknownOp`, `RuleUndrawable`, `RuleStandardFont` | the rules the backend raises itself |
 | `RunLimits`, `ErrRunLimit` | the bounds `RenderContext` renders under, and what it fails with past them |
 
-`Render`, `RenderContext`, `Result`, `RefusedError`, `Options` and the five
+`Render`, `RenderContext`, `RenderInto`, `RenderIntoContext`, `Result`,
+`RefusedError`, `ErrUnsupportedLevel`, `Options` and the five
 rules are this package's own, since what a render produced, why it would not,
 and what the PDF is asked to be are its business rather than the engine's.
 
