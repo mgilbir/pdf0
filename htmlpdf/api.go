@@ -133,8 +133,12 @@ type Options struct {
 	// too, since its document was made by the caller and claims what it
 	// claims.
 	//
-	// The metadata is the caller's. The HTML's own <title> and lang are not
-	// read into it.
+	// What the caller leaves empty of the title, author and language is filled
+	// from what the HTML says about itself: its <title>, its first <meta
+	// name="author">, and its root element's language. The caller's values
+	// win. A value the file cannot hold, such as a lang that is not a language
+	// tag, is left out and reported under RuleMetadataOmitted rather than
+	// failing the render.
 	PDFA pdfa.SkeletonOptions
 }
 

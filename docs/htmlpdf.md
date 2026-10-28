@@ -322,8 +322,21 @@ The levels are the ones `RenderInto` writes. A `PDFA` with fields set and no
 exactly as the plain render draws it: the same layout, only in a document
 that claims a level.
 
-The metadata is the caller's. The HTML's own `<title>` and `lang` are not
-read into it.
+What the caller leaves empty, the document fills. A blank `Title`, `Author` or
+`Language` is taken from what the HTML says about itself: its `<title>`
+(whitespace collapsed), its first `<meta name="author">`, and its root
+element's language (`lang`, `xml:lang` in XHTML, then a Content-Language
+pragma), as forme reads them in `layout.Composed.Document`. The caller's values
+always win. A value the file cannot hold is left out, and one
+`RuleMetadataOmitted` finding says which. That covers a `lang` that is not a
+language tag as PDF's `/Lang` is read (`nl_NL`), and a title or author with a
+character XMP cannot carry. The finding is a warning by default, and
+`Input.Policy` can raise it to refuse such a document. `lang=""` says the
+language is unknown, so nothing is written and nothing is reported.
+
+Only a PDF/A render does this. A plain `Render` writes no metadata, as before.
+`RenderInto` leaves the caller's document's metadata alone, since one page's
+title is not the whole document's.
 
 ## Into a document you have
 
@@ -427,11 +440,11 @@ import:
 | `A4`, `A5`, `Letter` | named sheets, each with a margin already |
 | `Finding`, `Size` | what `Result` carries |
 | `Severity`, `Ignore`, `Warn`, `Error` | how much a finding matters, for reading one or writing a policy |
-| `RuleVerticalText`, `RuleLinkDropped`, `RuleUnknownOp`, `RuleUndrawable`, `RuleStandardFont` | the rules the backend raises itself |
+| `RuleVerticalText`, `RuleLinkDropped`, `RuleUnknownOp`, `RuleUndrawable`, `RuleStandardFont`, `RuleMetadataOmitted` | the rules the backend raises itself |
 | `RunLimits`, `ErrRunLimit` | the bounds `RenderContext` renders under, and what it fails with past them |
 
 `Render`, `RenderContext`, `RenderInto`, `RenderIntoContext`, `Result`,
-`RefusedError`, `ErrUnsupportedLevel`, `ErrPDFAWithoutLevel`, `Options` and the five
+`RefusedError`, `ErrUnsupportedLevel`, `ErrPDFAWithoutLevel`, `Options` and the six
 rules are this package's own, since what a render produced, why it would not,
 and what the PDF is asked to be are its business rather than the engine's.
 

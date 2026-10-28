@@ -6,8 +6,9 @@ import "github.com/mgilbir/forme/layout"
 //
 // layout.Compose reports everything the engine could not do. These are the
 // things the engine did and this backend cannot write: the display list says
-// them, and a PDF page drawn from it would say something else. Each defaults to
-// Error, which refuses the document, and each is an ordinary rule a caller's
+// them, and a PDF page drawn from it would say something else. Each but
+// RuleMetadataOmitted defaults to Error, which refuses the document, and each is
+// an ordinary rule a caller's
 // Input.Policy can lower — to Warn, to get the document with the finding, or
 // to Ignore — so that a caller who can live with the loss says so rather than
 // finding it later.
@@ -53,4 +54,14 @@ const (
 	// Input.Policy does not lower, since the option is the caller already
 	// having said what such a page is worth.
 	RuleStandardFont layout.Rule = "backend-standard-font"
+
+	// RuleMetadataOmitted is something the document says about itself that a
+	// PDF/A render (Options.PDFA) cannot write into the file's metadata, so it
+	// is left out: a lang that is not a language tag by the grammar PDF's /Lang
+	// is judged by, or a title or author holding a character XMP cannot carry.
+	// The value is the document's, so it would be wrong to fail the render for
+	// it, and silent to drop it. It is the one rule here that defaults to Warn;
+	// Input.Policy can raise it to Error, to refuse such a document, or lower it
+	// to Ignore.
+	RuleMetadataOmitted layout.Rule = "backend-metadata-omitted"
 )
