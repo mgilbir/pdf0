@@ -55,13 +55,18 @@ go.work.sum
 # .vscode/
 
 # Test data (cloned repos)
-testdata/pdf20examples/
+#
+# A directory of fetched data is named without a trailing slash: "dir/" matches
+# only a directory, and a data set is often a symlink to another checkout's copy,
+# which "dir/" would leave untracked for `git add -A` to commit.
+# TestGitignoreCoversASymlinkedDataSet holds every data set to it.
+testdata/pdf20examples
 
 # ISO spec PDFs (copyrighted)
-spec/
+spec
 # The examples the spec-example tests extract from them: ISO's text, which is
 # not redistributed (THIRD_PARTY_NOTICES), kept here between runs.
-testdata/spec-examples/
+testdata/spec-examples
 
 # Generated example output. The examples write to stdout now — or, for the one
 # that produces several documents, to a directory it is told about — so nothing
@@ -72,7 +77,7 @@ output.pdf
 /out.pdf
 
 # veraPDF test corpus (downloaded via `make corpus`)
-testdata/verapdf-corpus/
+testdata/verapdf-corpus
 
 # testdata/fuzz is deliberately NOT ignored. Go keeps the corpus it generates
 # in the build cache — 21 MB of it here — and writes only two things under
@@ -88,12 +93,12 @@ testdata/wtpdf/.ok
 
 # Arlington PDF Model (Apache-2.0, pdf-association) — machine-readable ISO 32000
 # object grammar; cloned via `make arlington` for the structural oracle test.
-testdata/arlington-pdf-model/
+testdata/arlington-pdf-model
 
 # Cal Poly Graphic Communications PDF/VT-1 Test File Suite — graphically-rich
 # valid PDF/VT-1 files used as the FP=0 oracle for PDF/VT validation. Not
 # vendored (copyrighted test content); placed here out of band.
-testdata/pdfvt/
+testdata/pdfvt
 
 # CCITTFaxDecode sample PDFs (downloaded via `make ccitt`) — decode oracle for
 # the Group 3/4 fax decoder; manifest + script are committed, files are not.
@@ -108,7 +113,7 @@ testdata/jbig2/.ok
 # Factur-X example invoices (oracle) — not vendored
 testdata/facturx/*.pdf
 testdata/facturx/.ok
-testdata/facturx-official/
+testdata/facturx-official
 testdata/en16931-ubl/*.xml
 testdata/en16931-ubl/.ok
 # The EN 16931 / CIUS oracle data moved to github.com/mgilbir/formalis with the
@@ -116,25 +121,25 @@ testdata/en16931-ubl/.ok
 # en16931-artefacts`, `make en16931-codelists`, `make cius-oracles` there; pdf0
 # has no such targets). A checkout made before the move may still hold it, so it
 # stays ignored here rather than turning up as untracked files.
-testdata/en16931-artefacts/
+testdata/en16931-artefacts
 testdata/en16931-codelists/*.zip
 testdata/en16931-codelists/*.xlsx
-testdata/en16931-codelists/genericode/
-testdata/xrechnung/
-testdata/peppol/
-testdata/nlcius/
+testdata/en16931-codelists/genericode
+testdata/xrechnung
+testdata/peppol
+testdata/nlcius
 
 # Agent worktrees created by tooling under .claude/; never part of the repo.
 .claude/worktrees/
 
 # Common Crawl robustness sweep: streamed blocks, probe binary, logs and the
 # quarantined reproductions. The sweep script is committed; none of this is.
-testdata/cc/run/
+testdata/cc/run
 
 # A CID-keyed CFF face for the font-embedding tests, fetched by `make notocjk`.
-testdata/notocjk/
+testdata/notocjk
 # A colour-bitmap (CBDT) face for the Type 3 tests, fetched by `make notoemoji`.
-testdata/notoemoji/
+testdata/notoemoji
 
 # A virtualenv with the Skia oracle's packages (testdata/colrv1/README.md).
 .venv-skia/
