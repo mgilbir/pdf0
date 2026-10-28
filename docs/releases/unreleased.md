@@ -306,6 +306,15 @@ v0.6.0.
 
 ### For contributors
 
+- **The Arlington oracle reaches the whole file, and its ratchet is a list**
+  (#370). It now enters resource maps, walks name and number trees to their
+  values, honours inheritance from the page tree and null entries, and judges
+  each file by the grammar of its declared version. Three of the five findings
+  it used to accept were its own errors. The 40 findings it makes on conformant
+  corpus files are listed in `testdata/arlington-corpus-expected.tsv`, each one
+  checked against the file's bytes. The test fails on one it does not list,
+  and on one it lists that is no longer made.
+
 - **`make test-corpus` runs what CI's corpus job runs** (#340): `go test ./...`
   with the corpus named, then `TestCorpus`'s counts. It ran only
   `-run TestCorpus`, which missed the corpus tests named otherwise.
