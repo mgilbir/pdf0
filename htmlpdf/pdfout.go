@@ -40,6 +40,7 @@ import (
 	pdf0 "github.com/mgilbir/pdf0"
 	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/xmp"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/pdfa"
 )
@@ -223,26 +224,125 @@ func (e *RefusedError) Error() string {
 // Options.EmbedAllFonts for what that lays the document out in, and what it
 // refuses.
 func Render(in Input, opts Options) (Result, error) {
-	target, err := opts.pdfaTarget()
+	isPDFA, err := opts.pdfaRequested()
 	if err != nil {
 		return Result{}, err
 	}
-	if target != nil {
-		return renderInto(target, in, opts)
+	if isPDFA {
+		return renderPDFA(in, opts, func(in Input, o layout.Options) (layout.Composed, error) {
+			return layout.Compose(in, o), nil
+		})
 	}
 	return finish(layout.Compose(opts.layoutInput(in), opts.layoutOptions()), in, opts, nil)
 }
 
-// pdfaTarget is the document Options.PDFA asks Render to make, or nil when it
-// is zero.
-func (o Options) pdfaTarget() (*pdf0.Document, error) {
+// pdfaRequested is whether Options.PDFA asks for a PDF/A document: false when
+// it is zero, and ErrPDFAWithoutLevel when it has fields set and no Level.
+func (o Options) pdfaRequested() (bool, error) {
 	if reflect.ValueOf(o.PDFA).IsZero() {
-		return nil, nil
+		return false, nil
 	}
 	if o.PDFA.Level == pdfa.LevelDeclared {
-		return nil, ErrPDFAWithoutLevel
+		return false, ErrPDFAWithoutLevel
 	}
-	return pdf0.NewPDFADocumentWith(o.PDFA)
+	return true, nil
+}
+
+// renderPDFA is Render under Options.PDFA. The document is made after the
+// page is laid out, not before, because what the HTML says about itself
+// (layout.Composed.Document) fills the metadata the caller left empty:
+// documentMetadata. The caller's options are checked first, by building a
+// skeleton that is thrown away, so a profile or a title of theirs that cannot
+// be written fails before any layout is done, as it did when the document came
+// first. The page is then added as RenderInto adds one.
+func renderPDFA(in Input, opts Options, compose func(Input, layout.Options) (layout.Composed, error)) (Result, error) {
+	level := opts.PDFA.Level
+	if !writesPagesFor(level) {
+		return Result{}, fmt.Errorf("%w: %s", ErrUnsupportedLevel, level)
+	}
+	if _, _, _, err := pdfa.SkeletonWith(opts.PDFA); err != nil {
+		return Result{}, fmt.Errorf("htmlpdf: Options.PDFA: %w", err)
+	}
+	opts.EmbedAllFonts = true
+	composed, err := compose(opts.layoutInput(in), opts.layoutOptions())
+	if err != nil {
+		return Result{}, err
+	}
+	skeleton, omitted := documentMetadata(opts.PDFA, composed.Document)
+	if f, refuse, ok := metadataFinding(omitted, in.Policy); ok {
+		composed.Findings = append(composed.Findings, f)
+		composed.Refused = composed.Refused || refuse
+	}
+	target, err := pdf0.NewPDFADocumentWith(skeleton)
+	if err != nil {
+		return Result{}, err
+	}
+	out, err := finish(composed, in, opts, target)
+	out.ShapingWork = composed.ShapingWork
+	return out, err
+}
+
+// documentMetadata fills what the caller left empty in a PDF/A document's
+// options from what the HTML says about itself: the title from document.title,
+// the language from the root element's (lang, xml:lang, a Content-Language
+// pragma), and the author from the first <meta name="author">. The caller's
+// own values always win. A value that cannot be written is left out, and named
+// in omitted, rather than failing the render: a lang that is not a language
+// tag by the grammar the validators judge /Lang by, or a title or author with
+// a character XMP cannot carry. An explicit lang="" says the language is
+// unknown, which is no language to write and nothing to report.
+func documentMetadata(o pdfa.SkeletonOptions, d layout.DocumentInfo) (pdfa.SkeletonOptions, []string) {
+	var omitted []string
+	text := func(what, v string, into *string) {
+		if *into != "" || v == "" {
+			return
+		}
+		if err := xmp.CheckText(v); err != nil {
+			omitted = append(omitted, fmt.Sprintf("the %s, which XMP cannot carry (%v)", what, err))
+			return
+		}
+		*into = v
+	}
+	if d.HasTitle {
+		text("title", d.Title, &o.Title)
+	}
+	for _, m := range d.Meta {
+		if m.Name == "author" && m.Content != "" {
+			text("author", m.Content, &o.Author)
+			break
+		}
+	}
+	if o.Language == "" && d.HasLanguage && d.Language != "" {
+		if core.ValidLanguageTag(d.Language, o.Level.Part() != 1) {
+			o.Language = d.Language
+		} else {
+			omitted = append(omitted, fmt.Sprintf("the language %q, which is not a language tag as PDF's /Lang is read", d.Language))
+		}
+	}
+	return o, omitted
+}
+
+// metadataFinding is the one finding for what documentMetadata left out, at
+// the severity Input.Policy gives RuleMetadataOmitted (Warn by default), and
+// whether it refuses the document. ok is false when nothing was left out or
+// the policy ignores the rule.
+func metadataFinding(omitted []string, policy layout.Policy) (f layout.Finding, refuse, ok bool) {
+	if len(omitted) == 0 {
+		return layout.Finding{}, false, false
+	}
+	sev := layout.Warn
+	if s, set := policy[RuleMetadataOmitted]; set {
+		sev = s
+	}
+	if sev == layout.Ignore {
+		return layout.Finding{}, false, false
+	}
+	return layout.Finding{
+		Rule: RuleMetadataOmitted, Severity: sev,
+		Message: "the document says something about itself the PDF/A file's metadata cannot hold, so it was left out: " +
+			strings.Join(omitted, "; "),
+		Source: layout.Source{HTMLOffset: -1, CSSOffset: -1},
+	}, sev == layout.Error, true
 }
 
 // RenderContext is Render for a document a caller does not control: the
@@ -259,12 +359,14 @@ func (o Options) pdfaTarget() (*pdf0.Document, error) {
 // what Render returns for the document, the same bytes, and the work charged
 // in Result.ShapingWork.
 func RenderContext(ctx context.Context, in Input, opts Options, limits RunLimits) (Result, error) {
-	target, err := opts.pdfaTarget()
+	isPDFA, err := opts.pdfaRequested()
 	if err != nil {
 		return Result{}, err
 	}
-	if target != nil {
-		return renderIntoContext(ctx, target, in, opts, limits)
+	if isPDFA {
+		return renderPDFA(in, opts, func(in Input, o layout.Options) (layout.Composed, error) {
+			return layout.ComposeContext(ctx, in, o, limits)
+		})
 	}
 	composed, err := layout.ComposeContext(ctx, opts.layoutInput(in), opts.layoutOptions(), limits)
 	if err != nil {

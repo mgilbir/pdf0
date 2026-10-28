@@ -351,6 +351,14 @@ v0.6.0.
 
 ## Added
 
+- **A PDF/A render takes its metadata from the HTML** (#374). Under
+  `htmlpdf.Options.PDFA`, a blank `Title`, `Author` or `Language` is filled
+  from the document's `<title>`, first `<meta name="author">` and root
+  language, as forme v0.12.0 reports them. The caller's values win. A value the
+  file cannot hold is left out and reported under
+  `htmlpdf.RuleMetadataOmitted` (`backend-metadata-omitted`), a warning by
+  default. A plain `Render` and `RenderInto` are unchanged.
+
 - **`htmlpdf.Options.PDFA`** (#369), a `pdfa.SkeletonOptions`: with its
   `Level` set, `Render` returns a PDF/A document made by
   `NewPDFADocumentWith`, its page added as `RenderInto` adds one, every font
