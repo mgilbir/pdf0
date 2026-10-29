@@ -120,6 +120,23 @@ type Options struct {
 	// a page that names one is worth.
 	EmbedAllFonts bool
 
+	// Tagged makes the page a tagged one: a structure tree that says what
+	// each thing on it is, built from the HTML — a heading, a paragraph, a
+	// list and its items, a table and its header cells, a picture with its alt
+	// text, a link with its description — in the order the document reads it,
+	// with backgrounds, borders and other decoration marked as artifacts. It
+	// is what a screen reader reads, and what PDF/UA and the a levels of
+	// PDF/A require.
+	//
+	// Render's document also gets the HTML's <title> and the root element's
+	// language, as its title and /Lang. RenderInto adds the page and its tree
+	// to a document that has no structure tree, and refuses one that has
+	// (ErrTaggedTarget); the document's other pages are not tagged by it.
+	//
+	// Content a filter (CSS filter) draws is one span of the filtered
+	// element's, whatever elements it holds.
+	Tagged bool
+
 	// PDFA, with its Level set, makes the document Render returns a PDF/A
 	// one: it is made by pdf0.NewPDFADocumentWith(PDFA), with its XMP
 	// identification, output intent, title, author, language and creation

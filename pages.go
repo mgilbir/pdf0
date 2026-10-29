@@ -20,6 +20,25 @@ func (d *Document) PageList() []*object.Dictionary {
 	return pages
 }
 
+// PageRefs returns references to the document's pages in reading order, one
+// per entry of PageList: what SetStructureTree, Link.Page and PageAnnotations
+// name a page by. A page written directly into its parent's /Kids has no
+// reference to give, and its entry is the zero IndirectRef.
+func (d *Document) PageRefs() []object.IndirectRef {
+	var refs []object.IndirectRef
+	for _, pg := range d.view().Pages(d.view().CatalogPages()) {
+		var ref object.IndirectRef
+		if pg.ObjNum != 0 {
+			ref.Number = pg.ObjNum
+			if obj := d.Objects[pg.ObjNum]; obj != nil {
+				ref.Generation = obj.Generation
+			}
+		}
+		refs = append(refs, ref)
+	}
+	return refs
+}
+
 // PageCount returns the number of pages.
 func (d *Document) PageCount() int { return len(d.PageList()) }
 

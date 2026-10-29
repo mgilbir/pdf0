@@ -169,6 +169,7 @@ func (c *canvas) group(draw func(fc *canvas) error) (object.IndirectRef, error) 
 	// group's.
 	fc.curved = c.curved
 	fc.toLayout = c.toLayout
+	fc.untagged = true
 	if err := draw(fc); err != nil {
 		return object.IndirectRef{}, err
 	}

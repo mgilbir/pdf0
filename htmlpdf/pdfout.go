@@ -238,7 +238,47 @@ func Render(in Input, opts Options) (Result, error) {
 	}
 	composed := layout.Compose(opts.layoutInput(in), opts.layoutOptions())
 	out, err := finish(composed, in, opts, nil)
+	out, err = taggedInfo(out, err, in, opts, composed.Document)
 	return readingDirection(out, err, composed.Document)
+}
+
+// taggedInfo gives a tagged document Render made what the HTML says of its
+// title and language: the title a reader announces in place of the file
+// name, and the /Lang every run of text is read in unless its element says
+// otherwise (see Options.Tagged). A lang that is not a language tag is left
+// out and reported under RuleMetadataOmitted, as a PDF/A render reports it. A
+// failed render, an untagged one and one into a caller's document are
+// returned as they are.
+func taggedInfo(out Result, err error, in Input, opts Options, d layout.DocumentInfo) (Result, error) {
+	if err != nil || !opts.Tagged || out.Document == nil {
+		return out, err
+	}
+	var info pdf0.DocumentInfo
+	var omitted []string
+	if d.HasTitle {
+		info.Title = strings.TrimSpace(d.Title)
+	}
+	if d.HasLanguage && d.Language != "" {
+		if core.ValidLanguageTag(d.Language, true) {
+			info.Language = d.Language
+		} else {
+			omitted = append(omitted, fmt.Sprintf("the language %q, which is not a language tag as PDF's /Lang is read", d.Language))
+		}
+	}
+	if f, refuse, ok := metadataFinding(omitted, in.Policy); ok {
+		out.Findings = append(out.Findings, f)
+		if refuse {
+			out.Document = nil
+			return out, &RefusedError{Findings: out.Findings, Truncated: out.Truncated}
+		}
+	}
+	if info == (pdf0.DocumentInfo{}) {
+		return out, nil
+	}
+	if err := out.Document.SetDocumentInfo(info); err != nil {
+		return out, fmt.Errorf("htmlpdf: writing the document's title and language: %w", err)
+	}
+	return out, nil
 }
 
 // readingDirection gives the document Render made the direction its HTML is
@@ -287,7 +327,7 @@ func (o Options) pdfaRequested() (bool, error) {
 // first. The page is then added as RenderInto adds one.
 func renderPDFA(in Input, opts Options, compose func(Input, layout.Options) (layout.Composed, error)) (Result, error) {
 	level := opts.PDFA.Level
-	if !writesPagesFor(level) {
+	if !writesPagesFor(level, opts.Tagged) {
 		return Result{}, fmt.Errorf("%w: %s", ErrUnsupportedLevel, level)
 	}
 	if _, _, _, err := pdfa.SkeletonWith(opts.PDFA); err != nil {
@@ -382,7 +422,7 @@ func metadataFinding(omitted []string, policy layout.Policy) (f layout.Finding, 
 	}
 	return layout.Finding{
 		Rule: RuleMetadataOmitted, Severity: sev,
-		Message: "the document says something about itself the PDF/A file's metadata cannot hold, so it was left out: " +
+		Message: "the document says something about itself the file's metadata cannot hold, so it was left out: " +
 			strings.Join(omitted, "; "),
 		Source: layout.Source{HTMLOffset: -1, CSSOffset: -1},
 	}, sev == layout.Error, true
@@ -417,6 +457,7 @@ func RenderContext(ctx context.Context, in Input, opts Options, limits RunLimits
 	}
 	out, err := finish(composed, in, opts, nil)
 	out.ShapingWork = composed.ShapingWork
+	out, err = taggedInfo(out, err, in, opts, composed.Document)
 	return readingDirection(out, err, composed.Document)
 }
 
@@ -436,9 +477,9 @@ var ErrUnsupportedLevel = errors.New("htmlpdf: the document claims a PDF/A level
 // A document that claims a PDF/A level (pdf0.Document.Conformance) gets a page
 // that keeps the claim. Every font on it is embedded, whatever
 // opts.EmbedAllFonts says (see Options.EmbedAllFonts). The levels are PDF/A-1b,
-// PDF/A-2 and -3 at b and u, and PDF/A-4 with its e and f variants. The a
-// levels are refused with ErrUnsupportedLevel, since they need a tagged
-// structure this package does not write. PDF/A-1's PDF 1.4 has no
+// PDF/A-2 and -3 at b and u, and PDF/A-4 with its e and f variants; and the
+// a levels for a tagged page (opts.Tagged), which they require, and are
+// refused with ErrUnsupportedLevel otherwise. PDF/A-1's PDF 1.4 has no
 // transparency, so a page for a PDF/A-1b document that uses any (an opacity,
 // an image with alpha, a translucent gradient) is refused under
 // RuleTransparencyAtPDFA1.
@@ -506,11 +547,14 @@ func into(doc *pdf0.Document, opts Options) (Options, error) {
 	if doc.Locked() {
 		return opts, errors.New("htmlpdf: the document is encrypted and not decrypted, so a page cannot be added to it")
 	}
+	if opts.Tagged && hasStructure(doc) {
+		return opts, ErrTaggedTarget
+	}
 	level, claimed := doc.Conformance()
 	if !claimed {
 		return opts, nil
 	}
-	if !writesPagesFor(level) {
+	if !writesPagesFor(level, opts.Tagged) {
 		return opts, fmt.Errorf("%w: %s", ErrUnsupportedLevel, level)
 	}
 	opts.EmbedAllFonts = true
@@ -518,15 +562,44 @@ func into(doc *pdf0.Document, opts Options) (Options, error) {
 }
 
 // writesPagesFor is whether RenderInto writes pages for a document claiming
-// level: PDF/A-1b, PDF/A-2 and -3 at b and u, and PDF/A-4 with e and f. The a
-// levels need a tagged structure this package does not write.
-func writesPagesFor(level pdfa.Level) bool {
+// level: PDF/A-1b, PDF/A-2 and -3 at b and u, and PDF/A-4 with e and f; and,
+// for a tagged page (Options.Tagged), the a levels, which require one.
+func writesPagesFor(level pdfa.Level, tagged bool) bool {
 	switch level {
 	case pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA2u, pdfa.PDFA3b, pdfa.PDFA3u, pdfa.PDFA4, pdfa.PDFA4E, pdfa.PDFA4F:
 		return true
+	case pdfa.PDFA1a, pdfa.PDFA2a, pdfa.PDFA3a:
+		return tagged
 	}
 	return false
 }
+
+// hasStructure is whether doc's structure tree holds anything. An empty one,
+// which is what pdf0.NewPDFADocumentWith gives an a-level document that has
+// no content yet, is no tree to join, and a tagged page's replaces it.
+func hasStructure(doc *pdf0.Document) bool {
+	cat := doc.ResolveDict(doc.Trailer.Get("Root"))
+	if cat == nil {
+		return false
+	}
+	root := doc.ResolveDict(cat.Get("StructTreeRoot"))
+	if root == nil {
+		return false
+	}
+	switch k := doc.Resolve(root.Get("K")).(type) {
+	case nil:
+		return false
+	case object.Array:
+		return len(k) > 0
+	}
+	return true
+}
+
+// ErrTaggedTarget is RenderInto asked for a tagged page (Options.Tagged) in a
+// document that already has a structure tree. The page's tree would have to
+// join the document's, which this package does not do: it writes the tree of
+// a document that has none.
+var ErrTaggedTarget = errors.New("htmlpdf: Options.Tagged adds a page with its structure tree, and the document already has a structure tree to which this package cannot add one; render into a document without one")
 
 // transparencyAtPDFA1 refuses a page for a document claiming PDF/A-1, whose
 // PDF 1.4 base forbids transparency (ISO 19005-1 6.4), when the page uses any:
@@ -646,7 +719,11 @@ func finish(composed layout.Composed, in Input, opts Options, target *pdf0.Docum
 	if err != nil {
 		return out, err
 	}
-	doc, err := writePageTo(scratch, composed.Ops, composed.Page, composed.Scale)
+	var tags *tagger
+	if opts.Tagged {
+		tags = &tagger{}
+	}
+	doc, err := writePageTo(scratch, composed.Ops, composed.Page, composed.Scale, tags)
 	if err != nil {
 		return out, err
 	}
@@ -656,7 +733,7 @@ func finish(composed layout.Composed, in Input, opts Options, target *pdf0.Docum
 	}
 	if target == nil {
 		out.Document = doc
-		return out, nil
+		return out, tagPage(doc, tags)
 	}
 	report, err := target.AppendPages(doc)
 	if err != nil {
@@ -664,7 +741,34 @@ func finish(composed layout.Composed, in Input, opts Options, target *pdf0.Docum
 	}
 	out.imported = report
 	out.Document = target
-	return out, nil
+	return out, tagPage(target, tags)
+}
+
+// tagPage gives the last page of doc, the one just written, its structure
+// tree: built from what the page's drawing recorded, and naming the page and
+// its annotations as doc does. The tree is the document's, which has none
+// (into refuses one that does).
+func tagPage(doc *pdf0.Document, tags *tagger) error {
+	if tags == nil {
+		return nil
+	}
+	refs := doc.PageRefs()
+	if len(refs) == 0 {
+		return errors.New("htmlpdf: the tagged page is not in the document")
+	}
+	page := refs[len(refs)-1]
+	annots, err := doc.PageAnnotations(page)
+	if err != nil {
+		return err
+	}
+	tree := tags.tree(page, annots)
+	if len(tree) == 0 {
+		return nil // nothing drawn is content: there is nothing to tag
+	}
+	if err := doc.SetStructureTree(tree, nil); err != nil {
+		return fmt.Errorf("htmlpdf: writing the page's structure tree: %w", err)
+	}
+	return nil
 }
 
 // checkDrawable reads the display list and the box tree for what this backend
@@ -1007,11 +1111,13 @@ func (m pageTransform) box(b [4]float64) [4]float64 {
 // tests until this says what happens to it.
 var drawnFields = map[string]map[string]string{
 	"FillRect": {
-		"Rect":     "the rectangle filled",
-		"Color":    "the fill colour; alpha through an ExtGState, and nothing painted at zero",
-		"Overhang": "read by layout's page-overflow guard; it says nothing about painting",
+		"PaintedBy": "on a tagged page (Options.Tagged), whose content the operation is, or that it is an artifact: tagged.go",
+		"Rect":      "the rectangle filled",
+		"Color":     "the fill colour; alpha through an ExtGState, and nothing painted at zero",
+		"Overhang":  "read by layout's page-overflow guard; it says nothing about painting",
 	},
 	"DrawText": {
+		"PaintedBy":     "on a tagged page (Options.Tagged), whose content the operation is, or that it is an artifact: tagged.go",
 		"At":            "the origin of the text matrix",
 		"Text":          "what the glyphs were shaped from and what the page extracts as",
 		"RTL":           "through layout.ShapedText and layout.ShapedGlyphs",
@@ -1032,67 +1138,78 @@ var drawnFields = map[string]map[string]string{
 		"Clip":          "clipTo",
 	},
 	"DrawImage": {
-		"Rect":  "the placement matrix",
-		"Image": "embedded through images.Embed",
-		"Key":   "one image XObject per key",
-		"Clip":  "clipTo",
+		"PaintedBy": "on a tagged page (Options.Tagged), whose content the operation is, or that it is an artifact: tagged.go",
+		"Rect":      "the placement matrix",
+		"Image":     "embedded through images.Embed",
+		"Key":       "one image XObject per key",
+		"Clip":      "clipTo",
 	},
 	"Link": {
-		"Rects": "one link annotation per area, through the page transform",
+		"PaintedBy": "on a tagged page (Options.Tagged), whose content the operation is, or that it is an artifact: tagged.go",
+		"Rects":     "one link annotation per area, through the page transform",
 		"Href": "the annotation's URI action, through pdf0.LinkURI; a relative reference, " +
 			"a fragment or a URI the builder refuses is refused: RuleLinkDropped",
 	},
 	"TileImage": {
-		"Clip":  "the area painted",
-		"Tile":  "the first cell",
-		"StepX": "the pattern's /XStep",
-		"StepY": "the pattern's /YStep",
-		"Image": "embedded through images.Embed",
-		"Key":   "one image XObject per key",
+		"PaintedBy": "on a tagged page (Options.Tagged), whose content the operation is, or that it is an artifact: tagged.go",
+		"Clip":      "the area painted",
+		"Tile":      "the first cell",
+		"StepX":     "the pattern's /XStep",
+		"StepY":     "the pattern's /YStep",
+		"Image":     "embedded through images.Embed",
+		"Key":       "one image XObject per key",
 	},
 	"FillGradient": {
-		"Clip":     "the area painted, a clip",
-		"Tile":     "the first tile: the gradient clipped to it, or a tiling pattern's cell",
-		"StepX":    "the pattern's /XStep",
-		"StepY":    "the pattern's /YStep",
-		"Gradient": "an axial (linear), radial (radial, under a matrix for the ellipse) or function-based (conic) shading; its colour a stitching function of type 2 pieces, type 4 where premultiplied alpha needs it, and its alpha a constant /ca or a luminosity soft mask: gradient.go; refused past maxGradientPieces or maxConicPieces, or when not a number: planGradient",
-		"Overhang": "read by layout's page-overflow guard; it says nothing about painting",
+		"PaintedBy": "on a tagged page (Options.Tagged), whose content the operation is, or that it is an artifact: tagged.go",
+		"Clip":      "the area painted, a clip",
+		"Tile":      "the first tile: the gradient clipped to it, or a tiling pattern's cell",
+		"StepX":     "the pattern's /XStep",
+		"StepY":     "the pattern's /YStep",
+		"Gradient":  "an axial (linear), radial (radial, under a matrix for the ellipse) or function-based (conic) shading; its colour a stitching function of type 2 pieces, type 4 where premultiplied alpha needs it, and its alpha a constant /ca or a luminosity soft mask: gradient.go; refused past maxGradientPieces or maxConicPieces, or when not a number: planGradient",
+		"Overhang":  "read by layout's page-overflow guard; it says nothing about painting",
 	},
 	"FillPath": {
-		"Path":     "the path, arcs as cubic Béziers of at most 45°, filled by the even-odd rule (f*): pathTo; refused for an arc that is no number or sweeps past a turn: pathUndrawable",
-		"Color":    "the fill colour; alpha through an ExtGState, and nothing painted at zero",
-		"Clip":     "clipTo",
-		"Overhang": "read by layout's page-overflow guard; it says nothing about painting",
+		"PaintedBy": "on a tagged page (Options.Tagged), whose content the operation is, or that it is an artifact: tagged.go",
+		"Path":      "the path, arcs as cubic Béziers of at most 45°, filled by the even-odd rule (f*): pathTo; refused for an arc that is no number or sweeps past a turn: pathUndrawable",
+		"Color":     "the fill colour; alpha through an ExtGState, and nothing painted at zero",
+		"Clip":      "clipTo",
+		"Overhang":  "read by layout's page-overflow guard; it says nothing about painting",
 	},
 	"ClipPath": {
-		"Path": "the clip, by the even-odd rule (W* n), around a Save and Restore: pathTo; refused as FillPath's is",
-		"Ops":  "drawn inside the clip; a link among them is refused, since its rectangle cannot follow the curve",
+		"PaintedBy": "on a tagged page (Options.Tagged), whose content the operation is, or that it is an artifact: tagged.go",
+		"Path":      "the clip, by the even-odd rule (W* n), around a Save and Restore: pathTo; refused as FillPath's is",
+		"Ops":       "drawn inside the clip; a link among them is refused, since its rectangle cannot follow the curve",
 	},
 	"FilterGroup": {
-		"Filters": "each a transparency group over the step before: opacity at /ca, a sharp drop shadow as a fill through an alpha soft mask of the group at the offset, under it; a blur, a blurred drop shadow and a colour matrix are refused: filterUndrawable",
-		"Ops":     "drawn into a form XObject, an isolated transparency group",
-		"Clip":    "clipTo, around the filtered result",
+		"PaintedBy": "on a tagged page (Options.Tagged), whose content the operation is, or that it is an artifact: tagged.go",
+		"Filters":   "each a transparency group over the step before: opacity at /ca, a sharp drop shadow as a fill through an alpha soft mask of the group at the offset, under it; a blur, a blurred drop shadow and a colour matrix are refused: filterUndrawable",
+		"Ops":       "drawn into a form XObject, an isolated transparency group",
+		"Clip":      "clipTo, around the filtered result",
 	},
 	"DrawTextShadow": {
-		"Run":    "drawn as a DrawText is, every field of it as DrawText's list says, as an artifact inside an empty /ActualText: canvas.notText",
-		"StdDev": "a sharp shadow at zero; a blurred one is refused: undrawable",
+		"PaintedBy": "on a tagged page (Options.Tagged), whose content the operation is, or that it is an artifact: tagged.go",
+		"Run":       "drawn as a DrawText is, every field of it as DrawText's list says, as an artifact inside an empty /ActualText: canvas.notText",
+		"StdDev":    "a sharp shadow at zero; a blurred one is refused: undrawable",
 	},
 	"DrawEmphasisMark": {
-		"Mark": "drawn as a DrawText is, every field of it as DrawText's list says, as an artifact inside an empty /ActualText: canvas.notText",
+		"PaintedBy": "on a tagged page (Options.Tagged), whose content the operation is, or that it is an artifact: tagged.go",
+		"Mark":      "drawn as a DrawText is, every field of it as DrawText's list says, as an artifact inside an empty /ActualText: canvas.notText",
 	},
 	"TransformGroup": {
-		"Matrix": "its move from layout units to pixels (groupMatrix), concatenated (cm) inside a Save and Restore, and multiplied into a tiling pattern's /Matrix and a filter form's bounding box: canvas.transformGroup; nothing drawn when it is not invertible; refused, with the groups around it, past a millionfold scale or a billion-pixel move: transformUndrawable",
-		"Ops":    "drawn after the matrix, as they are anywhere else",
-		"Clip":   "clipTo, before the matrix",
+		"PaintedBy": "on a tagged page (Options.Tagged), whose content the operation is, or that it is an artifact: tagged.go",
+		"Matrix":    "its move from layout units to pixels (groupMatrix), concatenated (cm) inside a Save and Restore, and multiplied into a tiling pattern's /Matrix and a filter form's bounding box: canvas.transformGroup; nothing drawn when it is not invertible; refused, with the groups around it, past a millionfold scale or a billion-pixel move: transformUndrawable",
+		"Ops":       "drawn after the matrix, as they are anywhere else",
+		"Clip":      "clipTo, before the matrix",
 	},
 	"DrawGlyphs": {
-		"At":     "the origin of the text matrix",
-		"Text":   "the one /ActualText the glyphs stand for, and what their ToUnicode entries are written from; an artifact when empty",
-		"Glyphs": "drawn through fonts.Face.DrawReplaced, each at its offsets and advance; refused past the face's glyphs",
-		"Face":   "the font, adopted and embedded; refused for a simple or standard face, whose codes are characters",
-		"Size":   "the font size",
-		"Color":  "the fill colour; alpha through an ExtGState, and invisible at zero",
-		"Clip":   "clipTo",
+		"PaintedBy": "on a tagged page (Options.Tagged), whose content the operation is, or that it is an artifact: tagged.go",
+		"At":        "the origin of the text matrix",
+		"Text":      "the one /ActualText the glyphs stand for, and what their ToUnicode entries are written from; an artifact when empty",
+		"Glyphs":    "drawn through fonts.Face.DrawReplaced, each at its offsets and advance; refused past the face's glyphs",
+		"Face":      "the font, adopted and embedded; refused for a simple or standard face, whose codes are characters",
+		"Size":      "the font size",
+		"Color":     "the fill colour; alpha through an ExtGState, and invisible at zero",
+		"Clip":      "clipTo",
 	},
 }
 
