@@ -322,10 +322,11 @@ The levels are the ones `RenderInto` writes. A `PDFA` with fields set and no
 exactly as the plain render draws it: the same layout, only in a document
 that claims a level.
 
-What the caller leaves empty, the document fills. A blank `Title`, `Author` or
-`Language` is taken from what the HTML says about itself: its `<title>`
-(whitespace collapsed), its first `<meta name="author">`, and its root
-element's language (`lang`, `xml:lang` in XHTML, then a Content-Language
+What the caller leaves empty, the document fills. A blank `Title`, `Author`,
+`Subject`, `Keywords` or `Language` is taken from what the HTML says about
+itself: its `<title>` (whitespace collapsed); the first `<meta name="author">`,
+`"description"` and `"keywords"`, a later one of each kind going unread; and
+its root element's language (`lang`, `xml:lang` in XHTML, then a Content-Language
 pragma), as forme reads them in `layout.Composed.Document`. The caller's values
 always win. A value the file cannot hold is left out, and one
 `RuleMetadataOmitted` finding says which. That covers a `lang` that is not a
@@ -378,10 +379,13 @@ What the page does to the document:
 - **It keeps the document's claim.** In a document that claims a PDF/A level
   (`Document.Conformance`), every font on the page is embedded, whatever
   `Options.EmbedAllFonts` says, and the document's own output intents and
-  `/Lang` apply to the page. The levels written are PDF/A-2 and -3 at b and u,
-  and PDF/A-4 with e and f. PDF/A-1 is refused with `ErrUnsupportedLevel`,
-  because its PDF 1.4 has no transparency, and so are the a levels, which need
-  a tagged structure htmlpdf does not write. `Document.Save` then writes the
+  `/Lang` apply to the page. The levels written are PDF/A-1b, PDF/A-2 and -3 at
+  b and u, and PDF/A-4 with e and f. The a levels are refused with
+  `ErrUnsupportedLevel`, since they need a tagged structure htmlpdf does not
+  write. PDF/A-1's PDF 1.4 has no transparency, so a page for a PDF/A-1b
+  document that uses any (an opacity, an image with alpha, a translucent
+  gradient) is refused under `RuleTransparencyAtPDFA1`, and the finding says
+  which. An opaque page is written. `Document.Save` then writes the
   document only if all of it passes the level, so a page from elsewhere that
   breaks the claim stops the file rather than slipping into it.
 - **It changes nothing if it fails.** The page is written into a document of
@@ -446,11 +450,11 @@ import:
 | `A4`, `A5`, `Letter` | named sheets, each with a margin already |
 | `Finding`, `Size` | what `Result` carries |
 | `Severity`, `Ignore`, `Warn`, `Error` | how much a finding matters, for reading one or writing a policy |
-| `RuleVerticalText`, `RuleLinkDropped`, `RuleUnknownOp`, `RuleUndrawable`, `RuleStandardFont`, `RuleMetadataOmitted` | the rules the backend raises itself |
+| `RuleVerticalText`, `RuleLinkDropped`, `RuleUnknownOp`, `RuleUndrawable`, `RuleStandardFont`, `RuleMetadataOmitted`, `RuleTransparencyAtPDFA1` | the rules the backend raises itself |
 | `RunLimits`, `ErrRunLimit` | the bounds `RenderContext` renders under, and what it fails with past them |
 
 `Render`, `RenderContext`, `RenderInto`, `RenderIntoContext`, `Result`,
-`RefusedError`, `ErrUnsupportedLevel`, `ErrPDFAWithoutLevel`, `Options` and the six
+`RefusedError`, `ErrUnsupportedLevel`, `ErrPDFAWithoutLevel`, `Options` and the seven
 rules are this package's own, since what a render produced, why it would not,
 and what the PDF is asked to be are its business rather than the engine's.
 

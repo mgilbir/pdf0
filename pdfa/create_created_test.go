@@ -2,6 +2,7 @@ package pdfa
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -137,5 +138,44 @@ func TestTheSkeletonsLanguageIsTheCatalogsLang(t *testing.T) {
 		if (err == nil) != tc.ok {
 			t.Errorf("%s with Language %q: err %v; want ok=%v", tc.level, tc.lang, err, tc.ok)
 		}
+	}
+}
+
+// TestTheSkeletonsSubjectAndKeywordsAreItsXMP: written as dc:description and
+// pdf:Keywords, absent when empty, and refused when XMP cannot carry them;
+// GenerateXMPMetadata, which takes neither, writes neither.
+func TestTheSkeletonsSubjectAndKeywordsAreItsXMP(t *testing.T) {
+	packet := func(o SkeletonOptions) (*xmp.Packet, error) {
+		objs, _, _, err := SkeletonWith(o)
+		if err != nil {
+			return nil, err
+		}
+		return xmp.Parse(objs[3].Value.(*object.Stream).Data)
+	}
+	p, err := packet(SkeletonOptions{Level: PDFA2b, Subject: "S", Keywords: "k1, k2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := p.Text(xmp.NSPDF, "Keywords"); got != "k1, k2" {
+		t.Errorf("pdf:Keywords is %q", got)
+	}
+	p, err = packet(SkeletonOptions{Level: PDFA2b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := p.Text(xmp.NSPDF, "Keywords"); ok {
+		t.Errorf("no Keywords, but pdf:Keywords is %q", got)
+	}
+	for _, o := range []SkeletonOptions{{Level: PDFA2b, Subject: "a\x01b"}, {Level: PDFA2b, Keywords: "a￾b"}} {
+		if _, err := packet(o); err == nil {
+			t.Errorf("%+v: a value XMP cannot carry was accepted", o)
+		}
+	}
+	data, err := GenerateXMPMetadata(PDFA2b, "t", "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "dc:description") || strings.Contains(string(data), "pdf:Keywords") {
+		t.Error("GenerateXMPMetadata wrote a description or keywords")
 	}
 }

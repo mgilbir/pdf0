@@ -133,9 +133,10 @@ type Options struct {
 	// too, since its document was made by the caller and claims what it
 	// claims.
 	//
-	// What the caller leaves empty of the title, author and language is filled
-	// from what the HTML says about itself: its <title>, its first <meta
-	// name="author">, and its root element's language. The caller's values
+	// What the caller leaves empty of the title, author, subject, keywords and
+	// language is filled from what the HTML says about itself: its <title>,
+	// its first <meta name="author">, "description" and "keywords", and its
+	// root element's language. The caller's values
 	// win. A value the file cannot hold, such as a lang that is not a language
 	// tag, is left out and reported under RuleMetadataOmitted rather than
 	// failing the render.
