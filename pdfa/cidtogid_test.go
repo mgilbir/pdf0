@@ -118,11 +118,12 @@ func TestCIDToGIDMapNamesTheGlyphForEveryCheck(t *testing.T) {
 		},
 		{
 			// The map covers CIDs 0 and 1. CID 3 has no entry, so it selects
-			// no glyph — even though glyph 3 exists.
+			// no glyph — even though glyph 3 exists — and is drawn with
+			// .notdef, which is a reference to it.
 			name:  "a CID past the end of the map selects no glyph",
 			cgm:   cidToGIDStream(map[int]int{1: 1}),
 			shown: []byte{0x00, 0x03},
-			want:  []string{"does not define a glyph referenced for rendering (CID 3)"},
+			want:  []string{"does not define a glyph referenced for rendering (CID 3)", "references the .notdef glyph"},
 		},
 		{
 			// pdf0 cannot read the map, so it cannot name the glyph: nothing is

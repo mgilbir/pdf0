@@ -164,6 +164,24 @@ func checkOneFontDict(doc core.View, level Level, rule string, fontDict *object.
 				reg, regKnown = pdfTextString(doc, cidInfo.Get("Registry"))
 				ord, ordKnown = pdfTextString(doc, cidInfo.Get("Ordering"))
 			}
+			// A CMap that says no Registry and Ordering — a name that is
+			// neither predefined nor embedded, or an embedded CMap with no
+			// CIDSystemInfo — cannot be matched to the CIDFont's, and the
+			// relationship the rule requires does not hold (veraPDF:
+			// PDF_A-2b 6-2-11-3-3-t01-fail-a, -4 6-2-10-3-3-t01-fail-a).
+			// Identity needs none.
+			if !haveCMapInfo {
+				switch enc := doc.Resolve(encObj).(type) {
+				case object.Name:
+					if _, ok := core.PredefinedCMaps[string(enc)]; !ok {
+						bad("cidSystemInfo", "the CIDFont's CIDSystemInfo cannot be matched to the CMap /%s, which is neither predefined nor embedded and so states no Registry or Ordering", string(enc))
+					}
+				case *object.Stream:
+					if cmapStreamInfo == nil {
+						bad("cidSystemInfo", "the CIDFont's CIDSystemInfo cannot be matched to the embedded CMap, which has no CIDSystemInfo")
+					}
+				}
+			}
 			if cidInfo != nil && haveCMapInfo && regKnown && ordKnown {
 				if reg != cmReg {
 					bad("cidSystemInfo", "CIDFont CIDSystemInfo Registry %q does not match the CMap's %q", reg, cmReg)
@@ -543,6 +561,8 @@ func fontKindClause(kind string, level Level) string {
 		return fontClause("notdef", level)
 	case "width":
 		return fontClause("width", level)
+	case "toUnicode":
+		return fontClause("toUnicode", level)
 	}
 	return fontClause("general", level)
 }
@@ -566,9 +586,23 @@ func checkSimpleFontConsistency(doc core.View, level Level, rule string, fontDic
 	}
 
 	renders := rendersVisibly(u)
+	// At PDF/A-4 a shown code's Unicode value must not be U+0000 (6.2.10.7).
+	// A ToUnicode CMap that leaves the code out, under an encoding that
+	// gives it no name either, says nothing else of it, and veraPDF reads
+	// U+0000 (PDF_A-4 6-2-10-4-1-t02-fail-c: code 0 under WinAnsiEncoding,
+	// absent from the CMap). A font with no ToUnicode is not held to it.
+	var toUni *core.ToUnicode
+	if level.Part() == 4 {
+		toUni, _ = core.ParseToUnicode(doc, fontDict) // reason: only a CMap that was read is judged; the producer recorded any declined trip
+	}
 	for _, s := range u.Strings {
 		for _, code := range s {
 			name := enc[code]
+			if toUni != nil && name == "" {
+				if _, mapped := toUni.Runes(int(code)); !mapped {
+					report("toUnicode", fmt.Sprintf("a code shown in %s font has no Unicode value: neither its ToUnicode CMap nor its encoding maps code %d", string(subtype), code))
+				}
+			}
 			// A code the modelled encoding leaves unnamed selects .notdef
 			// (ISO 32000-1 9.6.6.1), the glyph the program carries for it:
 			// that is a .notdef reference, not a glyph the program lacks.
@@ -657,8 +691,13 @@ func checkCIDFontConsistency(doc core.View, level Level, rule string, fontDict *
 		// ends in an incomplete code that cannot reference a defined glyph
 		// (ISO 32000-1 9.7.5, 9.10). An embedded CMap says its own code widths,
 		// so the same question is asked of it below, per code.
-		if renders && cf.CMap.Identity() && len(s)%2 == 1 {
-			report("glyph", fmt.Sprintf("embedded %s font does not define a glyph referenced for rendering (incomplete character code)", string(cidSub)))
+		if cf.CMap.Identity() && len(s)%2 == 1 {
+			if renders {
+				report("glyph", fmt.Sprintf("embedded %s font does not define a glyph referenced for rendering (incomplete character code)", string(cidSub)))
+			}
+			// What a reader draws for it is .notdef (veraPDF names the
+			// glyph so: PDF_A-2b 6-2-11-4-1-t02-fail-e).
+			report("notdef", fmt.Sprintf("text showing operator references the .notdef glyph in %s font", string(cidSub)))
 		}
 		// cf.Shown skips a code left to a CMap whose data is not carried; the
 		// CMap has reported that those codes were not checked.
@@ -671,6 +710,8 @@ func checkCIDFontConsistency(doc core.View, level Level, rule string, fontDict *
 				if renders {
 					report("glyph", fmt.Sprintf("embedded %s font does not define a glyph referenced for rendering (character code %d is outside the font's CMap)", string(cidSub), code.Value))
 				}
+				// Drawn with .notdef: a reference to it.
+				report("notdef", fmt.Sprintf("text showing operator references the .notdef glyph in %s font", string(cidSub)))
 				// It is still drawn, with CID 0's glyph (ISO 32000-1
 				// 9.7.6.3), and advances by that glyph's width; CID.WidthDiffers
 				// says when that substitute is known.
@@ -690,6 +731,12 @@ func checkCIDFontConsistency(doc core.View, level Level, rule string, fontDict *
 				exists = gmap.Exists(fp, key)
 			}
 
+			if !exists {
+				// A CID the program lacks is drawn with .notdef, so it is a
+				// .notdef reference as well as a missing glyph (veraPDF:
+				// PDF_A-2b 6-2-11-4-1-t02-fail-d, 6-1-13-t10-fail-a).
+				report("notdef", fmt.Sprintf("text showing operator references the .notdef glyph in %s font", string(cidSub)))
+			}
 			if renders && !exists {
 				report("glyph", fmt.Sprintf("embedded %s font does not define a glyph referenced for rendering (CID %d)", string(cidSub), cid))
 			} else if renders && keyKnown && gmap.Empty(fp, key) {
@@ -759,8 +806,11 @@ func rendersVisibly(u *core.FontTextUsage) bool {
 
 func simpleGlyphExists(fp *font.Program, subtype object.Name, symbolic bool, code byte, name string) bool {
 	if subtype == "TrueType" {
+		// Glyph 0 is the program's .notdef: present, and a .notdef
+		// reference (isNotdefGlyph), not a glyph the program lacks
+		// (veraPDF: PDF_A-4 6-2-10-4-1-t02-fail-c).
 		gid, ok := simplefont.TrueTypeGlyph(fp, symbolic, code, name)
-		return ok && gid > 0 && gid < fp.NumGlyphs
+		return ok && gid < fp.NumGlyphs
 	}
 	if name == "" {
 		return false

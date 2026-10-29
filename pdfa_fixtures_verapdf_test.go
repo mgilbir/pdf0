@@ -128,6 +128,32 @@ var defectFixtures = []defectFixture{
 			object.Entry{Key: "PS", Value: d.Add(object.NewStream(&object.Dictionary{}, []byte("%!")))},
 			object.Entry{Key: "Resources", Value: &object.Dictionary{}})
 	}, want: [3][]string{{"6.2.5"}, {"6.2.9"}, nil}},
+	{name: "output-profile-n-mismatch", build: func(d *Document, p, r *object.Dictionary) string {
+		cat := d.ResolveDict(d.Trailer.Get("Root"))
+		oi := d.ResolveDict(d.Resolve(cat.Get("OutputIntents")).(object.Array)[0])
+		d.Resolve(oi.Get("DestOutputProfile")).(*object.Stream).Dict.Set("N", fxInt(4))
+		return ""
+	}, want: [3][]string{{"6.2.3.2"}, nil, nil}},
+	{name: "output-profile-without-n", build: func(d *Document, p, r *object.Dictionary) string {
+		cat := d.ResolveDict(d.Trailer.Get("Root"))
+		oi := d.ResolveDict(d.Resolve(cat.Get("OutputIntents")).(object.Array)[0])
+		d.Resolve(oi.Get("DestOutputProfile")).(*object.Stream).Dict.Delete("N")
+		return ""
+	}, want: [3][]string{{"6.2.3.2"}, nil, nil}},
+	{name: "xmp-not-well-formed", build: func(d *Document, p, r *object.Dictionary) string {
+		cat := d.ResolveDict(d.Trailer.Get("Root"))
+		md := d.Resolve(cat.Get("Metadata")).(*object.Stream)
+		data, err := d.StreamData(md)
+		if err != nil {
+			panic(err)
+		}
+		bad := bytes.Replace(data, []byte("</rdf:RDF>"), []byte("</rdf:Rdf>"), 1)
+		cat.Set("Metadata", d.Add(object.NewStream(object.NewDictionary(
+			object.Entry{Key: "Type", Value: object.Name("Metadata")},
+			object.Entry{Key: "Subtype", Value: object.Name("XML")},
+		), bad)))
+		return ""
+	}, want: [3][]string{{"6.7.11", "6.7.9"}, {"6.6.2.1", "6.6.4"}, {"6.7.2.1", "6.7.3"}}},
 	{name: "text-annotation-without-ap", build: func(d *Document, p, r *object.Dictionary) string {
 		fxAnnot(d, p, object.NewDictionary(object.Entry{Key: "Subtype", Value: object.Name("Text")}))
 		return ""

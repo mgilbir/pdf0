@@ -858,15 +858,20 @@ func checkOutputIntentProfile(doc core.View, level Level) []Violation {
 			continue
 		}
 		judged[profStream] = true
-		// Validate ICC profile N matches the profile data
-		nObj := profStream.Dict.Get("N")
-		if nObj == nil {
-			report(oi, "/DestOutputProfile must have /N")
-			continue
+		// /N and the profile's colour space must agree — at PDF/A-1, where
+		// the profile is an ICC profile stream like any ICCBased one and
+		// veraPDF holds it to that rule (6.2.3.2-2: N present, and 1 for GRAY,
+		// 3 for RGB or Lab, 4 for CMYK). PDF/A-2 and -4 have no such rule
+		// for an output profile, and veraPDF passes one whose /N is wrong or
+		// missing.
+		nRule := ""
+		if level.Part() == 1 {
+			nRule = colourClause("iccBased", level)
 		}
-		nVal, ok := doc.ResolveInt(nObj)
-		if !ok {
-			continue
+		nVal, nOK := doc.ResolveInt(profStream.Dict.Get("N"))
+		if profStream.Dict.Get("N") == nil && nRule != "" {
+			errs = append(errs, Violation{Rule: nRule, Level: level, Object: oi.obj,
+				Message: oi.label + " /DestOutputProfile must have /N"})
 		}
 		// Decompress and check ICC profile header
 		data, r := doc.ICCProfileData(profStream)
@@ -886,19 +891,17 @@ func checkOutputIntentProfile(doc core.View, level Level) []Violation {
 		}
 		// ICC profile header: bytes 16-19 contain color space signature
 		cs := string(data[16:20])
-		expectedN := 0
 		switch cs {
-		case "GRAY":
-			expectedN = 1
-		case "RGB ":
-			expectedN = 3
-		case "CMYK":
-			expectedN = 4
+		case "GRAY", "RGB ", "CMYK":
 		default:
 			report(oi, "ICC profile has unsupported color space %q", cs)
 		}
-		if expectedN > 0 && int(nVal) != expectedN {
-			report(oi, "/N=%d does not match ICC profile color space %s (expected %d)", nVal, cs, expectedN)
+		if nOK && nRule != "" {
+			n := int(nVal)
+			if !(n == 1 && cs == "GRAY" || n == 3 && (cs == "RGB " || cs == "Lab ") || n == 4 && cs == "CMYK") {
+				errs = append(errs, Violation{Rule: nRule, Level: level, Object: oi.obj,
+					Message: fmt.Sprintf("%s /N=%d does not match ICC profile color space %q", oi.label, n, cs)})
+			}
 		}
 		// ICC profile header: bytes 12-15 contain device class. Output intent
 		// profiles must be of class "mntr" (monitor), "prtr" (printer), or
@@ -2265,9 +2268,12 @@ func checkIdentification(doc core.View, level Level) []Violation {
 		// Reporting the identification missing would be a guess.
 		return nil
 	case core.XMPMalformed:
-		// The packet is not XML, which checkXMPWellFormed reports. It
-		// identifies nothing, and saying so again per property adds nothing.
-		return nil
+		// The packet is not XML, which checkXMPWellFormed reports; and so
+		// it identifies nothing, which is this rule's to report, once, as
+		// veraPDF does at every part (6.7.11-1, 6.6.4-1, 6.7.3-1; PDF_A-4
+		// 6-7-2-1-t01-fail-d). Not per property: none can be read.
+		return []Violation{{Rule: metadataClause("version", level), Level: level,
+			Message: "the XMP packet is not well-formed, so it identifies no PDF/A part or conformance level"}}
 	}
 	rule := metadataClause("version", level)
 	var errs []Violation
@@ -4095,31 +4101,28 @@ func getOutputIntentCoverage(doc core.View, catalog *object.Dictionary) (hasRGB,
 		if s, _ := doc.ResolveName(dict.Get("S")); s != "GTS_PDFA1" {
 			continue
 		}
+		// What veraPDF reads as the output colour space: the
+		// profile's header colour space, and none when there is no profile
+		// to read it from. An intent with no profile, or one whose data is
+		// broken, is no PDF/A output intent, and covers nothing (PDF_A-1b
+		// 6-2-2-t02-fail-a, PDF_A-2b and -4 6-2-3-t01-fail-b). Data pdf0
+		// declined to read — a limit, a cancellation — is unknown, not
+		// broken, and is taken to cover both spaces, so that nothing is
+		// asserted on the strength of a read that did not happen.
 		profileRef := dict.Get("DestOutputProfile")
 		if profileRef == nil {
-			// If there's an OutputIntent without a profile, it still signals
-			// intent. For OutputConditionIdentifier-based intents, treat as
-			// covering both RGB and CMYK (conservative).
-			oci := dict.Get("OutputConditionIdentifier")
-			if oci != nil {
-				hasRGB = true
-				hasCMYK = true
-			}
 			continue
 		}
-		profileObj := doc.Resolve(profileRef)
-		stream, ok := profileObj.(*object.Stream)
+		stream, ok := doc.Resolve(profileRef).(*object.Stream)
 		if !ok {
 			continue
 		}
-
-		// Decompress the profile data to read the ICC header
-		profileData, _ := doc.ICCProfileData(stream) // reason: an unread profile is taken to cover both spaces below; the producer recorded any declined trip
+		profileData, reason := doc.ICCProfileData(stream)
 		if len(profileData) < 20 {
-			// Can't read profile header; assume it covers both spaces
-			// to avoid false positives.
-			hasRGB = true
-			hasCMYK = true
+			if reason == core.ReasonLimit || reason == core.ReasonCanceled || reason == core.ReasonUnsupported {
+				hasRGB = true
+				hasCMYK = true
+			}
 			continue
 		}
 
@@ -4130,12 +4133,12 @@ func getOutputIntentCoverage(doc core.View, catalog *object.Dictionary) (hasRGB,
 			hasRGB = true
 		case "CMYK":
 			hasCMYK = true
-		case "GRAY":
-			hasGray = true
 		default:
-			// Unknown profile type - assume it covers both to avoid false positives
-			hasRGB = true
-			hasCMYK = true
+			// GRAY, or a colour space that is no output space at all: an
+			// output colour space nonetheless, which is all DeviceGray asks
+			// for (veraPDF asks only that there be one), and no RGB or CMYK one
+			// (PDF_A-1b 6-2-2-t03-fail-b, "YYY ").
+			hasGray = true
 		}
 	}
 	return

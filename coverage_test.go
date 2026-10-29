@@ -32,9 +32,14 @@ var ruleCoverageBaselines = []struct {
 	maxNotDetected        int
 }{
 	{"PDF/A-1b", "PDFA-1B.xml", "PDF_A-1b", pdfa.PDFA1b, 49, 1},
-	{"PDF/A-2b", "PDFA-2B.xml", "PDF_A-2b", pdfa.PDFA2b, 66, 8},
+	// 2b and 4 lost 6.2.11.4.1-t02 / 6.2.10.4.1-t02 by name when a TrueType
+	// code selecting glyph 0 stopped being reported as a missing glyph: the
+	// file named for it, 6-2-11-4-1-t02-fail-c (-4 6-2-10-4-1-t02-fail-c),
+	// fails on width and .notdef by veraPDF's verdict, which pdf0 now agrees
+	// with exactly (TestRuleCoverageByVeraPDF).
+	{"PDF/A-2b", "PDFA-2B.xml", "PDF_A-2b", pdfa.PDFA2b, 65, 9},
 	{"PDF/A-3b", "PDFA-3B.xml", "PDF_A-3b", pdfa.PDFA3b, 2, 0},
-	{"PDF/A-4", "PDFA-4.xml", "PDF_A-4", pdfa.PDFA4, 76, 3},
+	{"PDF/A-4", "PDFA-4.xml", "PDF_A-4", pdfa.PDFA4, 75, 4},
 }
 
 // TestRuleCoverage measures, per level and per veraPDF rule, whether pdf0
@@ -104,10 +109,12 @@ var ruleVerdictBaselines = []struct {
 	minDetected           int
 	maxNotDetected        int
 }{
-	{"PDF/A-1b", "PDFA-1B.xml", "PDF_A-1b", pdfa.PDFA1b, 68, 2},
-	{"PDF/A-2b", "PDFA-2B.xml", "PDF_A-2b", pdfa.PDFA2b, 98, 6},
+	// Every rule veraPDF fails a corpus file on is detected under its own
+	// clause, at every level: nothing tested is left to rise.
+	{"PDF/A-1b", "PDFA-1B.xml", "PDF_A-1b", pdfa.PDFA1b, 70, 0},
+	{"PDF/A-2b", "PDFA-2B.xml", "PDF_A-2b", pdfa.PDFA2b, 104, 0},
 	{"PDF/A-3b", "PDFA-3B.xml", "PDF_A-3b", pdfa.PDFA3b, 2, 0},
-	{"PDF/A-4", "PDFA-4.xml", "PDF_A-4", pdfa.PDFA4, 85, 6},
+	{"PDF/A-4", "PDFA-4.xml", "PDF_A-4", pdfa.PDFA4, 91, 0},
 }
 
 // TestRuleCoverageByVeraPDF is TestRuleCoverage judged by veraPDF instead of

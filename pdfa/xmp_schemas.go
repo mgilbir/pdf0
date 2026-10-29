@@ -636,6 +636,7 @@ func isXMPDate(s string) bool {
 // extension schemas: namespaceURI → property name → declared valueType text.
 func extensionDeclared(props []xmpProperty) map[string]map[string]string {
 	declared := make(map[string]map[string]string)
+	broken, _ := incompleteValueTypes(props)
 	for _, p := range props {
 		if p.NS != nsPDFAExtension || p.Name != "schemas" {
 			continue
@@ -662,10 +663,12 @@ func extensionDeclared(props []xmpProperty) map[string]map[string]string {
 			}
 			for _, sp := range schemaProps {
 				var name, valueType string
+				have := map[string]bool{}
 				for _, f := range sp.Fields {
 					if f.NS != nsPDFAProperty {
 						continue
 					}
+					have[f.Name] = f.Value.Text != ""
 					switch f.Name {
 					case "name":
 						name = f.Value.Text
@@ -673,9 +676,15 @@ func extensionDeclared(props []xmpProperty) map[string]map[string]string {
 						valueType = f.Value.Text
 					}
 				}
-				if name != "" {
-					declared[nsURI][name] = valueType
+				// A definition missing what a property definition must
+				// say, or of a value type whose own definition is
+				// incomplete, declares nothing: veraPDF counts the
+				// property as undefined (PDF_A-2b 6-6-2-3-3-t02-fail-d,
+				// -t03-fail-c).
+				if name == "" || !have["valueType"] || !have["category"] || !have["description"] || broken[valueType] {
+					continue
 				}
+				declared[nsURI][name] = valueType
 			}
 		}
 	}
@@ -766,6 +775,7 @@ func checkXMPProperties(doc core.View, level Level) []Violation {
 	containerRule := metadataClause("extSchema", level)
 	errs = append(errs, checkXMPExtensionContainer(packet.Declarations(), props, containerRule, level)...)
 	typeFields := extensionTypeFields(props)
+	_, badFields := incompleteValueTypes(props)
 	for _, p := range props {
 		// The extension schema machinery itself is validated separately.
 		switch p.NS {
@@ -794,6 +804,14 @@ func checkXMPProperties(doc core.View, level Level) []Violation {
 					Rule:    rule,
 					Level:   level,
 					Message: fmt.Sprintf("XMP property %s in schema %s is not declared by its extension schema", p.Name, p.NS),
+				})
+				continue
+			}
+			if badFields[vt] {
+				errs = append(errs, Violation{
+					Rule:    rule,
+					Level:   level,
+					Message: fmt.Sprintf("XMP property %s is of custom value type %s, whose definition has an incomplete field, so its value type is not correct", p.Name, vt),
 				})
 				continue
 			}
@@ -1108,6 +1126,66 @@ func extensionTypeFields(props []xmpProperty) map[string]map[string]bool {
 		}
 	}
 	return types
+}
+
+// incompleteValueTypes are the custom value types an extension schema defines
+// without what a definition must say: broken lacks one of its own required
+// fields (type, namespaceURI, prefix, description), and badFields has a field
+// definition that lacks one of its (name, valueType, description). A property
+// of a broken type is not declared; one of a type with a bad field is declared
+// with a value type that is not correct — veraPDF's 6.6.2.3.1 tests 1 and 2
+// (PDF_A-2b 6-6-2-3-3-t03-fail-c, -t04-fail-c).
+func incompleteValueTypes(props []xmpProperty) (broken, badFields map[string]bool) {
+	broken, badFields = map[string]bool{}, map[string]bool{}
+	for _, p := range props {
+		if p.NS != nsPDFAExtension || p.Name != "schemas" {
+			continue
+		}
+		for _, schema := range p.Value.Items {
+			for _, f := range schema.Fields {
+				if f.NS != nsPDFASchema || f.Name != "valueType" {
+					continue
+				}
+				for _, vt := range f.Value.Items {
+					var typeName string
+					have := map[string]bool{}
+					fieldsOK := true
+					for _, tf := range vt.Fields {
+						if tf.NS != nsPDFAType {
+							continue
+						}
+						have[tf.Name] = tf.Value.Text != "" || len(tf.Value.Items) > 0
+						switch tf.Name {
+						case "type":
+							typeName = tf.Value.Text
+						case "field":
+							for _, fld := range tf.Value.Items {
+								fhave := map[string]bool{}
+								for _, ff := range fld.Fields {
+									if ff.NS == nsPDFAField {
+										fhave[ff.Name] = ff.Value.Text != ""
+									}
+								}
+								if !fhave["name"] || !fhave["valueType"] || !fhave["description"] {
+									fieldsOK = false
+								}
+							}
+						}
+					}
+					if typeName == "" {
+						continue
+					}
+					if !have["namespaceURI"] || !have["prefix"] || !have["description"] {
+						broken[typeName] = true
+					}
+					if !fieldsOK {
+						badFields[typeName] = true
+					}
+				}
+			}
+		}
+	}
+	return broken, badFields
 }
 
 // sortedFieldNames renders a declared type's field names for a message, in a
