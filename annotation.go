@@ -36,6 +36,12 @@ type Link struct {
 	// It must be one of PageList's pages; anything else is refused by AddPage.
 	Page *object.IndirectRef
 
+	// Contents describes the link in words, for a reader that cannot see what
+	// it covers: "the annual report", not "click here" (ISO 32000-2 12.5.2,
+	// 14.9.3). PDF/UA requires it of every link (ISO 14289-1 7.18.5). It is
+	// written as the annotation's /Contents.
+	Contents string
+
 	// To says where on that page to go. The zero value shows the whole page,
 	// which is right for a link to a chapter and wrong for a link to a
 	// paragraph — a reader that jumps to the top of a forty-page section has not
@@ -152,6 +158,9 @@ func (l Link) annotation() (*object.Dictionary, error) {
 	const flagPrint = 1 << 2
 	a.Set("F", object.Integer(flagPrint))
 	a.Set("Border", object.Array{object.Integer(0), object.Integer(0), object.Integer(0)})
+	if l.Contents != "" {
+		a.Set("Contents", object.String{Value: encodePDFText(l.Contents)})
+	}
 
 	if l.URI != "" {
 		uri, err := LinkURI(l.URI)

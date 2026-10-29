@@ -711,7 +711,7 @@ func TestDestinationsMustNameAPage(t *testing.T) {
 		if _, err := d.AddPage(Page{Width: 1, Height: 1, Content: &b, Links: []Link{{Rect: [4]float64{0, 0, 1, 1}, Page: &ref}}}); err == nil {
 			t.Errorf("a link naming %s was accepted", what)
 		}
-		if err := d.SetStructureTree([]StructElem{{Tag: "P", Page: &ref, Content: []int{0}}}, nil); err == nil {
+		if err := d.SetStructureTree([]StructElem{{Tag: "P", Page: &ref, Kids: []StructKid{MCIDKid(0)}}}, nil); err == nil {
 			t.Errorf("a structure element naming %s was accepted", what)
 		}
 	}
