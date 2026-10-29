@@ -32,8 +32,9 @@ func (p pictures) Resolve(ref string) ([]byte, error) { return p[ref], nil }
 // The page draws what htmlpdf can: embedded text in a composite font, a link,
 // opacity, a rounded clip, linear and radial gradients, a picture with an
 // alpha channel, a tiled background, a rotation, a text shadow, a list and a
-// table. The oracle's teeth are the last check: the same page has keys PDF 1.3
-// lacks (a transparency group, /ca, /SMask), and the 1.3 grammar has to say so.
+// table, in a right-to-left document (/ViewerPreferences /Direction). The
+// oracle's teeth are the last check: the same page has keys PDF 1.3 lacks (a
+// transparency group, /ca, /SMask), and the 1.3 grammar has to say so.
 func TestAnHTMLPageFitsTheVersionOfTheDocumentItIsAddedTo(t *testing.T) {
 	face, err := notosans.Face()
 	if err != nil {
@@ -49,7 +50,7 @@ func TestAnHTMLPageFitsTheVersionOfTheDocumentItIsAddedTo(t *testing.T) {
 	if err := png.Encode(&pngData, img); err != nil {
 		t.Fatal(err)
 	}
-	html := `<h1 style="text-shadow: 1px 1px 0 #888">Title <a href="https://example.com/x">link</a></h1>
+	html := `<html dir="rtl"><h1 style="text-shadow: 1px 1px 0 #888">Title <a href="https://example.com/x">link</a></h1>
 <p style="opacity: .5">translucent text</p>
 <div style="width: 200px; height: 40px; border-radius: 12px; background: linear-gradient(90deg, red, rgba(0,0,255,.4))"></div>
 <div style="width: 100px; height: 100px; border-radius: 50%; background: radial-gradient(circle, yellow, green)"></div>

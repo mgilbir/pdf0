@@ -351,6 +351,12 @@ v0.6.0.
 
 ## Added
 
+- **A right-to-left HTML document is read right to left** (#375). When the root
+  element has `dir="rtl"`, the document `htmlpdf.Render` makes, plain or
+  PDF/A, gets `/ViewerPreferences /Direction /R2L`. Any other direction writes
+  nothing, so those documents are unchanged byte for byte. `RenderInto` leaves
+  the caller's document alone.
+
 - **A PDF/A render takes its metadata from the HTML** (#374). Under
   `htmlpdf.Options.PDFA`, a blank `Title`, `Author` or `Language` is filled
   from the document's `<title>`, first `<meta name="author">` and root
