@@ -223,6 +223,9 @@ func (e *RefusedError) Error() string {
 // With opts.EmbedAllFonts, every font the page shows is embedded: see
 // Options.EmbedAllFonts for what that lays the document out in, and what it
 // refuses.
+//
+// A document whose root element has dir="rtl" is read right to left: see
+// readingDirection.
 func Render(in Input, opts Options) (Result, error) {
 	isPDFA, err := opts.pdfaRequested()
 	if err != nil {
@@ -233,7 +236,34 @@ func Render(in Input, opts Options) (Result, error) {
 			return layout.Compose(in, o), nil
 		})
 	}
-	return finish(layout.Compose(opts.layoutInput(in), opts.layoutOptions()), in, opts, nil)
+	composed := layout.Compose(opts.layoutInput(in), opts.layoutOptions())
+	out, err := finish(composed, in, opts, nil)
+	return readingDirection(out, err, composed.Document)
+}
+
+// readingDirection gives the document Render made the direction its HTML is
+// read in, as the catalog's /ViewerPreferences /Direction (ISO 32000-2
+// 12.2): /R2L for a root element with dir="rtl", which a reader then uses
+// to order pages and lay out two-page spreads right to left. Left to right
+// is PDF's default, so any other direction writes nothing, and the document
+// is the one it was. Only a document Render made gets one: RenderInto adds
+// a page to the caller's document, and one page's direction is not the
+// whole document's. A failed render is returned as it is.
+func readingDirection(out Result, err error, d layout.DocumentInfo) (Result, error) {
+	if err != nil || out.Document == nil || d.Direction != "rtl" {
+		return out, err
+	}
+	cat := out.Document.ResolveDict(out.Document.Trailer.Get("Root"))
+	if cat == nil {
+		return out, err
+	}
+	prefs := out.Document.ResolveDict(cat.Get("ViewerPreferences"))
+	if prefs == nil {
+		prefs = &object.Dictionary{}
+		cat.Set("ViewerPreferences", prefs)
+	}
+	prefs.Set("Direction", object.Name("R2L"))
+	return out, err
 }
 
 // pdfaRequested is whether Options.PDFA asks for a PDF/A document: false when
@@ -279,7 +309,7 @@ func renderPDFA(in Input, opts Options, compose func(Input, layout.Options) (lay
 	}
 	out, err := finish(composed, in, opts, target)
 	out.ShapingWork = composed.ShapingWork
-	return out, err
+	return readingDirection(out, err, composed.Document)
 }
 
 // documentMetadata fills what the caller left empty in a PDF/A document's
@@ -374,7 +404,7 @@ func RenderContext(ctx context.Context, in Input, opts Options, limits RunLimits
 	}
 	out, err := finish(composed, in, opts, nil)
 	out.ShapingWork = composed.ShapingWork
-	return out, err
+	return readingDirection(out, err, composed.Document)
 }
 
 // ErrUnsupportedLevel is RenderInto given a document claiming a PDF/A level

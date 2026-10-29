@@ -338,6 +338,12 @@ Only a PDF/A render does this. A plain `Render` writes no metadata, as before.
 `RenderInto` leaves the caller's document's metadata alone, since one page's
 title is not the whole document's.
 
+**Reading direction.** A document whose root element has `dir="rtl"` gets
+`/ViewerPreferences /Direction /R2L`, plain or PDF/A, so a reader orders its
+pages and two-page spreads right to left. Left to right is PDF's default, so
+`ltr`, `auto` and no `dir` write nothing. `RenderInto` leaves the caller's
+document alone here too.
+
 ## Into a document you have
 
 `RenderInto` adds the page to a `*pdf0.Document` of the caller's, after the
