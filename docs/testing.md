@@ -145,10 +145,11 @@ list the tests resolve data sets through) and from the tests themselves:
 
 | Data set | What it proves | Source / licence | Location | Override | How it arrives | Read by |
 |---|---|---|---|---|---|---|
-| veraPDF corpus | The PDF/A conformance ratchet: no false positives, no missed violations, no parse errors; the rule-coverage ratchet; most whole-file robustness tests | [veraPDF/veraPDF-corpus](https://github.com/veraPDF/veraPDF-corpus) | `testdata/verapdf-corpus` | `VERAPDF_CORPUS` | `make corpus` | `TestAnAdoptedCIDFaceGetsItsOwnCollection`, `TestArlingtonCorpusParserFaithful`, `TestCFFSubsetDropsUnusedOutlines`, `TestCFFSubsetIsSmallerAndStillParses`, `TestCFFSubsetValidatesAtEveryLevel`, `TestCIDKeyedSystemInfoIsTheFontsOwn`, `TestCorpus`, `TestCorpusConformanceSuites`, `TestCorpusContentLexerDifferential`, `TestCorpusContentStateMemoSound`, `TestCorpusExtractEveryPage`, `TestCorpusIncrementalUpdatesOfXRefStreamFiles`, `TestCorpusIsartor`, `TestCorpusLevelA`, `TestCorpusPDFUA`, `TestCorpusParsesEntirely`, `TestCorpusReadKeepsEveryXRefObject`, `TestCorpusTWGA025UseCMapIsReadNotSkipped`, `TestCorpusWriteSignedOfXRefStreamFiles`, `TestCorpusXMPRoundTrip`, `TestDecryptCorpusFiles`, `TestEncryptedPassthroughAESCorpus`, `TestFindingsAreInvariantUnderIndirection`, `TestHybridCorpusManual`, `TestLevelACorpus`, `TestLoadSimpleRefusesWhatCannotBeOne`, `TestOpenTypeCFFEmbedsAndValidates`, `TestReEncryptCorpusRoundTrip`, `TestRepairEncryption`, `TestRuleCoverage`, `TestWorkMeterHeadroom` |
+| veraPDF corpus | The PDF/A conformance ratchet: no false positives, no missed violations, no parse errors; the rule-coverage ratchet; most whole-file robustness tests | [veraPDF/veraPDF-corpus](https://github.com/veraPDF/veraPDF-corpus) | `testdata/verapdf-corpus` | `VERAPDF_CORPUS` | `make corpus` | `TestAnAdoptedCIDFaceGetsItsOwnCollection`, `TestArlingtonCorpusParserFaithful`, `TestCFFSubsetDropsUnusedOutlines`, `TestCFFSubsetIsSmallerAndStillParses`, `TestCFFSubsetValidatesAtEveryLevel`, `TestCIDKeyedSystemInfoIsTheFontsOwn`, `TestCorpus`, `TestCorpusConformanceSuites`, `TestCorpusContentLexerDifferential`, `TestCorpusContentStateMemoSound`, `TestCorpusExtractEveryPage`, `TestCorpusIncrementalUpdatesOfXRefStreamFiles`, `TestCorpusIsartor`, `TestCorpusLevelA`, `TestCorpusPDFUA`, `TestCorpusParsesEntirely`, `TestCorpusReadKeepsEveryXRefObject`, `TestCorpusTWGA025UseCMapIsReadNotSkipped`, `TestCorpusWriteSignedOfXRefStreamFiles`, `TestCorpusXMPRoundTrip`, `TestDecryptCorpusFiles`, `TestEncryptedPassthroughAESCorpus`, `TestFindingsAreInvariantUnderIndirection`, `TestHybridCorpusManual`, `TestLevelACorpus`, `TestLoadSimpleRefusesWhatCannotBeOne`, `TestOpenTypeCFFEmbedsAndValidates`, `TestReEncryptCorpusRoundTrip`, `TestRepairEncryption`, `TestRuleCoverage`, `TestRuleCoverageByVeraPDF`, `TestWorkMeterHeadroom` |
+| veraPDF's verdicts on the corpus | The rule-coverage ratchet judged by what veraPDF reports for each corpus file rather than what its name says, and false positives against veraPDF's own verdicts | Generated here by veraPDF from the veraPDF corpus (`testdata/verapdf-verdicts/generate.sh`); never committed | `testdata/verapdf-verdicts` | `VERAPDF_VERDICTS` | `make verapdf-verdicts` | `TestRuleCoverageByVeraPDF` |
 | PDF 2.0 reference PDFs | Read→Write→Read round trips over real PDF 2.0 files; also seeds the fuzzers | [pdf-association/pdf20examples](https://github.com/pdf-association/pdf20examples) | `testdata/pdf20examples` | — | `make refpdfs` | `TestArlingtonParserFaithful`, `TestExtractAndMergePages`, `TestExtractText`, `TestOffsetsMatchObjects`, `TestReadSimplePDF`, `TestRoundTripReferencePDFs`, `TestValidateConcurrentSameDoc`, `TestWorkMeterHeadroom`, `TestWriteIsIdempotent`, `TestWriteObjectNumberMatchesKey` |
 | Arlington PDF model | External grammar oracle: the parser and serializer represent objects faithfully (right types, keys, structure) | [pdf-association/arlington-pdf-model](https://github.com/pdf-association/arlington-pdf-model), Apache-2.0 | `testdata/arlington-pdf-model/tsv/2.0` | `ARLINGTON_MODEL` | `make arlington` | `TestArlingtonCorpusParserFaithful`, `TestArlingtonModelDeviationsStillDeviate`, `TestArlingtonOracleHasTeeth`, `TestArlingtonOracleReachesWhatItUsedToMiss`, `TestArlingtonParserFaithful` |
-| veraPDF validation profiles | Per-rule detection coverage against the reference validator's own rule inventory (with the corpus) | [veraPDF/veraPDF-validation-profiles](https://github.com/veraPDF/veraPDF-validation-profiles), CC BY 4.0 | `spec/verapdf-profiles` | `VERAPDF_PROFILES` | `make profiles` | `TestRuleCoverage`, `pdfa: TestClausesAreTheProfilesNumbers` |
+| veraPDF validation profiles | Per-rule detection coverage against the reference validator's own rule inventory (with the corpus) | [veraPDF/veraPDF-validation-profiles](https://github.com/veraPDF/veraPDF-validation-profiles), CC BY 4.0 | `spec/verapdf-profiles` | `VERAPDF_PROFILES` | `make profiles` | `TestRuleCoverage`, `TestRuleCoverageByVeraPDF`, `pdfa: TestClausesAreTheProfilesNumbers` |
 | WTPDF / PDF/UA-2 examples | Round trips and robustness over complex real tagged PDF 2.0 (structure trees, associated files, MathML, role maps) | LaTeX Project, [tagging-project discussion 72](https://github.com/latex3/tagging-project/discussions/72), fetched from Google Drive; licences vary per file (see `testdata/wtpdf/sources.tsv`) | `testdata/wtpdf` | — | `make wtpdf` | `TestWTPDFExamples`, `TestWTPDFValidatePDFUA2`, `TestWorkMeterHeadroom` |
 | Factur-X corpus | FP=0 oracle for the Factur-X **container** checks; the invoice rule engine's findings are ratcheted, not forbidden, because which business rules fire is formalis' scope decision | ZUGFeRD/corpus and ZUGFeRD/mustangproject, Apache-2.0 | `testdata/facturx` | — | `make facturx` | `TestCorpusFacturXSetDocumentInfoKeepsFindings`, `TestCorpusXMPRoundTrip`, `TestValidateFacturXCorpus`, `TestValidateFacturXInvoiceCorpus`, `TestValidateFacturXMutations`, `TestWorkMeterHeadroom` |
 | CCITT samples | Decode oracle for the Group 3/4 fax decoder (the veraPDF corpus has no CCITT images) | pdf.js (Apache-2.0), PyPDF4 (BSD) | `testdata/ccitt` | — | `make ccitt` | `TestCCITTRealFiles` |
@@ -552,6 +553,23 @@ listed separately rather than counted. Use rule coverage to locate gaps, use the
 corpus to prove you closed them. See
 [CONTRIBUTING.md](../CONTRIBUTING.md#the-corpus-ratchet--read-this-before-changing-a-validation-rule).
 
+### Judged by veraPDF's verdicts
+
+A file's name is the rule it was written for, not always the rule it fails:
+`veraPDF test suite 6-2-10-t01-fail-f.pdf` is named for a blend mode and veraPDF
+fails it on uncalibrated colour (6.2.4.3-2), which pdf0 reports too, so by its
+name the blend-mode rule counts as caught only "elsewhere". At the pinned
+corpus, 235 of PDF/A-1b's 569 files, 420 of 2b's 986 and 153 of 4's 487 fail on
+rules their names do not say. `TestRuleCoverageByVeraPDF` asks the
+reference validator instead: `make verapdf-verdicts` runs veraPDF over the
+corpus's PDF/A levels (`testdata/verapdf-verdicts/generate.sh`, half a minute
+through Docker) and keeps its reports, never committed. Every rule veraPDF
+fails a file on is then a test of that rule, classified as above, and every file
+veraPDF passes that pdf0 flags is a false positive, of which there must be none.
+`ruleVerdictBaselines` ratchets it as `ruleCoverageBaselines` ratchets the
+name-based measure, which stays for a tree without Docker. CI generates the
+verdicts in the corpus job.
+
 ## CI
 
 CI fetches every data set with a make target, counts what arrived, and runs the
@@ -585,8 +603,8 @@ CI runs on every `push` (branches: [main]) and every `pull_request`, as 3 jobs.
 
 **`corpus`** (Go `1.27.3`):
 
-1. restore corpora: `testdata/verapdf-corpus`, `testdata/arlington-pdf-model`, `testdata/pdf20examples`, `spec/verapdf-profiles`, `testdata/notocjk`, `testdata/notoemoji`, `testdata/facturx/*.pdf`, `testdata/facturx/.ok`, `testdata/wtpdf/*.pdf`, `testdata/wtpdf/.ok`, `testdata/ccitt/*.pdf`, `testdata/ccitt/.ok`, `testdata/jbig2/*.pdf`, `testdata/jbig2/.ok`
-2. fetch corpora (only if `steps.corpora.outputs.cache-hit != 'true'`): `make corpus arlington refpdfs facturx profiles wtpdf ccitt jbig2 notocjk notoemoji`
+1. restore corpora: `testdata/verapdf-corpus`, `testdata/arlington-pdf-model`, `testdata/pdf20examples`, `spec/verapdf-profiles`, `testdata/notocjk`, `testdata/notoemoji`, `testdata/facturx/*.pdf`, `testdata/facturx/.ok`, `testdata/wtpdf/*.pdf`, `testdata/wtpdf/.ok`, `testdata/ccitt/*.pdf`, `testdata/ccitt/.ok`, `testdata/jbig2/*.pdf`, `testdata/jbig2/.ok`, `testdata/verapdf-verdicts/*.txt`, `testdata/verapdf-verdicts/.ok`
+2. fetch corpora (only if `steps.corpora.outputs.cache-hit != 'true'`): `make corpus arlington refpdfs facturx profiles wtpdf ccitt jbig2 notocjk notoemoji verapdf-verdicts`
 3. corpora are present and complete
 4. install the renderers
 5. conformance ratchets: `go test ./... -count=1`
@@ -604,6 +622,7 @@ has the data.
 | Data set | Location | How it arrives | In CI |
 |---|---|---|---|
 | veraPDF corpus | `testdata/verapdf-corpus` | `make corpus` | fetched; fails below 2800 `*.pdf` files |
+| veraPDF's verdicts on the corpus | `testdata/verapdf-verdicts` | `make verapdf-verdicts` | fetched; fails below 4 `*.txt` files |
 | PDF 2.0 reference PDFs | `testdata/pdf20examples` | `make refpdfs` | fetched; fails below 7 `*.pdf` files |
 | Arlington PDF model | `testdata/arlington-pdf-model/tsv/2.0` | `make arlington` | fetched; fails below 600 `*.tsv` files |
 | veraPDF validation profiles | `spec/verapdf-profiles` | `make profiles` | fetched; fails below 700 `*.xml` files |

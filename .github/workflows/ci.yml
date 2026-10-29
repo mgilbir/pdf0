@@ -135,11 +135,16 @@ jobs:
             testdata/ccitt/.ok
             testdata/jbig2/*.pdf
             testdata/jbig2/.ok
-          key: corpora-${{ hashFiles('Makefile', 'testdata/*/sources.tsv', 'testdata/*/download.sh') }}
+            testdata/verapdf-verdicts/*.txt
+            testdata/verapdf-verdicts/.ok
+          # The verdicts are veraPDF's on the pinned corpus: generated, not
+          # fetched, and keyed with their generator and the wrapper that pins
+          # the veraPDF image, so a new veraPDF or corpus makes new ones.
+          key: corpora-${{ hashFiles('Makefile', 'testdata/*/sources.tsv', 'testdata/*/download.sh', 'testdata/verapdf-verdicts/generate.sh', 'testdata/verapdf/verapdf-docker.sh') }}
 
       - name: fetch corpora
         if: steps.corpora.outputs.cache-hit != 'true'
-        run: make corpus arlington refpdfs facturx profiles wtpdf ccitt jbig2 notocjk notoemoji
+        run: make corpus arlington refpdfs facturx profiles wtpdf ccitt jbig2 notocjk notoemoji verapdf-verdicts
 
       # A half-finished fetch must be red, not green. The corpus-gated tests skip
       # when their directory is empty, and a skip reads as a pass: this repository
@@ -180,6 +185,8 @@ jobs:
           check spec/verapdf-profiles            '*.xml'  700
           check testdata/notocjk                 '*.otf'    1
           check testdata/notoemoji               '*.ttf'    2
+          # One veraPDF report per PDF/A level of the corpus.
+          check testdata/verapdf-verdicts        '*.txt'    4
 
       # The rendering oracles: what Ghostscript and poppler paint for a page
       # pdf0 wrote, compared with what the font or the layout says should be
@@ -204,8 +211,8 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/skia"
           "$RUNNER_TEMP/skia/bin/pip" install -q -r testdata/colrv1/requirements.txt
           echo "PDF0_SKIA_PYTHON=$RUNNER_TEMP/skia/bin/python" >> "$GITHUB_ENV"
-          # veraPDF, the PDF/A reference validator, for the Type 3 fonts'
-          # documents (testdata/verapdf).
+          # veraPDF, the PDF/A and PDF/UA reference validator, for the
+          # documents pdf0 writes (testdata/verapdf).
           docker pull -q verapdf/cli:v1.30.3
           echo "PDF0_VERAPDF=$GITHUB_WORKSPACE/testdata/verapdf/verapdf-docker.sh" >> "$GITHUB_ENV"
 

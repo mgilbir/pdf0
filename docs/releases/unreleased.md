@@ -20,6 +20,17 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 
 ## Behaviour changes
 
+### For contributors
+
+- **Rule coverage is also judged by veraPDF's own verdicts** (#PR).
+  `make verapdf-verdicts` runs veraPDF over the corpus's PDF/A levels and keeps
+  its reports (generated, never committed), and `TestRuleCoverageByVeraPDF`
+  judges pdf0 against the rules veraPDF fails each file on, where the file's
+  name says the wrong rule for a third to two fifths of the files. It fails on
+  any file veraPDF passes and pdf0 flags (none today). CI generates the
+  verdicts in the corpus job. `testdata/verapdf/verapdf-docker.sh` takes a
+  directory, for `--recurse`.
+
 ## Added
 
 ## Fixed

@@ -1,4 +1,4 @@
-.PHONY: test check check-examples fuzz cc-sweep cc-sweep-limited check-docs check-mermaid check-links check-doc-code corpus test-corpus clean-corpus refpdfs profiles rule-coverage wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc notocjk clean-notocjk notoemoji clean-notoemoji
+.PHONY: test check check-examples fuzz cc-sweep cc-sweep-limited check-docs check-mermaid check-links check-doc-code corpus test-corpus clean-corpus refpdfs profiles rule-coverage verapdf-verdicts clean-verapdf-verdicts wtpdf clean-wtpdf arlington test-arlington clean-arlington ccitt clean-ccitt jbig2 clean-jbig2 facturx clean-facturx clean-cc notocjk clean-notocjk notoemoji clean-notoemoji
 
 CORPUS_DIR := testdata/verapdf-corpus
 REFPDF_DIR := testdata/pdf20examples
@@ -16,6 +16,7 @@ WTPDF_DIR := testdata/wtpdf
 # inventory of every PDF/A rule. Cloned under spec/ (gitignored) for local use as
 # a coverage reference; not committed.
 PROFILES_DIR := spec/verapdf-profiles
+VERDICTS_DIR := testdata/verapdf-verdicts
 
 # Pinned corpus revisions.
 #
@@ -168,6 +169,19 @@ $(PROFILES_DIR)/.ok:
 # corpus files that test them (needs the profiles and the corpus).
 rule-coverage: profiles corpus
 	VERAPDF_PROFILES=$(PROFILES_DIR) VERAPDF_CORPUS=$(CORPUS_DIR) go run -tags devtools ./internal/cmd/rulecoverage
+
+# What veraPDF says of every file of the corpus's PDF/A levels, for
+# TestRuleCoverageByVeraPDF: generated, never committed. Needs Docker (or a
+# veraPDF named by PDF0_VERAPDF); keyed on the corpus revision and the veraPDF
+# image through the stamp's prerequisites.
+verapdf-verdicts: $(VERDICTS_DIR)/.ok
+
+$(VERDICTS_DIR)/.ok: $(CORPUS_DIR)/.ok $(VERDICTS_DIR)/generate.sh testdata/verapdf/verapdf-docker.sh
+	VERAPDF_CORPUS=$(CORPUS_DIR) sh $(VERDICTS_DIR)/generate.sh
+	touch $@
+
+clean-verapdf-verdicts:
+	rm -f $(VERDICTS_DIR)/*.txt $(VERDICTS_DIR)/*.log $(VERDICTS_DIR)/.ok
 
 # Download the LaTeX Project's Well Tagged PDF / PDF/UA-2 example documents.
 wtpdf: $(WTPDF_DIR)/.ok

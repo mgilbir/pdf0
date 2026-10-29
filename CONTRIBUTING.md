@@ -46,8 +46,8 @@ CI runs on every `push` (branches: [main]) and every `pull_request`, as 3 jobs.
 
 **`corpus`** (Go `1.27.3`):
 
-1. restore corpora: `testdata/verapdf-corpus`, `testdata/arlington-pdf-model`, `testdata/pdf20examples`, `spec/verapdf-profiles`, `testdata/notocjk`, `testdata/notoemoji`, `testdata/facturx/*.pdf`, `testdata/facturx/.ok`, `testdata/wtpdf/*.pdf`, `testdata/wtpdf/.ok`, `testdata/ccitt/*.pdf`, `testdata/ccitt/.ok`, `testdata/jbig2/*.pdf`, `testdata/jbig2/.ok`
-2. fetch corpora (only if `steps.corpora.outputs.cache-hit != 'true'`): `make corpus arlington refpdfs facturx profiles wtpdf ccitt jbig2 notocjk notoemoji`
+1. restore corpora: `testdata/verapdf-corpus`, `testdata/arlington-pdf-model`, `testdata/pdf20examples`, `spec/verapdf-profiles`, `testdata/notocjk`, `testdata/notoemoji`, `testdata/facturx/*.pdf`, `testdata/facturx/.ok`, `testdata/wtpdf/*.pdf`, `testdata/wtpdf/.ok`, `testdata/ccitt/*.pdf`, `testdata/ccitt/.ok`, `testdata/jbig2/*.pdf`, `testdata/jbig2/.ok`, `testdata/verapdf-verdicts/*.txt`, `testdata/verapdf-verdicts/.ok`
+2. fetch corpora (only if `steps.corpora.outputs.cache-hit != 'true'`): `make corpus arlington refpdfs facturx profiles wtpdf ccitt jbig2 notocjk notoemoji verapdf-verdicts`
 3. corpora are present and complete
 4. install the renderers
 5. conformance ratchets: `go test ./... -count=1`
@@ -65,6 +65,7 @@ has the data.
 | Data set | Location | How it arrives | In CI |
 |---|---|---|---|
 | veraPDF corpus | `testdata/verapdf-corpus` | `make corpus` | fetched; fails below 2800 `*.pdf` files |
+| veraPDF's verdicts on the corpus | `testdata/verapdf-verdicts` | `make verapdf-verdicts` | fetched; fails below 4 `*.txt` files |
 | PDF 2.0 reference PDFs | `testdata/pdf20examples` | `make refpdfs` | fetched; fails below 7 `*.pdf` files |
 | Arlington PDF model | `testdata/arlington-pdf-model/tsv/2.0` | `make arlington` | fetched; fails below 600 `*.tsv` files |
 | veraPDF validation profiles | `spec/verapdf-profiles` | `make profiles` | fetched; fails below 700 `*.xml` files |
@@ -156,7 +157,11 @@ it rejects only for some other reason are listed with what pdf0 reported
 instead. `TestRuleCoverage` ratchets the per-level counts
 (`ruleCoverageBaselines`): lower the not-detected baseline when you fix one.
 Rules the corpus does not test are not measured, so this is not a conformance
-claim either. Details in [docs/testing.md](docs/testing.md#rule-coverage).
+claim either. `TestRuleCoverageByVeraPDF` measures the same against what veraPDF
+reports for each file rather than what its name says (`make verapdf-verdicts`,
+which needs Docker), and fails on any file veraPDF passes and pdf0 flags; its
+baselines are `ruleVerdictBaselines`. Details in
+[docs/testing.md](docs/testing.md#rule-coverage).
 
 ## Fuzzing
 
