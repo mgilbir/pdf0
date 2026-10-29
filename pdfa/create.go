@@ -45,9 +45,14 @@ func Skeleton(level Level, title, author string) (map[int]*object.IndirectObject
 
 // SkeletonOptions is what a generated skeleton is made of.
 type SkeletonOptions struct {
-	Level        Level
-	Title        string
-	Author       string
+	Level  Level
+	Title  string
+	Author string
+	// Subject and Keywords are what the document is about, written as
+	// dc:description and pdf:Keywords, as Document.SetDocumentInfo writes
+	// them. Empty writes none.
+	Subject      string
+	Keywords     string
 	OutputIntent OutputIntentSpec
 
 	// FileID is the document's /ID, both halves. Empty means a fresh random
@@ -186,7 +191,8 @@ func SkeletonWith(opts SkeletonOptions) (map[int]*object.IndirectObject, object.
 	pages.Set("Count", object.Integer(0))
 
 	// Object 3: Metadata stream (XMP, unfiltered)
-	xmpData, err := generateXMP(level, title, author, created)
+	xmpData, err := generateXMP(level, described{title: title, author: author,
+		subject: opts.Subject, keywords: opts.Keywords, created: created})
 	if err != nil {
 		return nil, object.Dictionary{}, "", err
 	}
@@ -250,12 +256,22 @@ func pdfaVersion(level Level) string {
 // through (or its control characters silently dropped), which produced a packet
 // that was not well-formed and a document that failed its own level.
 func GenerateXMPMetadata(level Level, title, author string) ([]byte, error) {
-	return generateXMP(level, title, author, time.Time{})
+	return generateXMP(level, described{title: title, author: author})
 }
 
-// generateXMP is GenerateXMPMetadata with xmp:CreateDate when created is not
-// zero, in the form Document.SetDocumentInfo writes it (RFC 3339).
-func generateXMP(level Level, title, author string, created time.Time) ([]byte, error) {
+// described is what a skeleton's XMP says about the document beside its
+// identification.
+type described struct {
+	title, author, subject, keywords string
+	created                          time.Time
+}
+
+// generateXMP is GenerateXMPMetadata with the rest of what a skeleton
+// describes: dc:description for the subject, pdf:Keywords, and xmp:CreateDate
+// when created is not zero, each in the form Document.SetDocumentInfo writes
+// it.
+func generateXMP(level Level, d described) ([]byte, error) {
+	title, author, created := d.title, d.author, d.created
 	p := xmp.New()
 	if err := setPDFAIdentification(p, level); err != nil {
 		return nil, err
@@ -271,6 +287,17 @@ func generateXMP(level Level, title, author string, created time.Time) ([]byte, 
 		// dc:creator is an ordered sequence of authors.
 		if err := p.SetSeq(xmp.NSDC, "dc", "creator", []string{author}); err != nil {
 			return nil, fmt.Errorf("pdfa: author: %w", err)
+		}
+	}
+	if d.subject != "" {
+		// dc:description is a language alternative, as dc:title is.
+		if err := p.SetAltText(xmp.NSDC, "dc", "description", "x-default", d.subject); err != nil {
+			return nil, fmt.Errorf("pdfa: subject: %w", err)
+		}
+	}
+	if d.keywords != "" {
+		if err := p.SetText(xmp.NSPDF, "pdf", "Keywords", d.keywords); err != nil {
+			return nil, fmt.Errorf("pdfa: keywords: %w", err)
 		}
 	}
 	if err := p.SetText(xmp.NSXMP, "xmp", "CreatorTool", "pdf0"); err != nil {

@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"regexp"
 	"testing"
 	"time"
 
@@ -17,7 +18,8 @@ import (
 // two pieces of code, and this is what keeps them one rule.
 func TestTheSkeletonDatesAndLanguagesItsDocumentAsSetDocumentInfoDoes(t *testing.T) {
 	at := time.Date(2026, 10, 27, 9, 30, 0, 0, time.FixedZone("", 3600))
-	described := func(d *Document) (date, lang string) {
+	description := regexp.MustCompile(`(?s)<dc:description>.*?</dc:description>`)
+	described := func(d *Document) (date, lang, subject, keywords string) {
 		t.Helper()
 		cat := d.ResolveDict(d.Trailer.Get("Root"))
 		meta, _ := d.Resolve(cat.Get("Metadata")).(*object.Stream)
@@ -26,11 +28,14 @@ func TestTheSkeletonDatesAndLanguagesItsDocumentAsSetDocumentInfoDoes(t *testing
 			t.Fatal(err)
 		}
 		date, _ = p.Text(xmp.NSXMP, "CreateDate")
+		keywords, _ = p.Text(xmp.NSPDF, "Keywords")
+		subject = string(description.Find(meta.Data))
 		l, _ := cat.Get("Lang").(object.String)
-		return date, string(l.Value)
+		return date, string(l.Value), subject, keywords
 	}
 	for _, level := range pdfa.Levels() {
-		built, err := NewPDFADocumentWith(pdfa.SkeletonOptions{Level: level, Created: at, Language: "nl"})
+		built, err := NewPDFADocumentWith(pdfa.SkeletonOptions{Level: level, Created: at, Language: "nl",
+			Subject: "Facturen & <kwijtingen>", Keywords: "factuur, 2026"})
 		if err != nil {
 			t.Fatalf("%s: %v", level, err)
 		}
@@ -38,14 +43,18 @@ func TestTheSkeletonDatesAndLanguagesItsDocumentAsSetDocumentInfoDoes(t *testing
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := other.SetDocumentInfo(DocumentInfo{Created: at, Language: "nl"}); err != nil {
+		if err := other.SetDocumentInfo(DocumentInfo{Created: at, Language: "nl",
+			Subject: "Facturen & <kwijtingen>", Keywords: "factuur, 2026"}); err != nil {
 			t.Fatalf("%s: SetDocumentInfo: %v", level, err)
 		}
-		bd, bl := described(built)
-		od, ol := described(other)
-		if bd != od || bl != ol {
-			t.Errorf("%s: the skeleton writes CreateDate %q and /Lang %q; SetDocumentInfo writes %q and %q",
-				level, bd, bl, od, ol)
+		bd, bl, bs, bk := described(built)
+		od, ol, os, ok := described(other)
+		if bd != od || bl != ol || bs != os || bk != ok {
+			t.Errorf("%s: the skeleton writes CreateDate %q, /Lang %q, %s and Keywords %q;\nSetDocumentInfo writes %q, %q, %s and %q",
+				level, bd, bl, bs, bk, od, ol, os, ok)
+		}
+		if bs == "" || bk == "" {
+			t.Errorf("%s: the skeleton wrote no dc:description (%q) or pdf:Keywords (%q)", level, bs, bk)
 		}
 
 		var buf bytes.Buffer
