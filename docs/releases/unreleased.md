@@ -133,7 +133,7 @@ v0.6.0.
 
 ### htmlpdf
 
-- **forme v0.13.1** (#PR), whose one change is that a run of text says which
+- **forme v0.13.1** (#383), whose one change is that a run of text says which
   text node it came from (forme#966). A tagged page now reads an element's own
   text where the document has it: a transformed or positioned inline box is
   read between the words either side of it, where it used to be read after
