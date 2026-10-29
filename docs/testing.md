@@ -570,6 +570,19 @@ veraPDF passes that pdf0 flags is a false positive, of which there must be none.
 name-based measure, which stays for a tree without Docker. CI generates the
 verdicts in the corpus job.
 
+### Single-defect files
+
+The corpus does not test every rule, and some of pdf0's verdicts were wrong
+on files it does not have. `TestSingleDefectFilesAgreeWithVeraPDF`
+(`pdfa_fixtures_verapdf_test.go`) builds a PDF/A skeleton veraPDF passes, gives
+it one page with one thing wrong — or one thing that only looks wrong — and
+holds pdf0 to the clauses veraPDF fails it on, at PDF/A-1b, -2b and -4. Each
+fixture records veraPDF's answer, so the comparison runs in every job; with
+`PDF0_VERAPDF` set (CI's corpus job), veraPDF is run over the files as well, so
+the recorded answers cannot drift from it. The files are built by the test and
+never committed. Add a fixture with the rule you are fixing: write what
+veraPDF says, and watch pdf0 disagree before you change it.
+
 ## CI
 
 CI fetches every data set with a make target, counts what arrived, and runs the

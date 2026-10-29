@@ -29,7 +29,10 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
   name says the wrong rule for a third to two fifths of the files. It fails on
   any file veraPDF passes and pdf0 flags (none today). CI generates the
   verdicts in the corpus job. `testdata/verapdf/verapdf-docker.sh` takes a
-  directory, for `--recurse`.
+  directory, for `--recurse`. `TestSingleDefectFilesAgreeWithVeraPDF` builds
+  seventeen one-defect files at PDF/A-1b, -2b and -4 and holds pdf0 to the
+  clauses veraPDF fails each on, recorded in the test and checked against
+  veraPDF itself where it is available.
 
 ## Added
 
