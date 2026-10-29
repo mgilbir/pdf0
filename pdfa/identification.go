@@ -46,9 +46,23 @@ type pdfaIdentification struct {
 	// that prefix is bound to some other namespace, so the packet looks like
 	// it identifies itself and does not.
 	impostor bool
-	// otherPrefixes lists prefixes other than pdfaid that identification
-	// properties are written with.
-	otherPrefixes []string
+	// otherPrefixes lists the identification properties written with a
+	// prefix other than pdfaid.
+	otherPrefixes []xmp.Property
+}
+
+// prefixedIDProperties are the identification properties whose prefix the
+// veraPDF profiles hold to pdfaid, per part: ISO 19005-1's schema has part,
+// conformance and amd; -2 and -3 add corr; -4's identification is part and
+// rev.
+func prefixedIDProperties(level Level) []string {
+	switch level.Part() {
+	case 1:
+		return []string{"part", "conformance", "amd"}
+	case 4:
+		return []string{"part", "rev"}
+	}
+	return []string{"part", "conformance", "amd", "corr"}
 }
 
 func readPDFAIdentification(doc core.View) pdfaIdentification {
@@ -60,14 +74,12 @@ func readPDFAIdentification(doc core.View) pdfaIdentification {
 	id.part, id.hasPart = packet.Text(xmp.NSPDFAID, "part")
 	id.conformance, id.hasConformance = packet.Text(xmp.NSPDFAID, "conformance")
 	id.rev, id.hasRev = packet.Text(xmp.NSPDFAID, "rev")
-	seen := map[string]bool{}
 	for _, p := range packet.Properties() {
 		if p.Prefix == pdfaIDPrefix && p.NS != xmp.NSPDFAID {
 			id.impostor = true
 		}
-		if p.NS == xmp.NSPDFAID && p.Prefix != pdfaIDPrefix && !seen[p.Prefix] {
-			seen[p.Prefix] = true
-			id.otherPrefixes = append(id.otherPrefixes, p.Prefix)
+		if p.NS == xmp.NSPDFAID && p.Prefix != pdfaIDPrefix {
+			id.otherPrefixes = append(id.otherPrefixes, p)
 		}
 	}
 	return id

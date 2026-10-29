@@ -11,7 +11,7 @@ import (
 func init() {
 	bridge.PDFAValidateView.Install(validateView)
 	bridge.PDFAResolveTarget.Install(resolveTarget)
-	bridge.PDFASetEmbeddedChecker.Install(func(v core.View, f func(core.Canceler, []byte, core.Limits, int) (bool, bool)) {
+	bridge.PDFASetEmbeddedChecker.Install(func(v core.View, f func(core.Canceler, []byte, core.Limits, int) (int, bool, bool)) {
 		setEmbeddedChecker(v, f)
 	})
 }

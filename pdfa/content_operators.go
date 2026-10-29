@@ -587,6 +587,9 @@ func checkContentNumberLimit(s []byte, lim implLimits, objNum int, add func(stri
 		if absf(v) > lim.realLimit {
 			add(fmt.Sprintf("a content-stream real value %s exceeds the magnitude limit %g", s, lim.realLimit), objNum)
 		}
+		if a := absf(v); a != 0 && a < lim.realMin {
+			add(fmt.Sprintf("a content-stream real value %s is closer to zero than the limit %g", s, lim.realMin), objNum)
+		}
 		return
 	}
 	// Integer: exact, against the 2^31-1 architectural limit (ISO 32000-1

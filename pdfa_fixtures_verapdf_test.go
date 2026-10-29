@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,6 +33,9 @@ import (
 type defectFixture struct {
 	name  string
 	build func(d *Document, page, res *object.Dictionary) string // the page's content
+	// patch, when set, changes the written file: for a defect in the bytes
+	// rather than the objects.
+	patch func([]byte) []byte
 	want  [3][]string
 }
 
@@ -87,6 +91,102 @@ func fxMask(d *Document, bpc int) object.IndirectRef {
 		object.Entry{Key: "ImageMask", Value: object.Boolean(true)},
 		object.Entry{Key: "BitsPerComponent", Value: fxInt(bpc)},
 	), []byte{0}))
+}
+
+// fxCatalog is the document's catalog.
+func fxCatalog(d *Document) *object.Dictionary { return d.ResolveDict(d.Trailer.Get("Root")) }
+
+// fxXMP replaces the catalog's metadata with edit's change to it.
+func fxXMP(d *Document, edit func(xmp []byte) []byte) {
+	cat := fxCatalog(d)
+	data, err := d.StreamData(d.Resolve(cat.Get("Metadata")).(*object.Stream))
+	if err != nil {
+		panic(err)
+	}
+	cat.Set("Metadata", d.Add(object.NewStream(object.NewDictionary(
+		object.Entry{Key: "Type", Value: object.Name("Metadata")},
+		object.Entry{Key: "Subtype", Value: object.Name("XML")},
+	), edit(data))))
+}
+
+// fxStreamForm draws an empty form XObject whose stream has the given
+// filter entries and encoded data.
+func fxStreamForm(d *Document, res *object.Dictionary, data []byte, filter ...object.Entry) string {
+	dict := object.NewDictionary(append([]object.Entry{
+		{Key: "Type", Value: object.Name("XObject")},
+		{Key: "Subtype", Value: object.Name("Form")},
+		{Key: "BBox", Value: object.Array{fxInt(0), fxInt(0), fxInt(10), fxInt(10)}},
+	}, filter...)...)
+	res.Set("XObject", object.NewDictionary(object.Entry{Key: "X0", Value: d.Add(object.NewStream(dict, data))}))
+	return "/X0 Do"
+}
+
+// fxEmbed makes the document carry one embedded file, data of the given
+// MIME type, under a file specification that tweak changes first.
+func fxEmbed(d *Document, data []byte, mime string, tweak func(fs *object.Dictionary)) {
+	ef := d.Add(object.NewStream(object.NewDictionary(
+		object.Entry{Key: "Type", Value: object.Name("EmbeddedFile")},
+		object.Entry{Key: "Subtype", Value: object.Name(mime)},
+	), data))
+	fs := object.NewDictionary(
+		object.Entry{Key: "Type", Value: object.Name("Filespec")},
+		object.Entry{Key: "F", Value: object.String{Value: []byte("a.pdf")}},
+		object.Entry{Key: "UF", Value: object.String{Value: []byte("a.pdf")}},
+		object.Entry{Key: "Desc", Value: object.String{Value: []byte("an attachment")}},
+		object.Entry{Key: "AFRelationship", Value: object.Name("Unspecified")},
+		object.Entry{Key: "EF", Value: object.NewDictionary(object.Entry{Key: "F", Value: ef}, object.Entry{Key: "UF", Value: ef})},
+	)
+	if tweak != nil {
+		tweak(fs)
+	}
+	fsRef := d.Add(fs)
+	cat := fxCatalog(d)
+	cat.Set("Names", object.NewDictionary(object.Entry{Key: "EmbeddedFiles", Value: object.NewDictionary(
+		object.Entry{Key: "Names", Value: object.Array{object.String{Value: []byte("a.pdf")}, fsRef}})}))
+	cat.Set("AF", object.Array{fsRef})
+}
+
+// fxPDFA is a PDF/A file of the level with one empty page, to embed.
+func fxPDFA(level pdfa.Level) []byte {
+	d, err := NewPDFADocument(level)
+	if err != nil {
+		panic(err)
+	}
+	pagesRef := fxCatalog(d).Get("Pages")
+	page := object.NewDictionary(
+		object.Entry{Key: "Type", Value: object.Name("Page")},
+		object.Entry{Key: "Parent", Value: pagesRef},
+		object.Entry{Key: "MediaBox", Value: object.Array{fxInt(0), fxInt(0), fxInt(200), fxInt(200)}},
+		object.Entry{Key: "Resources", Value: &object.Dictionary{}},
+	)
+	pages := d.ResolveDict(pagesRef)
+	pages.Set("Kids", object.Array{d.Add(page)})
+	pages.Set("Count", fxInt(1))
+	var buf bytes.Buffer
+	if err := d.Write(&buf); err != nil {
+		panic(err)
+	}
+	return buf.Bytes()
+}
+
+// fxOC gives the document optional content: two groups, both in the default
+// configuration's /Order, which tweak changes first.
+func fxOC(d *Document, tweak func(ocp, config *object.Dictionary, groups object.Array)) {
+	var groups object.Array
+	for _, n := range []string{"one", "two"} {
+		groups = append(groups, d.Add(object.NewDictionary(
+			object.Entry{Key: "Type", Value: object.Name("OCG")},
+			object.Entry{Key: "Name", Value: object.String{Value: []byte(n)}})))
+	}
+	config := object.NewDictionary(
+		object.Entry{Key: "Name", Value: object.String{Value: []byte("default")}},
+		object.Entry{Key: "Order", Value: groups},
+	)
+	ocp := object.NewDictionary(object.Entry{Key: "OCGs", Value: groups}, object.Entry{Key: "D", Value: config})
+	if tweak != nil {
+		tweak(ocp, config, groups)
+	}
+	fxCatalog(d).Set("OCProperties", ocp)
 }
 
 // fxForm draws a form XObject whose dictionary has extra entries.
@@ -338,6 +438,175 @@ var defectFixtures = []defectFixture{
 			object.Entry{Key: "AP", Value: object.NewDictionary(object.Entry{Key: "N", Value: fxAppearance(d)})}))
 		return ""
 	}, want: [3][]string{{"6.5.2"}, nil, {"6.3.1"}}},
+	{name: "data-after-eof", build: func(d *Document, p, r *object.Dictionary) string { return "" },
+		patch: func(b []byte) []byte { return append(b, "trailing junk\n"...) }, want: [3][]string{{"6.1.3"}, {"6.1.3"}, {"6.1.3"}}},
+	{name: "lzw-filter", build: func(d *Document, p, r *object.Dictionary) string {
+		// Clear code then end of data, 9 bits each: an empty stream.
+		return fxStreamForm(d, r, []byte{0x80, 0x40, 0x40}, object.Entry{Key: "Filter", Value: object.Name("LZWDecode")})
+	}, want: [3][]string{{"6.1.10"}, {"6.1.7.2"}, {"6.1.6.2"}}},
+	{name: "crypt-filter-identity", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxStreamForm(d, r, nil, object.Entry{Key: "Filter", Value: object.Array{object.Name("Crypt")}},
+			object.Entry{Key: "DecodeParms", Value: object.Array{object.NewDictionary(object.Entry{Key: "Name", Value: object.Name("Identity")})}})
+	}, want: [3][]string{nil, nil, nil}},
+	{name: "crypt-filter-without-decodeparms", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxStreamForm(d, r, nil, object.Entry{Key: "Filter", Value: object.Name("Crypt")})
+	}, want: [3][]string{nil, nil, nil}},
+	{name: "crypt-filter-named", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxStreamForm(d, r, nil, object.Entry{Key: "Filter", Value: object.Array{object.Name("Crypt")}},
+			object.Entry{Key: "DecodeParms", Value: object.Array{object.NewDictionary(object.Entry{Key: "Name", Value: object.Name("StdCF")})}})
+	}, want: [3][]string{nil, {"6.1.7.2"}, {"6.1.6.2"}}},
+	{name: "real-too-large-in-content", build: func(d *Document, p, r *object.Dictionary) string {
+		return "340400000000000000000000000000000000000.0 0 m 0 0 l S"
+	}, want: [3][]string{{"6.1.12"}, {"6.1.13"}, nil}},
+	{name: "real-too-small-in-content", build: func(d *Document, p, r *object.Dictionary) string {
+		return "0.0000000000000000000000000000000000000001 0 m 0 0 l S"
+	}, want: [3][]string{nil, {"6.1.13"}, nil}},
+	{name: "real-too-large-in-object", build: func(d *Document, p, r *object.Dictionary) string {
+		p.Set("UserUnit", object.Real(3.404e38))
+		return ""
+	}, want: [3][]string{{"6.1.12"}, {"6.1.13"}, nil}},
+	{name: "q-nesting-29", build: func(d *Document, p, r *object.Dictionary) string {
+		return strings.Repeat("q ", 29) + strings.Repeat("Q ", 29)
+	}, want: [3][]string{{"6.1.12"}, {"6.1.13"}, nil}},
+	{name: "q-nesting-28", build: func(d *Document, p, r *object.Dictionary) string {
+		return strings.Repeat("q ", 28) + strings.Repeat("Q ", 28)
+	}, want: [3][]string{nil, nil, nil}},
+	{name: "devicen-33-colourants", build: func(d *Document, p, r *object.Dictionary) string { return fxDeviceN(d, r, 33) },
+		want: [3][]string{{"6.1.12"}, {"6.1.13", "6.2.4.4"}, {"6.2.4.4"}}},
+	{name: "devicen-32-colourants", build: func(d *Document, p, r *object.Dictionary) string { return fxDeviceN(d, r, 32) },
+		want: [3][]string{{"6.1.12"}, {"6.2.4.4"}, {"6.2.4.4"}}},
+	{name: "pdfx-output-intent-with-dest-output-profile-ref", build: func(d *Document, p, r *object.Dictionary) string {
+		cat := fxCatalog(d)
+		ois := d.Resolve(cat.Get("OutputIntents")).(object.Array)
+		x := d.ResolveDict(ois[0]).Clone()
+		x.Set("S", object.Name("GTS_PDFX"))
+		x.Set("DestOutputProfileRef", object.NewDictionary(object.Entry{Key: "URLs", Value: object.Array{}}))
+		cat.Set("OutputIntents", append(slices.Clone(ois), d.Add(x)))
+		return ""
+	}, want: [3][]string{nil, {"6.2.3"}, {"6.2.3"}}},
+	{name: "annotation-hidden", build: func(d *Document, p, r *object.Dictionary) string {
+		a := object.NewDictionary(object.Entry{Key: "Subtype", Value: object.Name("Square")},
+			object.Entry{Key: "AP", Value: object.NewDictionary(object.Entry{Key: "N", Value: fxAppearance(d)})})
+		fxAnnot(d, p, a)
+		a.Set("F", fxInt(4|2))
+		return ""
+	}, want: [3][]string{{"6.5.3"}, {"6.3.2"}, {"6.3.2"}}},
+	{name: "button-widget-appearance-states", build: func(d *Document, p, r *object.Dictionary) string {
+		fxAnnot(d, p, object.NewDictionary(object.Entry{Key: "Subtype", Value: object.Name("Widget")},
+			object.Entry{Key: "FT", Value: object.Name("Btn")}, object.Entry{Key: "T", Value: object.String{Value: []byte("b")}},
+			object.Entry{Key: "AS", Value: object.Name("Off")},
+			object.Entry{Key: "AP", Value: object.NewDictionary(object.Entry{Key: "N", Value: object.NewDictionary(
+				object.Entry{Key: "On", Value: fxAppearance(d)}, object.Entry{Key: "Off", Value: fxAppearance(d)})})}))
+		return ""
+	}, want: [3][]string{nil, nil, nil}},
+	{name: "xmp-utf16", build: func(d *Document, p, r *object.Dictionary) string {
+		fxXMP(d, func(x []byte) []byte {
+			// UTF-16BE, the packet's begin attribute its byte order mark.
+			var out []byte
+			for _, c := range string(x) {
+				out = append(out, byte(c>>8), byte(c))
+			}
+			return out
+		})
+		return ""
+	}, want: [3][]string{nil, {"6.6.2.1"}, {"6.7.2.1"}}},
+	{name: "xmp-pdfaid-amd-other-prefix", build: func(d *Document, p, r *object.Dictionary) string {
+		fxXMP(d, func(x []byte) []byte {
+			return bytes.Replace(x, []byte("<pdfaid:conformance>"),
+				[]byte("<id:amd xmlns:id=\"http://www.aiim.org/pdfa/ns/id/\">2005</id:amd>\n      <pdfaid:conformance>"), 1)
+		})
+		return ""
+	}, want: [3][]string{{"6.7.11"}, {"6.6.4"}, nil}},
+	{name: "xmp-pdfaid-corr-other-prefix", build: func(d *Document, p, r *object.Dictionary) string {
+		fxXMP(d, func(x []byte) []byte {
+			return bytes.Replace(x, []byte("<pdfaid:conformance>"),
+				[]byte("<id:corr xmlns:id=\"http://www.aiim.org/pdfa/ns/id/\">2011</id:corr>\n      <pdfaid:conformance>"), 1)
+		})
+		return ""
+	}, want: [3][]string{{"6.7.9"}, {"6.6.4"}, nil}},
+	{name: "xmp-pdfaid-amd", build: func(d *Document, p, r *object.Dictionary) string {
+		fxXMP(d, func(x []byte) []byte {
+			return bytes.Replace(x, []byte("<pdfaid:conformance>"), []byte("<pdfaid:amd>2005</pdfaid:amd>\n      <pdfaid:conformance>"), 1)
+		})
+		return ""
+	}, want: [3][]string{nil, nil, nil}},
+	{name: "embedded-pdfa", build: func(d *Document, p, r *object.Dictionary) string {
+		fxEmbed(d, fxPDFA(pdfa.PDFA2b), "application/pdf", nil)
+		return ""
+	}, want: [3][]string{{"6.1.11"}, nil, nil}},
+	{name: "embedded-pdfa-without-uf", build: func(d *Document, p, r *object.Dictionary) string {
+		fxEmbed(d, fxPDFA(pdfa.PDFA2b), "application/pdf", func(fs *object.Dictionary) { fs.Delete("UF") })
+		return ""
+	}, want: [3][]string{{"6.1.11"}, {"6.8"}, {"6.9"}}},
+	{name: "embedded-pdfa4", build: func(d *Document, p, r *object.Dictionary) string {
+		fxEmbed(d, fxPDFA(pdfa.PDFA4), "application/pdf", nil)
+		return ""
+	}, want: [3][]string{{"6.1.11"}, {"6.8"}, nil}},
+	{name: "embedded-pdfa1b", build: func(d *Document, p, r *object.Dictionary) string {
+		fxEmbed(d, fxPDFA(pdfa.PDFA1b), "application/pdf", nil)
+		return ""
+	}, want: [3][]string{{"6.1.11"}, nil, nil}},
+	{name: "embedded-pdfa-labelled-text", build: func(d *Document, p, r *object.Dictionary) string {
+		fxEmbed(d, fxPDFA(pdfa.PDFA2b), "text/plain", nil)
+		return ""
+	}, want: [3][]string{{"6.1.11"}, nil, nil}},
+	{name: "embedded-text-file", build: func(d *Document, p, r *object.Dictionary) string {
+		fxEmbed(d, []byte("hello\n"), "text/plain", nil)
+		return ""
+	}, want: [3][]string{{"6.1.11"}, {"6.8"}, {"6.9"}}},
+	{name: "optional-content", build: func(d *Document, p, r *object.Dictionary) string { fxOC(d, nil); return "" },
+		want: [3][]string{{"6.1.13"}, nil, nil}},
+	{name: "optional-content-config-without-name", build: func(d *Document, p, r *object.Dictionary) string {
+		fxOC(d, func(ocp, c *object.Dictionary, g object.Array) { c.Delete("Name") })
+		return ""
+	}, want: [3][]string{{"6.1.13"}, {"6.9"}, {"6.10"}}},
+	{name: "optional-content-config-names-repeat", build: func(d *Document, p, r *object.Dictionary) string {
+		fxOC(d, func(ocp, c *object.Dictionary, g object.Array) { ocp.Set("Configs", object.Array{c.Clone()}) })
+		return ""
+	}, want: [3][]string{{"6.1.13"}, {"6.9"}, {"6.10"}}},
+	{name: "optional-content-order-misses-a-group", build: func(d *Document, p, r *object.Dictionary) string {
+		fxOC(d, func(ocp, c *object.Dictionary, g object.Array) { c.Set("Order", object.Array{g[0]}) })
+		return ""
+	}, want: [3][]string{{"6.1.13"}, {"6.9"}, {"6.10"}}},
+	{name: "optional-content-config-as", build: func(d *Document, p, r *object.Dictionary) string {
+		fxOC(d, func(ocp, c *object.Dictionary, g object.Array) {
+			c.Set("AS", object.Array{object.NewDictionary(object.Entry{Key: "Event", Value: object.Name("View")},
+				object.Entry{Key: "OCGs", Value: g}, object.Entry{Key: "Category", Value: object.Array{object.Name("View")}})})
+		})
+		return ""
+	}, want: [3][]string{{"6.1.13"}, {"6.9"}, nil}},
+	{name: "alternate-presentations", build: func(d *Document, p, r *object.Dictionary) string {
+		fxCatalog(d).Set("Names", object.NewDictionary(object.Entry{Key: "AlternatePresentations", Value: object.NewDictionary(
+			object.Entry{Key: "Names", Value: object.Array{}})}))
+		return ""
+	}, want: [3][]string{nil, {"6.10"}, {"6.11"}}},
+	{name: "page-pressteps", build: func(d *Document, p, r *object.Dictionary) string {
+		p.Set("PresSteps", d.Add(object.NewDictionary(object.Entry{Key: "Type", Value: object.Name("NavNode")})))
+		return ""
+	}, want: [3][]string{nil, {"6.10"}, {"6.11"}}},
+	{name: "catalog-requirements", build: func(d *Document, p, r *object.Dictionary) string {
+		fxCatalog(d).Set("Requirements", object.Array{object.NewDictionary(
+			object.Entry{Key: "Type", Value: object.Name("Requirement")}, object.Entry{Key: "S", Value: object.Name("EnableJavaScripts")})})
+		return ""
+	}, want: [3][]string{nil, {"6.11"}, {"6.12"}}},
+}
+
+// fxDeviceN fills with a DeviceN colour space of n colourants over
+// DeviceGray, whose tint transform drops all but the first.
+func fxDeviceN(d *Document, res *object.Dictionary, n int) string {
+	var names, domain object.Array
+	for i := range n {
+		names = append(names, object.Name(fmt.Sprintf("C%d", i)))
+		domain = append(domain, fxInt(0), fxInt(1))
+	}
+	fn := d.Add(object.NewStream(object.NewDictionary(
+		object.Entry{Key: "FunctionType", Value: fxInt(4)},
+		object.Entry{Key: "Domain", Value: domain},
+		object.Entry{Key: "Range", Value: object.Array{fxInt(0), fxInt(1)}},
+	), []byte("{"+strings.Repeat(" pop", n-1)+" }")))
+	res.Set("ColorSpace", object.NewDictionary(object.Entry{Key: "CS0", Value: object.Array{
+		object.Name("DeviceN"), names, object.Name("DeviceGray"), fn}}))
+	return "/CS0 cs" + strings.Repeat(" 0", n) + " scn 0 0 10 10 re f"
 }
 
 // buildDefect writes one fixture at one level: the level's skeleton with one
@@ -362,6 +631,9 @@ func buildDefect(t *testing.T, f defectFixture, level pdfa.Level) []byte {
 	var buf bytes.Buffer
 	if err := d.Write(&buf); err != nil {
 		t.Fatal(err)
+	}
+	if f.patch != nil {
+		return f.patch(buf.Bytes())
 	}
 	return buf.Bytes()
 }

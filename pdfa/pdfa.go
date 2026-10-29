@@ -713,8 +713,10 @@ func checkOutputIntents(doc core.View, level Level) []Violation {
 			continue
 		}
 
-		// /DestOutputProfileRef is not allowed in PDF/A
-		if dict.Get("DestOutputProfileRef") != nil {
+		// /DestOutputProfileRef is not allowed in PDF/A-2 and later (ISO
+		// 19005-2 6.2.3; veraPDF 6.2.3-3). PDF/A-1 predates the key, which
+		// ISO 15930-7:2010 defined, and its profile has no rule for it.
+		if level.Part() != 1 && dict.Get("DestOutputProfileRef") != nil {
 			errs = append(errs, Violation{
 				Rule:    colourClause("outputIntent", level),
 				Level:   level,
@@ -1091,6 +1093,19 @@ func checkNoLZW(doc core.View, level Level) []Violation {
 				Object:  num,
 			})
 		}
+		// The Crypt filter is permitted only as the Identity crypt filter
+		// (ISO 19005-2 6.1.7.2, -4 6.1.6.2). PDF/A-1 says nothing of it,
+		// and veraPDF's PDF/A-1 profile passes any.
+		if level.Part() != 1 {
+			if name := cryptFilterName(doc, stream); name != "" && name != "Identity" {
+				errs = append(errs, Violation{
+					Rule:    filterClause(level),
+					Level:   level,
+					Message: fmt.Sprintf("stream uses the Crypt filter %s; only the Identity crypt filter is permitted", name),
+					Object:  num,
+				})
+			}
+		}
 		// Check for non-standard filter names
 		if badFilter := getNonStandardFilter(doc, stream); badFilter != "" {
 			errs = append(errs, Violation{
@@ -1219,6 +1234,39 @@ func getNonStandardFilter(doc core.View, stream *object.Stream) string {
 	for _, name := range doc.StreamFilters(stream) {
 		if !isStandardFilter(name) {
 			return string(name)
+		}
+	}
+	return ""
+}
+
+// cryptFilterName is the /Name of the first Crypt filter in a stream's chain,
+// from its decode parameters — Identity when they give none (ISO 32000-1
+// Table 14) — or "" when the chain has no Crypt filter.
+func cryptFilterName(doc core.View, stream *object.Stream) object.Name {
+	filters := doc.Resolve(stream.Dict.Get("Filter"))
+	parms := doc.Resolve(stream.Dict.Get("DecodeParms"))
+	at := func(i int) *object.Dictionary {
+		if arr, ok := parms.(object.Array); ok {
+			if i < len(arr) {
+				return doc.ResolveDict(arr[i])
+			}
+			return nil
+		}
+		return doc.ResolveDict(parms)
+	}
+	var names object.Array
+	switch f := filters.(type) {
+	case object.Name:
+		names = object.Array{f}
+	case object.Array:
+		names = f
+	}
+	for i, n := range names {
+		if name, _ := doc.ResolveName(n); name == "Crypt" {
+			if cf, ok := doc.ResolveName(at(i).Get("Name")); ok {
+				return cf
+			}
+			return "Identity"
 		}
 	}
 	return ""
@@ -2291,9 +2339,15 @@ func checkIdentification(doc core.View, level Level) []Violation {
 		return errs
 	}
 	// The identification schema's prefix is normative, not a convention
-	// (ISO 19005-1 Table 3; -2/-3 6.6.4; -4 6.7.3).
+	// (ISO 19005-1 Table 3; -2/-3 6.6.4; -4 6.7.3), for the properties the
+	// part's schema defines (prefixedIDProperties). One the schema does not
+	// define is not this rule's: at PDF/A-1 a corr fails 6.7.9 only.
+	seen := map[string]bool{}
 	for _, p := range id.otherPrefixes {
-		report("", fmt.Sprintf("the PDF/A identification schema must use the namespace prefix pdfaid, found %q", p))
+		if slices.Contains(prefixedIDProperties(level), p.Name) && !seen[p.Prefix] {
+			seen[p.Prefix] = true
+			report("", fmt.Sprintf("the PDF/A identification schema must use the namespace prefix pdfaid, found %q", p.Prefix))
+		}
 	}
 
 	switch want := strconv.Itoa(level.Part()); {
@@ -3662,6 +3716,16 @@ func checkOptionalContent(doc core.View, level Level) []Violation {
 		if cfgDict == nil {
 			continue
 		}
+		// "The AS key shall not appear in any optional content configuration
+		// dictionary" (ISO 19005-2/-3 6.9; veraPDF 6.9-4). ISO 19005-4
+		// dropped the requirement, and its profile has no such rule.
+		if level.Part() != 4 && cfgDict.Get("AS") != nil {
+			errs = append(errs, Violation{
+				Rule:    ocRule,
+				Level:   level,
+				Message: "an optional-content configuration dictionary must not contain /AS",
+			})
+		}
 		if nameObj := cfgDict.Get("Name"); nameObj != nil {
 			if s, r := doc.StringValue(nameObj); r == core.ReasonOK {
 				// A text string: the same name in UTF-16 and in PDFDocEncoding
@@ -3737,6 +3801,10 @@ type implLimits struct {
 	arrayLen  int
 	nesting   int
 	realLimit float64
+	// realMin is the least magnitude a non-zero real may have, 0 for none:
+	// PDF 1.7 Annex C's ±1.175e-38 at PDF/A-2 and -3 (veraPDF 6.1.13-5).
+	// ISO 19005-1's profile has no such rule.
+	realMin float64
 }
 
 func checkImplementationLimits(doc core.View, level Level) []Violation {
@@ -3759,6 +3827,7 @@ func checkImplementationLimits(doc core.View, level Level) []Violation {
 		lim.rule = "6.1.13" // ISO 19005-2/-3
 		lim.stringLen = 32767
 		lim.realLimit = 3.403e38 // PDF 1.7 Annex C (float32 range)
+		lim.realMin = 1.175e-38
 	}
 
 	var errs []Violation
@@ -3827,6 +3896,14 @@ func checkObjectLimits(obj object.Object, objNum int, level Level, lim implLimit
 				Rule:    lim.rule,
 				Level:   level,
 				Message: fmt.Sprintf("real %g exceeds magnitude limit %g", float64(v), lim.realLimit),
+				Object:  objNum,
+			})
+		}
+		if a := math.Abs(float64(v)); a != 0 && a < lim.realMin {
+			*errs = append(*errs, Violation{
+				Rule:    lim.rule,
+				Level:   level,
+				Message: fmt.Sprintf("real %g is closer to zero than the limit %g", float64(v), lim.realMin),
 				Object:  objNum,
 			})
 		}

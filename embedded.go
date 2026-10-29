@@ -79,9 +79,9 @@ func (b *embeddedBudget) take(n int) bool {
 // configures nothing, and the whole corpus — that condition is false and both
 // exits behave exactly as they always have.
 func embeddedPDFAChecker(budget *embeddedBudget) embeddedPDFACheck {
-	return func(cancel core.Canceler, data []byte, lim core.Limits, depth int) (compliant, complete bool) {
+	return func(cancel core.Canceler, data []byte, lim core.Limits, depth int) (part int, compliant, complete bool) {
 		if !budget.take(len(data)) {
-			return false, false
+			return 0, false, false
 		}
 		// True when a failure below could be the checker's doing rather than
 		// the file's, and so must not be reported as non-conformance.
@@ -89,22 +89,22 @@ func embeddedPDFAChecker(budget *embeddedBudget) embeddedPDFACheck {
 
 		edoc, err := readDocument(cancel, bytes.NewReader(data), int64(len(data)), "", lim)
 		if err != nil {
-			return false, !checkerMayHaveRefused
+			return 0, false, !checkerMayHaveRefused
 		}
 		if id := edoc.existingPDFAIdentification(); id.status == core.XMPLimit {
 			// The embedded document's metadata is over the XMP packet limit,
 			// so what level it declares is unknown to pdf0 — not "none".
 			// Withheld, like every other verdict the checker could not reach.
-			return false, false
+			return 0, false, false
 		}
 		elevel, ok := edoc.Conformance()
 		if !ok {
 			// An embedded PDF that is not PDF/A at all — or whose own metadata
 			// stream the caller's lowered per-stream cap declined to decode.
-			return false, !checkerMayHaveRefused
+			return 0, false, !checkerMayHaveRefused
 		}
 		edoc.embeddedDepth = depth
-		compliant, complete = true, true
+		part, compliant, complete = elevel.Part(), true, true
 		for _, e := range validatePDFABudget(cancel, edoc, elevel, budget) {
 			if finding.IsCheckerFinding(e) {
 				complete = false
@@ -112,6 +112,6 @@ func embeddedPDFAChecker(budget *embeddedBudget) embeddedPDFACheck {
 			}
 			compliant = false
 		}
-		return compliant, complete
+		return part, compliant, complete
 	}
 }

@@ -27,9 +27,10 @@ import (
 // The Document methods and validator functions of this package are the API.
 
 // embeddedPDFACheck is the per-run hook the PDF/A embedded-file rule calls
-// (ISO 19005-2/3 6.9, 19005-4 6.9): whether embedded PDF bytes are a
-// conforming PDF/A file, and whether that verdict is complete.
-type embeddedPDFACheck = func(cancel core.Canceler, data []byte, lim core.Limits, depth int) (compliant, complete bool)
+// (ISO 19005-2 6.8, 19005-4 6.9): the PDF/A part embedded bytes declare,
+// whether they are a conforming PDF/A file, and whether that verdict is
+// complete.
+type embeddedPDFACheck = func(cancel core.Canceler, data []byte, lim core.Limits, depth int) (part int, compliant, complete bool)
 
 var (
 	dpartValidateHierarchy = bridge.Resolve[func(core.View, func(rule, msg string, obj int))](bridge.DPartValidateHierarchy)

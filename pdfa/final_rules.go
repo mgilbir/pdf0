@@ -1,6 +1,7 @@
 package pdfa
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/mgilbir/pdf0/internal/core"
@@ -21,12 +22,13 @@ import (
 // reached through an applied ExtGState, only XObjects actually drawn — because
 // the corpus passes conforming files that carry unused non-conforming ones.
 
-// checkProhibitedCatalogEntries flags document-level features prohibited by
-// PDF/A-4: alternate presentations, page presentation steps, and the
-// Requirements dictionary (ISO 19005-4 6.11, 6.12).
+// checkProhibitedCatalogEntries flags document-level features PDF/A-2 and
+// later prohibit: alternate presentations, page presentation steps, and the
+// Requirements dictionary (ISO 19005-2/-3 6.10, 6.11; -4 6.11, 6.12).
 
-// embeddedCheckFunc reports whether embedded PDF bytes are a conforming PDF/A
-// file, and whether the check ran to completion. Reading a whole document out
+// embeddedCheckFunc reports the PDF/A part embedded bytes declare (0 for none
+// it could read), whether they are a conforming PDF/A file, and whether the
+// check ran to completion. Reading a whole document out
 // of a byte slice needs the parser, which these checks deliberately do not
 // depend on, so the caller hands one in per run.
 //
@@ -34,7 +36,7 @@ import (
 // top-level document, 2 for one embedded in that, and so on. The checker
 // validates the nested document at that depth, so its own embedded files are
 // checked in turn, down to MaxEmbeddedDepth.
-type embeddedCheckFunc func(cancel core.Canceler, data []byte, lim core.Limits, depth int) (compliant, complete bool)
+type embeddedCheckFunc func(cancel core.Canceler, data []byte, lim core.Limits, depth int) (part int, compliant, complete bool)
 
 // MaxEmbeddedDepth is how deep the embedded-PDF/A rule follows embedded files
 // into embedded files. A document nested deeper is not validated: the rule
@@ -61,7 +63,7 @@ func embeddedChecker(v core.View) embeddedCheckFunc {
 	if h := core.Slot[embeddedHolder](v.Run, embeddedSlot{}); h.check != nil {
 		return h.check
 	}
-	return func(core.Canceler, []byte, core.Limits, int) (bool, bool) { return false, false }
+	return func(core.Canceler, []byte, core.Limits, int) (int, bool, bool) { return 0, false, false }
 }
 
 func checkProhibitedCatalogEntries(doc core.View, level Level) []Violation {
@@ -73,22 +75,26 @@ func checkProhibitedCatalogEntries(doc core.View, level Level) []Violation {
 		return nil
 	}
 	var errs []Violation
-	// 6.12 (embedded-file requirements) applies only to PDF/A-4.
-	if level.Part() == 4 && catalog.Get("Requirements") != nil {
-		errs = append(errs, Violation{Rule: "6.12", Level: level,
+	// The clauses are numbered one apart by part: ISO 19005-2/-3 6.10
+	// (alternate presentations, presentation steps) and 6.11 (requirements),
+	// ISO 19005-4 6.11 and 6.12 (veraPDF 6.10-1/-2 and 6.11-1 at PDF/A-2).
+	presRule, reqRule := "6.10", "6.11"
+	if level.Part() == 4 {
+		presRule, reqRule = "6.11", "6.12"
+	}
+	if catalog.Get("Requirements") != nil {
+		errs = append(errs, Violation{Rule: reqRule, Level: level,
 			Message: "document catalog must not contain a /Requirements entry"})
 	}
-	// 6.11 forbids alternate presentations at PDF/A-2, -3, and -4 (ISO 19005-2/-3
-	// 6.11, 19005-4 6.11), not only A-4.
 	if names := doc.ResolveDict(catalog.Get("Names")); names != nil {
 		if names.Get("AlternatePresentations") != nil {
-			errs = append(errs, Violation{Rule: "6.11", Level: level,
+			errs = append(errs, Violation{Rule: presRule, Level: level,
 				Message: "document name dictionary must not contain /AlternatePresentations"})
 		}
 	}
 	for _, page := range doc.Pages(catalog.Get("Pages")) {
 		if page.Dict.Get("PresSteps") != nil {
-			errs = append(errs, Violation{Rule: "6.11", Level: level,
+			errs = append(errs, Violation{Rule: presRule, Level: level,
 				Message: "page dictionary must not contain /PresSteps (presentation steps)",
 				Object:  page.ObjNum})
 		}
@@ -480,23 +486,28 @@ func collectAppliedHalftones(doc core.View) []*object.Dictionary {
 	return out
 }
 
-// checkEmbeddedPDFA enforces ISO 19005-4 6.9: an embedded file whose MIME
-// subtype is application/pdf shall itself be a valid PDF/A document, at
-// whatever level it declares. Each such file is decoded and validated in turn,
-// which applies this rule to its own embedded files, down to MaxEmbeddedDepth
-// levels of nesting; below that a PDF is noted as not validated. The file-type
-// requirement — every embedded file is a PDF — is checked at every depth.
+// checkEmbeddedPDFA enforces that an embedded file is itself a PDF/A
+// document: one compliant with PDF/A-1 or -2 at PDF/A-2 (ISO 19005-2 6.8;
+// veraPDF 6.8-5), and with whatever level it declares at plain
+// PDF/A-4 (ISO 19005-4 6.9). PDF/A-3, -4e and -4f permit any embedded file.
+//
+// The file is judged by what it holds, as veraPDF judges it, not by the MIME
+// type its stream claims: a PDF/A document labelled text/plain is one, and
+// bytes that are not a PDF at all are not, whatever their label. Each PDF is
+// decoded and validated in turn, which applies this rule to its own embedded
+// files, down to MaxEmbeddedDepth levels of nesting; below that a PDF is noted
+// as not validated. Whether the bytes are a PDF at all is checked at every
+// depth.
 func checkEmbeddedPDFA(doc core.View, level Level) []Violation {
-	if level.Part() != 4 {
-		return nil
-	}
-	// PDF/A-4f and PDF/A-4e permit arbitrary embedded files; plain PDF/A-4
-	// requires every embedded file to itself be a compliant PDF/A document
-	// (ISO 19005-4 6.9).
-	if level.variant() != "" {
+	rule := "6.9"
+	switch {
+	case level.Part() == 2:
+		rule = "6.8"
+	case level.Part() != 4, level.variant() != "":
 		return nil
 	}
 	var errs []Violation
+	seen := map[*object.Stream]bool{}
 	for _, r := range doc.ReachableDicts() {
 		// One iteration can run a whole nested validation, so this is a
 		// cancellation boundary in its own right (cancel.go).
@@ -513,18 +524,10 @@ func checkEmbeddedPDFA(doc core.View, level Level) []Violation {
 		}
 		for val := range efDict.Values() {
 			stream, ok := doc.Resolve(val).(*object.Stream)
-			if !ok {
+			if !ok || seen[stream] {
 				continue
 			}
-			if !isPDFMIME(doc, stream.Dict.Get("Subtype")) {
-				errs = append(errs, Violation{Rule: "6.9", Level: level,
-					Message: "an embedded file is not a PDF/A document (non-PDF type not permitted at PDF/A-4)", Object: num})
-				continue
-			}
-			if doc.EmbeddedDepth >= MaxEmbeddedDepth {
-				doc.Note(core.GuardEmbeddedPDFA, fmt.Sprintf("an embedded PDF file is nested more than %d levels deep, so its PDF/A conformance (6.9) was not checked", MaxEmbeddedDepth), num)
-				continue
-			}
+			seen[stream] = true
 			data, r := doc.Decode(stream)
 			if r.Declined() {
 				continue // not read: the producer recorded the trip
@@ -533,14 +536,20 @@ func checkEmbeddedPDFA(doc core.View, level Level) []Violation {
 				// The embedded file's data does not decode, so whatever it was
 				// meant to be, it is not a PDF/A document anyone can open. It
 				// used to be skipped, which reported nothing at all.
-				errs = append(errs, Violation{Rule: "6.9", Level: level,
-					Message: "an embedded PDF file's stream data does not decode, so it is not a valid PDF/A document", Object: num})
+				errs = append(errs, Violation{Rule: rule, Level: level,
+					Message: "an embedded file's stream data does not decode, so it is not a valid PDF/A document", Object: num})
 				continue
 			}
-			if len(data) == 0 {
+			if !looksLikePDF(data) {
+				errs = append(errs, Violation{Rule: rule, Level: level,
+					Message: fmt.Sprintf("an embedded file is not a PDF/A document (non-PDF type not permitted at %s)", level), Object: num})
 				continue
 			}
-			compliant, complete := embeddedChecker(doc)(doc.Cancel, data, doc.Limits, doc.EmbeddedDepth+1)
+			if doc.EmbeddedDepth >= MaxEmbeddedDepth {
+				doc.Note(core.GuardEmbeddedPDFA, fmt.Sprintf("an embedded PDF file is nested more than %d levels deep, so its PDF/A conformance (%s) was not checked", MaxEmbeddedDepth, rule), num)
+				continue
+			}
+			part, compliant, complete := embeddedChecker(doc)(doc.Cancel, data, doc.Limits, doc.EmbeddedDepth+1)
 			// The nested validation shares this run's work meter. If it
 			// spent the budget, or the context ended, its verdict is a
 			// partial one — its reading of the file may have been refused
@@ -554,23 +563,26 @@ func checkEmbeddedPDFA(doc core.View, level Level) []Violation {
 				// central mistake: asserting a violation on the strength of an
 				// incomplete result (limits_report.go). Decline, and report the
 				// incompleteness under "limit" so it is attributable.
-				doc.Note(core.GuardEmbeddedPDFA, "an embedded PDF file could not be validated to completion, so its PDF/A conformance (6.9) was neither confirmed nor denied", num)
+				doc.Note(core.GuardEmbeddedPDFA, fmt.Sprintf("an embedded PDF file could not be validated to completion, so its PDF/A conformance (%s) was neither confirmed nor denied", rule), num)
 				continue
 			}
-			if !compliant {
-				errs = append(errs, Violation{Rule: "6.9", Level: level,
+			switch {
+			case !compliant:
+				errs = append(errs, Violation{Rule: rule, Level: level,
 					Message: "an embedded PDF file is not compliant with PDF/A", Object: num})
+			case level.Part() == 2 && part != 1 && part != 2:
+				errs = append(errs, Violation{Rule: rule, Level: level,
+					Message: fmt.Sprintf("an embedded file is a PDF/A-%d document; PDF/A-2 permits only PDF/A-1 and PDF/A-2 ones", part), Object: num})
 			}
 		}
 	}
 	return errs
 }
 
-// isPDFMIME reports whether a stream /Subtype names the application/pdf MIME
-// type (stored as the name /application#2Fpdf).
-func isPDFMIME(doc core.View, subtype object.Object) bool {
-	n, _ := doc.ResolveName(subtype)
-	return string(n) == "application/pdf"
+// looksLikePDF reports whether data has a PDF header within its first 1024
+// bytes, where ISO 32000-1 7.5.2 lets a reader find one.
+func looksLikePDF(data []byte) bool {
+	return bytes.Contains(data[:min(len(data), 1024)], []byte("%PDF-"))
 }
 
 // checkInheritedPageXObject enforces that an XObject drawn (Do) by a page's

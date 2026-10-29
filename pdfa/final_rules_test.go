@@ -32,22 +32,22 @@ func TestProhibitedCatalogEntries(t *testing.T) {
 	if len(checkProhibitedCatalogEntries(mkPDFAView(PDFA4), PDFA4)) != 0 {
 		t.Error("clean document flagged")
 	}
-	// The /Requirements (6.12) prohibition is PDF/A-4 only; it must not fire at
-	// 2b. A t.Skip here would let a level-gating regression pass silently.
-	if got := len(checkProhibitedCatalogEntries(mk(func(c *object.Dictionary, d core.View) {
-		c.Set("Requirements", object.Array{})
-	}), PDFA2b)); got != 0 {
-		t.Errorf("6.12 /Requirements must not be flagged at PDF/A-2b, got %d errors", got)
-	}
-	// 6.11 (AlternatePresentations / PresSteps) DOES apply at 2b and 3b.
+	// At PDF/A-2 and -3 the same prohibitions are numbered one lower, as
+	// veraPDF's profiles number them: /Requirements 6.11 (6.11-1),
+	// AlternatePresentations and PresSteps 6.10 (6.10-1, -2).
 	for _, lvl := range []Level{PDFA2b, PDFA3b} {
+		if !hasRuleMsg(checkProhibitedCatalogEntries(mk(func(c *object.Dictionary, d core.View) {
+			c.Set("Requirements", object.Array{})
+		}), lvl), "6.11") {
+			t.Errorf("Requirements must be flagged under 6.11 at %s", lvl)
+		}
 		altDoc := mk(func(c *object.Dictionary, d core.View) {
 			names := &object.Dictionary{}
 			names.Set("AlternatePresentations", &object.Dictionary{})
 			c.Set("Names", names)
 		})
-		if !hasRuleMsg(checkProhibitedCatalogEntries(altDoc, lvl), "6.11") {
-			t.Errorf("AlternatePresentations must be flagged at %s", lvl)
+		if !hasRuleMsg(checkProhibitedCatalogEntries(altDoc, lvl), "6.10") {
+			t.Errorf("AlternatePresentations must be flagged under 6.10 at %s", lvl)
 		}
 	}
 	// 1b does not use these clauses.
@@ -266,18 +266,23 @@ func pdfdocBytes(s string) ([]byte, bool) {
 	return out, true
 }
 
-func TestIsPDFMIME(t *testing.T) {
-	objs := map[int]*object.IndirectObject{}
-	ref := indirect(objs, 9, object.Name("application/pdf"))
-	doc := mkView(objs, nil)
-	if !isPDFMIME(doc, object.Name("application/pdf")) {
-		t.Error("application/pdf not recognized")
-	}
-	if !isPDFMIME(doc, ref) {
-		t.Error("application/pdf written indirectly not recognized")
-	}
-	if isPDFMIME(doc, object.Name("text/plain")) || isPDFMIME(doc, object.Integer(1)) || isPDFMIME(doc, nil) {
-		t.Error("non-pdf MIME wrongly recognized")
+// TestLooksLikePDF: an embedded file is a PDF when its bytes carry a header
+// where a reader looks for one, the first 1024 bytes, whatever MIME type its
+// stream claims.
+func TestLooksLikePDF(t *testing.T) {
+	for _, c := range []struct {
+		data string
+		want bool
+	}{
+		{"%PDF-1.7\n", true},
+		{strings.Repeat(" ", 1000) + "%PDF-2.0", true},
+		{strings.Repeat(" ", 1024) + "%PDF-2.0", false},
+		{"hello\n", false},
+		{"", false},
+	} {
+		if got := looksLikePDF([]byte(c.data)); got != c.want {
+			t.Errorf("looksLikePDF(%.20q...) = %v, want %v", c.data, got, c.want)
+		}
 	}
 }
 

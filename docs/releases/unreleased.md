@@ -22,6 +22,29 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 
 ### Validation
 
+- **PDF/A-2 rules the corpus does not test, checked against veraPDF on
+  single-defect files**: thirty-three more fixtures at PDF/A-1b, -2b and -4,
+  and what pdf0 changed to agree on every one:
+  - An embedded file is judged by its content, not the MIME type its stream
+    claims. At PDF/A-2 it must be a PDF/A-1 or PDF/A-2 document (6.8): a
+    non-PDF file, or a PDF/A-3 or -4 one, is reported, which was not checked
+    at all before. At PDF/A-4, a PDF/A document labelled with another MIME
+    type is no longer reported (6.9).
+  - A Crypt filter whose decode parameters name anything but Identity is
+    reported at PDF/A-2 and -4 (6.1.7.2 / 6.1.6.2).
+  - A non-zero real closer to zero than ±1.175×10⁻³⁸ is reported at PDF/A-2
+    and -3 (6.1.13).
+  - XMP that is not UTF-8 is reported at PDF/A-2 and -3 too (6.6.2.1), not
+    only at -4.
+  - An optional-content configuration with `/AS` is reported at PDF/A-2 and
+    -3 (6.9).
+  - A catalog `/Requirements` is reported at PDF/A-2 and -3 (6.11), and
+    AlternatePresentations and PresSteps there are 6.10 (were 6.11).
+  - At PDF/A-1, a `/DestOutputProfileRef` in an output intent is no longer
+    reported (PDF/A-1 predates the key). The identification schema's prefix
+    is required only of the properties the part defines, so a `corr` with
+    another prefix at PDF/A-1 fails only 6.7.9.
+
 - **PDF/A rules the corpus does not test, checked against veraPDF on
   single-defect files** (#391): eighteen more fixtures at PDF/A-1b, -2b and -4, and
   what pdf0 changed to agree with veraPDF on every one:

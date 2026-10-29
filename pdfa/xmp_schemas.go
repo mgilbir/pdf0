@@ -1201,8 +1201,9 @@ func sortedFieldNames(fields map[string]bool) string {
 
 // checkXMPWellFormed validates the XMP packet wrapper (ISO 19005-2 6.6.2.1,
 // -4 6.7.2.1): the xpacket processing instruction must not carry a bytes or
-// encoding attribute, the packet must be well-formed XML, and (PDF/A-4) it
-// must be encoded as UTF-8.
+// encoding attribute, the packet must be well-formed XML, and from PDF/A-2 on
+// it must be encoded as UTF-8 (veraPDF 6.6.2.1-5, 6.7.2.1-5; the PDF/A-1
+// profile has no such rule).
 func checkXMPWellFormed(doc core.View, level Level) []Violation {
 	// The rule numbers differ by part, but the requirements — no bytes/encoding
 	// attribute on the xpacket header, and a well-formed XMP packet — apply from
@@ -1250,7 +1251,7 @@ func checkXMPWellFormed(doc core.View, level Level) []Violation {
 		}
 	}
 
-	if level.Part() == 4 && !xmpIsUTF8(raw) {
+	if level.Part() != 1 && !xmpIsUTF8(raw) {
 		errs = append(errs, Violation{Rule: attrRule, Level: level, Message: "the XMP packet is not encoded as UTF-8"})
 	}
 
