@@ -23,7 +23,7 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 ### Validation
 
 - **PDF/A-2 rules the corpus does not test, checked against veraPDF on
-  single-defect files**: thirty-three more fixtures at PDF/A-1b, -2b and -4,
+  single-defect files** (#392): thirty-three more fixtures at PDF/A-1b, -2b and -4,
   and what pdf0 changed to agree on every one:
   - An embedded file is judged by its content, not the MIME type its stream
     claims. At PDF/A-2 it must be a PDF/A-1 or PDF/A-2 document (6.8): a
