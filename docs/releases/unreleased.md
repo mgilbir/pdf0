@@ -62,6 +62,14 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 
 ### For contributors
 
+- **PDF/UA rule coverage is judged by veraPDF's verdicts too** (#PR):
+  `TestPDFUARuleCoverageByVeraPDF` holds `ValidatePDFUA` and `ValidatePDFUA2`
+  to the rules veraPDF fails each PDF/UA corpus file on, with no false
+  positive at either part (`make verapdf-verdicts` now makes the two PDF/UA
+  reports too). It starts at 91 of 97 tested rules at PDF/UA-1 and 19 of 48
+  at PDF/UA-2, where most findings are reported under PDF/UA-1's clause
+  numbers.
+
 - **Rule coverage is also judged by veraPDF's own verdicts** (#385).
   `make verapdf-verdicts` runs veraPDF over the corpus's PDF/A levels and keeps
   its reports (generated, never committed), and `TestRuleCoverageByVeraPDF`

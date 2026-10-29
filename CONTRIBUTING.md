@@ -65,7 +65,7 @@ has the data.
 | Data set | Location | How it arrives | In CI |
 |---|---|---|---|
 | veraPDF corpus | `testdata/verapdf-corpus` | `make corpus` | fetched; fails below 2800 `*.pdf` files |
-| veraPDF's verdicts on the corpus | `testdata/verapdf-verdicts` | `make verapdf-verdicts` | fetched; fails below 9 `*.txt` files |
+| veraPDF's verdicts on the corpus | `testdata/verapdf-verdicts` | `make verapdf-verdicts` | fetched; fails below 11 `*.txt` files |
 | PDF 2.0 reference PDFs | `testdata/pdf20examples` | `make refpdfs` | fetched; fails below 7 `*.pdf` files |
 | Arlington PDF model | `testdata/arlington-pdf-model/tsv/2.0` | `make arlington` | fetched; fails below 600 `*.tsv` files |
 | veraPDF validation profiles | `spec/verapdf-profiles` | `make profiles` | fetched; fails below 700 `*.xml` files |

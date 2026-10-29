@@ -9,6 +9,7 @@ import (
 	"github.com/mgilbir/pdf0/internal/rulecov"
 	"github.com/mgilbir/pdf0/internal/testfiles"
 	"github.com/mgilbir/pdf0/pdfa"
+	"github.com/mgilbir/pdf0/pdfua"
 )
 
 // ruleCoverageBaselines ratchet the per-rule coverage internal/rulecov
@@ -188,6 +189,85 @@ func TestRuleCoverageByVeraPDF(t *testing.T) {
 		if notDetected > lv.maxNotDetected {
 			t.Errorf("%s: %d tested rules not detected under their own clause, above the baseline %d (a regression; see the list above)",
 				lv.name, notDetected, lv.maxNotDetected)
+		}
+	}
+}
+
+// pdfuaVerdictBaselines ratchet TestPDFUARuleCoverageByVeraPDF as
+// ruleVerdictBaselines ratchet the PDF/A one.
+var pdfuaVerdictBaselines = []struct {
+	name, profile, corpus string
+	validate              func(*Document) []pdfua.Violation
+	minDetected           int
+	maxNotDetected        int
+}{
+	{"PDF/UA-1", "PDFUA-1.xml", "PDF_UA-1", ValidatePDFUA, 91, 6},
+	{"PDF/UA-2", "PDFUA-2.xml", "PDF_UA-2", ValidatePDFUA2, 19, 29},
+}
+
+// TestPDFUARuleCoverageByVeraPDF is TestRuleCoverageByVeraPDF for PDF/UA:
+// every rule veraPDF fails a PDF/UA corpus file on is a test of that rule,
+// detected when ValidatePDFUA (or ValidatePDFUA2) reports its clause for the
+// file; a file veraPDF passes and pdf0 flags is a false positive, and there
+// must be none. Rules veraPDF numbers by an ISO 32005 table rather than a
+// clause are not measured.
+func TestPDFUARuleCoverageByVeraPDF(t *testing.T) {
+	verdictsDir := testfiles.VeraPDFVerdicts.Path(t)
+	profilesDir := filepath.Dir(testfiles.VeraPDFProfiles.File(t, "PDF_UA"))
+	corpusDir := corpusRoot(t)
+
+	for _, lv := range pdfuaVerdictBaselines {
+		rules, err := rulecov.LoadProfile(filepath.Join(profilesDir, "PDF_UA", lv.profile))
+		if err != nil {
+			t.Fatalf("%s: %v", lv.name, err)
+		}
+		levelDir := filepath.Join(corpusDir, lv.corpus)
+		report, err := os.Open(filepath.Join(verdictsDir, lv.corpus+".txt"))
+		if err != nil {
+			t.Fatalf("%s: %v (regenerate with `make verapdf-verdicts`)", lv.name, err)
+		}
+		abs, _ := filepath.Abs(levelDir)
+		verdicts, err := rulecov.ParseVerdicts(report, "/data/", abs+"/")
+		report.Close()
+		if err != nil {
+			t.Fatalf("%s: %v", lv.name, err)
+		}
+		validate := lv.validate
+		rep, err := rulecov.MeasureVerdicts(rules, levelDir, verdicts, func(data []byte) ([]string, error) {
+			doc, err := Read(bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				return nil, err
+			}
+			var clauses []string
+			for _, v := range validate(doc) {
+				if !IsCheckerFinding(v) {
+					clauses = append(clauses, v.Clause)
+				}
+			}
+			return clauses, nil
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", lv.name, err)
+		}
+		detected := rep.Count(rulecov.Detected)
+		untested := rep.Count(rulecov.Untested)
+		notDetected := len(rep.Rules) - detected - untested
+		t.Logf("%-9s %d files (%d failed on rules their names do not say); %d rules, %d tested: %d detected under their clause, %d not (elsewhere %d, missed %d, unreadable %d); %d untested; %d false positives",
+			lv.name, rep.Files, rep.Renamed, len(rep.Rules), len(rep.Rules)-untested, detected, notDetected,
+			rep.Count(rulecov.Elsewhere), rep.Count(rulecov.Missed), rep.Count(rulecov.Unreadable), untested, len(rep.FalsePositives))
+		for _, r := range rep.Rules {
+			if s := r.Status(); s != rulecov.Detected && s != rulecov.Untested {
+				t.Logf("   %-10s %s %v", s, r.ID(), r.Examples)
+			}
+		}
+		for _, fp := range rep.FalsePositives {
+			t.Errorf("%s: veraPDF passes it and pdf0 does not: %s", lv.name, fp)
+		}
+		if detected < lv.minDetected {
+			t.Errorf("%s: %d rules detected under their own clause, below the baseline %d", lv.name, detected, lv.minDetected)
+		}
+		if notDetected > lv.maxNotDetected {
+			t.Errorf("%s: %d tested rules not detected under their own clause, above the baseline %d", lv.name, notDetected, lv.maxNotDetected)
 		}
 	}
 }
