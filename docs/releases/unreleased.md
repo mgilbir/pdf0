@@ -351,7 +351,7 @@ v0.6.0.
 
 ## Added
 
-- **htmlpdf writes PDF/A-1b** (#PR), through `Options.PDFA` and
+- **htmlpdf writes PDF/A-1b** (#378), through `Options.PDFA` and
   `RenderInto`. PDF/A-1's PDF 1.4 has no transparency, so a page that uses
   any (an opacity, an image with alpha, a translucent gradient) is refused
   under `htmlpdf.RuleTransparencyAtPDFA1` (`backend-pdfa1-transparency`), and
