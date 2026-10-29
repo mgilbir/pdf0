@@ -201,8 +201,10 @@ var pdfuaVerdictBaselines = []struct {
 	minDetected           int
 	maxNotDetected        int
 }{
-	{"PDF/UA-1", "PDFUA-1.xml", "PDF_UA-1", ValidatePDFUA, 91, 6},
-	{"PDF/UA-2", "PDFUA-2.xml", "PDF_UA-2", ValidatePDFUA2, 19, 29},
+	// Every rule veraPDF fails a PDF/UA corpus file on is reported under its
+	// own clause, at both parts.
+	{"PDF/UA-1", "PDFUA-1.xml", "PDF_UA-1", ValidatePDFUA, 97, 0},
+	{"PDF/UA-2", "PDFUA-2.xml", "PDF_UA-2", ValidatePDFUA2, 48, 0},
 }
 
 // TestPDFUARuleCoverageByVeraPDF is TestRuleCoverageByVeraPDF for PDF/UA:

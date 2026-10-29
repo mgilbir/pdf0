@@ -1,6 +1,7 @@
 package pdfua
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -237,6 +238,47 @@ func checkUA2FormOneWidget(d core.View, cat *object.Dictionary) []Violation {
 	for i, n := range nodes {
 		if c := widgets[i]; c > 1 {
 			v = append(v, Violation{Clause: "8.10.1", Message: "a Form structure element encloses " + strconv.Itoa(c) + " widget annotations; it may enclose at most one", Object: anchorOf(d, n.Elem)})
+		}
+	}
+	return v
+}
+
+// pdfua2TextStringKeys are the entries ISO 32000-2 types as text strings
+// meant for a reader: structure elements' title, alternate and actual text,
+// expansion and language; annotations' and form fields' descriptions and
+// names; the document information entries; file specifications' description
+// and name; outline titles.
+var pdfua2TextStringKeys = map[object.Name]bool{
+	"T": true, "TU": true, "TM": true, "Alt": true, "ActualText": true, "E": true, "Lang": true,
+	"Contents": true, "Title": true, "Author": true, "Subject": true, "Keywords": true,
+	"Creator": true, "Producer": true, "Desc": true, "UF": true,
+}
+
+// checkUA2TextStringPUA: a text string meant for a reader shall not use the
+// Unicode Private Use Area (ISO 14289-2 8.6; veraPDF 8.6-t01: a structure
+// element's /T and /Lang holding U+F00C). A code point there means nothing
+// to anyone but the font that drew it. Only a Unicode text string can hold
+// one: PDFDocEncoding has none.
+func checkUA2TextStringPUA(d core.View, cat *object.Dictionary) []Violation {
+	var v []Violation
+	for _, r := range d.ReachableDicts() {
+		for k, val := range r.Dict.All() {
+			if !pdfua2TextStringKeys[k] {
+				continue
+			}
+			// Ciphertext says nothing about the text, and StringValue says
+			// when a string is that.
+			s, why := d.StringValue(val)
+			if why != core.ReasonOK || len(s.Value) < 2 || !(s.Value[0] == 0xFE && s.Value[1] == 0xFF || len(s.Value) >= 3 && s.Value[0] == 0xEF && s.Value[1] == 0xBB && s.Value[2] == 0xBF) {
+				continue
+			}
+			for _, c := range core.DecodePDFTextString(s.Value) {
+				if c >= 0xE000 && c <= 0xF8FF || c >= 0xF0000 && c <= 0xFFFFD || c >= 0x100000 && c <= 0x10FFFD {
+					v = append(v, Violation{Clause: "8.6", Object: r.ObjNum,
+						Message: fmt.Sprintf("the text string %s uses the Unicode Private Use Area (U+%04X)", k, c)})
+					break
+				}
+			}
 		}
 	}
 	return v

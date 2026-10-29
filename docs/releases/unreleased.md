@@ -22,6 +22,26 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 
 ### Validation
 
+- **PDF/UA findings follow veraPDF's numbering and verdicts** (#PR), at both
+  parts: every rule veraPDF fails a PDF/UA corpus file on is now reported
+  under the same clause (PDF/UA-1 97/97, PDF/UA-2 48/48), with no file
+  veraPDF passes flagged. What a caller sees change:
+  - `ValidatePDFUA2` reports the rules it shares with PDF/UA-1 under ISO
+    14289-2's clauses: the fonts' 7.21.x are 8.4.5.x, tagging is 6.2, the
+    structure tree 8.2.1, untagged content 8.2.2, the role map 8.2.4, tables
+    8.2.5.26, a figure's alternate text 8.2.5.28.2, the language 8.4.4,
+    Unicode mapping 8.4.5.8, optional content 8.7, the tab order 8.9.3.3,
+    `dc:title` 8.11.1 and `DisplayDocTitle` 8.11.2.
+  - `ValidatePDFUA2` reports a human-readable text string using the Unicode
+    Private Use Area (8.6).
+  - `ValidatePDFUA`: a catalog with no `/Metadata` is 7.1 (was 5); a widget
+    not under a `Form` is 7.18.4 and a link not under a `Link` 7.18.5 (both
+    were 7.18.1); a link with neither `/Contents` nor `/Alt` also fails
+    7.18.1; text with no Unicode mapping is 7.21.7 (was 7.2).
+  - Both: a CIDFont whose CMap is neither predefined nor embedded, or is
+    embedded with no CIDSystemInfo, fails the CIDSystemInfo rule (7.21.3.1,
+    8.4.5.3.1).
+
 - **A Level A file without a structure tree is reported under the
   structure-hierarchy clause** (#388), 6.8.3.3 at PDF/A-1a and 6.7.3.3 at
   -2a and -3a, as veraPDF's profiles number it; it was reported with the
