@@ -23,7 +23,7 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 ### Validation
 
 - **PDF/A rules the corpus does not test, checked against veraPDF on
-  single-defect files**: eighteen more fixtures at PDF/A-1b, -2b and -4, and
+  single-defect files** (#391): eighteen more fixtures at PDF/A-1b, -2b and -4, and
   what pdf0 changed to agree with veraPDF on every one:
   - A font dictionary needs `/Type /Font`, a `/BaseFont` unless it is Type 3,
     and, for a simple font that is not an unembedded standard 14 font,
