@@ -307,3 +307,148 @@ func TestPageRefsNameThePages(t *testing.T) {
 		}
 	}
 }
+
+// taggedFormPage is a page that draws a form XObject whose content stream holds
+// marked-content spans 0 and 1 of its own, beside the page's own span 0.
+func taggedFormPage(t *testing.T, d *Document, face *fonts.Face) (page, form object.IndirectRef) {
+	t.Helper()
+	var f content.Builder
+	for i, s := range []string{"inside", "the form"} {
+		f.BeginTagged("Span", i).BeginText().SetFont("F1", 11).SetRGB(0, 0, 0).MoveText(72, float64(700-20*i))
+		face.DrawShaped(&f, s, 11)
+		f.EndText().EndMarked()
+	}
+	form, err := d.AddForm(Form{BBox: [4]float64{0, 0, 595, 842}, Content: &f, Group: true,
+		Faces: map[object.Name]*fonts.Face{"F1": face}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b content.Builder
+	b.BeginTagged("P", 0).BeginText().SetFont("F1", 11).SetRGB(0, 0, 0).MoveText(72, 760)
+	face.DrawShaped(&b, "On the page", 11)
+	b.EndText().EndMarked()
+	b.Draw("Fm1")
+	page, err = d.AddPage(Page{Width: 595, Height: 842, Content: &b,
+		Faces:    map[object.Name]*fonts.Face{"F1": face},
+		XObjects: map[object.Name]object.Object{"Fm1": form}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return page, form
+}
+
+// TestAFormsMarksAreKidsByReference: a span inside a form is its element's kid
+// as a marked-content reference naming the form's stream, and the form's
+// /StructParents leads to its own parent-tree entry, an array by identifier,
+// keyed after the page's.
+func TestAFormsMarksAreKidsByReference(t *testing.T) {
+	face, err := fonts.NotoSans()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := NewDocument()
+	page, form := taggedFormPage(t, d, face)
+	if err := d.SetStructureTree([]StructElem{{Tag: "Document", Page: &page, Kids: []StructKid{
+		ElemKid(StructElem{Tag: "P", Kids: []StructKid{MCIDKid(0)}}),
+		ElemKid(StructElem{Tag: "P", Kids: []StructKid{FormMCIDKid(form, 0), FormMCIDKid(form, 1)}}),
+	}}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	root := d.ResolveDict(d.ResolveDict(d.Trailer.Get("Root")).Get("StructTreeRoot"))
+	ps := kidsOf(d, d.ResolveDict(root.Get("K")))
+	second := d.ResolveDict(ps[1])
+	k := kidsOf(d, second)
+	if len(k) != 2 {
+		t.Fatalf("the second P's /K = %v, want two references", k)
+	}
+	for i, kid := range k {
+		mcr := d.ResolveDict(kid)
+		if mcr == nil || mcr.Get("Type") != object.Name("MCR") || mcr.Get("Stm") != form || mcr.Get("Pg") != page || mcr.Get("MCID") != object.Integer(i) {
+			t.Errorf("kid %d = %v, want << /Type /MCR /Pg page /Stm form /MCID %d >>", i, mcr, i)
+		}
+	}
+	st := d.Resolve(form).(*object.Stream)
+	if st.Dict.Get("StructParents") != object.Integer(1) {
+		t.Fatalf("the form's /StructParents = %v, want 1 (the page has 0)", st.Dict.Get("StructParents"))
+	}
+	nums, _ := d.Resolve(d.ResolveDict(root.Get("ParentTree")).Get("Nums")).(object.Array)
+	if len(nums) != 4 || nums[2] != object.Integer(1) {
+		t.Fatalf("parent tree /Nums = %v, want the page's entry then the form's", nums)
+	}
+	entry, _ := d.Resolve(nums[3]).(object.Array)
+	if len(entry) != 2 || entry[0] != ps[1] || entry[1] != ps[1] {
+		t.Errorf("the form's entry = %v, want both identifiers owned by the second P", entry)
+	}
+	if root.Get("ParentTreeNextKey") != object.Integer(2) {
+		t.Errorf("/ParentTreeNextKey = %v, want 2", root.Get("ParentTreeNextKey"))
+	}
+}
+
+// TestFormMCIDKidRefusals: a form identifier claimed twice, one in something
+// that is not a form, and one with no page are refused.
+func TestFormMCIDKidRefusals(t *testing.T) {
+	face, err := fonts.NotoSans()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tree := range map[string]func(page, form, other object.IndirectRef) []StructElem{
+		"twice": func(page, form, _ object.IndirectRef) []StructElem {
+			return []StructElem{{Tag: "P", Page: &page, Kids: []StructKid{FormMCIDKid(form, 0), FormMCIDKid(form, 0)}}}
+		},
+		"not a form": func(page, _, other object.IndirectRef) []StructElem {
+			return []StructElem{{Tag: "P", Page: &page, Kids: []StructKid{FormMCIDKid(other, 0)}}}
+		},
+		"no page": func(_, form, _ object.IndirectRef) []StructElem {
+			return []StructElem{{Tag: "P", Kids: []StructKid{FormMCIDKid(form, 0)}}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := NewDocument()
+			page, form := taggedFormPage(t, d, face)
+			other := d.Add(object.NewDictionary())
+			if err := d.SetStructureTree(tree(page, form, other), nil); err == nil {
+				t.Error("accepted")
+			}
+			if d.Resolve(form).(*object.Stream).Dict.Get("StructParents") != nil {
+				t.Error("a refused tree left a /StructParents on the form")
+			}
+		})
+	}
+}
+
+// TestTextTaggedInAFormIsAccessible: a document whose second paragraph is
+// drawn inside a form passes ValidatePDFUA, and veraPDF as PDF/UA-1 when
+// PDF0_VERAPDF names it.
+func TestTextTaggedInAFormIsAccessible(t *testing.T) {
+	face, err := fonts.NotoSans()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := NewDocument()
+	d.Version = "1.7"
+	page, form := taggedFormPage(t, d, face)
+	if err := d.SetStructureTree([]StructElem{{Tag: "Document", Page: &page, Kids: []StructKid{
+		ElemKid(StructElem{Tag: "P", Kids: []StructKid{MCIDKid(0)}}),
+		ElemKid(StructElem{Tag: "P", Kids: []StructKid{FormMCIDKid(form, 0), FormMCIDKid(form, 1)}}),
+	}}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	describeAndDeclare(t, d, 1)
+	if v := uaViolations(ValidatePDFUA(writtenAndRead(t, d))); len(v) != 0 {
+		t.Errorf("ValidatePDFUA: %v", v)
+	}
+	vera := os.Getenv("PDF0_VERAPDF")
+	if vera == "" {
+		return
+	}
+	path := filepath.Join(t.TempDir(), "form.pdf")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Write(f); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	veraPDFPasses(t, vera, []string{path}, "--flavour", "ua1")
+}

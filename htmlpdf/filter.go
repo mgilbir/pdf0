@@ -169,7 +169,11 @@ func (c *canvas) group(draw func(fc *canvas) error) (object.IndirectRef, error) 
 	// group's.
 	fc.curved = c.curved
 	fc.toLayout = c.toLayout
-	fc.untagged = true
+	// On a tagged page what the group draws is tagged in the form itself,
+	// each span its element's, and named by the form once it is written.
+	if c.w.tags != nil {
+		fc.stream = &formStream{}
+	}
 	if err := draw(fc); err != nil {
 		return object.IndirectRef{}, err
 	}
@@ -186,6 +190,9 @@ func (c *canvas) group(draw func(fc *canvas) error) (object.IndirectRef, error) 
 	})
 	if err != nil {
 		return object.IndirectRef{}, fmt.Errorf("writing a filter group: %w", err)
+	}
+	if fc.stream != nil {
+		fc.stream.ref = ref
 	}
 	return ref, nil
 }

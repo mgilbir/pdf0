@@ -20,6 +20,13 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 
 ## Behaviour changes
 
+### htmlpdf
+
+- **What a CSS `filter` draws is tagged as what it is** (#386). A tagged page
+  used to make everything a filter group held one span of the filtered
+  element; it is now tagged inside the form the filter is painted through,
+  each element as itself, as anywhere else on the page.
+
 ### Validation
 
 - **PDF/A-1 rules the corpus does not test, checked against veraPDF on
@@ -170,5 +177,11 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
   veraPDF itself where it is available.
 
 ## Added
+
+- **`pdf0.FormMCIDKid`** (#386): a span inside a form XObject as a structure
+  element's kid, written as a marked-content reference naming the form's
+  stream (`/MCR` with `/Stm`), with the form's `/StructParents` entry in the
+  parent tree. Content drawn through a transparency group can be tagged where
+  it is drawn.
 
 ## Fixed

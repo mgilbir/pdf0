@@ -397,8 +397,8 @@ A tagged render passes `pdf0.ValidatePDFUA2` once declared, and veraPDF as
 PDF/UA-2. With `Options.PDFA` at an a level (`pdfa.PDFA2a`, say) it passes
 PDF/A-2a, and declared with `DeclarePDFUA(1)`, PDF/UA-1 too.
 
-One limit: what a CSS `filter` draws is one span of the filtered element,
-whatever elements it holds.
+What a CSS `filter` draws is tagged where it is drawn, inside the form the
+filter is painted through, each element as itself.
 
 ## Into a document you have
 

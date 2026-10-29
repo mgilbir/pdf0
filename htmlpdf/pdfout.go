@@ -741,6 +741,11 @@ func finish(composed layout.Composed, in Input, opts Options, target *pdf0.Docum
 	}
 	out.imported = report
 	out.Document = target
+	if tags != nil {
+		// The page's forms were copied with it under new numbers; its spans
+		// in them are named by the copies.
+		tags.renameForms(doc, target)
+	}
 	return out, tagPage(target, tags)
 }
 

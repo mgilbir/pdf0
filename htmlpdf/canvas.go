@@ -144,9 +144,11 @@ type canvas struct {
 	alphas    *alphaStates
 	// curved counts the ClipPaths around what is being drawn.
 	curved int
-	// untagged is a stream of a tagged page in which nothing is marked: a
-	// form a filter group draws, which is one span of the page's own.
-	untagged bool
+	// stream is, on a tagged page, the form this canvas draws, nil for the
+	// page's own stream; nextMCID is the next marked-content identifier in
+	// it, which each stream numbers from zero (see tagged.go).
+	stream   *formStream
+	nextMCID int
 	// toLayout maps the coordinates being drawn in to the page's layout
 	// coordinates: the identity, except inside a TransformGroup, where it is
 	// the matrices of the groups around the drawing, the innermost acting
@@ -262,7 +264,7 @@ func (c *canvas) drawOps(ops []layout.Op) error {
 // drawOp draws one operation: tagged, in a tagged page's own stream, and
 // painted as it is everywhere else.
 func (c *canvas) drawOp(op layout.Op) error {
-	if c.w.tags != nil && !c.untagged {
+	if c.w.tags != nil {
 		return c.tagged(op)
 	}
 	return c.paint(op)
