@@ -104,7 +104,7 @@ func imageClauses(level Level) (interpolate, intent string) {
 	case 2, 3:
 		return "6.2.8", "6.2.6"
 	}
-	return "6.2.7.1", "6.2.9"
+	return "6.2.7.1", ""
 }
 
 // checkImageIntentAndInterpolate flags Image XObjects and inline images that
@@ -112,15 +112,17 @@ func imageClauses(level Level) (interpolate, intent string) {
 // 8.9.5.2, 8.9.5.4). The clauses are the veraPDF profiles': Interpolate is
 // 6.2.4 at PDF/A-1, 6.2.8 at -2 and -3, and 6.2.7.1 at -4; a rendering intent
 // is 6.2.9 at PDF/A-1 (any rendering intent, not only an image's) and 6.2.6 at
-// -2 and -3. PDF/A-4's profile has no rendering-intent rule; the check keeps
-// the 6.2.9 it had there until that is settled.
+// -2 and -3. PDF/A-4's profile has no rendering-intent rule, and veraPDF
+// passes a PDF/A-4 file with a non-standard one, so none is reported there.
 func checkImageIntentAndInterpolate(doc core.View, level Level) []Violation {
 	interpRule, intentRule := imageClauses(level)
 	// One example per distinct rule and message, attributed to the lowest object
 	// number that produced it — both loops below iterate maps.
 	var found exampleFindings
 	add := func(rule, msg string, obj int) {
-		found.add(Violation{Rule: rule, Level: level, Message: msg, Object: obj})
+		if rule != "" {
+			found.add(Violation{Rule: rule, Level: level, Message: msg, Object: obj})
+		}
 	}
 
 	// Image XObject /Intent (Interpolate on image XObjects is already
@@ -147,6 +149,65 @@ func checkImageIntentAndInterpolate(doc core.View, level Level) []Violation {
 			}
 			if v := e["Intent"]; v != "" && !standardRenderingIntents[v] {
 				add(intentRule, "an inline image uses a non-standard rendering intent", num)
+			}
+		}
+	}
+	return found.errs
+}
+
+// checkImageBitsPerComponent flags an image whose BitsPerComponent is not
+// one the part allows: 1, 2, 4 or 8 at PDF/A-1 (veraPDF 6.2.4-4), and 16 too
+// at -2, -3 (6.2.8-4) and -4 (6.2.7.1-4). A stencil mask (/ImageMask true) is
+// exempt, as is an image that leaves the key out (a JPEG 2000 image may).
+// Inline images are images too: /BPC and /IM are their abbreviations.
+func checkImageBitsPerComponent(doc core.View, level Level) []Violation {
+	rule := imageClause("image", level)
+	allowed := func(bpc string) bool {
+		switch bpc {
+		case "1", "2", "4", "8":
+			return true
+		case "16":
+			return level.Part() != 1
+		}
+		return false
+	}
+	var found exampleFindings
+	for _, r := range doc.ReachableDicts() {
+		stream, num := r.Stream, r.ObjNum
+		if stream == nil {
+			continue
+		}
+		if st, _ := doc.ResolveName(stream.Dict.Get("Subtype")); st != "Image" {
+			continue
+		}
+		if m, ok := doc.ResolveBool(stream.Dict.Get("ImageMask")); ok && bool(m) {
+			continue
+		}
+		bpcObj := stream.Dict.Get("BitsPerComponent")
+		if bpcObj == nil {
+			continue
+		}
+		bpc := "?"
+		if n, ok := doc.Resolve(bpcObj).(object.Integer); ok {
+			bpc = fmt.Sprint(int64(n))
+		}
+		if !allowed(bpc) {
+			found.add(Violation{Rule: rule, Level: level, Object: num,
+				Message: fmt.Sprintf("an image dictionary's BitsPerComponent %s is not one PDF/A-%d allows", bpc, level.Part())})
+		}
+	}
+	for num, f := range contentBytesFactsOf(doc) {
+		for _, e := range f.inlineEntries {
+			if e["IM"] == "true" || e["ImageMask"] == "true" {
+				continue
+			}
+			bpc, ok := e["BPC"]
+			if !ok {
+				bpc, ok = e["BitsPerComponent"]
+			}
+			if ok && !allowed(bpc) {
+				found.add(Violation{Rule: rule, Level: level, Object: num,
+					Message: fmt.Sprintf("an inline image's BitsPerComponent %s is not one PDF/A-%d allows", bpc, level.Part())})
 			}
 		}
 	}
@@ -504,10 +565,15 @@ func isPDFMIME(doc core.View, subtype object.Object) bool {
 
 // checkInheritedPageXObject enforces that an XObject drawn (Do) by a page's
 // content stream is present in the page's own resource dictionary rather than
-// inherited from a /Pages tree node (ISO 19005-2 6.2.2, -4 6.2.2). Resource
-// inheritance in general remains permitted; only a rendered XObject that is
-// resolved solely through inheritance is rejected.
+// inherited from a /Pages tree node (ISO 19005-2 6.2.2, -4 6.2.2; veraPDF
+// 6.2.2-2, its inherited resource names). Resource inheritance in general remains
+// permitted; only a rendered XObject that is resolved through inheritance is
+// rejected. A name the page tree does not define either is not inherited but
+// undefined, contentClause's to judge; and PDF/A-1 has neither rule.
 func checkInheritedPageXObject(doc core.View, level Level) []Violation {
+	if level.Part() == 1 {
+		return nil
+	}
 	catalog := doc.Catalog()
 	if catalog == nil {
 		return nil
@@ -522,13 +588,18 @@ func checkInheritedPageXObject(doc core.View, level Level) []Violation {
 		if len(used.XObjects) == 0 {
 			continue
 		}
-		var ownXObj *object.Dictionary
-		if own := doc.ResolveDict(page.Dict.Get("Resources")); own != nil {
-			ownXObj = doc.ResolveDict(own.Get("XObject"))
+		// A page with resources of its own inherits none (ISO 32000-1 7.7.3.4:
+		// the attribute is inherited whole, not merged).
+		if page.Dict.Get("Resources") != nil {
+			continue
+		}
+		var inherited *object.Dictionary
+		if res := doc.Resources(page.Dict); res != nil {
+			inherited = doc.ResolveDict(res.Get("XObject"))
 		}
 		reported := false
 		for name := range used.XObjects {
-			if ownXObj == nil || ownXObj.Get(object.Name(name)) == nil {
+			if inherited != nil && inherited.Get(object.Name(name)) != nil {
 				if !reported {
 					reported = true
 					errs = append(errs, Violation{Rule: "6.2.2", Level: level,

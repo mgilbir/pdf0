@@ -257,6 +257,7 @@ func validateView(doc core.View, level Level) []Violation {
 		checkProhibitedCatalogEntries,
 		// Image interpolation / rendering intent (6.2.4-6.2.9)
 		checkImageIntentAndInterpolate,
+		checkImageBitsPerComponent,
 		// File trailer identifier (6.1.3)
 		checkFileTrailerID,
 		// PDF/A-4 trigger events (6.6.3)
@@ -1486,7 +1487,6 @@ var allowedAnnotSubtypes = map[int]map[object.Name]bool{
 		"Stamp": true, "Caret": true, "Ink": true, "Popup": true,
 		"Widget": true, "PrinterMark": true, "TrapNet": true,
 		"Watermark": true, "Redact": true, "Projection": true,
-		"FileAttachment": true,
 	},
 	// PDF/A-1b, 2b, 3b: same set minus Polygon, PolyLine, Projection, Redact; plus some others
 	// For now, 1b/2b/3b get the same restrictive list as 4 with adjustments
@@ -1561,11 +1561,16 @@ func checkAnnotationSubtypes(doc core.View, level Level) []Violation {
 		return nil
 	}
 	// PDF/A-4e permits 3D and RichMedia annotations (they carry the embedded
-	// 3D/multimedia content that "e" stands for); plain PDF/A-4 forbids them.
+	// 3D/multimedia content that "e" stands for), and PDF/A-4f FileAttachment
+	// (the embedded files "f" stands for); plain PDF/A-4 forbids all three,
+	// as the 4, 4E and 4F profiles' 6.3.1-1 have it.
 	extra := map[object.Name]bool{}
-	if level.variant() == "E" {
+	switch level.variant() {
+	case "E":
 		extra["3D"] = true
 		extra["RichMedia"] = true
+	case "F":
+		extra["FileAttachment"] = true
 	}
 
 	var errs []Violation
@@ -1684,7 +1689,14 @@ func checkAnnotationFlags(doc core.View, level Level) []Violation {
 	return errs
 }
 
-// Rule 6.3.3-1: Annotations need AP except Popup, Link, Projection, and zero-area rects.
+// checkAnnotationAppearance: an annotation's appearance (ISO 19005-2/-4
+// 6.3.3, -1 6.5.3 and 6.9). Whether one is required depends on the part: at
+// PDF/A-2, -3 and -4 every annotation needs /AP but a Popup, a Link, one with
+// no size at all, and at -4 a Projection (6.3.3-1); at PDF/A-1 only a form
+// field's widget does, with no exemption (6.9-2 — the PDF/A-1b profile has no
+// general appearance rule). What an /AP holds is judged for every annotation,
+// exempt or not: the exemptions are from needing one (6.3.3-2..4, 6.5.3-4..6),
+// as is PDF/A-1's annotation colour rule (6.5.3-3).
 func checkAnnotationAppearance(doc core.View, level Level) []Violation {
 	var errs []Violation
 	// The colour space of the catalog's PDF/A output intent profile, read once:
@@ -1712,24 +1724,48 @@ func checkAnnotationAppearance(doc core.View, level Level) []Violation {
 	check := func(dict *object.Dictionary, num int) {
 		st, _ := doc.ResolveName(dict.Get("Subtype"))
 
-		// Exempt subtypes
-		if st == "Popup" || st == "Link" || st == "Projection" {
-			return
-		}
-
-		// Exempt an annotation whose rectangle has no size at all
-		if isZeroSizeRect(doc, dict.Get("Rect")) {
-			return
+		// PDF/A-1: an annotation may carry a colour (/C) or interior colour
+		// (/IC) — which are given in DeviceRGB — only when the PDF/A output
+		// intent's destination profile is RGB (ISO 19005-1 6.5.3). An output
+		// intent whose profile could not be read is not judged.
+		if level.Part() == 1 && (dict.Get("C") != nil || dict.Get("IC") != nil) {
+			space, known := pdfa1OutputIntentSpace()
+			if known && space != "RGB " {
+				why := "there is no PDF/A output intent"
+				if space != "" {
+					why = fmt.Sprintf("the PDF/A output intent's profile is %q, not RGB", strings.TrimSpace(space))
+				}
+				errs = append(errs, Violation{
+					Rule:    annotActionClause("appearance", level),
+					Level:   level,
+					Message: "annotation /C or /IC colour is present but " + why,
+					Object:  num,
+				})
+			}
 		}
 
 		ap := dict.Get("AP")
 		if ap == nil {
-			errs = append(errs, Violation{
-				Rule:    annotActionClause("appearance", level),
-				Level:   level,
-				Message: "annotation must have /AP (appearance dictionary)",
-				Object:  num,
-			})
+			switch {
+			case level.Part() == 1:
+				if st == "Widget" {
+					errs = append(errs, Violation{
+						Rule:    "6.9",
+						Level:   level,
+						Message: "a form field's widget annotation must have /AP (appearance dictionary)",
+						Object:  num,
+					})
+				}
+			case st == "Popup" || st == "Link" || (st == "Projection" && level.Part() == 4):
+			case isZeroSizeRect(doc, dict.Get("Rect")):
+			default:
+				errs = append(errs, Violation{
+					Rule:    annotActionClause("appearance", level),
+					Level:   level,
+					Message: "annotation must have /AP (appearance dictionary)",
+					Object:  num,
+				})
+			}
 			return
 		}
 
@@ -1783,25 +1819,6 @@ func checkAnnotationAppearance(doc core.View, level Level) []Violation {
 			}
 		}
 
-		// PDF/A-1: an annotation may carry a colour (/C) or interior colour
-		// (/IC) — which are given in DeviceRGB — only when the PDF/A output
-		// intent's destination profile is RGB (ISO 19005-1 6.5.3). An output
-		// intent whose profile could not be read is not judged.
-		if level.Part() == 1 && (dict.Get("C") != nil || dict.Get("IC") != nil) {
-			space, known := pdfa1OutputIntentSpace()
-			if known && space != "RGB " {
-				why := "there is no PDF/A output intent"
-				if space != "" {
-					why = fmt.Sprintf("the PDF/A output intent's profile is %q, not RGB", strings.TrimSpace(space))
-				}
-				errs = append(errs, Violation{
-					Rule:    annotActionClause("appearance", level),
-					Level:   level,
-					Message: "annotation /C or /IC colour is present but " + why,
-					Object:  num,
-				})
-			}
-		}
 	}
 	for _, a := range reachableAnnotations(doc) {
 		check(a.dict, a.num)
@@ -2204,7 +2221,7 @@ func metadataClause(concept string, level Level) string {
 	m := map[string][3]string{
 		"version":         {"6.7.11", "6.6.4", "6.7.3"},
 		"catalogMetadata": {"6.7.2", "6.6.2.1", "6.7.2.1"},
-		"xmpProperties":   {"6.7.2", "6.6.2.3.1", "6.7.2"},
+		"xmpProperties":   {"6.7.9", "6.6.2.3.1", "6.7.2"}, // not checked at -4: see checkXMPProperties
 		"extSchema":       {"6.7.8", "6.6.2.3.3", "6.7.8"},
 	}
 	c, ok := m[concept]
@@ -2818,8 +2835,9 @@ func checkExtGState(doc core.View, level Level) []Violation {
 				Object:  num,
 			})
 		}
-		// /RI, when present, must be a standard rendering intent (all levels).
-		if ri, ok := doc.Resolve(dict.Get("RI")).(object.Name); ok && !standardRenderingIntents[string(ri)] {
+		// /RI, when present, must be a standard rendering intent — at the parts
+		// that have the rule (contentClause: not PDF/A-4).
+		if ri, ok := doc.Resolve(dict.Get("RI")).(object.Name); ok && !standardRenderingIntents[string(ri)] && contentClause(kindIntent, level) != "" {
 			errs = append(errs, Violation{
 				Rule:    contentClause(kindIntent, level),
 				Level:   level,
@@ -2840,7 +2858,7 @@ func checkExtGState(doc core.View, level Level) []Violation {
 				if n, ok := doc.ResolveName(bm); ok {
 					if !isValidBlendMode(n) {
 						errs = append(errs, Violation{
-							Rule:    blendModeClause(level),
+							Rule:    transparencyClause(level),
 							Level:   level,
 							Message: fmt.Sprintf("invalid blend mode /%s", string(n)),
 							Object:  num,
@@ -2864,10 +2882,12 @@ func deviceNLimitClause(level Level) string {
 	return "6.1.13"
 }
 
-// blendModeClause is the clause of the rule that a blend mode be one ISO 32000
-// defines: 6.2.10 at PDF/A-2 and -3 (6.2.10-1), 6.2.9 at -4 (6.2.9-1).
-// PDF/A-1 forbids transparency altogether, so has none.
-func blendModeClause(level Level) string {
+// transparencyClause is the clause of the transparency rules: that a blend
+// mode be one ISO 32000 defines (6.2.10-1 at PDF/A-2 and -3, 6.2.9-1 at -4),
+// and that a page with transparency name its blending colour space when no
+// output intent does (6.2.10-2, 6.2.9-2). PDF/A-1 forbids transparency
+// altogether, so has neither.
+func transparencyClause(level Level) string {
 	if level.Part() == 4 {
 		return "6.2.9"
 	}
@@ -3177,7 +3197,9 @@ func normalizeXMPDate(s string) string {
 
 // --- Transparency blending check (MR-2) ---
 
-// Rule 6.2.4: Pages using transparency must have proper blending color space.
+// checkTransparencyBlending: a page using transparency, where no output intent
+// gives the blending colour space, must name one in its transparency group
+// (6.2.10-2 at PDF/A-2 and -3, 6.2.9-2 at -4).
 func checkTransparencyBlending(doc core.View, level Level) []Violation {
 	if level.Part() == 1 {
 		return nil // PDF/A-1b prohibits transparency entirely
@@ -3208,7 +3230,7 @@ func checkTransparencyBlending(doc core.View, level Level) []Violation {
 				continue
 			}
 			errs = append(errs, Violation{
-				Rule:    "6.2.4",
+				Rule:    transparencyClause(level),
 				Level:   level,
 				Message: "page using transparency must have /Group with /S /Transparency",
 				Object:  page.ObjNum,
@@ -3223,7 +3245,7 @@ func checkTransparencyBlending(doc core.View, level Level) []Violation {
 		s, _ := doc.ResolveName(groupDict.Get("S"))
 		if s != "Transparency" {
 			errs = append(errs, Violation{
-				Rule:    "6.2.4",
+				Rule:    transparencyClause(level),
 				Level:   level,
 				Message: "page /Group must have /S /Transparency",
 				Object:  page.ObjNum,
@@ -3234,7 +3256,7 @@ func checkTransparencyBlending(doc core.View, level Level) []Violation {
 			// For PDF/A-4, OutputIntents can provide the blending CS implicitly
 			if !transparencyGroupNotRequired(doc, catalog, page.Dict, level) {
 				errs = append(errs, Violation{
-					Rule:    "6.2.4",
+					Rule:    transparencyClause(level),
 					Level:   level,
 					Message: "page transparency group must have /CS (color space)",
 					Object:  page.ObjNum,
@@ -3421,16 +3443,13 @@ func checkEmbeddedFileSpecs(doc core.View, level Level, catalog *object.Dictiona
 		rule = "6.9"
 	}
 
-	// PDF/A-3 and A-4 require embedded files to be associated with the
-	// document or one of its parts via /AF (the corpus fails A-3 files
-	// whose embedded file is associated with nothing). PDF/A-2 has no
-	// association mechanism. PDF/A-4f and -4e exist to carry embedded files
-	// (arbitrary files; 3D/RichMedia content) and associate them per-filespec
-	// via /AFRelationship rather than a document-level /AF array, so the
-	// document-/AF requirement is relaxed for both — when the target is one;
-	// the document's own declaration is the identification rule's to judge.
-	relaxAF := level.variant() != ""
-	if level.Part() != 2 && !relaxAF && documentHasEmbeddedFiles(doc, catalog) && !documentHasAF(doc) {
+	// PDF/A-3 requires embedded files to be associated with the document or
+	// one of its parts via /AF (the corpus fails A-3 files whose embedded
+	// file is associated with nothing; veraPDF 6.8-4). PDF/A-2 has no
+	// association mechanism, and PDF/A-4 asks only that each embedded file's
+	// specification carry /AFRelationship (6.9-4, checked below): none of the
+	// 4, 4E and 4F profiles has an association rule.
+	if level.Part() == 3 && documentHasEmbeddedFiles(doc, catalog) && !documentHasAF(doc) {
 		errs = append(errs, Violation{
 			Rule:    rule,
 			Level:   level,
@@ -4604,7 +4623,7 @@ func checkColorSpaceValueSeen(doc core.View, csObj object.Object, objNum int, le
 							for _, nameObj := range namesArr {
 								if name, ok := doc.ResolveName(nameObj); ok {
 									if colorantsDict.Get(name) == nil {
-										rule := "6.2.4"
+										rule := colourClause("spot", level)
 										if level.Part() == 1 {
 											rule = "6.2.3"
 										}

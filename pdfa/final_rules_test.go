@@ -359,6 +359,53 @@ func TestParseToUnicodeMapMalformed(t *testing.T) {
 }
 
 func TestInheritedPageXObject(t *testing.T) {
+	// own: the page's own resources (nil: none, so it inherits the page
+	// tree's); tree: the Pages node's XObject dictionary.
+	mkWith := func(own, tree *object.Dictionary) core.View {
+		doc := mkView(map[int]*object.IndirectObject{}, nil)
+		page := &object.Dictionary{}
+		page.Set("Type", object.Name("Page"))
+		page.Set("Parent", object.IndirectRef{Number: 2})
+		page.Set("Contents", object.IndirectRef{Number: 91})
+		if own != nil {
+			page.Set("Resources", own)
+		}
+		pages := &object.Dictionary{}
+		pages.Set("Type", object.Name("Pages"))
+		pages.Set("Kids", object.Array{object.IndirectRef{Number: 3}})
+		pages.Set("Count", object.Integer(1))
+		pages.Set("Resources", object.NewDictionary(object.Entry{Key: "XObject", Value: tree}))
+		cat := &object.Dictionary{}
+		cat.Set("Type", object.Name("Catalog"))
+		cat.Set("Pages", object.IndirectRef{Number: 2})
+		c := &object.Stream{Dict: object.Dictionary{}, Data: []byte("/X0 Do")}
+		c.Dict.Set("Length", object.Integer(6))
+		doc.Objects[1] = &object.IndirectObject{Number: 1, Value: cat}
+		doc.Objects[2] = &object.IndirectObject{Number: 2, Value: pages}
+		doc.Objects[3] = &object.IndirectObject{Number: 3, Value: page}
+		doc.Objects[91] = &object.IndirectObject{Number: 91, Value: c}
+		doc.Trailer.Set("Root", object.IndirectRef{Number: 1})
+		return doc
+	}
+	x0 := object.NewDictionary(object.Entry{Key: "X0", Value: object.IndirectRef{Number: 90}})
+	// A page with resources of its own inherits nothing: X0 in the tree alone
+	// is undefined for it (veraPDF 6.2.2-3 at -4, PDF_A-4 6-2-2-t03-fail-b),
+	// not inherited.
+	if errs := checkInheritedPageXObject(mkWith(&object.Dictionary{}, x0), PDFA4); len(errs) != 0 {
+		t.Errorf("a page with its own resources inherits nothing: %v", errs)
+	}
+	// Defined nowhere is not inherited either.
+	if errs := checkInheritedPageXObject(mkWith(nil, &object.Dictionary{}), PDFA4); len(errs) != 0 {
+		t.Errorf("an XObject the page tree does not define is not inherited: %v", errs)
+	}
+	// PDF/A-1 has no such rule.
+	if errs := checkInheritedPageXObject(mkWith(nil, x0), PDFA1b); len(errs) != 0 {
+		t.Errorf("PDF/A-1 has no inheritance rule: %v", errs)
+	}
+	if errs := checkInheritedPageXObject(mkWith(nil, x0), PDFA2b); !hasRuleMsg(errs, "6.2.2") {
+		t.Errorf("an XObject inherited from the page tree at 2b: want 6.2.2, got %v", errs)
+	}
+
 	mk := func(pageHasOwn bool) core.View {
 		doc := mkView(map[int]*object.IndirectObject{}, nil)
 		xo := &object.Dictionary{}
@@ -414,5 +461,51 @@ func TestA4EConformanceRelaxations(t *testing.T) {
 	// SetState/NOP stay forbidden even at 4e.
 	if !isForbiddenAction("SetState", PDFA4E) {
 		t.Error("PDF/A-4e must still forbid /SetState")
+	}
+}
+
+// TestImageBitsPerComponent: 1, 2, 4 and 8 everywhere, 16 too from PDF/A-2
+// on (veraPDF 6.2.4-4, 6.2.8-4, 6.2.7.1-4), for image XObjects and inline
+// images alike; a stencil mask and an image without the key are exempt.
+func TestImageBitsPerComponent(t *testing.T) {
+	image := func(bpc int, mask bool) core.View {
+		d := object.NewDictionary(
+			object.Entry{Key: "Type", Value: object.Name("XObject")},
+			object.Entry{Key: "Subtype", Value: object.Name("Image")},
+			object.Entry{Key: "Width", Value: object.Integer(1)},
+			object.Entry{Key: "Height", Value: object.Integer(1)},
+		)
+		if bpc > 0 {
+			d.Set("BitsPerComponent", object.Integer(bpc))
+		}
+		if mask {
+			d.Set("ImageMask", object.Boolean(true))
+		}
+		res := object.NewDictionary(object.Entry{Key: "XObject", Value: object.NewDictionary(object.Entry{Key: "Im0", Value: object.IndirectRef{Number: 44}})})
+		doc := mkPageWithContentAndRes("/Im0 Do", res)
+		doc.Objects[44] = &object.IndirectObject{Number: 44, Value: object.NewStream(d, []byte{0, 0})}
+		return doc
+	}
+	inline := func(bpc string) core.View {
+		return mkPageWithContentAndRes("BI /W 1 /H 1 /CS /G /BPC "+bpc+" ID \x00\x00 EI", nil)
+	}
+	for _, c := range []struct {
+		name string
+		doc  core.View
+		want [3]bool // a finding at 1b, 2b, 4
+	}{
+		{"8", image(8, false), [3]bool{false, false, false}},
+		{"16", image(16, false), [3]bool{true, false, false}},
+		{"12", image(12, false), [3]bool{true, true, true}},
+		{"absent", image(0, false), [3]bool{false, false, false}},
+		{"a stencil mask's 12", image(12, true), [3]bool{false, false, false}},
+		{"inline 16", inline("16"), [3]bool{true, false, false}},
+		{"inline 12", inline("12"), [3]bool{true, true, true}},
+	} {
+		for i, level := range []Level{PDFA1b, PDFA2b, PDFA4} {
+			if got := len(checkImageBitsPerComponent(c.doc, level)) > 0; got != c.want[i] {
+				t.Errorf("BitsPerComponent %s at %s: finding %v, want %v", c.name, level, got, c.want[i])
+			}
+		}
 	}
 }
