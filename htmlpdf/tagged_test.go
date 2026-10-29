@@ -736,3 +736,59 @@ func TestTextIsReadAroundAnInlineStackingContext(t *testing.T) {
 		}
 	}
 }
+
+// TestATaggedFormulaHasItsAltText: a MathML formula is a Formula holding the
+// spans its glyphs are drawn in, with alternate text: its alttext, or else
+// its own text. Declared PDF/UA-2 it has nothing wrong with it by
+// ValidatePDFUA2, and by veraPDF when PDF0_VERAPDF names it. The face is
+// forme's MATH fixture, which has a radical, a sum and an x and no letters
+// else, so the page holds the formula alone.
+func TestATaggedFormulaHasItsAltText(t *testing.T) {
+	cases := []struct{ name, html, alt string }{
+		{"alttext", `<math alttext="the square root of x"><msqrt>` + mathX + `</msqrt></math>`, "the square root of x"},
+		{"its own text", `<math><mo>∑</mo>` + mathX + `</math>`, "∑x"},
+	}
+	var files []string
+	dir := t.TempDir()
+	for _, c := range cases {
+		res, err := Render(Input{HTML: `<html lang="en"><title>m</title><p>` + c.html + `</p>`, Fonts: mathSet(t)},
+			Options{Page: A4, Tagged: true, EmbedAllFonts: true})
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		back, _ := writtenBack(t, res.Document)
+		root := back.ResolveDict(back.ResolveDict(back.Trailer.Get("Root")).Get("StructTreeRoot"))
+		p := back.ResolveDict(back.ResolveDict(root.Get("K")).Get("K"))
+		formula := back.ResolveDict(p.Get("K"))
+		if formula == nil || formula.Get("S") != object.Name("Formula") {
+			t.Fatalf("%s: the paragraph holds %v, want a Formula", c.name, p.Get("K"))
+		}
+		if alt, _ := back.Resolve(formula.Get("Alt")).(object.String); textString(alt.Value) != c.alt {
+			t.Errorf("%s: the Formula's /Alt = %q, want %q", c.name, textString(alt.Value), c.alt)
+		}
+		if err := res.Document.DeclarePDFUA(2); err != nil {
+			t.Fatal(err)
+		}
+		back, data := writtenBack(t, res.Document)
+		if v := uaFindings(pdf0.ValidatePDFUA2(back)); len(v) != 0 {
+			t.Errorf("%s: ValidatePDFUA2: %v", c.name, v)
+		}
+		files = append(files, writeTo(t, dir, strings.ReplaceAll(c.name, " ", "-")+".pdf", data))
+	}
+	if os.Getenv("PDF0_VERAPDF") != "" {
+		veraPDFPassesAs(t, "ua2", files)
+	}
+}
+
+// textString reads a PDF text string: UTF-16BE behind its byte-order mark,
+// or PDFDocEncoding, which for ASCII is ASCII.
+func textString(b []byte) string {
+	if len(b) >= 2 && b[0] == 0xFE && b[1] == 0xFF {
+		var rs []rune
+		for i := 2; i+1 < len(b); i += 2 {
+			rs = append(rs, rune(b[i])<<8|rune(b[i+1]))
+		}
+		return string(rs)
+	}
+	return string(b)
+}
