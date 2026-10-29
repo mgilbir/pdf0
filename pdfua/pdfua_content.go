@@ -452,15 +452,17 @@ func checkUAAnnotStructType(d core.View, cat *object.Dictionary) []Violation {
 		if !linked {
 			continue // not reached via OBJR; the tagging check covers presence
 		}
-		want := object.Name("Annot")
+		// Each kind's own rule: a widget's is 7.18.4, a link's 7.18.5, and
+		// every other annotation's 7.18.1 (veraPDF 7.18.4-1, 7.18.5-1).
+		want, clause := object.Name("Annot"), "7.18.1"
 		switch st {
 		case "Widget":
-			want = "Form"
+			want, clause = "Form", "7.18.4"
 		case "Link":
-			want = "Link"
+			want, clause = "Link", "7.18.5"
 		}
 		if parent != want {
-			v = append(v, Violation{Clause: "7.18.1", Message: "annotation of subtype /" + string(st) + " is nested in a <" + string(parent) + "> element, expected <" + string(want) + ">", Object: num})
+			v = append(v, Violation{Clause: clause, Message: "annotation of subtype /" + string(st) + " is nested in a <" + string(parent) + "> element, expected <" + string(want) + ">", Object: num})
 		}
 	}
 	return v

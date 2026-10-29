@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -104,5 +106,85 @@ func TestMeasure(t *testing.T) {
 		if rep.Count(s) != 1 {
 			t.Errorf("Count(%v) = %d, want 1", s, rep.Count(s))
 		}
+	}
+}
+
+// TestParseVerdicts: veraPDF's text report, with a path holding spaces, the
+// mount prefix removed, a passing file, and a failing one's rules in ID form.
+func TestParseVerdicts(t *testing.T) {
+	report := `FAIL /data/6.2 Graphics/veraPDF test suite 6-2-10-t01-fail-f.pdf 2b
+  FAIL 6.2.4.3-2
+  FAIL 6.2.10-1
+PASS /data/top.pdf 2b
+Oct 29, 2026 WARNING: noise
+`
+	got, err := ParseVerdicts(strings.NewReader(report), "/data/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fail := got["6.2 Graphics/veraPDF test suite 6-2-10-t01-fail-f.pdf"]
+	if fail.Pass || !slices.Equal(fail.Rules, []string{"6.2.4.3-t02", "6.2.10-t01"}) {
+		t.Errorf("the failing file: %+v", fail)
+	}
+	if v, ok := got["top.pdf"]; !ok || !v.Pass || len(v.Rules) != 0 {
+		t.Errorf("the passing file: %+v, %v", v, ok)
+	}
+	if len(got) != 2 {
+		t.Errorf("%d verdicts, want 2: %v", len(got), got)
+	}
+	if _, err := ParseVerdicts(strings.NewReader("  FAIL 6.1-1\n")); err == nil {
+		t.Error("a rule before any file was accepted")
+	}
+}
+
+// TestMeasureVerdicts: each rule veraPDF fails a file on is tested by that
+// file, whatever the file is named; a file veraPDF passes and pdf0 flags is a
+// false positive; a file named for a rule veraPDF does not fail it on is
+// counted as renamed; a file with no verdict is an error.
+func TestMeasureVerdicts(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"6-2-10-t01-fail-f.pdf", "6-1-2-t01-fail-a.pdf", "6-1-2-t01-pass-a.pdf", "6-1-3-t01-fail-a.pdf"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rules := []Rule{{Clause: "6.2.4.3", Test: 2}, {Clause: "6.2.10", Test: 1}, {Clause: "6.1.2", Test: 1}, {Clause: "6.1.3", Test: 1}}
+	verdicts := map[string]Verdict{
+		"6-2-10-t01-fail-f.pdf": {Rules: []string{"6.2.4.3-t02"}}, // named for 6.2.10-1, fails 6.2.4.3-2
+		"6-1-2-t01-fail-a.pdf":  {Rules: []string{"6.1.2-t01"}},
+		"6-1-2-t01-pass-a.pdf":  {Pass: true},
+		"6-1-3-t01-fail-a.pdf":  {Rules: []string{"6.1.3-t01"}},
+	}
+	// pdf0, as this test has it: 6.2.4.3 for the renamed file, 6.1.2 for both
+	// 6.1.2 files (a false positive on the passing one), nothing for 6.1.3.
+	validate := func(data []byte) ([]string, error) {
+		switch string(data) {
+		case "6-2-10-t01-fail-f.pdf":
+			return []string{"6.2.4.3"}, nil
+		case "6-1-2-t01-fail-a.pdf", "6-1-2-t01-pass-a.pdf":
+			return []string{"6.1.2"}, nil
+		}
+		return nil, nil
+	}
+	rep, err := MeasureVerdicts(rules, dir, verdicts, validate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := map[string]Status{}
+	for _, r := range rep.Rules {
+		status[r.ID()] = r.Status()
+	}
+	want := map[string]Status{"6.2.4.3-t02": Detected, "6.2.10-t01": Untested, "6.1.2-t01": Detected, "6.1.3-t01": Missed}
+	for id, s := range want {
+		if status[id] != s {
+			t.Errorf("%s: %v, want %v", id, status[id], s)
+		}
+	}
+	if len(rep.FalsePositives) != 1 || rep.Renamed != 1 || rep.Files != 4 {
+		t.Errorf("false positives %v, renamed %d, files %d; want 1, 1, 4", rep.FalsePositives, rep.Renamed, rep.Files)
+	}
+	delete(verdicts, "6-1-3-t01-fail-a.pdf")
+	if _, err := MeasureVerdicts(rules, dir, verdicts, validate); err == nil {
+		t.Error("a file with no verdict was measured")
 	}
 }

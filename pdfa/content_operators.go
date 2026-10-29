@@ -519,7 +519,14 @@ func namedResourcePresent(doc core.View, res *object.Dictionary, category, name 
 	if sub == nil {
 		return false
 	}
-	return sub.Get(object.Name(name)) != nil
+	v := sub.Get(object.Name(name))
+	if category == "Font" {
+		// A dictionary whose /Subtype names no kind of font is not a font
+		// (ISO 32000-1 9.5), and a Tf naming it selects none: veraPDF reads
+		// the name as undefined (PDF/A-4 6.2.2-3) and judges no font rule.
+		return isFontDict(doc, doc.ResolveDict(v))
+	}
+	return v != nil
 }
 
 // builtinColorSpaceName lists the colour-space names selectable with cs/CS
@@ -579,6 +586,9 @@ func checkContentNumberLimit(s []byte, lim implLimits, objNum int, add func(stri
 	if !isInt {
 		if absf(v) > lim.realLimit {
 			add(fmt.Sprintf("a content-stream real value %s exceeds the magnitude limit %g", s, lim.realLimit), objNum)
+		}
+		if a := absf(v); a != 0 && a < lim.realMin {
+			add(fmt.Sprintf("a content-stream real value %s is closer to zero than the limit %g", s, lim.realMin), objNum)
 		}
 		return
 	}

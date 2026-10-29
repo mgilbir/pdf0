@@ -14,6 +14,15 @@ var (
 		Proves: "The PDF/A conformance ratchet: no false positives, no missed violations, no parse errors; the rule-coverage ratchet; most whole-file robustness tests",
 		Source: "[veraPDF/veraPDF-corpus](https://github.com/veraPDF/veraPDF-corpus)",
 	}
+	VeraPDFVerdicts = Dataset{
+		Name:   "veraPDF's verdicts on the corpus",
+		Dir:    "testdata/verapdf-verdicts",
+		Env:    "VERAPDF_VERDICTS",
+		Stamp:  ".ok",
+		Fetch:  "run `make verapdf-verdicts` (needs the corpus, and Docker or a veraPDF in `PDF0_VERAPDF`)",
+		Proves: "The rule-coverage ratchet judged by what veraPDF reports for each corpus file rather than what its name says, and false positives against veraPDF's own verdicts",
+		Source: "Generated here by veraPDF from the veraPDF corpus (`testdata/verapdf-verdicts/generate.sh`); never committed",
+	}
 	PDF20Examples = Dataset{
 		Name:   "PDF 2.0 reference PDFs",
 		Dir:    "testdata/pdf20examples",

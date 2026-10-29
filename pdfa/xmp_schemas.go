@@ -636,6 +636,8 @@ func isXMPDate(s string) bool {
 // extension schemas: namespaceURI → property name → declared valueType text.
 func extensionDeclared(props []xmpProperty) map[string]map[string]string {
 	declared := make(map[string]map[string]string)
+	broken, _ := incompleteValueTypes(props)
+	custom := extensionTypeFields(props)
 	for _, p := range props {
 		if p.NS != nsPDFAExtension || p.Name != "schemas" {
 			continue
@@ -662,10 +664,12 @@ func extensionDeclared(props []xmpProperty) map[string]map[string]string {
 			}
 			for _, sp := range schemaProps {
 				var name, valueType string
+				have := map[string]bool{}
 				for _, f := range sp.Fields {
 					if f.NS != nsPDFAProperty {
 						continue
 					}
+					have[f.Name] = f.Value.Text != ""
 					switch f.Name {
 					case "name":
 						name = f.Value.Text
@@ -673,9 +677,19 @@ func extensionDeclared(props []xmpProperty) map[string]map[string]string {
 						valueType = f.Value.Text
 					}
 				}
-				if name != "" {
-					declared[nsURI][name] = valueType
+				// A definition without the name or value type of what it
+				// defines, or of a value type whose own definition is
+				// incomplete, declares nothing: veraPDF counts the
+				// property as undefined (PDF_A-2b 6-6-2-3-3-t02-fail-d,
+				// -t03-fail-c), and so does one whose value type is
+				// neither standard nor defined by an extension schema.
+				// One missing only its category or its description
+				// still declares it — the container rule alone fails
+				// (single-defect fixtures).
+				if name == "" || !have["valueType"] || broken[valueType] || !valueTypeDefined(valueType, custom) {
+					continue
 				}
+				declared[nsURI][name] = valueType
 			}
 		}
 	}
@@ -766,6 +780,7 @@ func checkXMPProperties(doc core.View, level Level) []Violation {
 	containerRule := metadataClause("extSchema", level)
 	errs = append(errs, checkXMPExtensionContainer(packet.Declarations(), props, containerRule, level)...)
 	typeFields := extensionTypeFields(props)
+	_, badFields := incompleteValueTypes(props)
 	for _, p := range props {
 		// The extension schema machinery itself is validated separately.
 		switch p.NS {
@@ -794,6 +809,14 @@ func checkXMPProperties(doc core.View, level Level) []Violation {
 					Rule:    rule,
 					Level:   level,
 					Message: fmt.Sprintf("XMP property %s in schema %s is not declared by its extension schema", p.Name, p.NS),
+				})
+				continue
+			}
+			if badFields[vt] {
+				errs = append(errs, Violation{
+					Rule:    rule,
+					Level:   level,
+					Message: fmt.Sprintf("XMP property %s is of custom value type %s, whose definition has an incomplete field, so its value type is not correct", p.Name, vt),
 				})
 				continue
 			}
@@ -997,6 +1020,19 @@ func checkXMPExtensionContainer(decls []xmp.Binding, props []xmpProperty, rule s
 			fields := requireFields("schema description", schema, nsPDFASchema,
 				[]string{"schema", "namespaceURI", "prefix"}, []string{"property", "valueType"})
 
+			// The custom value types this schema declares, which a
+			// property or a field may reference wherever it is declared.
+			declaredTypes := map[string]bool{}
+			if vtSeq, ok := fields["valueType"]; ok {
+				for _, vt := range vtSeq.Items {
+					for _, f := range vt.Fields {
+						if f.NS == nsPDFAType && f.Name == "type" {
+							declaredTypes[f.Value.Text] = true
+						}
+					}
+				}
+			}
+
 			if propSeq, ok := fields["property"]; ok {
 				if propSeq.Kind != xmpSeq {
 					report("pdfaSchema:property must be a Seq, got %s", propSeq.Kind)
@@ -1011,6 +1047,12 @@ func checkXMPExtensionContainer(decls []xmp.Binding, props []xmpProperty, rule s
 						if cat, ok := got["category"]; ok && cat.Text != "internal" && cat.Text != "external" {
 							report("pdfaProperty:category must be internal or external, got %q", cat.Text)
 						}
+						// A property's value type must be one XMP defines
+						// or one the schema declares (veraPDF 6.7.8-9,
+						// 6.6.2.3.3-8).
+						if vt, ok := got["valueType"]; ok && vt.Text != "" && !valueTypeDefined(vt.Text, declaredTypes) {
+							report("property value type %q is neither a standard type nor declared by the extension schema", vt.Text)
+						}
 					}
 				}
 			}
@@ -1019,19 +1061,6 @@ func checkXMPExtensionContainer(decls []xmp.Binding, props []xmpProperty, rule s
 				if vtSeq.Kind != xmpSeq {
 					report("pdfaSchema:valueType must be a Seq, got %s", vtSeq.Kind)
 					continue
-				}
-				// First pass: collect the custom value types this schema
-				// declares, so a field may reference one declared later.
-				declaredTypes := map[string]bool{}
-				for _, vt := range vtSeq.Items {
-					if vt.Kind != xmpStruct {
-						continue
-					}
-					for _, f := range vt.Fields {
-						if f.NS == nsPDFAType && f.Name == "type" {
-							declaredTypes[f.Value.Text] = true
-						}
-					}
 				}
 				for _, vt := range vtSeq.Items {
 					if vt.Kind != xmpStruct {
@@ -1068,6 +1097,24 @@ func checkXMPExtensionContainer(decls []xmp.Binding, props []xmpProperty, rule s
 		}
 	}
 	return errs
+}
+
+// valueTypeDefined reports whether an extension schema's valueType names a
+// type: a standard XMP one or one in custom, alone or as the items of a Bag,
+// Seq or Alt array (written in either case, as files write it), or Lang Alt.
+func valueTypeDefined[T any](vt string, custom map[string]T) bool {
+	vt = strings.TrimSpace(vt)
+	if strings.EqualFold(vt, "Lang Alt") {
+		return true
+	}
+	for _, form := range []string{"bag ", "seq ", "alt "} {
+		if len(vt) > len(form) && strings.EqualFold(vt[:len(form)], form) {
+			vt = strings.TrimSpace(vt[len(form):])
+			break
+		}
+	}
+	_, isCustom := custom[vt]
+	return standardXMPValueTypes[vt] || isCustom
 }
 
 // extensionTypeFields collects, per extension-declared custom value type
@@ -1110,6 +1157,66 @@ func extensionTypeFields(props []xmpProperty) map[string]map[string]bool {
 	return types
 }
 
+// incompleteValueTypes are the custom value types an extension schema defines
+// without what a definition must say: broken lacks one of its own required
+// fields (type, namespaceURI, prefix, description), and badFields has a field
+// definition that lacks one of its (name, valueType, description). A property
+// of a broken type is not declared; one of a type with a bad field is declared
+// with a value type that is not correct — veraPDF's 6.6.2.3.1 tests 1 and 2
+// (PDF_A-2b 6-6-2-3-3-t03-fail-c, -t04-fail-c).
+func incompleteValueTypes(props []xmpProperty) (broken, badFields map[string]bool) {
+	broken, badFields = map[string]bool{}, map[string]bool{}
+	for _, p := range props {
+		if p.NS != nsPDFAExtension || p.Name != "schemas" {
+			continue
+		}
+		for _, schema := range p.Value.Items {
+			for _, f := range schema.Fields {
+				if f.NS != nsPDFASchema || f.Name != "valueType" {
+					continue
+				}
+				for _, vt := range f.Value.Items {
+					var typeName string
+					have := map[string]bool{}
+					fieldsOK := true
+					for _, tf := range vt.Fields {
+						if tf.NS != nsPDFAType {
+							continue
+						}
+						have[tf.Name] = tf.Value.Text != "" || len(tf.Value.Items) > 0
+						switch tf.Name {
+						case "type":
+							typeName = tf.Value.Text
+						case "field":
+							for _, fld := range tf.Value.Items {
+								fhave := map[string]bool{}
+								for _, ff := range fld.Fields {
+									if ff.NS == nsPDFAField {
+										fhave[ff.Name] = ff.Value.Text != ""
+									}
+								}
+								if !fhave["name"] || !fhave["valueType"] || !fhave["description"] {
+									fieldsOK = false
+								}
+							}
+						}
+					}
+					if typeName == "" {
+						continue
+					}
+					if !have["namespaceURI"] || !have["prefix"] || !have["description"] {
+						broken[typeName] = true
+					}
+					if !fieldsOK {
+						badFields[typeName] = true
+					}
+				}
+			}
+		}
+	}
+	return broken, badFields
+}
+
 // sortedFieldNames renders a declared type's field names for a message, in a
 // fixed order so the report does not change between runs over one file.
 func sortedFieldNames(fields map[string]bool) string {
@@ -1123,8 +1230,9 @@ func sortedFieldNames(fields map[string]bool) string {
 
 // checkXMPWellFormed validates the XMP packet wrapper (ISO 19005-2 6.6.2.1,
 // -4 6.7.2.1): the xpacket processing instruction must not carry a bytes or
-// encoding attribute, the packet must be well-formed XML, and (PDF/A-4) it
-// must be encoded as UTF-8.
+// encoding attribute, the packet must be well-formed XML, and from PDF/A-2 on
+// it must be encoded as UTF-8 (veraPDF 6.6.2.1-5, 6.7.2.1-5; the PDF/A-1
+// profile has no such rule).
 func checkXMPWellFormed(doc core.View, level Level) []Violation {
 	// The rule numbers differ by part, but the requirements — no bytes/encoding
 	// attribute on the xpacket header, and a well-formed XMP packet — apply from
@@ -1172,7 +1280,7 @@ func checkXMPWellFormed(doc core.View, level Level) []Violation {
 		}
 	}
 
-	if level.Part() == 4 && !xmpIsUTF8(raw) {
+	if level.Part() != 1 && !xmpIsUTF8(raw) {
 		errs = append(errs, Violation{Rule: attrRule, Level: level, Message: "the XMP packet is not encoded as UTF-8"})
 	}
 
