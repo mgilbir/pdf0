@@ -23,7 +23,7 @@ v0.6.0.
 
 ### `pdf0`
 
-- **A StructElem's Content and Children are one ordered Kids list** (#PR).
+- **A StructElem's Content and Children are one ordered Kids list** (#381).
   An element held its marked content, then its children, always in that
   order, so a paragraph with an emphasised word in the middle could not be
   described in the order it reads. `StructElem.Kids` is a `[]pdf0.StructKid`,
@@ -364,7 +364,7 @@ v0.6.0.
 
 ## Added
 
-- **Structure trees that describe links and tables** (#PR):
+- **Structure trees that describe links and tables** (#381):
   `pdf0.AnnotKid` puts an annotation in the tree as its element's kid (an
   `/OBJR`, with the annotation's `/StructParent`, and `/Tabs /S` on its page);
   `StructElem.Attributes` writes attributes such as a header cell's `Scope` or
