@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/pdfa"
 )
@@ -76,6 +77,18 @@ func fxImage(d *Document, res *object.Dictionary, bpc int, tweak func(*object.Di
 	return "q 10 0 0 10 0 0 cm /Im0 Do Q"
 }
 
+// fxMask is a 1x1 stencil mask image of bpc bits, for an image's /Mask.
+func fxMask(d *Document, bpc int) object.IndirectRef {
+	return d.Add(object.NewStream(object.NewDictionary(
+		object.Entry{Key: "Type", Value: object.Name("XObject")},
+		object.Entry{Key: "Subtype", Value: object.Name("Image")},
+		object.Entry{Key: "Width", Value: fxInt(1)},
+		object.Entry{Key: "Height", Value: fxInt(1)},
+		object.Entry{Key: "ImageMask", Value: object.Boolean(true)},
+		object.Entry{Key: "BitsPerComponent", Value: fxInt(bpc)},
+	), []byte{0}))
+}
+
 // fxForm draws a form XObject whose dictionary has extra entries.
 func fxForm(d *Document, res *object.Dictionary, body string, extra ...object.Entry) string {
 	dict := object.NewDictionary(append([]object.Entry{
@@ -85,6 +98,102 @@ func fxForm(d *Document, res *object.Dictionary, body string, extra ...object.En
 	}, extra...)...)
 	res.Set("XObject", object.NewDictionary(object.Entry{Key: "X0", Value: d.Add(object.NewStream(dict, []byte(body)))}))
 	return "/X0 Do"
+}
+
+// fxTrueTypeProgram is a TrueType program with glyph 1 for 'A', 500 units
+// wide; cmap, when not nil, replaces its character map's subtables.
+func fxTrueTypeProgram(cmap []fonttest.CmapSub) []byte {
+	return fxTrueTypeProgramWith(cmap, nil)
+}
+
+// fxTrueTypeProgramWith is fxTrueTypeProgram with extra tables besides.
+func fxTrueTypeProgramWith(cmap []fonttest.CmapSub, extra map[string][]byte) []byte {
+	opts := fonttest.SFNTOptions{Name: "Test", Glyphs: []fonttest.Glyph{{Rune: 'A', Advance: 500, HasShape: true}}, Extra: extra}
+	if cmap != nil {
+		if opts.Extra == nil {
+			opts.Extra = map[string][]byte{}
+		}
+		// The one-table font SFNTWithCmapSubtables makes holds the cmap
+		// table at offset 28.
+		opts.Extra["cmap"] = fonttest.SFNTWithCmapSubtables(cmap)[28:]
+	}
+	return fonttest.SFNT(opts)
+}
+
+// fxPostNames is a version 2.0 post table naming fxTrueTypeProgram's glyph 1
+// "A" (Macintosh standard name 36); the program's own post table names none.
+func fxPostNames() []byte {
+	post := make([]byte, 32+2+2*2)
+	post[1] = 2   // version 2.0
+	post[33] = 2  // numGlyphs
+	post[37] = 36 // glyph 1; glyph 0 is name 0, .notdef
+	return post
+}
+
+// fxFormat0 is a format 0 cmap subtable mapping code 'A' to glyph 1.
+func fxFormat0() []byte {
+	b := make([]byte, 262)
+	b[3] = 6 // length 262, high byte 1
+	b[2] = 1
+	b[6+'A'] = 1
+	return b
+}
+
+// fxFont shows "A" in a TrueType font over program, non-symbolic under
+// WinAnsiEncoding unless symbolic; tweak changes the font dictionary first.
+func fxFont(d *Document, res *object.Dictionary, program []byte, symbolic bool, tweak func(font *object.Dictionary)) string {
+	flags := 32
+	if symbolic {
+		flags = 4
+	}
+	fd := object.NewDictionary(
+		object.Entry{Key: "Type", Value: object.Name("FontDescriptor")},
+		object.Entry{Key: "FontName", Value: object.Name("Test")},
+		object.Entry{Key: "Flags", Value: fxInt(flags)},
+		object.Entry{Key: "FontBBox", Value: object.Array{fxInt(0), fxInt(-200), fxInt(1000), fxInt(800)}},
+		object.Entry{Key: "ItalicAngle", Value: fxInt(0)},
+		object.Entry{Key: "Ascent", Value: fxInt(800)},
+		object.Entry{Key: "Descent", Value: fxInt(-200)},
+		object.Entry{Key: "CapHeight", Value: fxInt(700)},
+		object.Entry{Key: "StemV", Value: fxInt(80)},
+		object.Entry{Key: "FontFile2", Value: d.Add(object.NewStream(object.NewDictionary(
+			object.Entry{Key: "Length1", Value: fxInt(len(program))}), program))},
+	)
+	font := object.NewDictionary(
+		object.Entry{Key: "Type", Value: object.Name("Font")},
+		object.Entry{Key: "Subtype", Value: object.Name("TrueType")},
+		object.Entry{Key: "BaseFont", Value: object.Name("Test")},
+		object.Entry{Key: "FirstChar", Value: fxInt('A')},
+		object.Entry{Key: "LastChar", Value: fxInt('A')},
+		object.Entry{Key: "Widths", Value: object.Array{fxInt(500)}},
+		object.Entry{Key: "FontDescriptor", Value: d.Add(fd)},
+	)
+	if !symbolic {
+		font.Set("Encoding", object.Name("WinAnsiEncoding"))
+	}
+	if tweak != nil {
+		tweak(font)
+	}
+	res.Set("Font", object.NewDictionary(object.Entry{Key: "F1", Value: d.Add(font)}))
+	return "BT /F1 12 Tf 10 10 Td (A) Tj ET"
+}
+
+// fxICCFill fills with an ICCBased colour space over the skeleton's own
+// output profile's bytes, patched by patch.
+func fxICCFill(d *Document, res *object.Dictionary, patch func([]byte)) string {
+	cat := d.ResolveDict(d.Trailer.Get("Root"))
+	oi := d.ResolveDict(d.Resolve(cat.Get("OutputIntents")).(object.Array)[0])
+	src, err := d.StreamData(d.Resolve(oi.Get("DestOutputProfile")).(*object.Stream))
+	if err != nil {
+		panic(err)
+	}
+	prof := append([]byte(nil), src...)
+	if patch != nil {
+		patch(prof)
+	}
+	ref := d.Add(object.NewStream(object.NewDictionary(object.Entry{Key: "N", Value: fxInt(3)}), prof))
+	res.Set("ColorSpace", object.NewDictionary(object.Entry{Key: "CS0", Value: object.Array{object.Name("ICCBased"), ref}}))
+	return "/CS0 cs 1 0 0 sc 0 0 10 10 re f"
 }
 
 var defectFixtures = []defectFixture{
@@ -154,6 +263,62 @@ var defectFixtures = []defectFixture{
 		), bad)))
 		return ""
 	}, want: [3][]string{{"6.7.11", "6.7.9"}, {"6.6.2.1", "6.6.4"}, {"6.7.2.1", "6.7.3"}}},
+	{name: "truetype-font", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxFont(d, r, fxTrueTypeProgram(nil), false, nil)
+	}, want: [3][]string{nil, nil, nil}},
+	{name: "font-without-type", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxFont(d, r, fxTrueTypeProgram(nil), false, func(f *object.Dictionary) { f.Delete("Type") })
+	}, want: [3][]string{{"6.3.2"}, {"6.2.11.2"}, {"6.2.10.2"}}},
+	{name: "font-unknown-subtype", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxFont(d, r, fxTrueTypeProgram(nil), false, func(f *object.Dictionary) { f.Set("Subtype", object.Name("TrueType2")) })
+	}, want: [3][]string{nil, nil, {"6.2.2"}}},
+	{name: "font-without-basefont", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxFont(d, r, fxTrueTypeProgram(nil), false, func(f *object.Dictionary) { f.Delete("BaseFont") })
+	}, want: [3][]string{{"6.3.2"}, {"6.2.11.2"}, {"6.2.10.2"}}},
+	{name: "font-without-firstchar", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxFont(d, r, fxTrueTypeProgram(nil), false, func(f *object.Dictionary) { f.Delete("FirstChar") })
+	}, want: [3][]string{{"6.3.2", "6.3.6"}, {"6.2.11.2", "6.2.11.5"}, {"6.2.10.2", "6.2.10.5"}}},
+	{name: "font-without-lastchar", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxFont(d, r, fxTrueTypeProgram(nil), false, func(f *object.Dictionary) { f.Delete("LastChar") })
+	}, want: [3][]string{{"6.3.2", "6.3.6"}, {"6.2.11.2", "6.2.11.5"}, {"6.2.10.2", "6.2.10.5"}}},
+	{name: "font-widths-wrong-size", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxFont(d, r, fxTrueTypeProgram(nil), false, func(f *object.Dictionary) { f.Set("Widths", object.Array{fxInt(500), fxInt(500)}) })
+	}, want: [3][]string{{"6.3.2"}, {"6.2.11.2"}, {"6.2.10.2"}}},
+	{name: "nonsymbolic-truetype-without-31-or-10-cmap", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxFont(d, r, fxTrueTypeProgram([]fonttest.CmapSub{{Plat: 0, Enc: 3, Data: fxFormat0()}}), false, nil)
+	}, want: [3][]string{{"6.3.5", "6.3.6"}, {"6.2.11.4.1", "6.2.11.5"}, {"6.2.10.4.1", "6.2.10.5", "6.2.10.6"}}},
+	{name: "nonsymbolic-truetype-with-only-30-cmap", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxFont(d, r, fxTrueTypeProgram([]fonttest.CmapSub{{Plat: 3, Enc: 0, Data: fxFormat0()}}), false, nil)
+	}, want: [3][]string{{"6.3.5", "6.3.6"}, {"6.2.11.4.1", "6.2.11.5", "6.2.11.6"}, {"6.2.10.4.1", "6.2.10.5", "6.2.10.6"}}},
+	{name: "nonsymbolic-truetype-without-31-or-10-cmap-with-post-names", build: func(d *Document, p, r *object.Dictionary) string {
+		program := fxTrueTypeProgramWith([]fonttest.CmapSub{{Plat: 0, Enc: 3, Data: fxFormat0()}}, map[string][]byte{"post": fxPostNames()})
+		return fxFont(d, r, program, false, nil)
+	}, want: [3][]string{nil, nil, {"6.2.10.6"}}},
+	{name: "symbolic-truetype-without-30-or-10-cmap", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxFont(d, r, fxTrueTypeProgram([]fonttest.CmapSub{{Plat: 3, Enc: 1, Data: fxFormat0()}}), true, nil)
+	}, want: [3][]string{{"6.3.5"}, {"6.2.11.4.1"}, {"6.2.10.4.1", "6.2.10.6"}}},
+	{name: "image-mask-bpc2", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxImage(d, r, 2, func(i *object.Dictionary) { i.Delete("ColorSpace"); i.Set("ImageMask", object.Boolean(true)) })
+	}, want: [3][]string{nil, nil, nil}},
+	{name: "explicit-mask-bpc2", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxImage(d, r, 8, func(i *object.Dictionary) { i.Set("Mask", fxMask(d, 2)) })
+	}, want: [3][]string{{"6.2.4"}, {"6.2.8"}, {"6.2.7.1"}}},
+	{name: "explicit-mask-bpc1", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxImage(d, r, 8, func(i *object.Dictionary) { i.Set("Mask", fxMask(d, 1)) })
+	}, want: [3][]string{nil, nil, nil}},
+	{name: "iccbased-fill", build: func(d *Document, p, r *object.Dictionary) string { return fxICCFill(d, r, nil) }, want: [3][]string{nil, nil, nil}},
+	{name: "iccbased-device-link-profile", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxICCFill(d, r, func(b []byte) { copy(b[12:16], "link") })
+	}, want: [3][]string{{"6.2.3.2"}, {"6.2.4.2"}, {"6.2.4.2"}}},
+	{name: "iccbased-xyz-profile", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxICCFill(d, r, func(b []byte) { copy(b[16:20], "XYZ ") })
+	}, want: [3][]string{{"6.2.3.2"}, {"6.2.4.2"}, {"6.2.4.2"}}},
+	{name: "text-annotation-appearance-states", build: func(d *Document, p, r *object.Dictionary) string {
+		fxAnnot(d, p, object.NewDictionary(object.Entry{Key: "Subtype", Value: object.Name("Text")},
+			object.Entry{Key: "AP", Value: object.NewDictionary(object.Entry{Key: "N", Value: object.NewDictionary(
+				object.Entry{Key: "On", Value: fxAppearance(d)})})}))
+		return ""
+	}, want: [3][]string{{"6.5.3"}, {"6.3.3"}, {"6.3.3"}}},
 	{name: "text-annotation-without-ap", build: func(d *Document, p, r *object.Dictionary) string {
 		fxAnnot(d, p, object.NewDictionary(object.Entry{Key: "Subtype", Value: object.Name("Text")}))
 		return ""

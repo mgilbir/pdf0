@@ -32,6 +32,9 @@ func checkUnicodeMapping(doc core.View, level Level) []Violation {
 	rule := levelAClause("toUnicode", level)
 	var errs []Violation
 	for fontDict, u := range core.CollectFontTextUsage(doc) {
+		if !isFontDict(doc, fontDict) {
+			continue
+		}
 		if tu, ok := doc.Resolve(fontDict.Get("ToUnicode")).(*object.Stream); ok {
 			if level.Part() != 1 && core.HasForbiddenUnicodeTargets(doc, tu) {
 				errs = append(errs, Violation{

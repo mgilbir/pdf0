@@ -22,6 +22,30 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 
 ### Validation
 
+- **PDF/A rules the corpus does not test, checked against veraPDF on
+  single-defect files**: eighteen more fixtures at PDF/A-1b, -2b and -4, and
+  what pdf0 changed to agree with veraPDF on every one:
+  - A font dictionary needs `/Type /Font`, a `/BaseFont` unless it is Type 3,
+    and, for a simple font that is not an unembedded standard 14 font,
+    `/FirstChar`, `/LastChar` and a `/Widths` of LastChar−FirstChar+1 entries
+    (6.3.2 / 6.2.11.2 / 6.2.10.2).
+  - A font without `/FirstChar` or `/LastChar` declares no width from its
+    `/Widths`, and a code past `/LastChar` takes `/MissingWidth`, in the
+    width rule of PDF/A and PDF/UA alike.
+  - A dictionary whose `/Subtype` names no kind of font is not judged as a
+    font; at PDF/A-4 a `Tf` naming it selects an undefined resource (6.2.2).
+  - A non-symbolic TrueType program whose cmap has neither a Microsoft
+    Unicode (3,1) nor a Mac Roman (1,0) subtable, and whose post table names
+    no glyphs, has no glyph for a named code (a missing glyph, not `.notdef`).
+    At PDF/A-4 such a cmap fails 6.2.10.6 whatever the post table holds, and
+    at PDF/A-2 and -3 a cmap with no subtable but Microsoft Symbol (3,0) fails
+    6.2.11.6.
+  - An ICCBased colour space's profile must be an input profile: device
+    class `prtr`, `mntr`, `scnr` or `spac`, over RGB, CMYK, Gray or Lab
+    (6.2.3.2 / 6.2.4.2).
+  - An image's explicit `/Mask` must be 1 bit per sample (6.2.4 / 6.2.8 /
+    6.2.7.1).
+
 - **PDF/UA findings follow veraPDF's numbering and verdicts** (#390), at both
   parts: every rule veraPDF fails a PDF/UA corpus file on is now reported
   under the same clause (PDF/UA-1 97/97, PDF/UA-2 48/48), with no file

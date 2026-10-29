@@ -20,6 +20,7 @@ package fontcheck
 import (
 	"iter"
 	"math"
+	"slices"
 
 	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/pdf0/internal/core"
@@ -152,8 +153,17 @@ type Simple struct {
 	// EncodingModelled is BaseEncodingModelled's answer: whether a code
 	// Encoding has no name for selects .notdef, or is unknown.
 	EncodingModelled bool
+	// NoStandardCmap is true for a non-symbolic TrueType program whose cmap
+	// has neither of the subtables ISO 32000-1 9.6.6.4 looks a named code up
+	// in, Microsoft Unicode (3,1) and Mac Roman (1,0), and whose post table
+	// names no glyphs. Such a program has no glyph for a named code — veraPDF
+	// reads it so, with what is drawn glyph 0's width — though pdf0's program
+	// reader folds a Unicode-platform (0,x) subtable into the program's Cmap.
+	// One whose post table names its glyphs is left as that Cmap reads it:
+	// veraPDF looks a name up there, and pdf0 does not read post names.
+	NoStandardCmap bool
 
-	firstChar    int
+	codes        codeRange
 	widths       object.Array
 	haveWidths   bool
 	missingWidth float64
@@ -179,7 +189,14 @@ func newSimple(doc core.View, fontDict, fd *object.Dictionary, fp *font.Program)
 	s.Subtype, _ = doc.ResolveName(fontDict.Get("Subtype"))
 	s.Encoding = SimpleFontCodeToName(doc, fontDict, s.Symbolic)
 	s.EncodingModelled = BaseEncodingModelled(doc, fontDict, s.Symbolic)
-	s.firstChar = intVal(doc, fontDict.Get("FirstChar"))
+	if s.Subtype == "TrueType" && !s.Symbolic {
+		if encs, known := CmapEncodings(doc, fd); known &&
+			!slices.Contains(encs, CmapEncoding{3, 1}) && !slices.Contains(encs, CmapEncoding{1, 0}) &&
+			!PostGlyphNames(doc, fd) {
+			s.NoStandardCmap = true
+		}
+	}
+	s.codes = readCodeRange(doc, fontDict)
 	s.widths, s.haveWidths = doc.Resolve(fontDict.Get("Widths")).(object.Array)
 	if fd != nil {
 		s.missingWidth = numVal(doc, fd.Get("MissingWidth"))
@@ -203,6 +220,9 @@ func (s *Simple) ProgramWidth(code byte) (float64, bool) {
 	name := s.Encoding[code]
 	if s.Subtype == "TrueType" {
 		gid, ok := simplefont.TrueTypeGlyph(s.Program, s.Symbolic, code, name)
+		if s.NoStandardCmap && name != "" {
+			gid, ok = 0, true
+		}
 		if !ok || gid >= len(s.Program.WidthByGID) {
 			return 0, false
 		}
@@ -224,7 +244,7 @@ func (s *Simple) ProgramWidth(code byte) (float64, bool) {
 // 0 when it has none (ISO 32000-1 Tables 111 and 122). A dictionary with no
 // /Widths array declares a width only through a non-zero /MissingWidth.
 func (s *Simple) DeclaredWidth(doc core.View, code byte) (float64, bool) {
-	return declaredWidth(doc, s.widths, s.haveWidths, s.firstChar, code, s.missingWidth)
+	return declaredWidth(doc, s.widths, s.haveWidths, s.codes, code, s.missingWidth)
 }
 
 // WidthDiffers reports whether the program and the dictionary both give a
@@ -397,7 +417,7 @@ func Type3WidthDiffers(doc core.View, fontDict *object.Dictionary, u *core.FontT
 		return false
 	}
 	enc := SimpleFontCodeToName(doc, fontDict, false)
-	firstChar := intVal(doc, fontDict.Get("FirstChar"))
+	codes := readCodeRange(doc, fontDict)
 	widths, haveWidths := doc.Resolve(fontDict.Get("Widths")).(object.Array)
 	var missingWidth float64 // a Type 3 font's descriptor is optional
 	if fd := doc.ResolveDict(fontDict.Get("FontDescriptor")); fd != nil {
@@ -421,7 +441,7 @@ func Type3WidthDiffers(doc core.View, fontDict *object.Dictionary, u *core.FontT
 			if !ok {
 				continue
 			}
-			pdfW, havePDF := declaredWidth(doc, widths, haveWidths, firstChar, code, missingWidth)
+			pdfW, havePDF := declaredWidth(doc, widths, haveWidths, codes, code, missingWidth)
 			if havePDF && math.Abs(pdfW-glyphW) > tolerance {
 				differs = true
 			}
@@ -430,15 +450,32 @@ func Type3WidthDiffers(doc core.View, fontDict *object.Dictionary, u *core.FontT
 	return differs
 }
 
+// codeRange is a simple font's /FirstChar and /LastChar; ok only when the
+// dictionary has both.
+type codeRange struct {
+	first, last int
+	ok          bool
+}
+
+func readCodeRange(doc core.View, fontDict *object.Dictionary) codeRange {
+	first, okF := doc.ResolveInt(fontDict.Get("FirstChar"))
+	last, okL := doc.ResolveInt(fontDict.Get("LastChar"))
+	return codeRange{first: int(first), last: int(last), ok: okF && okL}
+}
+
 // declaredWidth returns the width a simple font's dictionary declares for a
-// code: Widths[code-FirstChar] when in range; else missingWidth, which is 0
+// code: Widths[code-FirstChar] when the code is in FirstChar to LastChar; else
+// missingWidth, which is 0
 // when the descriptor gives none, when the dictionary has a /Widths array
 // (haveWidths) — "For character codes outside the range FirstChar to
 // LastChar, the value of MissingWidth ... shall be used" (ISO 32000-1 Table
-// 111) — or, without one, when missingWidth is not zero.
-func declaredWidth(doc core.View, widths object.Array, haveWidths bool, firstChar int, code byte, missingWidth float64) (float64, bool) {
-	idx := int(code) - firstChar
-	if idx >= 0 && idx < len(widths) {
+// 111) — or, without one, when missingWidth is not zero. A dictionary missing
+// either bound has no range, and every code takes missingWidth: a font
+// without /LastChar declares none of its /Widths (veraPDF 6.2.11.5 fails
+// such a font where the program's widths are not 0).
+func declaredWidth(doc core.View, widths object.Array, haveWidths bool, codes codeRange, code byte, missingWidth float64) (float64, bool) {
+	idx := int(code) - codes.first
+	if codes.ok && int(code) <= codes.last && idx >= 0 && idx < len(widths) {
 		return numVal(doc, widths[idx]), true
 	}
 	if haveWidths || missingWidth != 0 {

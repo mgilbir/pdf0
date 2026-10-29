@@ -1346,6 +1346,9 @@ func fontObjNum(doc core.View, fontDict *object.Dictionary) int {
 // checkOneFontEmbedded applies the 6.2.10 embedding rule to a single font
 // dictionary.
 func checkOneFontEmbedded(doc core.View, fontDict *object.Dictionary, objNum int, level Level) []Violation {
+	if !isFontDict(doc, fontDict) {
+		return nil // not a font; see isFontDict
+	}
 	subtypeName, _ := doc.ResolveName(fontDict.Get("Subtype"))
 
 	// Type3 fonts define their glyphs with content streams, so they carry no
@@ -4218,6 +4221,27 @@ func checkICCBasedProfiles(doc core.View, level Level) []Violation {
 			if expectedN > 0 && expectedN != nVal {
 				errs = append(errs, Violation{Rule: rule, Level: level, Object: p.num,
 					Message: fmt.Sprintf("ICCBased profile /N=%d does not match ICC color space %q", nVal, cs)})
+			}
+		}
+		// An ICCBased colour space's profile is an input profile: of a
+		// device class that converts to the profile connection space —
+		// output, display, input or colour space conversion — over a
+		// colour space PDF can name (ISO 32000-1 8.6.5.5; veraPDF 6.2.3.2-1,
+		// 6.2.4.2-1). A device link joins two device spaces and an abstract
+		// profile two PCS ones; neither is a colour space.
+		if len(profileData) >= 20 {
+			cls, cs := string(profileData[12:16]), string(profileData[16:20])
+			switch cls {
+			case "prtr", "mntr", "scnr", "spac":
+			default:
+				errs = append(errs, Violation{Rule: rule, Level: level, Object: p.num,
+					Message: fmt.Sprintf("ICCBased profile has device class %q; an input profile is prtr, mntr, scnr or spac", cls)})
+			}
+			switch cs {
+			case "RGB ", "CMYK", "GRAY", "Lab ":
+			default:
+				errs = append(errs, Violation{Rule: rule, Level: level, Object: p.num,
+					Message: fmt.Sprintf("ICCBased profile has colour space %q; an input profile's is RGB, CMYK, GRAY or Lab", cs)})
 			}
 		}
 		if len(profileData) >= 9 {

@@ -75,7 +75,7 @@ func widthProgram() []byte {
 }
 
 // simpleTrueType is a non-symbolic WinAnsi TrueType font over widthProgram
-// (object 7) declaring widths for the codes from 65 ("A") on.
+// (object 7) declaring widths for the codes from 65 ("A") on, one per width.
 func simpleTrueType(widths ...object.Object) *object.Dictionary {
 	fd := object.NewDictionary(
 		object.Entry{Key: "Type", Value: object.Name("FontDescriptor")},
@@ -89,6 +89,7 @@ func simpleTrueType(widths ...object.Object) *object.Dictionary {
 		object.Entry{Key: "BaseFont", Value: object.Name("Test")},
 		object.Entry{Key: "Encoding", Value: object.Name("WinAnsiEncoding")},
 		object.Entry{Key: "FirstChar", Value: object.Integer(65)},
+		object.Entry{Key: "LastChar", Value: object.Integer(64 + len(widths))},
 		object.Entry{Key: "Widths", Value: object.Array(widths)},
 		object.Entry{Key: "FontDescriptor", Value: fd},
 	)

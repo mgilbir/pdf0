@@ -160,6 +160,7 @@ func checkImageIntentAndInterpolate(doc core.View, level Level) []Violation {
 // at -2, -3 (6.2.8-4) and -4 (6.2.7.1-4). A stencil mask (/ImageMask true) is
 // exempt, as is an image that leaves the key out (a JPEG 2000 image may).
 // Inline images are images too: /BPC and /IM are their abbreviations.
+// An explicit mask an image's /Mask names is 1 bit per sample at every part.
 func checkImageBitsPerComponent(doc core.View, level Level) []Violation {
 	rule := imageClause("image", level)
 	allowed := func(bpc string) bool {
@@ -179,6 +180,15 @@ func checkImageBitsPerComponent(doc core.View, level Level) []Violation {
 		}
 		if st, _ := doc.ResolveName(stream.Dict.Get("Subtype")); st != "Image" {
 			continue
+		}
+		// An explicit mask, the stencil an image's /Mask names, is 1 bit
+		// per sample (ISO 32000-1 8.9.6.3; veraPDF 6.2.4-5, 6.2.8-5,
+		// 6.2.7.1-5).
+		if mask, ok := doc.Resolve(stream.Dict.Get("Mask")).(*object.Stream); ok {
+			if n, ok := doc.ResolveInt(mask.Dict.Get("BitsPerComponent")); ok && n != 1 {
+				found.add(Violation{Rule: rule, Level: level, Object: num,
+					Message: fmt.Sprintf("an image's explicit /Mask has BitsPerComponent %d; a mask's is 1", n)})
+			}
 		}
 		if m, ok := doc.ResolveBool(stream.Dict.Get("ImageMask")); ok && bool(m) {
 			continue
