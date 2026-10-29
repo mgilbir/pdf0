@@ -143,7 +143,7 @@ func TestRenderIntoLeavesTheDocumentAloneWhenItFails(t *testing.T) {
 		},
 		{
 			name: "a level it does not write",
-			doc:  func() *pdf0.Document { return pdfaDoc(t, pdfa.PDFA1b) },
+			doc:  func() *pdf0.Document { return pdfaDoc(t, pdfa.PDFA2a) },
 			in:   Input{HTML: `<p>x</p>`, Fonts: notoSansSet(t)},
 			opts: Options{Page: A5},
 			want: func(err error) bool { return errors.Is(err, ErrUnsupportedLevel) },
@@ -241,10 +241,10 @@ func veraPDFPasses(t *testing.T, files []string) {
 	}
 }
 
-// TestRenderIntoRefusesTheLevelsItDoesNotWrite: PDF/A-1, whose PDF 1.4 has no
-// transparency, and the a levels, which need a tagged structure.
+// TestRenderIntoRefusesTheLevelsItDoesNotWrite: the a levels, which need a
+// tagged structure. (PDF/A-1b is written; see TestAPDFA1bPageIsOpaque.)
 func TestRenderIntoRefusesTheLevelsItDoesNotWrite(t *testing.T) {
-	for _, level := range []pdfa.Level{pdfa.PDFA1b, pdfa.PDFA1a, pdfa.PDFA2a, pdfa.PDFA3a} {
+	for _, level := range []pdfa.Level{pdfa.PDFA1a, pdfa.PDFA2a, pdfa.PDFA3a} {
 		_, err := RenderInto(pdfaDoc(t, level), Input{HTML: "<p>x</p>", Fonts: notoSansSet(t)}, Options{})
 		if !errors.Is(err, ErrUnsupportedLevel) {
 			t.Errorf("%s: err %v; want ErrUnsupportedLevel", level, err)
