@@ -335,7 +335,8 @@ character XMP cannot carry. The finding is a warning by default, and
 `Input.Policy` can raise it to refuse such a document. `lang=""` says the
 language is unknown, so nothing is written and nothing is reported.
 
-Only a PDF/A render does this. A plain `Render` writes no metadata, as before.
+Only a PDF/A render and a tagged one (below) do this. A plain `Render` writes
+no metadata, as before.
 `RenderInto` leaves the caller's document's metadata alone, since one page's
 title is not the whole document's.
 
@@ -344,6 +345,64 @@ title is not the whole document's.
 pages and two-page spreads right to left. Left to right is PDF's default, so
 `ltr`, `auto` and no `dir` write nothing. `RenderInto` leaves the caller's
 document alone here too.
+
+## Tagged and accessible PDF
+
+`Options.Tagged` writes a tagged page: a structure tree built from the HTML,
+which is what a screen reader reads, and what PDF/UA and the a levels of PDF/A
+require.
+
+<!-- snippet
+var report string
+-->
+```go
+func accessible(w io.Writer) error {
+	out, err := htmlpdf.Render(htmlpdf.Input{HTML: report},
+		htmlpdf.Options{Page: htmlpdf.A4, Tagged: true, EmbedAllFonts: true})
+	if err != nil {
+		return err
+	}
+	// PDF/UA asks for a title and a language, which a tagged render takes
+	// from the HTML's <title> and lang; DeclarePDFUA refuses without them.
+	if err := out.Document.DeclarePDFUA(2); err != nil {
+		return err
+	}
+	return out.Document.Write(w)
+}
+```
+
+What the tree holds:
+
+- **The elements, as the types they play.** A heading is an `H1`…`H6`, a
+  paragraph a `P`, a list an `L` of `LI`s with the marker as the `Lbl` and the
+  rest as the `LBody`, and a table a `Table` of `TR`s of `TH` and `TD`. A header
+  cell has its `Scope`, and a data cell the IDs of the header cells its
+  `headers` attribute names. An `<img>` or an inline `<svg>` is a `Figure` with
+  its alt text (`alt`, `aria-label`, or the SVG's `<title>`), and an `<a href>`
+  is a `Link` holding its text and its annotation, which says in words where it
+  leads (`aria-label`, `title`, or its text). An element in another language
+  than the one around it has its `Lang`.
+- **The document's reading order, not the painting's.** A float, a positioned
+  box and anything else painted out of turn is read where the document has
+  it. Text straight in a `<div>`, a `<section>` or the `<body>` is a `P`: the
+  anonymous block a browser lays it out in, and what PDF/UA-2 asks of those
+  elements.
+- **Artifacts for what only decorates.** Backgrounds, borders, outlines, the
+  lines `text-decoration` draws and shadows are marked as artifacts, and so
+  are an `<img alt="">` and anything inside `aria-hidden="true"`: a reader
+  skips them.
+
+A tagged render passes `pdf0.ValidatePDFUA2` once declared, and veraPDF as
+PDF/UA-2. With `Options.PDFA` at an a level (`pdfa.PDFA2a`, say) it passes
+PDF/A-2a, and declared with `DeclarePDFUA(1)`, PDF/UA-1 too.
+
+Two limits. A run of an element's own text is placed among the element's
+children by the order it is painted in, which is the document's in a line of
+text; a child painted later than its line — a transformed or positioned
+inline box — is read after the text that follows it in the line
+([forme#965](https://github.com/mgilbir/forme/issues/965) would settle it).
+And what a CSS `filter` draws is one span of the filtered element, whatever
+elements it holds.
 
 ## Into a document you have
 
@@ -380,9 +439,11 @@ What the page does to the document:
   (`Document.Conformance`), every font on the page is embedded, whatever
   `Options.EmbedAllFonts` says, and the document's own output intents and
   `/Lang` apply to the page. The levels written are PDF/A-1b, PDF/A-2 and -3 at
-  b and u, and PDF/A-4 with e and f. The a levels are refused with
-  `ErrUnsupportedLevel`, since they need a tagged structure htmlpdf does not
-  write. PDF/A-1's PDF 1.4 has no transparency, so a page for a PDF/A-1b
+  b and u, and PDF/A-4 with e and f; and the a levels for a tagged page
+  (`Options.Tagged`), which they require, refused with `ErrUnsupportedLevel`
+  otherwise. A tagged page goes into a document whose structure tree is empty
+  or absent, and is refused with `ErrTaggedTarget` by one that has a tree
+  already. PDF/A-1's PDF 1.4 has no transparency, so a page for a PDF/A-1b
   document that uses any (an opacity, an image with alpha, a translucent
   gradient) is refused under `RuleTransparencyAtPDFA1`, and the finding says
   which. An opaque page is written. `Document.Save` then writes the

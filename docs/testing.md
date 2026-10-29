@@ -284,7 +284,7 @@ program the list does not describe.
 
 | Variable | What it is | Unset | Read by |
 |---|---|---|---|
-| `PDF0_VERAPDF` | the veraPDF command the Type 3, CIDSet, RenderInto and PDF/A render tests validate their documents with; [testdata/verapdf/verapdf-docker.sh](../testdata/verapdf/README.md) runs the official image (needs docker) | those checks skip | `TestAnAccessibleDocumentWithALinkAndATable`, `TestTheCIDSetIsWhatTheProgramHas`, `TestType3DocumentsAreValidForVeraPDF`, `htmlpdf: TestADocumentDescribedByItsHTMLPassesVeraPDF`, `htmlpdf: TestAPDFA1bPageIsOpaque`, `htmlpdf: TestARightToLeftPDFADocumentPassesVeraPDF`, `htmlpdf: TestIssue357APDFA2bRender`, `htmlpdf: TestRenderIntoKeepsTheDocumentsClaim` |
+| `PDF0_VERAPDF` | the veraPDF command the Type 3, CIDSet, RenderInto and PDF/A render tests validate their documents with; [testdata/verapdf/verapdf-docker.sh](../testdata/verapdf/README.md) runs the official image (needs docker) | those checks skip | tests in the root package, `htmlpdf` |
 | `PDF0_SKIA_PYTHON` | a Python with the packages in `testdata/colrv1/requirements.txt`, which renders COLR glyphs with Skia ([testdata/colrv1/README.md](../testdata/colrv1/README.md)) | the Skia comparison skips | `TestColourGlyphsAreWhatSkiaPaints` |
 | `PDF0_CLI_BIN` | a prebuilt `pdf0` command for the CLI's black-box tests, to point them at an older build and watch them fail | the tests build the command from the checkout | `cmd/pdf0: TestMain` |
 | `PDF0_LARGE_PDF` | a large real PDF to measure cancellation latency on | the measurement skips | `TestCancelLargeRealFile` |

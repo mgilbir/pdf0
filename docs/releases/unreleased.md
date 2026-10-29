@@ -364,6 +364,21 @@ v0.6.0.
 
 ## Added
 
+- **htmlpdf writes tagged PDF** (#PR): `Options.Tagged` gives the page a
+  structure tree built from the HTML — headings, paragraphs, lists with their
+  labels, tables with header scope and the headers each cell names, figures
+  with their alt text, links with their annotations and a description, and
+  each element's language — in the document's reading order, with
+  backgrounds, borders, decoration, shadows, `alt=""` images and
+  `aria-hidden` content marked as artifacts. A tagged render also takes its
+  title and `/Lang` from the HTML. Declared with `DeclarePDFUA`, it passes
+  `ValidatePDFUA2` and veraPDF as PDF/UA-2; at `pdfa.PDFA2a` it passes
+  PDF/A-2a and, declared, PDF/UA-1. The a levels of PDF/A are now written for
+  a tagged page, by `Options.PDFA` and `RenderInto`; a tagged `RenderInto`
+  into a document that already has a structure tree is refused with
+  `htmlpdf.ErrTaggedTarget`. Untagged output is unchanged. New in pdf0:
+  `Document.PageRefs`.
+
 - **Structure trees that describe links and tables** (#381):
   `pdf0.AnnotKid` puts an annotation in the tree as its element's kid (an
   `/OBJR`, with the annotation's `/StructParent`, and `/Tabs /S` on its page);
@@ -378,7 +393,7 @@ v0.6.0.
   any (an opacity, an image with alpha, a translucent gradient) is refused
   under `htmlpdf.RuleTransparencyAtPDFA1` (`backend-pdfa1-transparency`), and
   the finding names what it does. An opaque page passes veraPDF at 1b. The a
-  levels are still refused with `ErrUnsupportedLevel`.
+  levels need a tagged page (`Options.Tagged`, below).
 
 - **`pdfa.SkeletonOptions.Subject` and `pdfa.SkeletonOptions.Keywords`**
   (#377), written as `dc:description` and `pdf:Keywords`, as

@@ -56,7 +56,8 @@ const (
 	RuleStandardFont layout.Rule = "backend-standard-font"
 
 	// RuleMetadataOmitted is something the document says about itself that a
-	// PDF/A render (Options.PDFA) cannot write into the file's metadata, so it
+	// PDF/A render (Options.PDFA) or a tagged one (Options.Tagged) cannot write
+	// into the file's metadata, so it
 	// is left out: a lang that is not a language tag by the grammar PDF's /Lang
 	// is judged by, or a title or author holding a character XMP cannot carry.
 	// The value is the document's, so it would be wrong to fail the render for

@@ -282,3 +282,28 @@ func TestAnAccessibleDocumentWithALinkAndATable(t *testing.T) {
 		t.Log(strings.Repeat("-", 8), "the file is at", path)
 	}
 }
+
+// TestPageRefsNameThePages: one reference per page, in PageList's order, each
+// resolving to that page's dictionary.
+func TestPageRefsNameThePages(t *testing.T) {
+	d := NewDocument()
+	var want []object.IndirectRef
+	for range 3 {
+		var b content.Builder
+		b.Rect(0, 0, 1, 1).Fill()
+		ref, err := d.AddPage(Page{Width: 10, Height: 10, Content: &b})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want = append(want, ref)
+	}
+	got, pages := d.PageRefs(), d.PageList()
+	if len(got) != 3 {
+		t.Fatalf("PageRefs = %v, want 3", got)
+	}
+	for i := range got {
+		if got[i] != want[i] || d.ResolveDict(got[i]) != pages[i] {
+			t.Errorf("page %d: PageRefs gives %v, want %v, the dictionary PageList gives", i, got[i], want[i])
+		}
+	}
+}

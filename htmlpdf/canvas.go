@@ -27,14 +27,18 @@ import (
 // checkDrawable before this runs; drawnFields lists which, and a test holds
 // that list against the operations layout declares.
 func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Document, error) {
-	return writePageTo(pdf0.NewDocument(), ops, page, scale)
+	return writePageTo(pdf0.NewDocument(), ops, page, scale, nil)
 }
 
 // writePageTo is writePage into a document of the caller's: the page is added
 // to doc, and so are the images, patterns and functions it draws, as it goes.
 // A failure part way leaves them there, so doc is a scratch document that is
 // thrown away on error (see RenderInto), never the caller's own.
-func writePageTo(doc *pdf0.Document, ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Document, error) {
+//
+// tags, when not nil, makes the page a tagged one: what it draws is marked as
+// it is drawn, and tags records the spans for the structure tree (tagged.go),
+// which is set on the document that ends up holding the page.
+func writePageTo(doc *pdf0.Document, ops []layout.Op, page layout.PageSize, scale float64, tags *tagger) (*pdf0.Document, error) {
 	// The one transform. Reading it right to left: layout units become points,
 	// the y axis is inverted, the whole thing is scaled to fit, and the result
 	// is placed inside the page's margin.
@@ -51,6 +55,7 @@ func writePageTo(doc *pdf0.Document, ops []layout.Op, page layout.PageSize, scal
 		toPage: pageTransform{k: k, tx: tx, ty: ty},
 		faces:  map[*shape.Face]*fonts.Face{},
 		images: map[string]object.Object{},
+		tags:   tags,
 	}
 	// The sheet in layout's coordinates, which a form XObject drawn in them
 	// takes as its bounding box: nothing drawn off the sheet is seen.
@@ -104,6 +109,8 @@ type pageWriter struct {
 	// table is one image XObject in the file.
 	images map[string]object.Object
 	links  []pdf0.Link
+	// tags is the page's tagging, nil for an untagged page (see tagged.go).
+	tags *tagger
 	// transparent is any stream of the page selecting transparency: an
 	// alpha, a soft mask or a transparency group.
 	transparent bool
@@ -137,6 +144,9 @@ type canvas struct {
 	alphas    *alphaStates
 	// curved counts the ClipPaths around what is being drawn.
 	curved int
+	// untagged is a stream of a tagged page in which nothing is marked: a
+	// form a filter group draws, which is one span of the page's own.
+	untagged bool
 	// toLayout maps the coordinates being drawn in to the page's layout
 	// coordinates: the identity, except inside a TransformGroup, where it is
 	// the matrices of the groups around the drawing, the innermost acting
@@ -249,7 +259,17 @@ func (c *canvas) drawOps(ops []layout.Op) error {
 	return nil
 }
 
+// drawOp draws one operation: tagged, in a tagged page's own stream, and
+// painted as it is everywhere else.
 func (c *canvas) drawOp(op layout.Op) error {
+	if c.w.tags != nil && !c.untagged {
+		return c.tagged(op)
+	}
+	return c.paint(op)
+}
+
+// paint draws one operation.
+func (c *canvas) paint(op layout.Op) error {
 	b := c.b
 	switch v := op.(type) {
 	case layout.FillRect:
@@ -489,7 +509,10 @@ func (c *canvas) run(v layout.DrawText, artifact bool) {
 	name, face := c.face(v.Face, v.Upright)
 	b.Save()
 	clipTo(b, v.Clip)
-	if artifact {
+	// A tagged page marks what is an artifact where it draws the operation
+	// (canvas.tagged), and nothing inside a span may be marked again.
+	marked := artifact && c.w.tags == nil
+	if marked {
 		b.BeginMarked("Artifact")
 	}
 	c.alphas.use(b, v.Color.A)
@@ -538,7 +561,7 @@ func (c *canvas) run(v layout.DrawText, artifact bool) {
 		}
 	}
 	b.EndText()
-	if artifact {
+	if marked {
 		b.EndMarked()
 	}
 	b.Restore()
@@ -564,7 +587,8 @@ func (c *canvas) glyphs(v layout.DrawGlyphs) {
 	name, face := c.face(v.Face, false)
 	b.Save()
 	clipTo(b, v.Clip)
-	if v.Text == "" {
+	marked := v.Text == "" && c.w.tags == nil // see run
+	if marked {
 		b.BeginMarked("Artifact")
 	}
 	c.alphas.use(b, v.Color.A)
@@ -577,7 +601,7 @@ func (c *canvas) glyphs(v layout.DrawGlyphs) {
 	b.SetTextMatrix(1, 0, 0, -1, v.At.X.Px(), v.At.Y.Px())
 	face.DrawReplaced(b, v.Text, v.Glyphs, v.Size.Px(), v.Text)
 	b.EndText()
-	if v.Text == "" {
+	if marked {
 		b.EndMarked()
 	}
 	b.Restore()
