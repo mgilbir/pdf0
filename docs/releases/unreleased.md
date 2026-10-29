@@ -351,7 +351,7 @@ v0.6.0.
 
 ## Added
 
-- **A right-to-left HTML document is read right to left** (#PR). When the root
+- **A right-to-left HTML document is read right to left** (#375). When the root
   element has `dir="rtl"`, the document `htmlpdf.Render` makes, plain or
   PDF/A, gets `/ViewerPreferences /Direction /R2L`. Any other direction writes
   nothing, so those documents are unchanged byte for byte. `RenderInto` leaves
