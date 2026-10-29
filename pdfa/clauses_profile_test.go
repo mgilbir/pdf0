@@ -47,12 +47,17 @@ func TestClausesAreTheProfilesNumbers(t *testing.T) {
 		{"a PostScript XObject", func(l Level) string { return contentClause(kindPostScript, l) }, [3]string{"6.2.7-t01", "6.2.9-t03", ""}},
 		{"a form's /Subtype2 /PS", func(l Level) string { return contentClause(kindSubtype2PS, l) }, [3]string{"6.2.5-t01", "6.2.9-t01", ""}},
 		{"a form's /PS entry", func(l Level) string { return contentClause(kindPSEntry, l) }, [3]string{"6.2.5-t01", "6.2.9-t01", ""}},
-		{"a blend mode", blendModeClause, [3]string{"", "6.2.10-t01", "6.2.9-t01"}},
+		{"a blend mode", transparencyClause, [3]string{"", "6.2.10-t01", "6.2.9-t01"}},
+		{"a transparent page's blending colour space", transparencyClause, [3]string{"", "6.2.10-t02", "6.2.9-t02"}},
 		{"the catalog's /AA", func(l Level) string { return annotActionClause("catalogAA", l) }, [3]string{"6.6.2-t03", "6.5.2-t01", "6.6.3-t01"}},
 		{"the catalog's /Metadata", func(l Level) string { return metadataClause("catalogMetadata", l) }, [3]string{"6.7.2-t01", "6.6.2.1-t01", "6.7.2.1-t01"}},
+		{"an XMP property's schema and value type", func(l Level) string { return metadataClause("xmpProperties", l) }, [3]string{"6.7.9-t02", "6.6.2.3.1-t01", ""}},
+		{"an extension schema's container", func(l Level) string { return metadataClause("extSchema", l) }, [3]string{"6.7.8-t02", "6.6.2.3.3-t01", ""}},
 		{"a stream's /F, /FFilter, /FDecodeParms", externalStreamClause, [3]string{"6.1.7-t03", "6.1.7.1-t03", "6.1.6.1-t02"}},
 		{"a /Perms key", permsClause, [3]string{"", "6.1.12-t01", "6.1.11-t01"}},
+		{"a spot colorant without a Colorants entry", func(l Level) string { return colourClause("spot", l) }, [3]string{"", "6.2.4.4-t01", "6.2.4.4-t01"}},
 		{"DeviceN's colorant limit", deviceNLimitClause, [3]string{"6.1.12-t09", "6.1.13-t09", ""}},
+		{"an image's BitsPerComponent", func(l Level) string { return imageClause("image", l) }, [3]string{"6.2.4-t04", "6.2.8-t04", "6.2.7.1-t04"}},
 		{"an image's /Interpolate", interp, [3]string{"6.2.4-t03", "6.2.8-t03", "6.2.7.1-t03"}},
 	} {
 		for i, p := range parts {
