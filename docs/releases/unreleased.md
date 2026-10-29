@@ -154,7 +154,7 @@ v0.6.0.
   `TestClausesAreTheProfilesNumbers` holds each of these to the profile rule
   it implements.
 
-- **PDF/A verdicts follow veraPDF on the rules where they differed** (#PR).
+- **PDF/A verdicts follow veraPDF on the rules where they differed** (#380).
   Each change was checked against veraPDF 1.30 on the corpus and on
   single-defect files:
   - New: an image's `/BitsPerComponent` must be 1, 2, 4 or 8, and 16 from
