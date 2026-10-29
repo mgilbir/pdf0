@@ -133,6 +133,10 @@ v0.6.0.
 
 ### htmlpdf
 
+- **forme v0.13.0** (#382), whose one change is that every operation it paints
+  says which box painted it (forme#964), which tagged output is built on. No
+  page lays out differently.
+
 - **forme v0.11.0** (#366). A page refused for a font nothing supplies now gets
   one `no-face` finding per face to supply. Each names the families the
   element asked for and points at that element, and `Finding.Font` holds the
