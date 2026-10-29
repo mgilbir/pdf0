@@ -10,6 +10,7 @@ import (
 	"github.com/mgilbir/forme/html"
 	"github.com/mgilbir/forme/layout"
 	pdf0 "github.com/mgilbir/pdf0"
+	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/object"
 )
 
@@ -55,21 +56,90 @@ type mark struct {
 	mcid int
 	elem *html.Node
 	kind markKind
+	// stream is the form the span is in, nil for the page's own stream.
+	stream *formStream
 	// node is the text node a run of the document's text was taken from,
 	// which says where among its element's children the run is; nil for
 	// generated text and for what is not text.
 	node *html.Node
 }
 
+// renameForms points the spans drawn in forms at the forms' copies in to,
+// where AppendPages put the last page of from under new object numbers. The
+// copies are found where the originals are: the same names in the same
+// resource dictionaries, from the page down.
+func (t *tagger) renameForms(from, to *pdf0.Document) {
+	fromPages, toPages := from.PageList(), to.PageList()
+	if len(fromPages) == 0 || len(toPages) == 0 {
+		return
+	}
+	copies := map[int]object.IndirectRef{}
+	var walk func(fr, tr *object.Dictionary, depth int)
+	walk = func(fr, tr *object.Dictionary, depth int) {
+		if fr == nil || tr == nil || depth > content.MaxNestingDepth {
+			return
+		}
+		fx, tx := from.ResolveDict(fr.Get("XObject")), to.ResolveDict(tr.Get("XObject"))
+		if fx == nil || tx == nil {
+			return
+		}
+		for name, v := range fx.All() {
+			fref, ok1 := v.(object.IndirectRef)
+			tref, ok2 := tx.Get(name).(object.IndirectRef)
+			if !ok1 || !ok2 {
+				continue
+			}
+			if _, seen := copies[fref.Number]; seen {
+				continue
+			}
+			copies[fref.Number] = tref
+			fs, ok1 := from.Resolve(fref).(*object.Stream)
+			ts, ok2 := to.Resolve(tref).(*object.Stream)
+			if ok1 && ok2 {
+				walk(from.ResolveDict(fs.Dict.Get("Resources")), to.ResolveDict(ts.Dict.Get("Resources")), depth+1)
+			}
+		}
+	}
+	walk(from.ResolveDict(fromPages[len(fromPages)-1].Get("Resources")), to.ResolveDict(toPages[len(toPages)-1].Get("Resources")), 0)
+	// Each form once: its spans share it, and a form renamed already holds a
+	// number of to's, which means nothing in copies.
+	renamed := map[*formStream]bool{}
+	for i := range t.marks {
+		st := t.marks[i].stream
+		if st == nil || renamed[st] {
+			continue
+		}
+		renamed[st] = true
+		if c, ok := copies[st.ref.Number]; ok {
+			st.ref = c
+		}
+	}
+}
+
+// kid is the span as its element's kid: on the page, or in the form it was
+// drawn in.
+func (m *mark) kid() pdf0.StructKid {
+	if m.stream != nil {
+		return pdf0.FormMCIDKid(m.stream.ref, m.mcid)
+	}
+	return pdf0.MCIDKid(m.mcid)
+}
+
+// formStream is a form XObject a tagged page draws its content into: a filter
+// group. Its spans are numbered in it, and named by the form, whose reference
+// exists once the form is written (canvas.group).
+type formStream struct {
+	ref object.IndirectRef
+}
+
 // tagged draws op as tagged content or as an artifact, by what forme says it
-// is. Groups drawn inline in the page's stream — a clip, a transform — are not
-// wrapped: each operation inside is, as it is drawn. A filter group is drawn
-// as a form XObject, which a drop shadow draws twice; it is one span, its
-// element's, and nothing inside it is marked.
+// is. A group — a clip, a transform, a filter — is not wrapped: each operation
+// inside is, as it is drawn, in the page's stream or in the form a filter
+// draws into, which numbers its spans itself.
 func (c *canvas) tagged(op layout.Op) error {
 	t := c.w.tags
 	switch v := op.(type) {
-	case layout.ClipPath, layout.TransformGroup:
+	case layout.ClipPath, layout.TransformGroup, layout.FilterGroup:
 		return c.paint(op)
 	case layout.Link:
 		n := len(c.w.links)
@@ -89,8 +159,9 @@ func (c *canvas) tagged(op layout.Op) error {
 		c.b.EndMarked()
 		return err
 	}
-	mcid := len(t.marks)
-	t.marks = append(t.marks, mark{mcid: mcid, elem: elem, kind: kind, node: node})
+	mcid := c.nextMCID
+	c.nextMCID++
+	t.marks = append(t.marks, mark{mcid: mcid, elem: elem, kind: kind, node: node, stream: c.stream})
 	tag := roleOf(elem).tag
 	if tag == "" {
 		tag = "Span"
@@ -110,7 +181,7 @@ func classify(op layout.Op) (elem *html.Node, kind markKind, content bool) {
 		return nil, 0, false
 	}
 	switch pb.Part {
-	case layout.PartContent, layout.PartGroup:
+	case layout.PartContent:
 		if g, ok := op.(layout.DrawGlyphs); ok && g.Text == "" {
 			return nil, 0, false // glyphs that stand for no text: a formula's shadow
 		}
@@ -438,10 +509,10 @@ func (b *treeBuilder) elems(n *html.Node, page object.IndirectRef, annots []obje
 				children = append(children, e)
 			}
 		case k.mark != nil && k.mark.kind == markMarker:
-			marker = append(marker, pdf0.MCIDKid(k.mark.mcid))
+			marker = append(marker, k.mark.kid())
 		case k.mark != nil:
-			kids = append(kids, structKid{kid: pdf0.MCIDKid(k.mark.mcid), inline: true, text: true})
-			ownMarks = append(ownMarks, pdf0.MCIDKid(k.mark.mcid))
+			kids = append(kids, structKid{kid: k.mark.kid(), inline: true, text: true})
+			ownMarks = append(ownMarks, k.mark.kid())
 		case k.annot >= 0:
 			kids = append(kids, structKid{kid: pdf0.AnnotKid(annots[k.annot]), inline: true})
 		}

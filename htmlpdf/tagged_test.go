@@ -125,6 +125,9 @@ func kidMark(doc *pdf0.Document, k object.Object) string {
 		if s, ok := v.Get("S").(object.Name); ok {
 			return " <" + string(s) + ">"
 		}
+		if v.Get("Type") == object.Name("MCR") {
+			return " #f" // a span in a form
+		}
 	}
 	return " ?"
 }
@@ -207,15 +210,28 @@ var paintingOps = map[string]bool{
 // unmarkedPainting is every painting operator of a content stream that is in
 // no marked-content sequence, and every one inside both a tagged span and an
 // artifact, which ISO 14289 forbids either way round (PDF/UA-1 7.1).
-func unmarkedPainting(t *testing.T, data []byte) []string {
+//
+// isForm says whether an XObject the stream draws is a form: drawing one is
+// not itself a mark, and what the form draws is judged in the form.
+func unmarkedPainting(t *testing.T, data []byte, isForm func(name string) bool) []string {
+	bad, _ := markedContent(t, data, isForm, func(string) bool { return false })
+	return bad
+}
+
+// markedContent is unmarkedPainting's findings, and also a form with spans
+// of its own (formTagged) drawn inside a span, which would put tagged content
+// inside tagged content; and the identifiers the stream's spans carry.
+func markedContent(t *testing.T, data []byte, isForm, formTagged func(name string) bool) ([]string, []int) {
 	t.Helper()
 	type open struct{ artifact, tagged bool }
 	var stack []open
 	var bad []string
+	var mcids []int
 	var lastName string
 	lx := core.NewContentLexer(core.Canceler{}, data)
 	var tok core.ContentTok
 	sawDict := false
+	wantMCID := false
 	for lx.Next(&tok) {
 		switch tok.Kind {
 		case core.ContentName:
@@ -233,7 +249,14 @@ func unmarkedPainting(t *testing.T, data []byte) []string {
 					depth--
 				case core.ContentName:
 					if tok.Name() == "MCID" {
-						sawDict = true
+						sawDict, wantMCID = true, true
+					}
+				case core.ContentNumber:
+					if wantMCID {
+						if n, ok := tok.Int(); ok {
+							mcids = append(mcids, n)
+						}
+						wantMCID = false
 					}
 				}
 			}
@@ -254,6 +277,12 @@ func unmarkedPainting(t *testing.T, data []byte) []string {
 		case "EMC":
 			stack = stack[:len(stack)-1]
 		default:
+			if op == "Do" && isForm(lastName) {
+				if formTagged(lastName) && len(stack) > 0 && stack[len(stack)-1].tagged {
+					bad = append(bad, "a form with spans of its own drawn inside a span")
+				}
+				break
+			}
 			if paintingOps[op] {
 				switch {
 				case len(stack) == 0 || !(stack[len(stack)-1].artifact || stack[len(stack)-1].tagged):
@@ -265,7 +294,7 @@ func unmarkedPainting(t *testing.T, data []byte) []string {
 		}
 		sawDict = false
 	}
-	return bad
+	return bad, mcids
 }
 
 // TestEverythingDrawnIsContentOrArtifact: on a tagged page every mark is in a
@@ -278,27 +307,96 @@ func TestEverythingDrawnIsContentOrArtifact(t *testing.T) {
 			t.Fatal(err)
 		}
 		back, _ := writtenBack(t, res.Document)
-		if bad := unmarkedPainting(t, []byte(lastPageContent(t, back))); len(bad) != 0 {
-			t.Errorf("%s: %v", name, bad)
-		}
-		// A form is drawn inside a span of the page's, and is part of it:
-		// nothing in it is marked again.
-		for _, form := range formsOf(t, back, back.ResolveDict(back.PageList()[0].Get("Resources")), 0) {
-			if marks := markedSequences(form); len(marks) != 0 {
-				t.Errorf("%s: a form drawn on a tagged page marks %v", name, marks)
+		// The page, and every form it draws — a filter's, whose content is
+		// tagged in the form itself — each held to the same rule.
+		page := back.PageList()[0]
+		pageRes := back.ResolveDict(page.Get("Resources"))
+		streams := append([]drawnStream{{data: []byte(lastPageContent(t, back)), res: pageRes, structParents: page.Get("StructParents")}}, formsOf(t, back, pageRes, 0)...)
+		for i, st := range streams {
+			bad, mcids := markedContent(t, st.data, isFormIn(back, st.res), formTaggedIn(back, st.res))
+			if len(bad) != 0 {
+				t.Errorf("%s, stream %d: %v", name, i, bad)
+			}
+			// Every span is some element's: its identifier has an owner in
+			// the stream's parent-tree entry.
+			owners := parentTreeEntry(back, st.structParents)
+			for _, id := range mcids {
+				if id >= len(owners) || back.ResolveDict(owners[id]) == nil {
+					t.Errorf("%s, stream %d: span %d is no element's", name, i, id)
+				}
 			}
 		}
 	}
 }
 
+// drawnStream is a content stream, the resources it names, and its
+// /StructParents.
+type drawnStream struct {
+	data          []byte
+	res           *object.Dictionary
+	structParents object.Object
+}
+
+// formTaggedIn says whether a name in res's /XObject is a form with spans of
+// its own, which /StructParents says.
+func formTaggedIn(doc *pdf0.Document, res *object.Dictionary) func(string) bool {
+	return func(name string) bool {
+		if res == nil {
+			return false
+		}
+		xo := doc.ResolveDict(res.Get("XObject"))
+		if xo == nil {
+			return false
+		}
+		st, ok := doc.Resolve(xo.Get(object.Name(name))).(*object.Stream)
+		return ok && st.Dict.Get("StructParents") != nil
+	}
+}
+
+// parentTreeEntry is the parent tree's entry for a /StructParents key: the
+// owners of a stream's spans, by identifier.
+func parentTreeEntry(doc *pdf0.Document, key object.Object) object.Array {
+	k, ok := doc.Resolve(key).(object.Integer)
+	if !ok {
+		return nil
+	}
+	root := doc.ResolveDict(doc.ResolveDict(doc.Trailer.Get("Root")).Get("StructTreeRoot"))
+	if root == nil {
+		return nil
+	}
+	nums, _ := doc.Resolve(doc.ResolveDict(root.Get("ParentTree")).Get("Nums")).(object.Array)
+	for i := 0; i+1 < len(nums); i += 2 {
+		if nums[i] == k {
+			entry, _ := doc.Resolve(nums[i+1]).(object.Array)
+			return entry
+		}
+	}
+	return nil
+}
+
+// isFormIn says whether a name in res's /XObject is a form.
+func isFormIn(doc *pdf0.Document, res *object.Dictionary) func(string) bool {
+	return func(name string) bool {
+		if res == nil {
+			return false
+		}
+		xo := doc.ResolveDict(res.Get("XObject"))
+		if xo == nil {
+			return false
+		}
+		st, ok := doc.Resolve(xo.Get(object.Name(name))).(*object.Stream)
+		return ok && st.Dict.Get("Subtype") == object.Name("Form")
+	}
+}
+
 // formsOf is the decoded content of every form XObject a resource dictionary
 // names, and those their own resources name.
-func formsOf(t *testing.T, doc *pdf0.Document, res *object.Dictionary, depth int) [][]byte {
+func formsOf(t *testing.T, doc *pdf0.Document, res *object.Dictionary, depth int) []drawnStream {
 	t.Helper()
 	if res == nil || depth > 8 {
 		return nil
 	}
-	var out [][]byte
+	var out []drawnStream
 	xo := doc.ResolveDict(res.Get("XObject"))
 	if xo == nil {
 		return nil
@@ -312,36 +410,9 @@ func formsOf(t *testing.T, doc *pdf0.Document, res *object.Dictionary, depth int
 		if err != nil {
 			t.Fatal(err)
 		}
-		out = append(out, data)
-		out = append(out, formsOf(t, doc, doc.ResolveDict(st.Dict.Get("Resources")), depth+1)...)
-	}
-	return out
-}
-
-// markedSequences is each Artifact sequence and each one with an MCID that
-// a content stream opens.
-func markedSequences(data []byte) []string {
-	var out []string
-	var lastName string
-	mcid := false
-	lx := core.NewContentLexer(core.Canceler{}, data)
-	var tok core.ContentTok
-	for lx.Next(&tok) {
-		switch tok.Kind {
-		case core.ContentName:
-			lastName = tok.Name()
-			if lastName == "MCID" {
-				mcid = true
-			}
-		case core.ContentOperator:
-			switch string(tok.Raw) {
-			case "BMC", "BDC":
-				if lastName == "Artifact" || mcid {
-					out = append(out, string(tok.Raw)+" "+lastName)
-				}
-			}
-			mcid = false
-		}
+		fres := doc.ResolveDict(st.Dict.Get("Resources"))
+		out = append(out, drawnStream{data: data, res: fres, structParents: st.Dict.Get("StructParents")})
+		out = append(out, formsOf(t, doc, fres, depth+1)...)
 	}
 	return out
 }
@@ -510,8 +581,8 @@ func veraPDFPassesAs(t *testing.T, flavour string, files []string) {
 // one early in the document is read after the heading it follows; ::before
 // content leads its heading; a display: contents element keeps its language
 // and its link; the hidden paragraph is not in the tree; the table keeps its
-// spans and its empty cell; and what a filter draws is one span of the
-// filtered element's.
+// spans and its empty cell; and the text a filter draws is tagged inside the
+// filter's form ("#f"), as the paragraph it is.
 func TestAReorderedPageIsReadInTheDocumentsOrder(t *testing.T) {
 	res, err := Render(Input{HTML: hardPage, Fonts: notoSansSet(t)}, Options{Page: A4, Tagged: true, EmbedAllFonts: true})
 	if err != nil {
@@ -547,7 +618,7 @@ func TestAReorderedPageIsReadInTheDocumentsOrder(t *testing.T) {
     Figure /Alt="A square" : #
     P : # # #
   Div : <P>
-    P : #
+    P : #f #f #f
   Table : <TR> <TR> <TR>
     TR : <TH> <TH>
       TH /Table:/Scope=/Column /Table:/RowSpan=2 : #

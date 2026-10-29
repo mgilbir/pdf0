@@ -132,9 +132,6 @@ type Options struct {
 	// language, as its title and /Lang. RenderInto adds the page and its tree
 	// to a document that has no structure tree, and refuses one that has
 	// (ErrTaggedTarget); the document's other pages are not tagged by it.
-	//
-	// Content a filter (CSS filter) draws is one span of the filtered
-	// element's, whatever elements it holds.
 	Tagged bool
 
 	// PDFA, with its Level set, makes the document Render returns a PDF/A

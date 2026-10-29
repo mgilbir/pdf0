@@ -94,7 +94,7 @@ type StructKid struct {
 	kind  structKidKind
 	mcid  int
 	elem  *StructElem
-	annot object.IndirectRef
+	annot object.IndirectRef // the annotation, or the form of a kidForm
 }
 
 type structKidKind uint8
@@ -104,6 +104,7 @@ const (
 	kidMCID
 	kidElem
 	kidAnnot
+	kidForm
 )
 
 // MCIDKid is the span of the element's page's content stream that
@@ -112,6 +113,17 @@ func MCIDKid(mcid int) StructKid { return StructKid{kind: kidMCID, mcid: mcid} }
 
 // ElemKid is a child element.
 func ElemKid(e StructElem) StructKid { return StructKid{kind: kidElem, elem: &e} }
+
+// FormMCIDKid is the span of a form XObject's content stream that
+// content.Builder.BeginTagged opened with identifier mcid: content drawn in a
+// form, such as a transparency group, which the page draws with Do. It is
+// written as a marked-content reference naming the form's stream (/MCR with
+// /Stm, ISO 32000-2 14.7.5.2), and the form is given the /StructParents that
+// leads a reader from its marks back to their elements. The form must be one
+// the element's page draws; its identifiers are its own, apart from the page's.
+func FormMCIDKid(form object.IndirectRef, mcid int) StructKid {
+	return StructKid{kind: kidForm, mcid: mcid, annot: form}
+}
 
 // AnnotKid is an annotation on the element's page: a link's annotation is the
 // kid of its Link element, beside the marks that draw the link's text (ISO
@@ -184,7 +196,7 @@ func (d *Document) SetStructureTree(root []StructElem, roleMap map[string]string
 		return nil
 	}
 	check := structureCheck{roleMap: roleMap, pdf20: d.isPDF20(), claimed: map[int]map[int]bool{},
-		annots: map[int]bool{}, ids: map[string]bool{}}
+		annots: map[int]bool{}, ids: map[string]bool{}, formClaimed: map[int]map[int]bool{}}
 	if err := check.elems(root, 0, nil); err != nil {
 		return err
 	}
@@ -264,6 +276,8 @@ type structureCheck struct {
 	claimed map[int]map[int]bool
 	// annots is the annotations already owned, by object number.
 	annots map[int]bool
+	// formClaimed is, per form object number, the identifiers already owned.
+	formClaimed map[int]map[int]bool
 	// ids is the element IDs, and headers the IDs Headers attributes name,
 	// with the tag of the element naming each, checked against ids once the
 	// whole tree is seen.
@@ -334,10 +348,14 @@ func (c *structureCheck) elems(elems []StructElem, depth int, inheritedPage *obj
 						"the second is %q, and an annotation has one parent", k.annot.Number, e.Tag)
 				}
 				c.annots[k.annot.Number] = true
+			case kidForm:
+				if err := c.formMCID(e.Tag, page, k.annot, k.mcid); err != nil {
+					return err
+				}
 			case kidElem:
 				children = append(children, *k.elem)
 			default:
-				return fmt.Errorf("pdf0: structure element %q has a kid that is none of MCIDKid, ElemKid and AnnotKid", e.Tag)
+				return fmt.Errorf("pdf0: structure element %q has a kid that is none of MCIDKid, FormMCIDKid, ElemKid and AnnotKid", e.Tag)
 			}
 		}
 		if err := c.elems(children, depth+1, page); err != nil {
@@ -369,6 +387,30 @@ func (c *structureCheck) mcid(tag string, page *object.IndirectRef, mcid int) er
 			"pdf0: marked-content identifier %d on page %d is claimed twice; "+
 				"the second claim is by %q, and an identifier belongs to one element",
 			mcid, page.Number, tag)
+	}
+	on[mcid] = true
+	return nil
+}
+
+// formMCID checks one marked-content identifier in a form an element names.
+func (c *structureCheck) formMCID(tag string, page *object.IndirectRef, form object.IndirectRef, mcid int) error {
+	if page == nil {
+		return fmt.Errorf(
+			"pdf0: structure element %q names marked content in form %d but no page, and no ancestor states one; "+
+				"a form's marks are on the page that draws it", tag, form.Number)
+	}
+	if mcid < 0 || mcid > content.MaxMCID {
+		return fmt.Errorf("pdf0: structure element %q names marked-content identifier %d in form %d, outside [0, %d]",
+			tag, mcid, form.Number, content.MaxMCID)
+	}
+	on := c.formClaimed[form.Number]
+	if on == nil {
+		on = map[int]bool{}
+		c.formClaimed[form.Number] = on
+	}
+	if on[mcid] {
+		return fmt.Errorf("pdf0: marked-content identifier %d in form %d is claimed twice; the second claim is by %q",
+			mcid, form.Number, tag)
 	}
 	on[mcid] = true
 	return nil
@@ -461,6 +503,12 @@ func (d *Document) checkStructurePages(elems []StructElem, inheritedPage *object
 				if !d.pageHasAnnot(*page, k.annot) {
 					return fmt.Errorf("pdf0: structure element %q names annotation %d, which is not in the /Annots of page %d",
 						e.Tag, k.annot.Number, page.Number)
+				}
+			case kidForm:
+				st, ok := d.Resolve(k.annot).(*object.Stream)
+				if !ok || st.Dict.Get("Subtype") != object.Name("Form") {
+					return fmt.Errorf("pdf0: structure element %q names marked content in object %d, which is not a form XObject",
+						e.Tag, k.annot.Number)
 				}
 			}
 		}
@@ -560,6 +608,16 @@ func (d *Document) writeStructElem(e *StructElem, parent object.IndirectRef,
 				return ref, err
 			}
 			kids = append(kids, child)
+		case kidForm:
+			if err := owners.claimForm(k.annot, k.mcid, ref); err != nil {
+				return ref, err
+			}
+			kids = append(kids, object.NewDictionary(
+				object.Entry{Key: "Type", Value: object.Name("MCR")},
+				object.Entry{Key: "Pg", Value: *page},
+				object.Entry{Key: "Stm", Value: k.annot},
+				object.Entry{Key: "MCID", Value: object.Integer(k.mcid)},
+			))
 		case kidAnnot:
 			// An object reference names the page it is on, which is the
 			// element's own; /Pg is optional then and written anyway, so
@@ -632,6 +690,28 @@ type mcidOwners struct {
 	annots []annotOwner
 	// ids is each element ID and its element.
 	ids map[string]object.IndirectRef
+	// byForm, formRefs and formOrder are byPage, pageRefs and order for the
+	// forms whose marks the tree names.
+	byForm    map[int]map[int]object.IndirectRef
+	formRefs  map[int]object.IndirectRef
+	formOrder []int
+}
+
+// claimForm records that an element owns an identifier in a form. The
+// structure check has refused a second claim already.
+func (o *mcidOwners) claimForm(form object.IndirectRef, mcid int, owner object.IndirectRef) error {
+	on, seen := o.byForm[form.Number]
+	if !seen {
+		on = map[int]object.IndirectRef{}
+		o.byForm[form.Number] = on
+		o.formRefs[form.Number] = form
+		o.formOrder = append(o.formOrder, form.Number)
+	}
+	if _, taken := on[mcid]; taken {
+		return fmt.Errorf("pdf0: marked-content identifier %d in form %d is claimed twice", mcid, form.Number)
+	}
+	on[mcid] = owner
+	return nil
 }
 
 type annotOwner struct{ annot, owner, page object.IndirectRef }
@@ -641,6 +721,8 @@ func newMCIDOwners() *mcidOwners {
 		byPage:   map[int]map[int]object.IndirectRef{},
 		pageRefs: map[int]object.IndirectRef{},
 		ids:      map[string]object.IndirectRef{},
+		byForm:   map[int]map[int]object.IndirectRef{},
+		formRefs: map[int]object.IndirectRef{},
 	}
 }
 
@@ -684,25 +766,22 @@ func (d *Document) writeParentTree(treeRoot *object.Dictionary, owners *mcidOwne
 		// The entry for a page is an array indexed by identifier, so it has to
 		// be dense: a gap is a null, not a shorter array, because the position
 		// *is* the identifier.
-		on := owners.byPage[pageNum]
-		highest := -1
-		for mcid := range on {
-			if mcid > highest {
-				highest = mcid
-			}
+		nums = append(nums, object.Integer(index), d.Add(denseOwners(owners.byPage[pageNum])))
+	}
+	// A form's entry is an array by identifier, as a page's is, keyed by the
+	// form's /StructParents after the pages' keys.
+	next := len(owners.order)
+	for _, formNum := range owners.formOrder {
+		form, ok := d.Resolve(owners.formRefs[formNum]).(*object.Stream)
+		if !ok {
+			return fmt.Errorf("pdf0: the structure tree names object %d as a form, and no such form exists", formNum)
 		}
-		elems := make(object.Array, highest+1)
-		for i := range elems {
-			elems[i] = object.Null{}
-		}
-		for mcid, owner := range on {
-			elems[mcid] = owner
-		}
-		nums = append(nums, object.Integer(index), d.Add(elems))
+		form.Dict.Set("StructParents", object.Integer(next))
+		nums = append(nums, object.Integer(next), d.Add(denseOwners(owners.byForm[formNum])))
+		next++
 	}
 	// An annotation's entry is the element itself, keyed by the annotation's
-	// /StructParent (ISO 32000-2 14.7.5.4), after the pages' keys.
-	next := len(owners.order)
+	// /StructParent (ISO 32000-2 14.7.5.4), after the pages' and forms' keys.
 	for _, ao := range owners.annots {
 		annot := d.ResolveDict(ao.annot)
 		if annot == nil {
@@ -732,6 +811,24 @@ func (d *Document) writeParentTree(treeRoot *object.Dictionary, owners *mcidOwne
 		treeRoot.Set("IDTree", d.Add(object.NewDictionary(object.Entry{Key: "Names", Value: names})))
 	}
 	return nil
+}
+
+// denseOwners is a stream's parent-tree entry: an array indexed by
+// identifier, a gap a null rather than a shorter array, because the position
+// is the identifier.
+func denseOwners(on map[int]object.IndirectRef) object.Array {
+	highest := -1
+	for mcid := range on {
+		highest = max(highest, mcid)
+	}
+	elems := make(object.Array, highest+1)
+	for i := range elems {
+		elems[i] = object.Null{}
+	}
+	for mcid, owner := range on {
+		elems[mcid] = owner
+	}
+	return elems
 }
 
 // The builder and the validators read one structure vocabulary: the PDF 1.7
