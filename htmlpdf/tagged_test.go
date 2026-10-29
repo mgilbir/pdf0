@@ -636,3 +636,32 @@ func TestHeaderCells(t *testing.T) {
 		t.Errorf("the structure tree:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+// TestTextIsReadAroundAnInlineStackingContext: an inline box that makes a
+// stacking context — transformed, or positioned with a z-index — is painted
+// after the text on both sides of it, and is still read between them: the
+// paragraph's own text is placed by the text node it came from.
+func TestTextIsReadAroundAnInlineStackingContext(t *testing.T) {
+	for _, style := range []string{"transform: rotate(10deg); display: inline-block", "position: relative; z-index: 2"} {
+		html := `<html lang="en"><title>x</title><p>a <span style="` + style + `">b</span> c</p>`
+		res, err := Render(Input{HTML: html, Fonts: notoSansSet(t)}, Options{Page: A4, Tagged: true, EmbedAllFonts: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		back, _ := writtenBack(t, res.Document)
+		root := back.ResolveDict(back.ResolveDict(back.Trailer.Get("Root")).Get("StructTreeRoot"))
+		p := back.ResolveDict(back.ResolveDict(root.Get("K")).Get("K"))
+		var got []string
+		for _, k := range back.Resolve(p.Get("K")).(object.Array) {
+			if span := back.ResolveDict(k); span != nil {
+				got = append(got, fmt.Sprintf("Span(%v)", span.Get("K")))
+			} else {
+				got = append(got, fmt.Sprint(k))
+			}
+		}
+		// "a", " ", " ", "c" are painted first (0-3), "b" last (4).
+		if want := "[0 1 Span(4) 2 3]"; fmt.Sprint(got) != want {
+			t.Errorf("%s: the paragraph's kids %v, want %s", style, got, want)
+		}
+	}
+}

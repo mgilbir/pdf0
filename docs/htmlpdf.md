@@ -384,7 +384,8 @@ What the tree holds:
   than the one around it has its `Lang`.
 - **The document's reading order, not the painting's.** A float, a positioned
   box and anything else painted out of turn is read where the document has
-  it. Text straight in a `<div>`, a `<section>` or the `<body>` is a `P`: the
+  it, and so is the text around it: a transformed or positioned inline box is
+  read between the words either side of it, though it is painted after both. Text straight in a `<div>`, a `<section>` or the `<body>` is a `P`: the
   anonymous block a browser lays it out in, and what PDF/UA-2 asks of those
   elements.
 - **Artifacts for what only decorates.** Backgrounds, borders, outlines, the
@@ -396,13 +397,8 @@ A tagged render passes `pdf0.ValidatePDFUA2` once declared, and veraPDF as
 PDF/UA-2. With `Options.PDFA` at an a level (`pdfa.PDFA2a`, say) it passes
 PDF/A-2a, and declared with `DeclarePDFUA(1)`, PDF/UA-1 too.
 
-Two limits. A run of an element's own text is placed among the element's
-children by the order it is painted in, which is the document's in a line of
-text; a child painted later than its line — a transformed or positioned
-inline box — is read after the text that follows it in the line
-([forme#965](https://github.com/mgilbir/forme/issues/965) would settle it).
-And what a CSS `filter` draws is one span of the filtered element, whatever
-elements it holds.
+One limit: what a CSS `filter` draws is one span of the filtered element,
+whatever elements it holds.
 
 ## Into a document you have
 
