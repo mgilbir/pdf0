@@ -255,7 +255,7 @@ func TestUACharMappingAdobeCollections(t *testing.T) {
 			object.Entry{Key: "Encoding", Value: object.Name("Identity-H")},
 			object.Entry{Key: "DescendantFonts", Value: object.Array{f.add(desc)}})
 		f.res.Set("Font", object.NewDictionary(object.Entry{Key: "F1", Value: f.add(font)}))
-		got := findings(f.run("1"), "7.2", "cannot be mapped to Unicode")
+		got := findings(f.run("1"), "7.21.7", "cannot be mapped to Unicode")
 		if (len(got) != 0) != tc.flagged {
 			t.Errorf("Adobe-%s Identity-H font without ToUnicode: flagged=%v, want %v (%v)", tc.ordering, len(got) != 0, tc.flagged, got)
 		}
@@ -288,7 +288,11 @@ func TestUALangTagSyntax(t *testing.T) {
 			p, _ := f.elem(f.docEl, f.docElRef, "P")
 			p.Set("Lang", str(tc.elemLang))
 			f.res.Set("Properties", object.NewDictionary(object.Entry{Key: "PL0", Value: object.NewDictionary(object.Entry{Key: "Lang", Value: str("portugues-pt")})}))
-			got := findings(f.run(part), "7.2", notTag)
+			clause := "7.2"
+			if part == "2" {
+				clause = "8.4.4" // ISO 14289-2's number for the language rule
+			}
+			got := findings(f.run(part), clause, notTag)
 			if (len(got) != 0) != tc.bad {
 				t.Errorf("part %s, %s: flagged=%v, want %v (%v)", part, tc.name, len(got) != 0, tc.bad, got)
 			}
@@ -399,7 +403,7 @@ func TestUA1LanguageDeterminable(t *testing.T) {
 	f := newUAFixture("/P <</MCID 0>> BDC BT (x) Tj ET EMC")
 	p, _ := f.elem(f.docEl, f.docElRef, "P", object.Integer(0))
 	p.Set("Lang", str("en"))
-	if got := findings(f.run("2"), "7.2", "default language"); len(got) == 0 {
+	if got := findings(f.run("2"), "8.4.4", "default language"); len(got) == 0 {
 		t.Error("PDF/UA-2 without a catalog /Lang: want a finding")
 	}
 }
@@ -476,7 +480,11 @@ func TestUATableHeaderAssociation(t *testing.T) {
 	} {
 		f := tableFixture(tc.rows...)
 		for part, want := range map[string]bool{"1": tc.bad1, "2": tc.bad2} {
-			got := findings(f.run(part), "7.5", "")
+			clause := "7.5"
+			if part == "2" {
+				clause = "8.2.5.26" // ISO 14289-2's number for the table rules
+			}
+			got := findings(f.run(part), clause, "")
 			if (len(got) != 0) != want {
 				t.Errorf("part %s, %s: flagged=%v, want %v (%v)", part, tc.name, len(got) != 0, want, got)
 			}

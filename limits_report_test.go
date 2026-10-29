@@ -390,7 +390,8 @@ func embeddedPDFAFixture(t *testing.T, lim core.Limits) (inner []byte, outer *Do
 // embeddedPDFACompliant runs the embedded-PDF/A check on one document at depth
 // 1, with a fresh budget of its own, which is what these tests mean by it.
 func embeddedPDFACompliant(cancel core.Canceler, data []byte, lim core.Limits) (compliant, complete bool) {
-	return embeddedPDFAChecker(newEmbeddedBudget(core.DefaultLimits()))(cancel, data, lim, 1)
+	_, compliant, complete = embeddedPDFAChecker(newEmbeddedBudget(core.DefaultLimits()))(cancel, data, lim, 1)
+	return compliant, complete
 }
 
 func TestEmbeddedPDFAIncompleteIsNotNonConformance(t *testing.T) {

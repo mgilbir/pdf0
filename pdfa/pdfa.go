@@ -595,7 +595,8 @@ func annotActionClause(concept string, level Level) string {
 	// [1b, 2b/3b, 4]
 	m := map[string][3]string{
 		"subtype":    {"6.5.2", "6.3.1", "6.3.1"},
-		"widget":     {"6.6.2", "6.4.1", "6.4.1"},
+		"widget":     {"6.6.1", "6.4.1", "6.4.1"}, // a widget's /A: veraPDF 6.6.1-3 at 1b
+		"widgetAA":   {"6.6.2", "6.4.1", "6.4.1"}, // a field's /AA: veraPDF 6.6.2-2 at 1b
 		"forbidden":  {"6.6.1", "6.5.1", "6.6.1"},
 		"catalogAA":  {"6.6.2", "6.5.2", "6.6.3"},
 		"flags":      {"6.5.3", "6.3.2", "6.3.2"},
@@ -713,8 +714,10 @@ func checkOutputIntents(doc core.View, level Level) []Violation {
 			continue
 		}
 
-		// /DestOutputProfileRef is not allowed in PDF/A
-		if dict.Get("DestOutputProfileRef") != nil {
+		// /DestOutputProfileRef is not allowed in PDF/A-2 and later (ISO
+		// 19005-2 6.2.3; veraPDF 6.2.3-3). PDF/A-1 predates the key, which
+		// ISO 15930-7:2010 defined, and its profile has no rule for it.
+		if level.Part() != 1 && dict.Get("DestOutputProfileRef") != nil {
 			errs = append(errs, Violation{
 				Rule:    colourClause("outputIntent", level),
 				Level:   level,
@@ -858,15 +861,20 @@ func checkOutputIntentProfile(doc core.View, level Level) []Violation {
 			continue
 		}
 		judged[profStream] = true
-		// Validate ICC profile N matches the profile data
-		nObj := profStream.Dict.Get("N")
-		if nObj == nil {
-			report(oi, "/DestOutputProfile must have /N")
-			continue
+		// /N and the profile's colour space must agree — at PDF/A-1, where
+		// the profile is an ICC profile stream like any ICCBased one and
+		// veraPDF holds it to that rule (6.2.3.2-2: N present, and 1 for GRAY,
+		// 3 for RGB or Lab, 4 for CMYK). PDF/A-2 and -4 have no such rule
+		// for an output profile, and veraPDF passes one whose /N is wrong or
+		// missing.
+		nRule := ""
+		if level.Part() == 1 {
+			nRule = colourClause("iccBased", level)
 		}
-		nVal, ok := doc.ResolveInt(nObj)
-		if !ok {
-			continue
+		nVal, nOK := doc.ResolveInt(profStream.Dict.Get("N"))
+		if profStream.Dict.Get("N") == nil && nRule != "" {
+			errs = append(errs, Violation{Rule: nRule, Level: level, Object: oi.obj,
+				Message: oi.label + " /DestOutputProfile must have /N"})
 		}
 		// Decompress and check ICC profile header
 		data, r := doc.ICCProfileData(profStream)
@@ -886,19 +894,17 @@ func checkOutputIntentProfile(doc core.View, level Level) []Violation {
 		}
 		// ICC profile header: bytes 16-19 contain color space signature
 		cs := string(data[16:20])
-		expectedN := 0
 		switch cs {
-		case "GRAY":
-			expectedN = 1
-		case "RGB ":
-			expectedN = 3
-		case "CMYK":
-			expectedN = 4
+		case "GRAY", "RGB ", "CMYK":
 		default:
 			report(oi, "ICC profile has unsupported color space %q", cs)
 		}
-		if expectedN > 0 && int(nVal) != expectedN {
-			report(oi, "/N=%d does not match ICC profile color space %s (expected %d)", nVal, cs, expectedN)
+		if nOK && nRule != "" {
+			n := int(nVal)
+			if !(n == 1 && cs == "GRAY" || n == 3 && (cs == "RGB " || cs == "Lab ") || n == 4 && cs == "CMYK") {
+				errs = append(errs, Violation{Rule: nRule, Level: level, Object: oi.obj,
+					Message: fmt.Sprintf("%s /N=%d does not match ICC profile color space %q", oi.label, n, cs)})
+			}
 		}
 		// ICC profile header: bytes 12-15 contain device class. Output intent
 		// profiles must be of class "mntr" (monitor), "prtr" (printer), or
@@ -1088,6 +1094,19 @@ func checkNoLZW(doc core.View, level Level) []Violation {
 				Object:  num,
 			})
 		}
+		// The Crypt filter is permitted only as the Identity crypt filter
+		// (ISO 19005-2 6.1.7.2, -4 6.1.6.2). PDF/A-1 says nothing of it,
+		// and veraPDF's PDF/A-1 profile passes any.
+		if level.Part() != 1 {
+			if name := cryptFilterName(doc, stream); name != "" && name != "Identity" {
+				errs = append(errs, Violation{
+					Rule:    filterClause(level),
+					Level:   level,
+					Message: fmt.Sprintf("stream uses the Crypt filter %s; only the Identity crypt filter is permitted", name),
+					Object:  num,
+				})
+			}
+		}
 		// Check for non-standard filter names
 		if badFilter := getNonStandardFilter(doc, stream); badFilter != "" {
 			errs = append(errs, Violation{
@@ -1221,6 +1240,39 @@ func getNonStandardFilter(doc core.View, stream *object.Stream) string {
 	return ""
 }
 
+// cryptFilterName is the /Name of the first Crypt filter in a stream's chain,
+// from its decode parameters — Identity when they give none (ISO 32000-1
+// Table 14) — or "" when the chain has no Crypt filter.
+func cryptFilterName(doc core.View, stream *object.Stream) object.Name {
+	filters := doc.Resolve(stream.Dict.Get("Filter"))
+	parms := doc.Resolve(stream.Dict.Get("DecodeParms"))
+	at := func(i int) *object.Dictionary {
+		if arr, ok := parms.(object.Array); ok {
+			if i < len(arr) {
+				return doc.ResolveDict(arr[i])
+			}
+			return nil
+		}
+		return doc.ResolveDict(parms)
+	}
+	var names object.Array
+	switch f := filters.(type) {
+	case object.Name:
+		names = object.Array{f}
+	case object.Array:
+		names = f
+	}
+	for i, n := range names {
+		if name, _ := doc.ResolveName(n); name == "Crypt" {
+			if cf, ok := doc.ResolveName(at(i).Get("Name")); ok {
+				return cf
+			}
+			return "Identity"
+		}
+	}
+	return ""
+}
+
 // hasFilter reports whether filterName is anywhere in the stream's filter
 // chain, resolved as getNonStandardFilter's is.
 func hasFilter(doc core.View, stream *object.Stream, filterName string) bool {
@@ -1343,6 +1395,9 @@ func fontObjNum(doc core.View, fontDict *object.Dictionary) int {
 // checkOneFontEmbedded applies the 6.2.10 embedding rule to a single font
 // dictionary.
 func checkOneFontEmbedded(doc core.View, fontDict *object.Dictionary, objNum int, level Level) []Violation {
+	if !isFontDict(doc, fontDict) {
+		return nil // not a font; see isFontDict
+	}
 	subtypeName, _ := doc.ResolveName(fontDict.Get("Subtype"))
 
 	// Type3 fonts define their glyphs with content streams, so they carry no
@@ -1952,8 +2007,13 @@ func checkNeedAppearances(doc core.View, level Level) []Violation {
 		return nil
 	}
 	if doc.IsTrue(af.Get("NeedAppearances")) {
+		// ISO 19005-1 6.9; -2/-3 and -4 6.4.1 (veraPDF 6.9-1, 6.4.1-3).
+		rule := "6.4.1"
+		if level.Part() == 1 {
+			rule = "6.9"
+		}
 		return []Violation{{
-			Rule:    "6.4.1",
+			Rule:    rule,
 			Level:   level,
 			Message: "NeedAppearances must be false",
 		}}
@@ -2172,7 +2232,7 @@ func checkAnnotationAA(doc core.View, level Level) []Violation {
 
 	// The clause is the widget/form-field additional-actions rule: 6.6.2 at
 	// PDF/A-1 and 6.4.1 at -2 and -3, which annotActionClause has under
-	// "widget". It was hardcoded to 6.6.3, which is PDF/A-4's — a level this
+	// "widgetAA". It was hardcoded to 6.6.3, which is PDF/A-4's — a level this
 	// function returns nil for — and the comment here cited 6.5.3 and 6.3.3,
 	// which are the annotation rules about CA, F, C/IC and AP and say nothing
 	// about AA. Three different wrong numbers for one report.
@@ -2181,7 +2241,7 @@ func checkAnnotationAA(doc core.View, level Level) []Violation {
 	// PDWidgetAnnot and PDFormField: this reports /AA on any annotation. The
 	// corpus is the oracle on that and it holds at FP=0 either way, so the
 	// broader reading keeps whatever it catches.
-	clause := annotActionClause("widget", level)
+	clause := annotActionClause("widgetAA", level)
 	var errs []Violation
 	check := func(dict *object.Dictionary, num int) {
 		if dict.Get("AA") != nil {
@@ -2265,9 +2325,12 @@ func checkIdentification(doc core.View, level Level) []Violation {
 		// Reporting the identification missing would be a guess.
 		return nil
 	case core.XMPMalformed:
-		// The packet is not XML, which checkXMPWellFormed reports. It
-		// identifies nothing, and saying so again per property adds nothing.
-		return nil
+		// The packet is not XML, which checkXMPWellFormed reports; and so
+		// it identifies nothing, which is this rule's to report, once, as
+		// veraPDF does at every part (6.7.11-1, 6.6.4-1, 6.7.3-1; PDF_A-4
+		// 6-7-2-1-t01-fail-d). Not per property: none can be read.
+		return []Violation{{Rule: metadataClause("version", level), Level: level,
+			Message: "the XMP packet is not well-formed, so it identifies no PDF/A part or conformance level"}}
 	}
 	rule := metadataClause("version", level)
 	var errs []Violation
@@ -2282,9 +2345,15 @@ func checkIdentification(doc core.View, level Level) []Violation {
 		return errs
 	}
 	// The identification schema's prefix is normative, not a convention
-	// (ISO 19005-1 Table 3; -2/-3 6.6.4; -4 6.7.3).
+	// (ISO 19005-1 Table 3; -2/-3 6.6.4; -4 6.7.3), for the properties the
+	// part's schema defines (prefixedIDProperties). One the schema does not
+	// define is not this rule's: at PDF/A-1 a corr fails 6.7.9 only.
+	seen := map[string]bool{}
 	for _, p := range id.otherPrefixes {
-		report("", fmt.Sprintf("the PDF/A identification schema must use the namespace prefix pdfaid, found %q", p))
+		if slices.Contains(prefixedIDProperties(level), p.Name) && !seen[p.Prefix] {
+			seen[p.Prefix] = true
+			report("", fmt.Sprintf("the PDF/A identification schema must use the namespace prefix pdfaid, found %q", p.Prefix))
+		}
 	}
 
 	switch want := strconv.Itoa(level.Part()); {
@@ -3653,6 +3722,16 @@ func checkOptionalContent(doc core.View, level Level) []Violation {
 		if cfgDict == nil {
 			continue
 		}
+		// "The AS key shall not appear in any optional content configuration
+		// dictionary" (ISO 19005-2/-3 6.9; veraPDF 6.9-4). ISO 19005-4
+		// dropped the requirement, and its profile has no such rule.
+		if level.Part() != 4 && cfgDict.Get("AS") != nil {
+			errs = append(errs, Violation{
+				Rule:    ocRule,
+				Level:   level,
+				Message: "an optional-content configuration dictionary must not contain /AS",
+			})
+		}
 		if nameObj := cfgDict.Get("Name"); nameObj != nil {
 			if s, r := doc.StringValue(nameObj); r == core.ReasonOK {
 				// A text string: the same name in UTF-16 and in PDFDocEncoding
@@ -3728,6 +3807,10 @@ type implLimits struct {
 	arrayLen  int
 	nesting   int
 	realLimit float64
+	// realMin is the least magnitude a non-zero real may have, 0 for none:
+	// PDF 1.7 Annex C's ±1.175e-38 at PDF/A-2 and -3 (veraPDF 6.1.13-5).
+	// ISO 19005-1's profile has no such rule.
+	realMin float64
 }
 
 func checkImplementationLimits(doc core.View, level Level) []Violation {
@@ -3750,6 +3833,10 @@ func checkImplementationLimits(doc core.View, level Level) []Violation {
 		lim.rule = "6.1.13" // ISO 19005-2/-3
 		lim.stringLen = 32767
 		lim.realLimit = 3.403e38 // PDF 1.7 Annex C (float32 range)
+		lim.realMin = 1.175e-38
+		// PDF 1.7's Annex C sets no array or dictionary capacity, and the
+		// PDF/A-2 profile has no such rule (veraPDF 6.1.13 has none).
+		lim.arrayLen, lim.dictEnt = 0, 0
 	}
 
 	var errs []Violation
@@ -3821,6 +3908,14 @@ func checkObjectLimits(obj object.Object, objNum int, level Level, lim implLimit
 				Object:  objNum,
 			})
 		}
+		if a := math.Abs(float64(v)); a != 0 && a < lim.realMin {
+			*errs = append(*errs, Violation{
+				Rule:    lim.rule,
+				Level:   level,
+				Message: fmt.Sprintf("real %g is closer to zero than the limit %g", float64(v), lim.realMin),
+				Object:  objNum,
+			})
+		}
 	case *object.Dictionary:
 		if depth > lim.nesting {
 			*errs = append(*errs, Violation{
@@ -3831,7 +3926,7 @@ func checkObjectLimits(obj object.Object, objNum int, level Level, lim implLimit
 			})
 			return // Don't recurse further
 		}
-		if v.Len() > lim.dictEnt {
+		if lim.dictEnt > 0 && v.Len() > lim.dictEnt {
 			*errs = append(*errs, Violation{
 				Rule:    lim.rule,
 				Level:   level,
@@ -3853,7 +3948,7 @@ func checkObjectLimits(obj object.Object, objNum int, level Level, lim implLimit
 			})
 			return // Don't recurse further
 		}
-		if len(v) > lim.arrayLen {
+		if lim.arrayLen > 0 && len(v) > lim.arrayLen {
 			*errs = append(*errs, Violation{
 				Rule:    lim.rule,
 				Level:   level,
@@ -4095,31 +4190,28 @@ func getOutputIntentCoverage(doc core.View, catalog *object.Dictionary) (hasRGB,
 		if s, _ := doc.ResolveName(dict.Get("S")); s != "GTS_PDFA1" {
 			continue
 		}
+		// What veraPDF reads as the output colour space: the
+		// profile's header colour space, and none when there is no profile
+		// to read it from. An intent with no profile, or one whose data is
+		// broken, is no PDF/A output intent, and covers nothing (PDF_A-1b
+		// 6-2-2-t02-fail-a, PDF_A-2b and -4 6-2-3-t01-fail-b). Data pdf0
+		// declined to read — a limit, a cancellation — is unknown, not
+		// broken, and is taken to cover both spaces, so that nothing is
+		// asserted on the strength of a read that did not happen.
 		profileRef := dict.Get("DestOutputProfile")
 		if profileRef == nil {
-			// If there's an OutputIntent without a profile, it still signals
-			// intent. For OutputConditionIdentifier-based intents, treat as
-			// covering both RGB and CMYK (conservative).
-			oci := dict.Get("OutputConditionIdentifier")
-			if oci != nil {
-				hasRGB = true
-				hasCMYK = true
-			}
 			continue
 		}
-		profileObj := doc.Resolve(profileRef)
-		stream, ok := profileObj.(*object.Stream)
+		stream, ok := doc.Resolve(profileRef).(*object.Stream)
 		if !ok {
 			continue
 		}
-
-		// Decompress the profile data to read the ICC header
-		profileData, _ := doc.ICCProfileData(stream) // reason: an unread profile is taken to cover both spaces below; the producer recorded any declined trip
+		profileData, reason := doc.ICCProfileData(stream)
 		if len(profileData) < 20 {
-			// Can't read profile header; assume it covers both spaces
-			// to avoid false positives.
-			hasRGB = true
-			hasCMYK = true
+			if reason == core.ReasonLimit || reason == core.ReasonCanceled || reason == core.ReasonUnsupported {
+				hasRGB = true
+				hasCMYK = true
+			}
 			continue
 		}
 
@@ -4130,12 +4222,12 @@ func getOutputIntentCoverage(doc core.View, catalog *object.Dictionary) (hasRGB,
 			hasRGB = true
 		case "CMYK":
 			hasCMYK = true
-		case "GRAY":
-			hasGray = true
 		default:
-			// Unknown profile type - assume it covers both to avoid false positives
-			hasRGB = true
-			hasCMYK = true
+			// GRAY, or a colour space that is no output space at all: an
+			// output colour space nonetheless, which is all DeviceGray asks
+			// for (veraPDF asks only that there be one), and no RGB or CMYK one
+			// (PDF_A-1b 6-2-2-t03-fail-b, "YYY ").
+			hasGray = true
 		}
 	}
 	return
@@ -4215,6 +4307,27 @@ func checkICCBasedProfiles(doc core.View, level Level) []Violation {
 			if expectedN > 0 && expectedN != nVal {
 				errs = append(errs, Violation{Rule: rule, Level: level, Object: p.num,
 					Message: fmt.Sprintf("ICCBased profile /N=%d does not match ICC color space %q", nVal, cs)})
+			}
+		}
+		// An ICCBased colour space's profile is an input profile: of a
+		// device class that converts to the profile connection space —
+		// output, display, input or colour space conversion — over a
+		// colour space PDF can name (ISO 32000-1 8.6.5.5; veraPDF 6.2.3.2-1,
+		// 6.2.4.2-1). A device link joins two device spaces and an abstract
+		// profile two PCS ones; neither is a colour space.
+		if len(profileData) >= 20 {
+			cls, cs := string(profileData[12:16]), string(profileData[16:20])
+			switch cls {
+			case "prtr", "mntr", "scnr", "spac":
+			default:
+				errs = append(errs, Violation{Rule: rule, Level: level, Object: p.num,
+					Message: fmt.Sprintf("ICCBased profile has device class %q; an input profile is prtr, mntr, scnr or spac", cls)})
+			}
+			switch cs {
+			case "RGB ", "CMYK", "GRAY", "Lab ":
+			default:
+				errs = append(errs, Violation{Rule: rule, Level: level, Object: p.num,
+					Message: fmt.Sprintf("ICCBased profile has colour space %q; an input profile's is RGB, CMYK, GRAY or Lab", cs)})
 			}
 		}
 		if len(profileData) >= 9 {

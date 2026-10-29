@@ -25,6 +25,11 @@ func levelAClause(concept string, level Level) string {
 			return "6.8.2.2"
 		}
 		return "6.7.2.2"
+	case "structTree": // The structure hierarchy, rooted in /StructTreeRoot
+		if part1 {
+			return "6.8.3.3"
+		}
+		return "6.7.3.3"
 	case "toUnicode": // A rendered font must map its codes to Unicode
 		if part1 {
 			return "6.3.8"
@@ -76,9 +81,12 @@ func checkLevelAStructure(doc core.View, level Level) []Violation {
 			Message: "a Level A file shall be a Tagged PDF (catalog /MarkInfo << /Marked true >>)",
 		})
 	}
+	// The tree itself is the structure-hierarchy rule's (ISO 19005-1
+	// 6.8.3.3, -2/-3 6.7.3.3; veraPDF 6.8.3.3-1, 6.7.3.3-1), not the
+	// MarkInfo one's.
 	if cat.Get("StructTreeRoot") == nil {
 		errs = append(errs, Violation{
-			Rule:    levelAClause("structure", level),
+			Rule:    levelAClause("structTree", level),
 			Level:   level,
 			Message: "a Level A file shall contain a logical structure tree (catalog /StructTreeRoot)",
 		})

@@ -47,8 +47,10 @@
 package rulecov
 
 import (
+	"bufio"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -299,4 +301,172 @@ func dedupe(xs []string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// # Measured against veraPDF's verdicts
+//
+// A corpus file's name says the rule it was written for, and it is not always
+// the rule veraPDF fails it on: a file named for 6.2.10-t01 that veraPDF fails
+// under 6.2.4.3-2 counts, by its name, as a 6.2.10 file pdf0 caught only
+// "elsewhere", when pdf0 reports exactly what veraPDF does. MeasureVerdicts
+// asks the reference validator instead. For every file veraPDF fails, each
+// rule it fails the file on is a test of that rule, classified as Measure
+// classifies one; every file veraPDF passes that pdf0 flags is a false
+// positive. The verdicts are veraPDF's own report (Verdicts), generated from
+// the corpus and never committed.
+
+// Verdict is what veraPDF said of one file: whether it passed, and the rules
+// it failed, as Rule.ID writes them.
+type Verdict struct {
+	Pass  bool
+	Rules []string
+}
+
+// verdictRule is a rule line of veraPDF's text report: "  FAIL 6.2.4.3-2".
+var verdictRule = regexp.MustCompile(`^\s+FAIL ((?:\d+\.)*\d+)-(\d+)\s*$`)
+
+// ParseVerdicts reads veraPDF's text report (--format text -v), keyed by each
+// file's path with the first of prefixes it starts with removed: the
+// directory the report was made over, as veraPDF saw it.
+func ParseVerdicts(r io.Reader, prefixes ...string) (map[string]Verdict, error) {
+	out := map[string]Verdict{}
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64*1024), 1<<20)
+	var current string
+	for sc.Scan() {
+		line := sc.Text()
+		if m := verdictRule.FindStringSubmatch(line); m != nil {
+			if current == "" {
+				return nil, fmt.Errorf("rulecov: rule %s-%s in veraPDF's report belongs to no file", m[1], m[2])
+			}
+			n, _ := strconv.Atoi(m[2])
+			v := out[current]
+			v.Rules = append(v.Rules, Rule{Clause: m[1], Test: n}.ID())
+			out[current] = v
+			continue
+		}
+		var pass bool
+		switch {
+		case strings.HasPrefix(line, "PASS "):
+			pass = true
+		case strings.HasPrefix(line, "FAIL "):
+		default:
+			continue
+		}
+		// "FAIL <path> <flavour>": the path may hold spaces, the flavour not.
+		rest := line[len("FAIL "):]
+		i := strings.LastIndexByte(rest, ' ')
+		if i < 0 {
+			return nil, fmt.Errorf("rulecov: %q in veraPDF's report names no flavour", line)
+		}
+		path := rest[:i]
+		for _, p := range prefixes {
+			if strings.HasPrefix(path, p) {
+				path = strings.TrimPrefix(path, p)
+				break
+			}
+		}
+		current = filepath.ToSlash(path)
+		out[current] = Verdict{Pass: pass}
+	}
+	return out, sc.Err()
+}
+
+// VerdictReport is one level measured against veraPDF's verdicts.
+type VerdictReport struct {
+	Report
+	// FalsePositives are the files veraPDF passes and pdf0 flags, each with
+	// what pdf0 reported.
+	FalsePositives []string
+	// Renamed counts the files veraPDF fails on rules that do not include the
+	// one their name says: what measuring by name got wrong.
+	Renamed int
+	// Files is how many files were judged.
+	Files int
+}
+
+// MeasureVerdicts validates every PDF under dir and judges it by veraPDF's
+// verdict on it (see the section above). A file veraPDF has no verdict on is
+// an error: the verdicts are of another corpus, and nothing measured against
+// them would mean anything.
+func MeasureVerdicts(rules []Rule, dir string, verdicts map[string]Verdict, validate Validator) (VerdictReport, error) {
+	root, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return VerdictReport{}, err
+	}
+	index := map[string]int{}
+	results := make([]RuleResult, len(rules))
+	for i, r := range rules {
+		results[i].Rule = r
+		if _, dup := index[r.ID()]; !dup {
+			index[r.ID()] = i
+		}
+	}
+	var rep VerdictReport
+	var paths []string
+	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && strings.HasSuffix(strings.ToLower(d.Name()), ".pdf") {
+			paths = append(paths, p)
+		}
+		return nil
+	})
+	if err != nil {
+		return VerdictReport{}, err
+	}
+	sort.Strings(paths)
+	for _, p := range paths {
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return VerdictReport{}, err
+		}
+		rel = filepath.ToSlash(rel)
+		v, ok := verdicts[rel]
+		if !ok {
+			return VerdictReport{}, fmt.Errorf("rulecov: veraPDF has no verdict on %s; the verdicts are not of this corpus (regenerate them)", rel)
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return VerdictReport{}, err
+		}
+		rep.Files++
+		clauses, verr := validate(data)
+		base := filepath.Base(p)
+		if v.Pass {
+			if verr == nil && len(clauses) > 0 {
+				rep.FalsePositives = append(rep.FalsePositives, base+": reported "+strings.Join(dedupe(clauses), ", "))
+			}
+			continue
+		}
+		if clause, test, _, named := ParseName(base); named && !contains(v.Rules, Rule{Clause: clause, Test: test}.ID()) {
+			rep.Renamed++
+		}
+		for _, id := range dedupe(v.Rules) {
+			i, ok := index[id]
+			if !ok {
+				rep.Orphans = append(rep.Orphans, CorpusFile{Path: p})
+				continue
+			}
+			rr := &results[i]
+			rr.FailFiles++
+			clause := rr.Clause
+			switch {
+			case verr != nil:
+				rr.Unreadable++
+				rr.Examples = append(rr.Examples, fmt.Sprintf("%s: %v", base, verr))
+			case len(clauses) == 0:
+				rr.Missed++
+				rr.Examples = append(rr.Examples, base+": no violations")
+			case contains(clauses, clause):
+				rr.Detected++
+			default:
+				rr.Elsewhere++
+				rr.Examples = append(rr.Examples, base+": reported "+strings.Join(dedupe(clauses), ", "))
+			}
+		}
+	}
+	rep.Rules = results
+	return rep, nil
 }

@@ -132,7 +132,7 @@ rule, noted in the source comments.
 | Part 2's own rules | UA-2 5, 8.2.5.2, 8.2.5.12, 8.2.5.25, 8.8, 8.9.2.2, 8.9.2.4.10, 8.10.1, 8.10.2.3, 8.14.1 | `checkUA2Revision`, `checkUA2DocumentRoot`, `checkUA2NoH`, `checkUA2ListNumbering`, `checkUA2StructDestinations`, `checkUA2InvisibleAnnots`, `checkUA2FileAttachments`, `checkUA2FormOneWidget`, `checkUA2WidgetDescription`, `checkUA2EmbeddedFileDesc` | **PDF/UA-2 only**: `pdfuaid:rev`, the `Document` root, no `H`, `ListNumbering`, structure destinations, invisible annotations, `AFRelationship`, one widget per `Form`, a widget's label, an embedded file's `/Desc` — see [PDF/UA-2](#pdfua-2) |
 | Media clips | 7.18.6.2 | `checkUAMediaClips` | a `/Type /MediaClip` dictionary anywhere in the document (`core.View.ReachableDicts`, direct dictionaries included) missing `/CT`, missing `/Alt`, or with an `/Alt` carrying no non-empty string |
 | Fonts | 7.21.3.1–7.21.8, 7.21.4.1/.2, 7.21.5, 7.21.6 | `checkUAFonts`, `checkUAFontDicts`, `checkUACMaps`, `checkUACMapWMode`, `checkUACIDSystemInfo`, `checkUAToUnicodeValues`, `checkUAFontSubsetGlyphs`, `checkUANotdefCID`, `checkUAFontWidths` | not embedded, `CIDFontType2` without `/CIDToGIDMap` or with a non-`Identity` name, symbolic TrueType with an `/Encoding`, non-symbolic TrueType not on MacRoman/WinAnsi, or with a `/Differences` naming a glyph not in the Adobe Glyph List (`fontcheck.AGLListed`: the list's names and `.notdef`, not `uniXXXX`) or, its program embedded, with no (3,1) cmap subtable to look the names up in, a shown glyph whose declared width differs from the program's by more than 1/1000 (text in rendering mode 3 only is exempt), a CMap neither predefined nor embedded, an embedded CMap whose `/WMode` disagrees with the stream's own, a `CIDSystemInfo` Registry/Ordering/Supplement mismatch with the CMap, a `ToUnicode` mapping to U+0000/U+FEFF/U+FFFE, a subset `/CharSet` or `/CIDSet` disagreeing with the embedded program, and a shown CID 0 (`.notdef`) |
-| Character mapping | 7.2 | `checkUACharMapping` | text shown with a Type 0 Identity-encoded font that has no `ToUnicode` (Matterhorn 10-001), unless its descendant is in the Adobe-GB1, -CNS1, -Japan1 or -Korea1 collection, whose Unicode mapping Adobe publishes. A deliberately narrow case of 7.21.7, not all of it |
+| Character mapping | 7.21.7 | `checkUACharMapping` | text shown with a Type 0 Identity-encoded font that has no `ToUnicode` (Matterhorn 10-001), unless its descendant is in the Adobe-GB1, -CNS1, -Japan1 or -Korea1 collection, whose Unicode mapping Adobe publishes. A deliberately narrow case of 7.21.7, not all of it |
 | Real content vs artifacts | 7.1 | `checkUARealContent` | text, a painted path, an inline image, an image XObject, or what a form XObject paints, outside any marked-content sequence; see [Content-level checking](#content-level-checking) |
 | XObjects | 7.20 | `checkUAReferenceXObjects`, `checkUAFormXObjectMCID` | a Form XObject carrying `/Ref` (a reference XObject), or a form containing `/MCID` painted by more than one `Do` |
 | Security | 7.16 | `checkUASecurity` | an encrypted document with no `/P`, or `/P` with permission bit 10 (extract for accessibility) clear |
@@ -330,6 +330,18 @@ cell refers to (`7.5-t01-pass-e`, `8.2.5.26-t05-pass-e`).
 `TestUATableHeaderAssociation` holds the boundaries.
 
 ## PDF/UA-2
+
+**Numbering.** A finding of a check the two parts share is reported under
+ISO 14289-2's clause on a `ValidatePDFUA2` run, as veraPDF's PDF/UA-2 profile
+numbers the rule: the font rules 7.21.x are 8.4.5.x (`ua2Fonts`), tagging is
+6.2, the structure tree 8.2.1, untagged content 8.2.2, the role map 8.2.4,
+tables 8.2.5.26, a figure's alternate text 8.2.5.28.2, the language 8.4.4,
+optional content 8.7, the tab order 8.9.3.3, `dc:title` 8.11.1 and
+`DisplayDocTitle` 8.11.2. Each call site in `validatePDFUA` says how its
+check's findings are numbered at part 2 (`runAs`, `ua2Numbering`). A rule the
+PDF/UA-2 profile has no clause for keeps PDF/UA-1's number.
+`TestPDFUARuleCoverageByVeraPDF` holds both parts to veraPDF's verdicts on the
+corpus.
 
 `ValidatePDFUA2` runs the same checks with `part` "2" (`pdfua/pdfua2.go` holds no
 code, only a comment, after its package clause, describing what part 2 shares

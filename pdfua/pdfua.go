@@ -81,15 +81,23 @@ func validateView(doc core.View, part string) []Violation {
 	runCat := func(check func(core.View, *object.Dictionary) []Violation) {
 		run(func(d core.View) []Violation { return check(d, cat) })
 	}
+	// runAs and runCatAs run a check PDF/UA-1 and -2 share, numbering its
+	// findings at part 2 by ISO 14289-2, as numbered gives them (see ua2Map).
+	runAs := func(numbered ua2Numbering, check func(core.View) []Violation) {
+		run(func(d core.View) []Violation { return renumberUA2(part, numbered, check(d)) })
+	}
+	runCatAs := func(numbered ua2Numbering, check func(core.View, *object.Dictionary) []Violation) {
+		runAs(numbered, func(d core.View) []Violation { return check(d, cat) })
+	}
 
 	// 7.1 — tagged PDF, structure tree, shown title.
-	runCat(checkUACatalogBasics)
+	runCatAs(ua2CatalogBasics, checkUACatalogBasics)
 
 	// 7.2 — natural language: PDF/UA-2 requires the catalog /Lang; PDF/UA-1
 	// requires each text's language to be determinable, which a catalog /Lang
 	// settles at once.
 	if part == "2" {
-		runCat(checkUA2CatalogLang)
+		runCatAs(ua2Map{"7.2": "8.4.4"}.number, checkUA2CatalogLang)
 	} else {
 		runCat(checkUA1LangDeterminable)
 	}
@@ -98,35 +106,35 @@ func validateView(doc core.View, part string) []Violation {
 	run(func(d core.View) []Violation { return checkUAIdentifier(d, cat, part) })
 
 	// Matterhorn checkpoint 06: the document must have an XMP dc:title.
-	runCat(checkUATitle)
+	runCatAs(ua2Map{"7.1": "8.11.1"}.number, checkUATitle)
 
 	// 7.21 — every font used for rendering must be embedded.
-	run(checkUAFonts)
-	run(checkUAFontDicts)
-	run(checkUACMaps)
-	run(checkUACMapWMode)
-	run(checkUACIDSystemInfo)
-	run(checkUAToUnicodeValues)
-	run(checkUAFontSubsetGlyphs)
-	run(checkUANotdefCID)
-	run(checkUAFontWidths)
+	runAs(ua2Fonts.number, checkUAFonts)
+	runAs(ua2Fonts.number, checkUAFontDicts)
+	runAs(ua2Fonts.number, checkUACMaps)
+	runAs(ua2Fonts.number, checkUACMapWMode)
+	runAs(ua2Fonts.number, checkUACIDSystemInfo)
+	runAs(ua2Fonts.number, checkUAToUnicodeValues)
+	runAs(ua2Fonts.number, checkUAFontSubsetGlyphs)
+	runAs(ua2Fonts.number, checkUANotdefCID)
+	runAs(ua2Fonts.number, checkUAFontWidths)
 
 	// 7.2 — text must map to Unicode (Matterhorn 10-001).
-	run(checkUACharMapping)
+	runAs(ua2Fonts.number, checkUACharMapping)
 
 	// 7.18.3 — pages with annotations must use structure tab order.
-	run(checkUATabOrder)
+	runAs(ua2Map{"7.18.3": "8.9.3.3"}.number, checkUATabOrder)
 
 	// 7.1 — structure types must be standard or mapped via /RoleMap.
-	runCat(checkUARoleMap)
-	runCat(checkUARoleMapIntegrity)
+	runCatAs(ua2Map{"7.1": "8.2.4"}.number, checkUARoleMap)
+	runCatAs(ua2Map{"7.1": "8.2.4"}.number, checkUARoleMapIntegrity)
 	runCat(checkUAStructParent)
 
 	// 7.2 — structure-element nesting (tables, lists, TOC) per the UA profile;
 	// 7.5 — in a regular table, every data cell's headers determinable.
 	runCat(checkUAStructNesting)
 	runCat(checkUATableListStructure)
-	runCat(func(d core.View, cat *object.Dictionary) []Violation { return checkUATableGrid(d, cat, part) })
+	runCatAs(ua2Map{"7.2": "8.2.5.26", "7.5": "8.2.5.26"}.number, func(d core.View, cat *object.Dictionary) []Violation { return checkUATableGrid(d, cat, part) })
 
 	// 7.4.2 — heading levels must not be skipped, and start at H1; 7.4.4 —
 	// one <H> per node, and <H> and <H1>–<H6> not mixed. All PDF/UA-1 only:
@@ -162,10 +170,10 @@ func validateView(doc core.View, part string) []Violation {
 	run(checkUAFormXObjectMCID)
 
 	// 7.2 — any present /Lang must be a language identifier (RFC 3066).
-	runCat(checkUALang)
+	runCatAs(ua2Map{"7.2": "8.4.4"}.number, checkUALang)
 
 	// 7.10 — optional-content config; 7.11 — embedded-file specifications.
-	runCat(checkUAOptionalContent)
+	runCatAs(ua2Map{"7.10": "8.7"}.number, checkUAOptionalContent)
 	run(checkUAEmbeddedFiles)
 
 	// 6.1 — PDF/UA-1 requires a 1.x header. PDF/UA-2 is defined against
@@ -200,6 +208,7 @@ func validateView(doc core.View, part string) []Violation {
 		runCat(checkUA2FormOneWidget)
 		runCat(checkUA2WidgetDescription)
 		runCat(checkUA2EmbeddedFileDesc)
+		runCat(checkUA2TextStringPUA)
 	}
 
 	// 7.1 — Suspects must not be true; 7.9 Note IDs.
@@ -207,16 +216,75 @@ func validateView(doc core.View, part string) []Violation {
 	runCat(checkUANotes)
 
 	// 7.1 — real content must be tagged or marked as an artifact (Matterhorn 01).
-	runCat(checkUARealContent)
+	runCatAs(ua2Map{"7.1": "8.2.2"}.number, checkUARealContent)
 
 	// 7.18 — annotation must sit under the right structure element (28-010/011).
 	runCat(checkUAAnnotStructType)
 
 	// 7.3 — every figure needs alternate text; 7.7 — so does a formula.
-	runCat(func(d core.View, cat *object.Dictionary) []Violation { return checkFigureAlt(d, cat, part) })
+	runCatAs(ua2Map{"7.3": "8.2.5.28.2"}.number, func(d core.View, cat *object.Dictionary) []Violation { return checkFigureAlt(d, cat, part) })
 
 	// The caller sorts.
 	return withPart(v, part)
+}
+
+// PDF/UA-2 numbers the requirements it shares with PDF/UA-1 by its own
+// clauses (ISO 14289-2), and the veraPDF PDF/UA-2 profile by those: what
+// PDF/UA-1 calls 7.21.6 is 8.4.5.7 there, 7.1's tagging is 6.2 and its
+// structure tree 8.2.1. The shared checks report PDF/UA-1's numbers; a
+// PDF/UA-2 run gives each finding its PDF/UA-2 clause as its check's
+// numbering says. A finding whose rule PDF/UA-2's profile has no clause for
+// keeps PDF/UA-1's.
+
+// ua2Numbering is a shared check's PDF/UA-2 clause for one of its findings,
+// "" to keep the finding's own.
+type ua2Numbering func(Violation) string
+
+// ua2Map numbers by clause: every finding the check reports under the key's
+// PDF/UA-1 clause is the value's at PDF/UA-2.
+type ua2Map map[string]string
+
+func (m ua2Map) number(v Violation) string { return m[v.Clause] }
+
+// ua2Fonts is the font checks' numbering: ISO 14289-1 7.21 is ISO 14289-2
+// 8.4.5, clause by clause.
+var ua2Fonts = ua2Map{
+	"7.21.3.1": "8.4.5.3.1",
+	"7.21.3.2": "8.4.5.3.2",
+	"7.21.3.3": "8.4.5.4",
+	"7.21.4.1": "8.4.5.5.1",
+	"7.21.5":   "8.4.5.6",
+	"7.21.6":   "8.4.5.7",
+	"7.21.7":   "8.4.5.8",
+	"7.21.8":   "8.4.5.9",
+}
+
+// ua2CatalogBasics numbers checkUACatalogBasics's findings, which PDF/UA-1
+// gives one clause and PDF/UA-2 three.
+func ua2CatalogBasics(v Violation) string {
+	switch {
+	case strings.Contains(v.Message, "/MarkInfo"):
+		return "6.2"
+	case strings.Contains(v.Message, "/StructTreeRoot"):
+		return "8.2.1"
+	case strings.Contains(v.Message, "DisplayDocTitle"):
+		return "8.11.2"
+	}
+	return ""
+}
+
+// renumberUA2 gives a shared check's findings their PDF/UA-2 clauses on a
+// part-2 run.
+func renumberUA2(part string, numbered ua2Numbering, vs []Violation) []Violation {
+	if part != "2" {
+		return vs
+	}
+	for i := range vs {
+		if c := numbered(vs[i]); c != "" {
+			vs[i].Clause = c
+		}
+	}
+	return vs
 }
 
 // checkUACatalogBasics covers the catalog-level PDF/UA requirements: the file
@@ -360,6 +428,12 @@ func checkUARoleMap(d core.View, cat *object.Dictionary) []Violation {
 func checkUAIdentifier(d core.View, cat *object.Dictionary, want string) []Violation {
 	stream, ok := d.Resolve(cat.Get("Metadata")).(*object.Stream)
 	if !ok {
+		// PDF/UA-1 requires the catalog's /Metadata itself (7.1; veraPDF
+		// 7.1-8), which the identifier is then read from. PDF/UA-2's profile
+		// has no such rule, and its identification rule (5) says it.
+		if want == "1" {
+			return []Violation{{Clause: "7.1", Message: "the catalog has no /Metadata stream (an XMP packet with the PDF/UA identifier is required)", Object: 0}}
+		}
 		return []Violation{{Clause: "5", Message: "document has no XMP metadata (a PDF/UA identifier is required)", Object: 0}}
 	}
 	packet, status := d.XMPPacketOf(stream, object.RefNum(cat.Get("Metadata")))
@@ -545,6 +619,12 @@ func checkUAAnnotations(d core.View, cat *object.Dictionary, part string) []Viol
 		if describe && st == "Link" {
 			if !d.NonEmptyStringOrLocked(a.Get("Contents")) {
 				v = append(v, Violation{Clause: "7.18.5", Message: "Link annotation has no alternate description (/Contents)", Object: num})
+				// And with no /Alt either it has no description at all,
+				// which 7.18.1 asks of every annotation, a link included
+				// (veraPDF 7.18.1-2: PDF_UA-1 7.18.5-t02-fail-a).
+				if !hasAlt {
+					v = append(v, Violation{Clause: "7.18.1", Message: "Link annotation has no alternate description (/Contents or /Alt)", Object: num})
+				}
 			}
 		}
 		// 7.18.1: a form-field Widget must have a non-empty field description /TU
@@ -708,10 +788,18 @@ func checkOneUACIDSystemInfo(d core.View, fontDict *object.Dictionary) []Violati
 		}
 		info, ok := core.PredefinedCMaps[string(enc)]
 		if !ok {
-			return nil
+			// A CMap that is neither predefined nor embedded states no
+			// Registry or Ordering, so nothing matches it (veraPDF: PDF_UA-1
+			// 7.21.3.3-t01-fail-a, PDF_UA-2 8.4.5.4-t01-fail-a).
+			return []Violation{{Clause: "7.21.3.1", Object: d.ObjNumOf(fontDict),
+				Message: "the CIDFont's CIDSystemInfo cannot be matched to the CMap /" + string(enc) + ", which is neither predefined nor embedded"}}
 		}
 		wantReg, wantOrd = info.Registry, info.Ordering
 	case *object.Stream:
+		if d.ResolveDict(enc.Dict.Get("CIDSystemInfo")) == nil {
+			return []Violation{{Clause: "7.21.3.1", Object: d.ObjNumOf(fontDict),
+				Message: "the CIDFont's CIDSystemInfo cannot be matched to the embedded CMap, which has no CIDSystemInfo"}}
+		}
 		wantReg, wantOrd = cidSystemInfo(d, &enc.Dict)
 		wantSup, haveWantSup = cidSupplement(d, &enc.Dict)
 	default:
@@ -1382,7 +1470,7 @@ func checkUACharMapping(d core.View) []Violation {
 				continue
 			}
 		}
-		v = append(v, Violation{Clause: "7.2", Message: "text uses a composite font with Identity encoding and no ToUnicode CMap; its character codes cannot be mapped to Unicode", Object: d.ObjNumOf(fontDict)})
+		v = append(v, Violation{Clause: "7.21.7", Message: "text uses a composite font with Identity encoding and no ToUnicode CMap; its character codes cannot be mapped to Unicode", Object: d.ObjNumOf(fontDict)})
 	}
 	return v
 }

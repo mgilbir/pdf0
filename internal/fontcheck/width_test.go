@@ -35,6 +35,7 @@ func type1Simple(t *testing.T, enc object.Object, symbolic bool, widths object.A
 		f.Set("Encoding", enc)
 	}
 	if widths != nil {
+		f.Set("LastChar", object.Integer(64+len(widths)))
 		f.Set("Widths", widths)
 	}
 	fp := &font.Program{
@@ -103,6 +104,8 @@ func TestCodeOutsideWidthsDeclaresMissingWidth(t *testing.T) {
 		{"Widths and MissingWidth", type1Simple(t, winAnsi, false, object.Array{object.Integer(600)}, object.Integer(250)), 250, true},
 		{"no Widths, no MissingWidth", type1Simple(t, winAnsi, false, nil, nil), 0, false},
 		{"no Widths, MissingWidth", type1Simple(t, winAnsi, false, nil, object.Integer(250)), 250, true},
+		{"B past LastChar, inside Widths", lastChar(type1Simple(t, winAnsi, false, object.Array{object.Integer(600), object.Integer(600)}, nil), 65), 0, true},
+		{"no LastChar", lastChar(type1Simple(t, winAnsi, false, object.Array{object.Integer(600), object.Integer(600)}, nil), -1), 0, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if w, ok := c.s.DeclaredWidth(mkView(nil), 'B'); w != c.w || ok != c.ok {
@@ -110,6 +113,13 @@ func TestCodeOutsideWidthsDeclaresMissingWidth(t *testing.T) {
 			}
 		})
 	}
+}
+
+// lastChar sets s's /LastChar to last, or removes it when last is negative,
+// as the dictionary newSimple would have read.
+func lastChar(s *Simple, last int) *Simple {
+	s.codes.last, s.codes.ok = last, last >= 0
+	return s
 }
 
 // cidType2 is an Identity-H Type 0 font over a CIDFontType2 whose program has
@@ -197,6 +207,7 @@ func TestType3CodeOutsideWidthsDeclaresMissingWidth(t *testing.T) {
 			object.Entry{Key: "Encoding", Value: object.NewDictionary(
 				object.Entry{Key: "Differences", Value: object.Array{object.Integer(65), object.Name("A"), object.Name("B")}})},
 			object.Entry{Key: "FirstChar", Value: object.Integer(65)},
+			object.Entry{Key: "LastChar", Value: object.Integer(65)},
 			object.Entry{Key: "Widths", Value: object.Array{object.Integer(500)}},
 		)
 		if missingWidth != nil {

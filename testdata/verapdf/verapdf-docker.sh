@@ -1,12 +1,16 @@
 #!/bin/sh
 # veraPDF through its official Docker image, for PDF0_VERAPDF. The arguments
 # are veraPDF's; an argument that is an existing file is a document, and every
-# document must be in one directory, which is mounted as /data. Used by
-# TestType3DocumentsAreValidForVeraPDF.
+# document must be in one directory, which is mounted as /data. An argument
+# that is a directory is mounted as /data itself, for --recurse; it is then the
+# only path. Used by the tests that hold pdf0's output to veraPDF, and by
+# `make verapdf-verdicts`.
 set -eu
 dir=""
 for a in "$@"; do
-	if [ -f "$a" ]; then
+	if [ -d "$a" ]; then
+		dir=$(cd "$a" && pwd)
+	elif [ -f "$a" ]; then
 		dir=$(dirname "$a")
 	fi
 done
@@ -19,7 +23,9 @@ i=0
 while [ "$i" -lt "$n" ]; do
 	a=$1
 	shift
-	if [ -f "$a" ]; then
+	if [ -d "$a" ]; then
+		set -- "$@" "/data"
+	elif [ -f "$a" ]; then
 		set -- "$@" "/data/$(basename "$a")"
 	else
 		set -- "$@" "$a"

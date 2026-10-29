@@ -37,9 +37,9 @@ type contentBytesFacts struct {
 }
 
 // strictContentLimits are the tightest content-stream operand limits of any
-// part (ISO 19005-1's): a number or string within them is within every
-// part's.
-var strictContentLimits = implLimits{stringLen: 32767, realLimit: 32767}
+// part (ISO 19005-1's magnitudes, -2's least real): a number or string within
+// them is within every part's.
+var strictContentLimits = implLimits{stringLen: 32767, realLimit: 32767, realMin: 1.175e-38}
 
 // scanContentBytes makes one pass over a content stream for contentBytesFacts.
 func scanContentBytes(cancel core.Canceler, data []byte) *contentBytesFacts {

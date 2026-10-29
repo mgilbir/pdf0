@@ -141,14 +141,19 @@ func resourcesUseTransparency(doc View, container *object.Dictionary, seen map[*
 				}
 				subtype, _ := doc.ResolveName(stream.Dict.Get("Subtype"))
 				if subtype == "Form" {
-					// If the Form XObject has its own transparency Group,
-					// it manages its own compositing - don't propagate to page level.
+					// A form that is a transparency group is transparency on
+					// the page that draws it, whatever its own /CS: the page
+					// still composites the group onto itself, in the page's
+					// blending space, which is the one 6.2.10-2 (-4 6.2.9-2)
+					// asks the page to name. veraPDF reads it so (PDF_A-2b
+					// 6-2-10-t03-fail-e, a form group with /CS /DeviceRGB on a
+					// page with no output intent and no group).
 					if stream.Dict.Get("Group") != nil {
 						groupDict := doc.ResolveDict(stream.Dict.Get("Group"))
 						if groupDict != nil {
 							s, _ := doc.ResolveName(groupDict.Get("S"))
 							if s == "Transparency" {
-								continue // self-contained transparency group
+								return true
 							}
 						}
 					}
