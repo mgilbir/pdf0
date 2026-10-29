@@ -64,4 +64,12 @@ const (
 	// Input.Policy can raise it to Error, to refuse such a document, or lower it
 	// to Ignore.
 	RuleMetadataOmitted layout.Rule = "backend-metadata-omitted"
+
+	// RuleTransparencyAtPDFA1 is a page for a PDF/A-1 document that uses
+	// transparency, which PDF/A-1 forbids (ISO 19005-1 6.4): an opacity
+	// below 1, an image with an alpha channel, a translucent gradient. The
+	// page is refused, and the finding names what it does. Like
+	// RuleStandardFont, Input.Policy does not lower it: the claim is the
+	// caller's, and a page that breaks it is not one to write.
+	RuleTransparencyAtPDFA1 layout.Rule = "backend-pdfa1-transparency"
 )

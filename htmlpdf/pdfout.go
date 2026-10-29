@@ -435,10 +435,13 @@ var ErrUnsupportedLevel = errors.New("htmlpdf: the document claims a PDF/A level
 //
 // A document that claims a PDF/A level (pdf0.Document.Conformance) gets a page
 // that keeps the claim. Every font on it is embedded, whatever
-// opts.EmbedAllFonts says (see Options.EmbedAllFonts). The levels are PDF/A-2
-// and -3 at b and u, and PDF/A-4 with its e and f variants. PDF/A-1 is refused
-// with ErrUnsupportedLevel, because PDF 1.4 has no transparency, and so are
-// the a levels, which need a tagged structure this package does not write.
+// opts.EmbedAllFonts says (see Options.EmbedAllFonts). The levels are PDF/A-1b,
+// PDF/A-2 and -3 at b and u, and PDF/A-4 with its e and f variants. The a
+// levels are refused with ErrUnsupportedLevel, since they need a tagged
+// structure this package does not write. PDF/A-1's PDF 1.4 has no
+// transparency, so a page for a PDF/A-1b document that uses any (an opacity,
+// an image with alpha, a translucent gradient) is refused under
+// RuleTransparencyAtPDFA1.
 // The claim is the document's, so it is pdf0.Document.Save, which writes only
 // a document that passes the level it claims, that says whether the whole
 // document does.
@@ -515,13 +518,49 @@ func into(doc *pdf0.Document, opts Options) (Options, error) {
 }
 
 // writesPagesFor is whether RenderInto writes pages for a document claiming
-// level: PDF/A-2 and -3 at b and u, and PDF/A-4 with e and f.
+// level: PDF/A-1b, PDF/A-2 and -3 at b and u, and PDF/A-4 with e and f. The a
+// levels need a tagged structure this package does not write.
 func writesPagesFor(level pdfa.Level) bool {
 	switch level {
-	case pdfa.PDFA2b, pdfa.PDFA2u, pdfa.PDFA3b, pdfa.PDFA3u, pdfa.PDFA4, pdfa.PDFA4E, pdfa.PDFA4F:
+	case pdfa.PDFA1b, pdfa.PDFA2b, pdfa.PDFA2u, pdfa.PDFA3b, pdfa.PDFA3u, pdfa.PDFA4, pdfa.PDFA4E, pdfa.PDFA4F:
 		return true
 	}
 	return false
+}
+
+// transparencyAtPDFA1 refuses a page for a document claiming PDF/A-1, whose
+// PDF 1.4 base forbids transparency (ISO 19005-1 6.4), when the page uses any:
+// an opacity, an image with an alpha channel, a translucent gradient, all of
+// which this package draws with a soft mask, a constant alpha or a
+// transparency group. It is asked of the scratch document the page was written
+// into, by the validator's own 6.4 rules, so there is one reading of what
+// transparency is, and the caller's document is untouched by a refusal. The
+// finding names what the page does, under RuleTransparencyAtPDFA1, at Error
+// whatever Input.Policy says: the claim is the caller's, and a page that breaks
+// it is not one to write.
+func transparencyAtPDFA1(target, page *pdf0.Document) (layout.Finding, bool) {
+	if target == nil {
+		return layout.Finding{}, false
+	}
+	level, claimed := target.Conformance()
+	if !claimed || level.Part() != 1 {
+		return layout.Finding{}, false
+	}
+	var what []string
+	for _, v := range pdf0.ValidatePDFA(page, level) {
+		if v.Rule == "6.4" && len(what) < 3 {
+			what = append(what, v.Message)
+		}
+	}
+	if len(what) == 0 {
+		return layout.Finding{}, false
+	}
+	return layout.Finding{
+		Rule: RuleTransparencyAtPDFA1, Severity: layout.Error,
+		Message: "the page uses transparency, which PDF/A-1 forbids (ISO 19005-1 6.4); draw it opaque or " +
+			"claim PDF/A-2 or later: " + strings.Join(what, "; "),
+		Source: layout.Source{HTMLOffset: -1, CSSOffset: -1},
+	}, true
 }
 
 // scratchFor is the document a page for target is written into first: one
@@ -610,6 +649,10 @@ func finish(composed layout.Composed, in Input, opts Options, target *pdf0.Docum
 	doc, err := writePageTo(scratch, composed.Ops, composed.Page, composed.Scale)
 	if err != nil {
 		return out, err
+	}
+	if f, refuse := transparencyAtPDFA1(target, doc); refuse {
+		out.Findings = append(out.Findings, f)
+		return out, &RefusedError{Findings: out.Findings, Truncated: composed.Truncated}
 	}
 	if target == nil {
 		out.Document = doc

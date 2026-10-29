@@ -156,7 +156,7 @@ func TestOptionsPDFAIsAllOrNothing(t *testing.T) {
 			t.Errorf("PDFA %+v: err %v; want ErrPDFAWithoutLevel", partial, err)
 		}
 	}
-	for _, level := range []pdfa.Level{pdfa.PDFA1b, pdfa.PDFA2a} {
+	for _, level := range []pdfa.Level{pdfa.PDFA1a, pdfa.PDFA2a} {
 		if _, err := Render(in, Options{PDFA: pdfa.SkeletonOptions{Level: level}}); !errors.Is(err, ErrUnsupportedLevel) {
 			t.Errorf("%s: err %v; want ErrUnsupportedLevel", level, err)
 		}

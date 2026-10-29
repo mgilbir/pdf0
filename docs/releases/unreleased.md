@@ -351,6 +351,13 @@ v0.6.0.
 
 ## Added
 
+- **htmlpdf writes PDF/A-1b** (#378), through `Options.PDFA` and
+  `RenderInto`. PDF/A-1's PDF 1.4 has no transparency, so a page that uses
+  any (an opacity, an image with alpha, a translucent gradient) is refused
+  under `htmlpdf.RuleTransparencyAtPDFA1` (`backend-pdfa1-transparency`), and
+  the finding names what it does. An opaque page passes veraPDF at 1b. The a
+  levels are still refused with `ErrUnsupportedLevel`.
+
 - **`pdfa.SkeletonOptions.Subject` and `pdfa.SkeletonOptions.Keywords`**
   (#377), written as `dc:description` and `pdf:Keywords`, as
   `SetDocumentInfo` writes them. A PDF/A render (`htmlpdf.Options.PDFA`) fills
