@@ -23,7 +23,7 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 ### Validation
 
 - **Every rule veraPDF fails a corpus file on, pdf0 reports under the same
-  clause** (#PR), at PDF/A-1b, -2b, -3b and -4, and pdf0 flags no file veraPDF
+  clause** (#387), at PDF/A-1b, -2b, -3b and -4, and pdf0 flags no file veraPDF
   passes. What changed to get there, each checked against veraPDF on the
   corpus or on a single-defect file:
   - An output intent with no profile, or with broken profile data, is no
