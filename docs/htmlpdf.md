@@ -322,10 +322,11 @@ The levels are the ones `RenderInto` writes. A `PDFA` with fields set and no
 exactly as the plain render draws it: the same layout, only in a document
 that claims a level.
 
-What the caller leaves empty, the document fills. A blank `Title`, `Author` or
-`Language` is taken from what the HTML says about itself: its `<title>`
-(whitespace collapsed), its first `<meta name="author">`, and its root
-element's language (`lang`, `xml:lang` in XHTML, then a Content-Language
+What the caller leaves empty, the document fills. A blank `Title`, `Author`,
+`Subject`, `Keywords` or `Language` is taken from what the HTML says about
+itself: its `<title>` (whitespace collapsed); the first `<meta name="author">`,
+`"description"` and `"keywords"`, a later one of each kind going unread; and
+its root element's language (`lang`, `xml:lang` in XHTML, then a Content-Language
 pragma), as forme reads them in `layout.Composed.Document`. The caller's values
 always win. A value the file cannot hold is left out, and one
 `RuleMetadataOmitted` finding says which. That covers a `lang` that is not a

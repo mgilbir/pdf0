@@ -315,7 +315,8 @@ func renderPDFA(in Input, opts Options, compose func(Input, layout.Options) (lay
 // documentMetadata fills what the caller left empty in a PDF/A document's
 // options from what the HTML says about itself: the title from document.title,
 // the language from the root element's (lang, xml:lang, a Content-Language
-// pragma), and the author from the first <meta name="author">. The caller's
+// pragma), and the author, subject and keywords from the first <meta
+// name="author">, "description" and "keywords". The caller's
 // own values always win. A value that cannot be written is left out, and named
 // in omitted, rather than failing the render: a lang that is not a language
 // tag by the grammar the validators judge /Lang by, or a title or author with
@@ -336,10 +337,22 @@ func documentMetadata(o pdfa.SkeletonOptions, d layout.DocumentInfo) (pdfa.Skele
 	if d.HasTitle {
 		text("title", d.Title, &o.Title)
 	}
+	// The first non-empty <meta name=...> of each kind is the document's
+	// statement of it, and a later one of the same kind is not read, whether
+	// or not the first could be written. A field the caller set is kept.
+	first := map[string]bool{}
 	for _, m := range d.Meta {
-		if m.Name == "author" && m.Content != "" {
+		if m.Content == "" || first[m.Name] {
+			continue
+		}
+		first[m.Name] = true
+		switch m.Name {
+		case "author":
 			text("author", m.Content, &o.Author)
-			break
+		case "description":
+			text("description", m.Content, &o.Subject)
+		case "keywords":
+			text("keywords", m.Content, &o.Keywords)
 		}
 	}
 	if o.Language == "" && d.HasLanguage && d.Language != "" {

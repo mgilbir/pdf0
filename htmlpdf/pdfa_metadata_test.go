@@ -208,7 +208,8 @@ func TestADocumentDescribedByItsHTMLPassesVeraPDF(t *testing.T) {
 	dir := t.TempDir()
 	var files []string
 	for _, l := range renderIntoLevels {
-		in := metadataPage(`<title>Factuur 7</title><meta name="author" content="Boekhouding">`, ` lang="nl"`)
+		in := metadataPage(`<title>Factuur 7</title><meta name="author" content="Boekhouding">`+
+			`<meta name="description" content="Een factuur &amp; kwijting"><meta name="keywords" content="factuur, 2026">`, ` lang="nl"`)
 		in.Fonts = notoSansSet(t)
 		out, err := Render(in, Options{PDFA: pdfa.SkeletonOptions{Level: l.level}})
 		if err != nil {
@@ -251,5 +252,59 @@ func TestThePDFAOptionsAreCheckedBeforeLayout(t *testing.T) {
 	_, err := RenderContext(ctx, in, Options{PDFA: pdfa.SkeletonOptions{Level: pdfa.PDFA2b, Language: "not a tag"}}, RunLimits{})
 	if err == nil || errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), "Language") {
 		t.Errorf("err %v; want the caller's invalid Language, reported before layout", err)
+	}
+}
+
+const (
+	xmpSubject  = `<dc:description><rdf:Alt><rdf:li xml:lang="x-default">`
+	xmpKeywords = `<pdf:Keywords>`
+)
+
+// TestAPDFARenderTakesItsDescriptionAndKeywords: the first <meta
+// name="description"> and "keywords" become dc:description and pdf:Keywords.
+// A later one of the same kind is not read, whether or not the first could be
+// written, and the caller's own values win.
+func TestAPDFARenderTakesItsDescriptionAndKeywords(t *testing.T) {
+	render := func(head string, o pdfa.SkeletonOptions) (string, Result) {
+		t.Helper()
+		in := metadataPage(head, ``)
+		in.Fonts = notoSansSet(t)
+		o.Level = pdfa.PDFA2b
+		out, err := Render(in, Options{PDFA: o})
+		if err != nil {
+			t.Fatal(err)
+		}
+		packet, _ := described(t, out.Document)
+		return packet, out
+	}
+
+	packet, _ := render(`<meta name="Description" content="Invoices &amp; receipts"><meta name="description" content="Second">
+<meta name="keywords" content="invoice, 2026"><meta name="keywords" content="later">`, pdfa.SkeletonOptions{})
+	if !strings.Contains(packet, xmpSubject+"Invoices &amp; receipts<") || strings.Contains(packet, "Second") {
+		t.Errorf("dc:description is not the first <meta name=description>:\n%s", packet)
+	}
+	if !strings.Contains(packet, xmpKeywords+"invoice, 2026<") || strings.Contains(packet, "later") {
+		t.Errorf("pdf:Keywords is not the first <meta name=keywords>:\n%s", packet)
+	}
+
+	packet, _ = render(`<meta name="description" content="Document"><meta name="keywords" content="document">`,
+		pdfa.SkeletonOptions{Subject: "Caller", Keywords: "caller"})
+	if !strings.Contains(packet, xmpSubject+"Caller<") || !strings.Contains(packet, xmpKeywords+"caller<") ||
+		strings.Contains(packet, "ocument") {
+		t.Errorf("the caller's subject and keywords did not win:\n%s", packet)
+	}
+
+	packet, out := render(`<meta name="description" content="a&#1;b"><meta name="description" content="Valid">`, pdfa.SkeletonOptions{})
+	if strings.Contains(packet, xmpSubject) {
+		t.Errorf("a description was written though the first could not be, and a later one is not read:\n%s", packet)
+	}
+	found := false
+	for _, f := range out.Findings {
+		if f.Rule == RuleMetadataOmitted && strings.Contains(f.Message, "the description") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no %s finding names the description: %v", RuleMetadataOmitted, out.Findings)
 	}
 }
