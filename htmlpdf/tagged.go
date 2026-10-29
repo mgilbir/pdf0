@@ -27,9 +27,11 @@ import (
 // plays (roleOf), pruned to the elements that hold something drawn. An
 // element's kids are in the order the document reads them, which is not the
 // order the page is painted in: floats, positioning and z-index reorder the
-// painting. A run of an element's own text is placed by paint order between
-// its child elements, and the child elements themselves are put back in
-// document order wherever the painting moved them.
+// painting. So every kid is placed where the document has it: a child element
+// by its own place, and a run of the element's own text by the place of the
+// text node it was taken from (layout.PaintedBy.Node). Only text the document
+// does not hold as a node — generated content, a form control's value — is
+// placed by paint order, after the child elements painted before it.
 
 // tagger records, while a page is drawn, the marked-content span each painted
 // operation was given and the element it belongs to.
@@ -53,6 +55,10 @@ type mark struct {
 	mcid int
 	elem *html.Node
 	kind markKind
+	// node is the text node a run of the document's text was taken from,
+	// which says where among its element's children the run is; nil for
+	// generated text and for what is not text.
+	node *html.Node
 }
 
 // tagged draws op as tagged content or as an artifact, by what forme says it
@@ -76,6 +82,7 @@ func (c *canvas) tagged(op layout.Op) error {
 		return err
 	}
 	elem, kind, content := classify(op)
+	node := layout.OpPaintedBy(op).Node()
 	if !content {
 		c.b.BeginMarked("Artifact")
 		err := c.paint(op)
@@ -83,7 +90,7 @@ func (c *canvas) tagged(op layout.Op) error {
 		return err
 	}
 	mcid := len(t.marks)
-	t.marks = append(t.marks, mark{mcid: mcid, elem: elem, kind: kind})
+	t.marks = append(t.marks, mark{mcid: mcid, elem: elem, kind: kind, node: node})
 	tag := roleOf(elem).tag
 	if tag == "" {
 		tag = "Span"
@@ -377,11 +384,13 @@ func (b *treeBuilder) add(n *html.Node, k kid) {
 	}
 }
 
-// sorted is an element's kids in reading order. A child element is placed
-// where the document has it. A span of the element's own is placed after the
-// child elements painted before it, which in the flow of a line is where the
-// document has it too; ::before and a marker come first, ::after last, and an
-// annotation after the spans it covers.
+// sorted is an element's kids in reading order. A child element, and a span
+// of the element's own text, is placed where the document has it: the
+// element, and the text node the span was taken from. A span the document
+// holds no node for is placed after the child elements painted before it,
+// which in the flow of a line is where the document has it too; ::before and
+// a marker come first, ::after last, and an annotation after the spans it
+// covers.
 func (b *treeBuilder) sorted(n *html.Node) []kid {
 	ks := slices.Clone(b.kids[n])
 	slices.SortStableFunc(ks, func(x, y kid) int { return cmp.Compare(x.seq, y.seq) })
@@ -396,6 +405,9 @@ func (b *treeBuilder) sorted(n *html.Node) []kid {
 			k.key = -1
 		case k.mark != nil && k.mark.kind == markAfter:
 			k.key = 1 << 40
+		case k.mark != nil && k.mark.node != nil:
+			// A run of the document's text is where its text node is.
+			k.key = float64(b.order[k.mark.node])
 		case k.mark != nil:
 			k.key = last + 0.5
 		default:
