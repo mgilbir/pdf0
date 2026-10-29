@@ -48,7 +48,9 @@ func TestTheDrawingOperationsAgainstPDFA(t *testing.T) {
 	// What a plain page is told: no output intent for its device colour
 	// (19005-1 6.2.3.3, -2 6.2.4.3), no XMP metadata (6.7.2), and a PDF 2.0
 	// header where -2 and -3 are based on PDF 1.7 (6.1.2).
-	claim := map[string]bool{"6.2.3.3": true, "6.2.4.3": true, "6.7.2": true, "6.1.2": true}
+	// The catalog's /Metadata is 6.7.2 at PDF/A-1, 6.6.2.1 at -2 and -3 and
+	// 6.7.2.1 at -4, as the veraPDF profiles number it.
+	claim := map[string]bool{"6.2.3.3": true, "6.2.4.3": true, "6.7.2": true, "6.6.2.1": true, "6.7.2.1": true, "6.1.2": true}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			in := tc.in

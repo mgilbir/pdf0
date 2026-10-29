@@ -137,8 +137,8 @@ func TestValidatePDFA_MetadataStream(t *testing.T) {
 		catalog.Delete("Metadata")
 
 		errs := ValidatePDFA(doc, pdfa.PDFA4)
-		if !hasRule(errs, "6.7.2") {
-			t.Error("expected 6.7.2 error for missing metadata")
+		if !hasRule(errs, "6.7.2.1") {
+			t.Error("expected 6.7.2.1 error for missing metadata (PDF/A-4's clause, veraPDF 6.7.2.1-1)")
 		}
 	})
 
@@ -264,8 +264,8 @@ func TestValidatePDFA_ExternalStreams(t *testing.T) {
 	reference(doc, 10)
 
 	errs := ValidatePDFA(doc, pdfa.PDFA4)
-	if !hasRule(errs, "6.1.6") {
-		t.Error("expected 6.1.6 error for external stream reference")
+	if !hasRule(errs, "6.1.6.1") {
+		t.Error("expected 6.1.6.1 error for external stream reference (PDF/A-4's clause, veraPDF 6.1.6.1-2)")
 	}
 }
 
@@ -1713,8 +1713,8 @@ func TestValidatePDFA_SeparationInDirectResources(t *testing.T) {
 	page.Set("Resources", resources) // direct, not an indirect object
 
 	errs := ValidatePDFA(doc, pdfa.PDFA2b)
-	if !hasRule(errs, "6.2.4") {
-		t.Errorf("expected 6.2.4 error for 33-colorant DeviceN in direct Resources, got %v", errs)
+	if !hasRule(errs, "6.1.13") {
+		t.Errorf("expected 6.1.13 error (the implementation limit, veraPDF 6.1.13-9) for 33-colorant DeviceN in direct Resources, got %v", errs)
 	}
 }
 

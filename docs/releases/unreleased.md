@@ -145,6 +145,58 @@ v0.6.0.
 
 ### Validation
 
+- **PDF/A findings are reported under the clause the veraPDF profiles give
+  them at each part** (#379). Several checks reported a PDF/A-1 number at every
+  part, or a parent clause for a sub-clause. The verdicts are unchanged; a
+  caller matching on `pdfa.Violation.Rule` sees new numbers:
+
+  | finding | was | now (1b / 2b and 3b / 4) |
+  |---|---|---|
+  | undefined content operator | 6.2.2 | 6.2.10 / 6.2.2 / 6.2.2 |
+  | rendering intent (`ri`, ExtGState `/RI`, image `/Intent`) | 6.2.2, 6.2.5 or 6.2.4 | 6.2.9 / 6.2.6 / unchanged |
+  | PostScript XObject | 6.2.2 | 6.2.7 / 6.2.9 / 6.2.2 |
+  | form `/Subtype2 /PS` or `/PS` entry | 6.2.2 | 6.2.5 / 6.2.9 / 6.2.2 |
+  | blend mode | 6.2.5 | — / 6.2.10 / 6.2.9 |
+  | catalog `/AA` | 6.6.1 at 1b | 6.6.2 / 6.5.2 / 6.6.3 |
+  | catalog `/Metadata` presence and form | 6.7.2 | 6.7.2 / 6.6.2.1 / 6.7.2.1 |
+  | stream `/F`, `/FFilter`, `/FDecodeParms` | 6.1.6 | 6.1.7 / 6.1.7.1 / 6.1.6.1 |
+  | `/Perms` keys | 6.1.12 | — / 6.1.12 / 6.1.11 |
+  | DeviceN colorant limit | 6.2.3 or 6.2.4 | 6.1.12 / 6.1.13 / — |
+  | image `/Interpolate` at PDF/A-4 | 6.2.7 | 6.2.7.1 |
+
+  `TestClausesAreTheProfilesNumbers` holds each of these to the profile rule
+  it implements.
+
+- **PDF/A verdicts follow veraPDF on the rules where they differed** (#380).
+  Each change was checked against veraPDF 1.30 on the corpus and on
+  single-defect files:
+  - New: an image's `/BitsPerComponent` must be 1, 2, 4 or 8, and 16 from
+    PDF/A-2 on (6.2.4 / 6.2.8 / 6.2.7.1), for image XObjects and inline images.
+  - A code the font's encoding leaves unnamed — code 0 under
+    `/WinAnsiEncoding` — is reported as a `.notdef` reference (6.2.11.8 /
+    6.2.10.9), not as a glyph the font lacks. PDF/A-1 has no `.notdef` rule
+    and no longer reports one.
+  - A `FileAttachment` annotation is allowed at PDF/A-4 only in PDF/A-4f; plain
+    PDF/A-4 and PDF/A-4e reject it (6.3.1).
+  - An embedded file associated with nothing (`/AF`) is a PDF/A-3 finding only;
+    PDF/A-4 asks only for each file specification's `/AFRelationship`.
+  - At PDF/A-1 only a form field's widget needs an `/AP`, under 6.9, with no
+    exemption for a zero-size one; other annotations without one pass. What
+    an `/AP` holds, and PDF/A-1's annotation colour rule, are now checked on
+    the annotations exempt from needing one (Popup, Link, zero-size) too.
+  - A named resource missing from a content stream's own resources is
+    *inherited* when the content it is drawn from supplies it (6.2.2, PDF/A-2,
+    -3 and -4), and *undefined* when nothing does (6.2.2, PDF/A-4 only). A
+    name defined nowhere is no longer reported at PDF/A-2 and -3, nor any
+    named-resource finding at PDF/A-1; a page with resources of its own no
+    longer has the page tree's reported as inherited.
+  - PDF/A-4 no longer reports a non-standard rendering intent or a PostScript
+    XObject or form entry: its profile has no rule for either.
+  - Renumbered: a DeviceN colorant missing from `/Colorants` is 6.2.4.4 at
+    PDF/A-2, -3 and -4 (was 6.2.4); a transparent page's missing blending
+    colour space is 6.2.10 / 6.2.9 (was 6.2.4); an XMP property's schema or
+    value type at PDF/A-1 is 6.7.9 (was 6.7.2).
+
 - **`ValidatePDFX` with an unset level validates what the document declares** (#346)
   (see Breaking changes). The declaration is the XMP
   `pdfxid:GTS_PDFXVersion` when it names a level, and otherwise the Info

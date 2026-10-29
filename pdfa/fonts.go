@@ -65,7 +65,7 @@ func fontClause(concept string, level Level) string {
 		"charSet":       {"6.3.5", "6.2.11.4.2", "6.2.10.4.2"},
 		"width":         {"6.3.6", "6.2.11.5", "6.2.10.5"},
 		"encoding":      {"6.3.7", "6.2.11.6", "6.2.10.6"},
-		"notdef":        {"6.3.5", "6.2.11.8", "6.2.10.9"},
+		"notdef":        {"", "6.2.11.8", "6.2.10.9"}, // none at PDF/A-1: see fontKindApplies
 		"toUnicode":     {"6.3.2", "6.2.11.2", "6.2.10.7"},
 	}
 	c, ok := m[concept]
@@ -526,6 +526,14 @@ func hasEmbeddedFontProgram(doc core.View, fd *object.Dictionary) bool {
 	return false
 }
 
+// fontKindApplies reports whether the level has a rule for a report kind.
+// ISO 19005-1 has no .notdef rule: PDF/A-2 introduced it (6.2.11.8, -4
+// 6.2.10.9), and the PDF/A-1b profile has none, so at PDF/A-1 a .notdef
+// reference is a glyph the program defines and nothing more.
+func fontKindApplies(kind string, level Level) bool {
+	return kind != "notdef" || level.Part() != 1
+}
+
 // fontKindClause maps a report "kind" to its ISO clause for the level.
 func fontKindClause(kind string, level Level) string {
 	switch kind {
@@ -550,7 +558,7 @@ func checkSimpleFontConsistency(doc core.View, level Level, rule string, fontDic
 	var errs []Violation
 	reported := map[string]bool{}
 	report := func(kind, msg string) {
-		if reported[kind] {
+		if reported[kind] || !fontKindApplies(kind, level) {
 			return
 		}
 		reported[kind] = true
@@ -561,6 +569,14 @@ func checkSimpleFontConsistency(doc core.View, level Level, rule string, fontDic
 	for _, s := range u.Strings {
 		for _, code := range s {
 			name := enc[code]
+			// A code the modelled encoding leaves unnamed selects .notdef
+			// (ISO 32000-1 9.6.6.1), the glyph the program carries for it:
+			// that is a .notdef reference, not a glyph the program lacks.
+			// veraPDF reads it so (6-2-11-8-t01-fail-a at PDF/A-2b, code 0
+			// under /WinAnsiEncoding; 6-2-10-9-t01-fail-a at -4, code 31).
+			if name == "" && subtype != "TrueType" && baseEncodingModelled {
+				name = ".notdef"
+			}
 
 			glyphExists := simpleGlyphExists(fp, subtype, symbolic, code, name)
 
@@ -620,7 +636,7 @@ func checkCIDFontConsistency(doc core.View, level Level, rule string, fontDict *
 	var errs []Violation
 	reported := map[string]bool{}
 	report := func(kind, msg string) {
-		if reported[kind] {
+		if reported[kind] || !fontKindApplies(kind, level) {
 			return
 		}
 		reported[kind] = true
