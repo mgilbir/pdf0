@@ -30,10 +30,10 @@ var ruleCoverageBaselines = []struct {
 	minDetected           int
 	maxNotDetected        int
 }{
-	{"PDF/A-1b", "PDFA-1B.xml", "PDF_A-1b", pdfa.PDFA1b, 46, 4},
+	{"PDF/A-1b", "PDFA-1B.xml", "PDF_A-1b", pdfa.PDFA1b, 48, 2},
 	{"PDF/A-2b", "PDFA-2B.xml", "PDF_A-2b", pdfa.PDFA2b, 64, 10},
 	{"PDF/A-3b", "PDFA-3B.xml", "PDF_A-3b", pdfa.PDFA3b, 2, 0},
-	{"PDF/A-4", "PDFA-4.xml", "PDF_A-4", pdfa.PDFA4, 68, 11},
+	{"PDF/A-4", "PDFA-4.xml", "PDF_A-4", pdfa.PDFA4, 72, 7},
 }
 
 // TestRuleCoverage measures, per level and per veraPDF rule, whether pdf0

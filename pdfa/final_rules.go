@@ -96,18 +96,26 @@ func checkProhibitedCatalogEntries(doc core.View, level Level) []Violation {
 	return errs
 }
 
-// checkImageIntentAndInterpolate flags Image XObjects and inline images that
-// carry Interpolate/true or a non-standard rendering intent (ISO 19005-2
-// 6.2.4/6.2.6, -4 6.2.7/6.2.9; ISO 32000-1 8.9.5.2, 8.9.5.4).
-func checkImageIntentAndInterpolate(doc core.View, level Level) []Violation {
-	interpRule := "6.2.7"
-	intentRule := "6.2.9"
+// imageClauses is checkImageIntentAndInterpolate's two clauses per part.
+func imageClauses(level Level) (interpolate, intent string) {
 	switch level.Part() {
 	case 1:
-		interpRule, intentRule = "6.2.4", "6.2.4"
+		return "6.2.4", "6.2.9"
 	case 2, 3:
-		interpRule, intentRule = "6.2.8", "6.2.6"
+		return "6.2.8", "6.2.6"
 	}
+	return "6.2.7.1", "6.2.9"
+}
+
+// checkImageIntentAndInterpolate flags Image XObjects and inline images that
+// carry Interpolate/true or a non-standard rendering intent (ISO 32000-1
+// 8.9.5.2, 8.9.5.4). The clauses are the veraPDF profiles': Interpolate is
+// 6.2.4 at PDF/A-1, 6.2.8 at -2 and -3, and 6.2.7.1 at -4; a rendering intent
+// is 6.2.9 at PDF/A-1 (any rendering intent, not only an image's) and 6.2.6 at
+// -2 and -3. PDF/A-4's profile has no rendering-intent rule; the check keeps
+// the 6.2.9 it had there until that is settled.
+func checkImageIntentAndInterpolate(doc core.View, level Level) []Violation {
+	interpRule, intentRule := imageClauses(level)
 	// One example per distinct rule and message, attributed to the lowest object
 	// number that produced it — both loops below iterate maps.
 	var found exampleFindings

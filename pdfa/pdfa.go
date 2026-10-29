@@ -488,10 +488,13 @@ func getCatalog(doc core.View) *object.Dictionary {
 
 // Rule 6.7.2.1-1: Catalog requires Metadata stream with Type/Metadata, Subtype/XML, no Filter.
 func checkMetadataStream(doc core.View, level Level) []Violation {
+	// The catalog's metadata stream, present and a stream of /Type /Metadata,
+	// /Subtype /XML, is one rule numbered by part (metadataClause).
+	rule := metadataClause("catalogMetadata", level)
 	catalog := doc.Catalog()
 	if catalog == nil {
 		return []Violation{{
-			Rule:    "6.7.2",
+			Rule:    rule,
 			Level:   level,
 			Message: "catalog not found",
 		}}
@@ -500,7 +503,7 @@ func checkMetadataStream(doc core.View, level Level) []Violation {
 	metaRef := catalog.Get("Metadata")
 	if metaRef == nil {
 		return []Violation{{
-			Rule:    "6.7.2",
+			Rule:    rule,
 			Level:   level,
 			Message: "catalog must have /Metadata entry",
 		}}
@@ -509,7 +512,7 @@ func checkMetadataStream(doc core.View, level Level) []Violation {
 	metaObj := doc.Resolve(metaRef)
 	if metaObj == nil {
 		return []Violation{{
-			Rule:    "6.7.2",
+			Rule:    rule,
 			Level:   level,
 			Message: "/Metadata reference target not found",
 		}}
@@ -518,7 +521,7 @@ func checkMetadataStream(doc core.View, level Level) []Violation {
 	stream, ok := metaObj.(*object.Stream)
 	if !ok {
 		return []Violation{{
-			Rule:    "6.7.2",
+			Rule:    rule,
 			Level:   level,
 			Message: "/Metadata must be a stream",
 		}}
@@ -528,7 +531,7 @@ func checkMetadataStream(doc core.View, level Level) []Violation {
 
 	if t, _ := doc.ResolveName(stream.Dict.Get("Type")); t != "Metadata" {
 		errs = append(errs, Violation{
-			Rule:    "6.7.2",
+			Rule:    rule,
 			Level:   level,
 			Message: "metadata stream must have /Type /Metadata",
 		})
@@ -536,7 +539,7 @@ func checkMetadataStream(doc core.View, level Level) []Violation {
 
 	if st, _ := doc.ResolveName(stream.Dict.Get("Subtype")); st != "XML" {
 		errs = append(errs, Violation{
-			Rule:    "6.7.2",
+			Rule:    rule,
 			Level:   level,
 			Message: "metadata stream must have /Subtype /XML",
 		})
@@ -593,7 +596,7 @@ func annotActionClause(concept string, level Level) string {
 		"subtype":    {"6.5.2", "6.3.1", "6.3.1"},
 		"widget":     {"6.6.2", "6.4.1", "6.4.1"},
 		"forbidden":  {"6.6.1", "6.5.1", "6.6.1"},
-		"catalogAA":  {"6.6.1", "6.5.2", "6.6.3"},
+		"catalogAA":  {"6.6.2", "6.5.2", "6.6.3"},
 		"flags":      {"6.5.3", "6.3.2", "6.3.2"},
 		"appearance": {"6.5.3", "6.3.3", "6.3.3"},
 	}
@@ -969,11 +972,21 @@ func checkNoOCProperties(doc core.View, level Level) []Violation {
 	return nil
 }
 
-// Rule 6.1.12: Perms dictionary may only contain UR3 and DocMDP keys.
+// permsClause is checkPermsDict's clause per part (PDF/A-1 has none).
+func permsClause(level Level) string {
+	if level.Part() == 4 {
+		return "6.1.11"
+	}
+	return "6.1.12"
+}
+
+// checkPermsDict: a permissions dictionary may contain only UR3 and DocMDP,
+// numbered 6.1.12 at PDF/A-2 and -3 and 6.1.11 at -4 in the veraPDF profiles.
 func checkPermsDict(doc core.View, level Level) []Violation {
 	if level.Part() == 1 {
 		return nil // PDF/A-1b doesn't have Perms rules
 	}
+	rule := permsClause(level)
 	catalog := doc.Catalog()
 	if catalog == nil {
 		return nil
@@ -991,7 +1004,7 @@ func checkPermsDict(doc core.View, level Level) []Violation {
 	for key := range permsDict.Keys() {
 		if key != "UR3" && key != "DocMDP" {
 			errs = append(errs, Violation{
-				Rule:    "6.1.12",
+				Rule:    rule,
 				Level:   level,
 				Message: fmt.Sprintf("Perms dictionary contains forbidden key /%s (only /UR3 and /DocMDP allowed)", string(key)),
 			})
@@ -1218,8 +1231,22 @@ func hasFilter(doc core.View, stream *object.Stream, filterName string) bool {
 	return false
 }
 
-// Rule 6.1.6.1-2: Stream dict cannot contain F, FFilter, or FDecodeParms.
+// externalStreamClause is checkNoExternalStreams' clause per part.
+func externalStreamClause(level Level) string {
+	switch level.Part() {
+	case 1:
+		return "6.1.7"
+	case 4:
+		return "6.1.6.1"
+	}
+	return "6.1.7.1"
+}
+
+// checkNoExternalStreams: a stream dictionary shall not contain the F, FFilter
+// or FDecodeParms keys. The veraPDF profiles number it 6.1.7 at PDF/A-1
+// (6.1.7-3), 6.1.7.1 at -2 and -3 (6.1.7.1-3), and 6.1.6.1 at -4 (6.1.6.1-2).
 func checkNoExternalStreams(doc core.View, level Level) []Violation {
+	rule := externalStreamClause(level)
 	var errs []Violation
 	// allobjects: the stream dictionary's keys are file syntax, required of
 	// every stream the file holds whether or not the document uses it.
@@ -1231,7 +1258,7 @@ func checkNoExternalStreams(doc core.View, level Level) []Violation {
 		for _, key := range []object.Name{"F", "FFilter", "FDecodeParms"} {
 			if stream.Dict.Get(key) != nil {
 				errs = append(errs, Violation{
-					Rule:    "6.1.6",
+					Rule:    rule,
 					Level:   level,
 					Message: fmt.Sprintf("stream must not have /%s (external stream reference)", string(key)),
 					Object:  num,
@@ -2175,9 +2202,10 @@ func isWidgetOrField(doc core.View, dict *object.Dictionary) bool {
 func metadataClause(concept string, level Level) string {
 	// [1b, 2b/3b, 4]
 	m := map[string][3]string{
-		"version":       {"6.7.11", "6.6.4", "6.7.3"},
-		"xmpProperties": {"6.7.2", "6.6.2.3.1", "6.7.2"},
-		"extSchema":     {"6.7.8", "6.6.2.3.3", "6.7.8"},
+		"version":         {"6.7.11", "6.6.4", "6.7.3"},
+		"catalogMetadata": {"6.7.2", "6.6.2.1", "6.7.2.1"},
+		"xmpProperties":   {"6.7.2", "6.6.2.3.1", "6.7.2"},
+		"extSchema":       {"6.7.8", "6.6.2.3.3", "6.7.8"},
 	}
 	c, ok := m[concept]
 	if !ok {
@@ -2793,7 +2821,7 @@ func checkExtGState(doc core.View, level Level) []Violation {
 		// /RI, when present, must be a standard rendering intent (all levels).
 		if ri, ok := doc.Resolve(dict.Get("RI")).(object.Name); ok && !standardRenderingIntents[string(ri)] {
 			errs = append(errs, Violation{
-				Rule:    rule,
+				Rule:    contentClause(kindIntent, level),
 				Level:   level,
 				Message: fmt.Sprintf("ExtGState /RI uses a non-standard rendering intent /%s", string(ri)),
 				Object:  num,
@@ -2812,7 +2840,7 @@ func checkExtGState(doc core.View, level Level) []Violation {
 				if n, ok := doc.ResolveName(bm); ok {
 					if !isValidBlendMode(n) {
 						errs = append(errs, Violation{
-							Rule:    rule,
+							Rule:    blendModeClause(level),
 							Level:   level,
 							Message: fmt.Sprintf("invalid blend mode /%s", string(n)),
 							Object:  num,
@@ -2826,6 +2854,26 @@ func checkExtGState(doc core.View, level Level) []Violation {
 }
 
 // isValidBlendMode returns true if the name is one of the standard PDF blend modes.
+// deviceNLimitClause is the implementation-limits clause the DeviceN colorant
+// limit is reported under: 6.1.12 at PDF/A-1, 6.1.13 at -2 and -3. PDF/A-4
+// has no such limit.
+func deviceNLimitClause(level Level) string {
+	if level.Part() == 1 {
+		return "6.1.12"
+	}
+	return "6.1.13"
+}
+
+// blendModeClause is the clause of the rule that a blend mode be one ISO 32000
+// defines: 6.2.10 at PDF/A-2 and -3 (6.2.10-1), 6.2.9 at -4 (6.2.9-1).
+// PDF/A-1 forbids transparency altogether, so has none.
+func blendModeClause(level Level) string {
+	if level.Part() == 4 {
+		return "6.2.9"
+	}
+	return "6.2.10"
+}
+
 func isValidBlendMode(bm object.Name) bool {
 	switch bm {
 	case "Normal", "Compatible", "Multiply", "Screen", "Overlay",
@@ -4489,12 +4537,14 @@ func checkColorSpaceValueSeen(doc core.View, csObj object.Object, objNum int, le
 		// DeviceN colorant limit is an implementation limit that varies by part:
 		// PDF/A-1 (PDF 1.4) caps DeviceN at 8 colorants; PDF/A-2 and PDF/A-3
 		// (PDF 1.7, NChannel) raise it to 32; PDF/A-4 (PDF 2.0) has no such limit.
+		// It is reported under the implementation-limits clause, as the veraPDF
+		// profiles number it: 6.1.12 at PDF/A-1 (6.1.12-9), 6.1.13 at -2 and -3
+		// (6.1.13-9).
 		maxColorants := 0
-		rule := "6.2.4"
+		rule := deviceNLimitClause(level)
 		switch level.Part() {
 		case 1:
 			maxColorants = 8
-			rule = "6.2.3"
 		case 2, 3:
 			maxColorants = 32
 		}

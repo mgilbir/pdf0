@@ -90,13 +90,14 @@ func TestATilingPatternsFindingNamesThePattern(t *testing.T) {
 }
 
 func TestRenderingIntentOperator(t *testing.T) {
+	// 6.2.6 is PDF/A-2's rendering-intent clause (veraPDF 6.2.6-1).
 	doc := mkPageWithContentAndRes("/Perceptual ri", nil)
-	if hasRuleMsg(validateView(doc, PDFA2b), "6.2.2") {
+	if hasRuleMsg(validateView(doc, PDFA2b), "6.2.6") {
 		t.Error("standard rendering intent must pass")
 	}
 	doc = mkPageWithContentAndRes("/CustomIntent ri", nil)
-	if !hasRuleMsg(validateView(doc, PDFA2b), "6.2.2") {
-		t.Error("custom rendering intent must be flagged")
+	if !hasRuleMsg(validateView(doc, PDFA2b), "6.2.6") {
+		t.Error("custom rendering intent must be flagged under 6.2.6")
 	}
 }
 

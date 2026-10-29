@@ -132,6 +132,28 @@ v0.6.0.
 
 ### Validation
 
+- **PDF/A findings are reported under the clause the veraPDF profiles give
+  them at each part** (#379). Several checks reported a PDF/A-1 number at every
+  part, or a parent clause for a sub-clause. The verdicts are unchanged; a
+  caller matching on `pdfa.Violation.Rule` sees new numbers:
+
+  | finding | was | now (1b / 2b and 3b / 4) |
+  |---|---|---|
+  | undefined content operator | 6.2.2 | 6.2.10 / 6.2.2 / 6.2.2 |
+  | rendering intent (`ri`, ExtGState `/RI`, image `/Intent`) | 6.2.2, 6.2.5 or 6.2.4 | 6.2.9 / 6.2.6 / unchanged |
+  | PostScript XObject | 6.2.2 | 6.2.7 / 6.2.9 / 6.2.2 |
+  | form `/Subtype2 /PS` or `/PS` entry | 6.2.2 | 6.2.5 / 6.2.9 / 6.2.2 |
+  | blend mode | 6.2.5 | — / 6.2.10 / 6.2.9 |
+  | catalog `/AA` | 6.6.1 at 1b | 6.6.2 / 6.5.2 / 6.6.3 |
+  | catalog `/Metadata` presence and form | 6.7.2 | 6.7.2 / 6.6.2.1 / 6.7.2.1 |
+  | stream `/F`, `/FFilter`, `/FDecodeParms` | 6.1.6 | 6.1.7 / 6.1.7.1 / 6.1.6.1 |
+  | `/Perms` keys | 6.1.12 | — / 6.1.12 / 6.1.11 |
+  | DeviceN colorant limit | 6.2.3 or 6.2.4 | 6.1.12 / 6.1.13 / — |
+  | image `/Interpolate` at PDF/A-4 | 6.2.7 | 6.2.7.1 |
+
+  `TestClausesAreTheProfilesNumbers` holds each of these to the profile rule
+  it implements.
+
 - **`ValidatePDFX` with an unset level validates what the document declares** (#346)
   (see Breaking changes). The declaration is the XMP
   `pdfxid:GTS_PDFXVersion` when it names a level, and otherwise the Info
