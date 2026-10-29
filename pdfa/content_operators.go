@@ -77,15 +77,15 @@ var standardRenderingIntents = map[string]bool{
 // a standard rendering intent, and that named XObject/resource references
 // resolve within the associated resource dictionary.
 func checkContentStreamOperators(doc core.View, level Level) []Violation {
-	rule := "6.2.2"
 	var errs []Violation
 	seen := map[string]bool{}
-	add := func(msg string, obj int) {
-		if seen[msg] {
+	add := func(f contentFinding, obj int) {
+		rule := contentClause(f.kind, level)
+		if rule == "" || seen[f.msg] {
 			return
 		}
-		seen[msg] = true
-		errs = append(errs, Violation{Rule: rule, Level: level, Message: msg, Object: obj})
+		seen[f.msg] = true
+		errs = append(errs, Violation{Rule: rule, Level: level, Message: f.msg, Object: obj})
 	}
 
 	catalog := doc.Catalog()
@@ -98,7 +98,10 @@ func checkContentStreamOperators(doc core.View, level Level) []Violation {
 	w := &contentWalk{containers: map[*object.Dictionary]bool{}, facts: map[*object.Stream]*contentTokenFacts{}}
 	for _, page := range doc.Pages(catalog.Get("Pages")) {
 		data, key, _ := doc.ContentBytesAndKey(page.Dict.Get("Contents")) // reason: presence-only; the producer recorded any declined trip
-		walkExecutedContent(doc, page.Dict, data, key, page.ObjNum, w, add, 0)
+		// A page's own resources already include what it inherits from the
+		// page tree (checkInheritedPageXObject judges that), so a name its
+		// resources lack is defined nowhere.
+		walkExecutedContent(doc, page.Dict, data, key, page.ObjNum, enclosing{known: true}, w, add, 0)
 	}
 
 	// Annotation appearance streams (their /AP /N) are executed content too:
@@ -106,7 +109,7 @@ func checkContentStreamOperators(doc core.View, level Level) []Violation {
 	// there (ISO 19005-1 6.2.10; Isartor 6.2.10-t01-fail-c).
 	for _, ap := range collectAppearanceStreams(doc) {
 		if data, _ := doc.Content(ap.stream); data != nil { // reason: presence-only; the producer recorded any declined trip
-			w.tokens(doc, data, ap.stream, doc.ResolveDict(ap.stream.Dict.Get("Resources")), ap.objNum, add)
+			w.tokens(doc, data, ap.stream, doc.ResolveDict(ap.stream.Dict.Get("Resources")), enclosing{}, ap.objNum, add)
 		}
 	}
 
@@ -126,7 +129,7 @@ func checkContentStreamOperators(doc core.View, level Level) []Violation {
 		for cpVal := range cps.Values() {
 			if cp, ok := doc.Resolve(cpVal).(*object.Stream); ok {
 				if cpData, _ := doc.Content(cp); cpData != nil { // reason: presence-only; the producer recorded any declined trip
-					w.tokens(doc, cpData, cp, res, u.ObjNum, add)
+					w.tokens(doc, cpData, cp, res, enclosing{}, u.ObjNum, add)
 				}
 			}
 		}
@@ -169,6 +172,40 @@ func collectAppearanceStreams(doc core.View) []appearanceStream {
 	return out
 }
 
+// enclosing is the resource dictionaries of the content a stream is drawn
+// from, innermost last, which supply a name the stream's own resources lack:
+// the veraPDF profiles call that name inherited (6.2.2-2 at PDF/A-2, -3 and
+// -4), and one found nowhere undefined (6.2.2-3, PDF/A-4 only). known is
+// false where the walk does not follow what a stream is drawn from — a Type 3
+// glyph procedure, an annotation's appearance — and a name its resources lack
+// is reported as absent, without saying which.
+type enclosing struct {
+	known bool
+	dicts []*object.Dictionary
+}
+
+// inside is the enclosing scope of a stream drawn from content whose
+// resources are res.
+func (e enclosing) inside(res *object.Dictionary) enclosing {
+	if res == nil {
+		return e
+	}
+	return enclosing{known: e.known, dicts: append(e.dicts[:len(e.dicts):len(e.dicts)], res)}
+}
+
+// classify says which of the three a resource-dictionary miss is.
+func (e enclosing) classify(doc core.View, f contentFinding) contentFinding {
+	if !e.known {
+		return contentFinding{kind: kindAbsentResource, msg: resourceAbsentMsg[f.category]}
+	}
+	for _, d := range e.dicts {
+		if namedResourcePresent(doc, d, f.category, f.name) {
+			return contentFinding{kind: kindInheritedResource, msg: resourceInheritedMsg[f.category]}
+		}
+	}
+	return contentFinding{kind: kindUndefinedResource, msg: resourceAbsentMsg[f.category]}
+}
+
 // contentWalk is the state of one checkContentStreamOperators run: the
 // containers already walked, what each stream's tokens say (contentTokenFacts),
 // and what each (stream, resources) pair was found to lack.
@@ -185,18 +222,24 @@ func collectAppearanceStreams(doc core.View) []appearanceStream {
 type contentWalk struct {
 	containers map[*object.Dictionary]bool
 	facts      map[*object.Stream]*contentTokenFacts
-	judged     core.ResMemo[[]string]
+	judged     core.ResMemo[[]contentFinding]
 }
 
 // tokens reports a content stream's undefined operators, custom rendering
 // intents and unresolved named resource references for (data, res), tokenising
 // each stream once (key; a nil key is tokenised every time) and judging its
 // resource references once per distinct resource dictionary.
-func (w *contentWalk) tokens(doc core.View, data []byte, key *object.Stream, res *object.Dictionary, objNum int, add func(string, int)) {
-	if msgs, ok := w.judged.Get(doc, key, res); ok {
+func (w *contentWalk) tokens(doc core.View, data []byte, key *object.Stream, res *object.Dictionary, outer enclosing, objNum int, add func(contentFinding, int)) {
+	report := func(msgs []contentFinding) {
 		for _, m := range msgs {
+			if m.kind == kindResource {
+				m = outer.classify(doc, m)
+			}
 			add(m, objNum)
 		}
+	}
+	if msgs, ok := w.judged.Get(doc, key, res); ok {
+		report(msgs)
 		return
 	}
 	f := w.facts[key]
@@ -207,17 +250,72 @@ func (w *contentWalk) tokens(doc core.View, data []byte, key *object.Stream, res
 		}
 	}
 	msgs := f.judge(doc, res)
-	for _, m := range msgs {
-		add(m, objNum)
-	}
+	report(msgs)
 	if !doc.Cancel.Stopped() {
 		w.judged.Put(key, res, msgs)
 	}
 }
 
+// contentKind is what kind of finding the executed-content walk made, which
+// decides its clause (contentClause): the walk reports several of the
+// profiles' rules, and at each part they are numbered apart.
+type contentKind int
+
+const (
+	kindResource          contentKind = iota // a named resource its stream's dictionary lacks, before enclosing.classify
+	kindInheritedResource                    // one an enclosing content's resources supply
+	kindUndefinedResource                    // one no resource dictionary supplies
+	kindAbsentResource                       // one whose enclosing content the walk did not follow
+	kindOperator                             // an operator not defined in ISO 32000
+	kindIntent                               // ri with a rendering intent not among the four
+	kindPostScript                           // a drawn PostScript XObject
+	kindSubtype2PS                           // a drawn form with /Subtype2 /PS
+	kindPSEntry                              // a drawn form with a /PS entry
+)
+
+// contentFinding is one finding of the executed-content walk. A kindResource
+// finding names the resource (category, name) rather than carrying a message:
+// which finding it is depends on where the stream is drawn from.
+type contentFinding struct {
+	kind           contentKind
+	msg            string
+	category, name string
+}
+
+// contentClause is the clause each kind of finding is reported under, per
+// part, as the veraPDF profiles number the rules: [1, 2 and 3, 4]. PDF/A-1
+// numbers an undefined operator 6.2.10, a rendering intent 6.2.9, a PostScript
+// XObject 6.2.7 and a form's Subtype2 or PS entry 6.2.5; PDF/A-2 and -3 number
+// them 6.2.2, 6.2.6, 6.2.9 and 6.2.9. "" is a part whose profile has no such
+// rule, and the finding is not made there: PDF/A-1 has no named-resource
+// rule, PDF/A-2 and -3 none for a name defined nowhere (only for one
+// inherited, 6.2.2-2), and PDF/A-4 none for rendering intents or PostScript —
+// veraPDF passes a file showing each.
+func contentClause(k contentKind, level Level) string {
+	m := map[contentKind][3]string{
+		kindInheritedResource: {"", "6.2.2", "6.2.2"},
+		kindUndefinedResource: {"", "", "6.2.2"},
+		kindAbsentResource:    {"", "6.2.2", "6.2.2"},
+		kindOperator:          {"6.2.10", "6.2.2", "6.2.2"},
+		kindIntent:            {"6.2.9", "6.2.6", ""},
+		kindPostScript:        {"6.2.7", "6.2.9", ""},
+		kindSubtype2PS:        {"6.2.5", "6.2.9", ""},
+		kindPSEntry:           {"6.2.5", "6.2.9", ""},
+	}
+	c := m[k]
+	switch level.Part() {
+	case 1:
+		return c[0]
+	case 4:
+		return c[2]
+	default:
+		return c[1]
+	}
+}
+
 // walkExecutedContent validates a content stream and recurses into the form
 // XObjects and tiling patterns it actually invokes.
-func walkExecutedContent(doc core.View, container *object.Dictionary, data []byte, key *object.Stream, objNum int, w *contentWalk, add func(string, int), depth int) {
+func walkExecutedContent(doc core.View, container *object.Dictionary, data []byte, key *object.Stream, objNum int, outer enclosing, w *contentWalk, add func(contentFinding, int), depth int) {
 	if !doc.Descend(depth) {
 		return
 	}
@@ -231,7 +329,7 @@ func walkExecutedContent(doc core.View, container *object.Dictionary, data []byt
 	w.containers[container] = true
 	res := doc.Resources(container)
 	if data != nil {
-		w.tokens(doc, data, key, res, objNum, add)
+		w.tokens(doc, data, key, res, outer, objNum, add)
 	}
 	if res == nil {
 		return
@@ -248,16 +346,16 @@ func walkExecutedContent(doc core.View, container *object.Dictionary, data []byt
 				// A PostScript XObject that is actually drawn is prohibited
 				// (ISO 19005-1 6.2.5, -2/-3/-4 6.2.9).
 				if st == "PS" {
-					add("a drawn PostScript XObject is not permitted", xnum)
+					add(contentFinding{kind: kindPostScript, msg: "a drawn PostScript XObject is not permitted"}, xnum)
 				} else if st == "Form" {
 					if s2, _ := doc.ResolveName(s.Dict.Get("Subtype2")); s2 == "PS" {
-						add("a drawn form XObject has /Subtype2 /PS (PostScript)", xnum)
+						add(contentFinding{kind: kindSubtype2PS, msg: "a drawn form XObject has /Subtype2 /PS (PostScript)"}, xnum)
 					}
 					if s.Dict.Get("PS") != nil {
-						add("a drawn form XObject dictionary contains a /PS entry", xnum)
+						add(contentFinding{kind: kindPSEntry, msg: "a drawn form XObject dictionary contains a /PS entry"}, xnum)
 					}
 					data, _ := doc.Content(s) // reason: presence-only; the producer recorded any declined trip
-					walkExecutedContent(doc, &s.Dict, data, s, xnum, w, add, depth+1)
+					walkExecutedContent(doc, &s.Dict, data, s, xnum, outer.inside(res), w, add, depth+1)
 				}
 			}
 		}
@@ -273,7 +371,7 @@ func walkExecutedContent(doc core.View, container *object.Dictionary, data []byt
 			}
 			if s, ok := doc.Resolve(pref).(*object.Stream); ok {
 				data, _ := doc.Content(s) // reason: presence-only; the producer recorded any declined trip
-				walkExecutedContent(doc, &s.Dict, data, s, resolveObjNum(doc, pref), w, add, depth+1)
+				walkExecutedContent(doc, &s.Dict, data, s, resolveObjNum(doc, pref), outer.inside(res), w, add, depth+1)
 			}
 		}
 	}
@@ -289,6 +387,7 @@ type contentTokenFacts struct {
 }
 
 type contentTokenEvent struct {
+	kind     contentKind
 	msg      string // a finding; empty for a resource reference
 	category string // the resource category a reference names (XObject, Font, …)
 	name     string
@@ -304,16 +403,26 @@ var resourceAbsentMsg = map[string]string{
 	"Font":       "content stream references a font that is absent from the resource dictionary",
 }
 
+// resourceInheritedMsg is the finding for a named resource its stream's
+// dictionary lacks and the content it is drawn from supplies.
+var resourceInheritedMsg = map[string]string{
+	"XObject":    "content stream uses an XObject absent from its own resource dictionary, inherited from the content it is drawn from",
+	"Shading":    "content stream uses a shading absent from its own resource dictionary, inherited from the content it is drawn from",
+	"ExtGState":  "content stream uses an ExtGState absent from its own resource dictionary, inherited from the content it is drawn from",
+	"ColorSpace": "content stream uses a colour space absent from its own resource dictionary, inherited from the content it is drawn from",
+	"Font":       "content stream uses a font absent from its own resource dictionary, inherited from the content it is drawn from",
+}
+
 // judge is the findings of the stream drawn with res, in the order a scan
 // would have reported them.
-func (f *contentTokenFacts) judge(doc core.View, res *object.Dictionary) []string {
-	var out []string
+func (f *contentTokenFacts) judge(doc core.View, res *object.Dictionary) []contentFinding {
+	var out []contentFinding
 	for _, e := range f.events {
 		doc.Charge(1)
 		if e.msg != "" {
-			out = append(out, e.msg)
+			out = append(out, contentFinding{kind: e.kind, msg: e.msg})
 		} else if !namedResourcePresent(doc, res, e.category, e.name) {
-			out = append(out, resourceAbsentMsg[e.category])
+			out = append(out, contentFinding{kind: kindResource, category: e.category, name: e.name})
 		}
 	}
 	return out
@@ -357,13 +466,13 @@ func scanContentTokens(cancel core.Canceler, data []byte) *contentTokenFacts {
 			continue
 		}
 		if !contentOperators[s] {
-			add(contentTokenEvent{msg: fmt.Sprintf("content stream contains an operator %q not defined in ISO 32000", s)})
+			add(contentTokenEvent{kind: kindOperator, msg: fmt.Sprintf("content stream contains an operator %q not defined in ISO 32000", s)})
 			continue
 		}
 		switch s {
 		case "ri":
 			if lastName != "" && !standardRenderingIntents[lastName] {
-				add(contentTokenEvent{msg: fmt.Sprintf("rendering intent operator (ri) uses a non-standard value /%s", lastName)})
+				add(contentTokenEvent{kind: kindIntent, msg: fmt.Sprintf("rendering intent operator (ri) uses a non-standard value /%s", lastName)})
 			}
 		case "Do":
 			ref("XObject", lastName)

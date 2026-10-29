@@ -68,9 +68,12 @@ func TestValidatePDFA_AnnotationSubtypes(t *testing.T) {
 		{"Screen", PDFA4},
 		{"3D", PDFA4},
 		{"RichMedia", PDFA4},
-		// FileAttachment is forbidden in PDF/A-1b (which bans embedded files)
-		// but allowed in PDF/A-2/3/4 (it is the PDF/A-3 embedding mechanism).
+		// FileAttachment is forbidden in PDF/A-1b (which bans embedded files),
+		// allowed in PDF/A-2 and -3, and at -4 allowed only in PDF/A-4f, the
+		// embedded-files variant (the 4, 4E and 4F profiles' 6.3.1-1).
 		{"FileAttachment", PDFA1b},
+		{"FileAttachment", PDFA4},
+		{"FileAttachment", PDFA4E},
 	}
 
 	for _, tt := range forbidden {
@@ -93,9 +96,17 @@ func TestValidatePDFA_AnnotationSubtypes(t *testing.T) {
 	}
 
 	t.Run("allowed subtypes pass", func(t *testing.T) {
-		allowed := []object.Name{"Text", "Link", "FreeText", "Widget", "Popup", "Stamp", "FileAttachment"}
-		for _, st := range allowed {
-			doc := mkPDFAView(PDFA4)
+		allowed := []struct {
+			subtype object.Name
+			level   Level
+		}{
+			{"Text", PDFA4}, {"Link", PDFA4}, {"FreeText", PDFA4}, {"Widget", PDFA4}, {"Popup", PDFA4}, {"Stamp", PDFA4},
+			{"FileAttachment", PDFA2b}, {"FileAttachment", PDFA3b}, {"FileAttachment", PDFA4F},
+			{"3D", PDFA4E}, {"RichMedia", PDFA4E},
+		}
+		for _, a := range allowed {
+			st := a.subtype
+			doc := mkPDFAView(a.level)
 			annot := &object.Dictionary{}
 			annot.Set("Type", object.Name("Annot"))
 			annot.Set("Subtype", st)
@@ -105,9 +116,9 @@ func TestValidatePDFA_AnnotationSubtypes(t *testing.T) {
 			doc.Objects[10] = &object.IndirectObject{Number: 10, Value: annot}
 			addTestPage(doc).Set("Annots", object.Array{object.IndirectRef{Number: 10}})
 
-			errs := filterRule(validateView(doc, PDFA4), "6.3.1")
+			errs := filterRule(validateView(doc, a.level), "6.3.1")
 			if len(errs) > 0 {
-				t.Errorf("subtype /%s should be allowed in PDF/A-4", st)
+				t.Errorf("subtype /%s should be allowed in %s", st, a.level)
 			}
 		}
 	})
@@ -648,5 +659,97 @@ func TestValidatePDFA_OutputIntentRules(t *testing.T) {
 	catalog2.Set("OutputIntents", object.Array{i1, i2})
 	if !hasRule(checkOutputIntents(doc2, PDFA2b), "6.2.3") {
 		t.Error("differing DestOutputProfile objects across intents must be flagged")
+	}
+}
+
+// TestDocumentAFIsAPDFA3Rule: an embedded file associated with nothing is a
+// PDF/A-3 finding (veraPDF 6.8-4, an associated file) and not a PDF/A-4 one —
+// the 4, 4E and 4F profiles ask only for each specification's
+// /AFRelationship (6.9-4). pdf0 used to require the document-level /AF at
+// plain PDF/A-4 too, which veraPDF does not (6-3-1-t01-fail-f).
+func TestDocumentAFIsAPDFA3Rule(t *testing.T) {
+	for _, tc := range []struct {
+		level Level
+		want  bool
+	}{{PDFA3b, true}, {PDFA4, false}, {PDFA4F, false}} {
+		doc := mkPDFAView(tc.level)
+		ef := object.NewStream(object.NewDictionary(
+			object.Entry{Key: "Type", Value: object.Name("EmbeddedFile")},
+			object.Entry{Key: "Subtype", Value: object.Name("application/pdf")},
+		), nil)
+		doc.Objects[30] = &object.IndirectObject{Number: 30, Value: ef}
+		doc.Objects[31] = &object.IndirectObject{Number: 31, Value: object.NewDictionary(
+			object.Entry{Key: "Type", Value: object.Name("Filespec")},
+			object.Entry{Key: "F", Value: object.String{Value: []byte("a.pdf")}},
+			object.Entry{Key: "UF", Value: object.String{Value: []byte("a.pdf")}},
+			object.Entry{Key: "AFRelationship", Value: object.Name("Source")},
+			object.Entry{Key: "EF", Value: object.NewDictionary(object.Entry{Key: "F", Value: object.IndirectRef{Number: 30}})},
+		)}
+		doc.Catalog().Set("Names", object.NewDictionary(object.Entry{Key: "EmbeddedFiles", Value: object.NewDictionary(
+			object.Entry{Key: "Names", Value: object.Array{object.String{Value: []byte("a.pdf")}, object.IndirectRef{Number: 31}}},
+		)}))
+		if got := hasMessage(validateView(doc, tc.level), "must have /AF array"); got != tc.want {
+			t.Errorf("%s, an embedded file associated with nothing: /AF finding %v, want %v", tc.level, got, tc.want)
+		}
+	}
+}
+
+// TestAppearanceRequirementPerPart: which annotations must have /AP is the
+// part's, as the profiles have it — every one but a Popup, a Link and one with
+// no size at PDF/A-2 and -3 (6.3.3-1), a Projection too at -4, and at PDF/A-1
+// a form field's widget alone, size or not (6.9-2). What an /AP holds is
+// judged on every annotation, exempt from needing one or not (6.3.3-2).
+func TestAppearanceRequirementPerPart(t *testing.T) {
+	sized := object.Array{object.Integer(0), object.Integer(0), object.Integer(100), object.Integer(100)}
+	empty := object.Array{object.Integer(5), object.Integer(5), object.Integer(5), object.Integer(5)}
+	withDown := object.NewDictionary(
+		object.Entry{Key: "N", Value: &object.Stream{}},
+		object.Entry{Key: "D", Value: &object.Stream{}},
+	)
+	for _, tc := range []struct {
+		name    string
+		level   Level
+		subtype object.Name
+		rect    object.Array
+		ap      *object.Dictionary
+		want    string // the clause reported, "" for none
+	}{
+		{"a text annotation without /AP at 2b", PDFA2b, "Text", sized, nil, "6.3.3"},
+		{"a text annotation without /AP at 1b", PDFA1b, "Text", sized, nil, ""},
+		{"a widget without /AP at 1b", PDFA1b, "Widget", sized, nil, "6.9"},
+		{"a widget with no size and no /AP at 1b", PDFA1b, "Widget", empty, nil, "6.9"},
+		{"a widget with no size and no /AP at 2b", PDFA2b, "Widget", empty, nil, ""},
+		{"a link without /AP at 2b", PDFA2b, "Link", sized, nil, ""},
+		{"a projection without /AP at 4", PDFA4, "Projection", sized, nil, ""},
+		{"a projection without /AP at 2b", PDFA2b, "Projection", sized, nil, "6.3.3"},
+		{"a popup whose /AP has /D at 2b", PDFA2b, "Popup", sized, withDown, "6.3.3"},
+		{"a link whose /AP has /D at 1b", PDFA1b, "Link", sized, withDown, "6.5.3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc := mkPDFAView(tc.level)
+			annot := object.NewDictionary(
+				object.Entry{Key: "Type", Value: object.Name("Annot")},
+				object.Entry{Key: "Subtype", Value: tc.subtype},
+				object.Entry{Key: "Rect", Value: tc.rect},
+				object.Entry{Key: "F", Value: object.Integer(4)},
+			)
+			if tc.ap != nil {
+				annot.Set("AP", tc.ap)
+			}
+			doc.Objects[10] = &object.IndirectObject{Number: 10, Value: annot}
+			addTestPage(doc).Set("Annots", object.Array{object.IndirectRef{Number: 10}})
+			var got []string
+			for _, v := range validateView(doc, tc.level) {
+				if strings.Contains(v.Message, "/AP") || strings.Contains(v.Message, "appearance dictionary") {
+					got = append(got, v.Rule)
+				}
+			}
+			switch {
+			case tc.want == "" && len(got) > 0:
+				t.Errorf("want no appearance finding, got %v", got)
+			case tc.want != "" && (len(got) != 1 || got[0] != tc.want):
+				t.Errorf("want one appearance finding under %s, got %v", tc.want, got)
+			}
+		})
 	}
 }

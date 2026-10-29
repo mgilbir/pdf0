@@ -139,3 +139,40 @@ func TestClipOnlyTextNeedsAReadableProgram(t *testing.T) {
 		}
 	}
 }
+
+// TestAnUnnamedCodeIsANotdefReference: under an encoding pdf0 models, a code
+// it leaves unnamed (0 under /WinAnsiEncoding) selects .notdef, which the
+// program carries — a .notdef reference at PDF/A-2 and -4 (veraPDF 6.2.11.8-1,
+// PDF_A-2b 6-2-11-8-t01-fail-a; 6.2.10.9-1), not a glyph the program lacks.
+// PDF/A-1 has no .notdef rule, and veraPDF finds the glyph present there.
+func TestAnUnnamedCodeIsANotdefReference(t *testing.T) {
+	fd := &object.Dictionary{}
+	fd.Set("Flags", object.Integer(32))
+	fd.Set("FontFile", object.IndirectRef{Number: 9})
+	font := &object.Dictionary{}
+	font.Set("Subtype", object.Name("Type1"))
+	font.Set("Encoding", object.Name("WinAnsiEncoding"))
+	font.Set("FontDescriptor", fd)
+	doc := mkV(core.View{Objects: map[int]*object.IndirectObject{
+		1: {Number: 1, Value: font},
+		9: {Number: 9, Value: object.NewStream(&object.Dictionary{}, fonttest.Type1Program([]string{".notdef", "A"}))},
+	}})
+	u := &core.FontTextUsage{ObjNum: 1, Strings: [][]byte{{0}}, Modes: map[int]bool{0: true}}
+	for _, c := range []struct {
+		level  Level
+		notdef string // the clause of the .notdef finding, "" for none
+	}{{PDFA1b, ""}, {PDFA2b, "6.2.11.8"}, {PDFA4, "6.2.10.9"}} {
+		var notdef []string
+		for _, v := range checkSimpleFontConsistency(doc, c.level, "", font, u) {
+			if strings.Contains(v.Message, "does not define a glyph") {
+				t.Errorf("%s: code 0 selects .notdef, which the program defines: %v", c.level, v)
+			}
+			if strings.Contains(v.Message, ".notdef") {
+				notdef = append(notdef, v.Rule)
+			}
+		}
+		if (c.notdef == "" && len(notdef) != 0) || (c.notdef != "" && (len(notdef) != 1 || notdef[0] != c.notdef)) {
+			t.Errorf("%s: .notdef findings %v, want %q", c.level, notdef, c.notdef)
+		}
+	}
+}

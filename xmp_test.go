@@ -39,8 +39,9 @@ func TestValidatePDFA_XMPUnknownProperty(t *testing.T) {
 	doc := mustPDFADoc(t, pdfa.PDFA1b)
 	setDocXMP(doc, xmpWithPDFAID(pdfa.PDFA1b, `
 		<rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Author="A"/>`))
-	if !hasRule(ValidatePDFA(doc, pdfa.PDFA1b), "6.7.2") {
-		t.Error("expected 6.7.2 error for xmp:Author (not in XMP Basic)")
+	// PDF/A-1 numbers the XMP schema rule 6.7.9 (veraPDF 6.7.9-2).
+	if !hasRule(ValidatePDFA(doc, pdfa.PDFA1b), "6.7.9") {
+		t.Error("expected 6.7.9 error for xmp:Author (not in XMP Basic)")
 	}
 }
 
@@ -50,8 +51,9 @@ func TestValidatePDFA_XMPWrongForm(t *testing.T) {
 		<rdf:Description rdf:about="" xmlns:pdf="http://ns.adobe.com/pdf/1.3/">
 			<pdf:Keywords><rdf:Seq><rdf:li>k</rdf:li></rdf:Seq></pdf:Keywords>
 		</rdf:Description>`))
-	if !hasRule(ValidatePDFA(doc, pdfa.PDFA1b), "6.7.2") {
-		t.Error("expected 6.7.2 error for pdf:Keywords as Seq (must be Text)")
+	// A value of the wrong type is veraPDF 6.7.9-3.
+	if !hasRule(ValidatePDFA(doc, pdfa.PDFA1b), "6.7.9") {
+		t.Error("expected 6.7.9 error for pdf:Keywords as Seq (must be Text)")
 	}
 }
 
@@ -113,7 +115,7 @@ func TestValidatePDFA_XMPLevelDependentSchemas(t *testing.T) {
 
 	doc1 := mustPDFADoc(t, pdfa.PDFA1b)
 	setDocXMP(doc1, xmpWithPDFAID(pdfa.PDFA1b, body))
-	if !hasRule(ValidatePDFA(doc1, pdfa.PDFA1b), "6.7.2") {
+	if !hasRule(ValidatePDFA(doc1, pdfa.PDFA1b), "6.7.9") {
 		t.Error("crs property must fail at 1b (schema not predefined, no extension schema)")
 	}
 

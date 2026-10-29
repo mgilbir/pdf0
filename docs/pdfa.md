@@ -215,7 +215,12 @@ whitelist (`contentOperators`, ISO 32000-1 Annex A Table A.1; anything outside i
 is forbidden even inside a `BX`/`EX` compatibility section), the four
 `standardRenderingIntents` for the `ri` operand, named-resource resolution for
 `Do`/`sh`/`gs`/`cs`/`CS`/`Tf`, the drawn-PostScript-XObject prohibition and the
-A-4 ICC profile-identity rule. `walkExecutedContent` lives here — see
+A-4 ICC profile-identity rule. A name a stream's own resources lack is told
+apart as the veraPDF profiles tell it: inherited when the content it is drawn
+from supplies it (6.2.2-2, PDF/A-2, -3 and -4), undefined when nothing does
+(6.2.2-3, PDF/A-4 only). `contentClause` numbers each kind of finding per part,
+and a kind a part's profile has no rule for — a named resource at PDF/A-1, a
+rendering intent or PostScript at PDF/A-4 — is not reported there. `walkExecutedContent` lives here — see
 [the executed-content model](#the-executed-content-model).
 
 **`pdfa/content_facts.go`** — the rules that judge a content stream by its tokens
@@ -499,7 +504,7 @@ flowchart TD
     DG -->|yes| S{"container in w.containers,<br/>or the run cancelled?"}
     S -->|yes| STOP["return: each container once"]
     S -->|no| RES["doc.Resources(container)<br/>own or inherited through /Parent"]
-    RES --> T["contentWalk.tokens<br/>operator whitelist, ri operand,<br/>named resource present<br/>(tokenised once per stream,<br/>judged once per resources value)"]
+    RES --> T["contentWalk.tokens<br/>operator whitelist, ri operand,<br/>named resource: own, inherited<br/>from the enclosing content, or undefined<br/>(tokenised once per stream,<br/>judged once per resources value)"]
     RES --> U["doc.ContentUsedNamesCached<br/>names invoked by Do and scn / SCN"]
     U --> X{"XObject named<br/>in the used set?"}
     X -->|no| SKIP["skipped: never drawn,<br/>cannot violate a rendering rule"]
