@@ -133,7 +133,7 @@ v0.6.0.
 ### Validation
 
 - **PDF/A findings are reported under the clause the veraPDF profiles give
-  them at each part** (#PR). Several checks reported a PDF/A-1 number at every
+  them at each part** (#379). Several checks reported a PDF/A-1 number at every
   part, or a parent clause for a sub-clause. The verdicts are unchanged; a
   caller matching on `pdfa.Violation.Rule` sees new numbers:
 
