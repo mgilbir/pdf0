@@ -22,7 +22,7 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 
 ### Validation
 
-- **PDF/UA findings follow veraPDF's numbering and verdicts** (#PR), at both
+- **PDF/UA findings follow veraPDF's numbering and verdicts** (#390), at both
   parts: every rule veraPDF fails a PDF/UA corpus file on is now reported
   under the same clause (PDF/UA-1 97/97, PDF/UA-2 48/48), with no file
   veraPDF passes flagged. What a caller sees change:
