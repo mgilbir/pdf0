@@ -22,7 +22,7 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 
 ### For contributors
 
-- **Rule coverage is also judged by veraPDF's own verdicts** (#PR).
+- **Rule coverage is also judged by veraPDF's own verdicts** (#385).
   `make verapdf-verdicts` runs veraPDF over the corpus's PDF/A levels and keeps
   its reports (generated, never committed), and `TestRuleCoverageByVeraPDF`
   judges pdf0 against the rules veraPDF fails each file on, where the file's
