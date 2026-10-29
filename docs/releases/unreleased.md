@@ -364,7 +364,7 @@ v0.6.0.
 
 ## Added
 
-- **htmlpdf writes tagged PDF** (#PR): `Options.Tagged` gives the page a
+- **htmlpdf writes tagged PDF** (#382): `Options.Tagged` gives the page a
   structure tree built from the HTML — headings, paragraphs, lists with their
   labels, tables with header scope and the headers each cell names, figures
   with their alt text, links with their annotations and a description, and
