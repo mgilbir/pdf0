@@ -23,7 +23,7 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 ### Validation
 
 - **PDF/A-1 rules the corpus does not test, checked against veraPDF on
-  single-defect files**: fifty-three more fixtures at PDF/A-1b, -2b and -4,
+  single-defect files** (#393): fifty-three more fixtures at PDF/A-1b, -2b and -4,
   covering stream syntax, implementation limits, output intents, images and
   XObjects, transparency, Type 0 fonts, actions, the metadata stream and
   extension schemas. What pdf0 changed to agree on every one:
