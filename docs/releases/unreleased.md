@@ -22,6 +22,26 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 
 ### Validation
 
+- **PDF/A-1 rules the corpus does not test, checked against veraPDF on
+  single-defect files**: fifty-three more fixtures at PDF/A-1b, -2b and -4,
+  covering stream syntax, implementation limits, output intents, images and
+  XObjects, transparency, Type 0 fonts, actions, the metadata stream and
+  extension schemas. What pdf0 changed to agree on every one:
+  - A TrueType font with no `/Encoding` selects glyphs by code through the
+    program's (3,0) or (1,0) cmap, as a symbolic font does (ISO 32000-1
+    9.6.6.4): a non-symbolic font without `/Encoding` whose program has only
+    a (3,1) cmap shows no glyph, and one with a (3,0) or (1,0) cmap shows
+    the code's glyph. This applies to PDF/A and PDF/UA alike.
+  - An extension schema property definition missing only its category or
+    description still declares the property; one whose value type is
+    neither a standard XMP type nor declared by the schema is reported
+    (6.7.8 / 6.6.2.3.3) and declares nothing.
+  - PDF/A-2 and -3 have no array or dictionary capacity limit (6.1.13),
+    and PDF/A-4 no rule on the stream and endstream keywords' line ends.
+  - Reported under the clauses veraPDF's PDF/A-1 profile gives them: the
+    stream keyword's line ends 6.1.7 (was 6.1.6), a widget's `/A` 6.6.1
+    (was 6.6.2), `NeedAppearances` 6.9 (was 6.4.1).
+
 - **PDF/A-2 rules the corpus does not test, checked against veraPDF on
   single-defect files** (#392): thirty-three more fixtures at PDF/A-1b, -2b and -4,
   and what pdf0 changed to agree on every one:

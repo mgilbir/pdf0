@@ -595,7 +595,8 @@ func annotActionClause(concept string, level Level) string {
 	// [1b, 2b/3b, 4]
 	m := map[string][3]string{
 		"subtype":    {"6.5.2", "6.3.1", "6.3.1"},
-		"widget":     {"6.6.2", "6.4.1", "6.4.1"},
+		"widget":     {"6.6.1", "6.4.1", "6.4.1"}, // a widget's /A: veraPDF 6.6.1-3 at 1b
+		"widgetAA":   {"6.6.2", "6.4.1", "6.4.1"}, // a field's /AA: veraPDF 6.6.2-2 at 1b
 		"forbidden":  {"6.6.1", "6.5.1", "6.6.1"},
 		"catalogAA":  {"6.6.2", "6.5.2", "6.6.3"},
 		"flags":      {"6.5.3", "6.3.2", "6.3.2"},
@@ -2006,8 +2007,13 @@ func checkNeedAppearances(doc core.View, level Level) []Violation {
 		return nil
 	}
 	if doc.IsTrue(af.Get("NeedAppearances")) {
+		// ISO 19005-1 6.9; -2/-3 and -4 6.4.1 (veraPDF 6.9-1, 6.4.1-3).
+		rule := "6.4.1"
+		if level.Part() == 1 {
+			rule = "6.9"
+		}
 		return []Violation{{
-			Rule:    "6.4.1",
+			Rule:    rule,
 			Level:   level,
 			Message: "NeedAppearances must be false",
 		}}
@@ -2226,7 +2232,7 @@ func checkAnnotationAA(doc core.View, level Level) []Violation {
 
 	// The clause is the widget/form-field additional-actions rule: 6.6.2 at
 	// PDF/A-1 and 6.4.1 at -2 and -3, which annotActionClause has under
-	// "widget". It was hardcoded to 6.6.3, which is PDF/A-4's — a level this
+	// "widgetAA". It was hardcoded to 6.6.3, which is PDF/A-4's — a level this
 	// function returns nil for — and the comment here cited 6.5.3 and 6.3.3,
 	// which are the annotation rules about CA, F, C/IC and AP and say nothing
 	// about AA. Three different wrong numbers for one report.
@@ -2235,7 +2241,7 @@ func checkAnnotationAA(doc core.View, level Level) []Violation {
 	// PDWidgetAnnot and PDFormField: this reports /AA on any annotation. The
 	// corpus is the oracle on that and it holds at FP=0 either way, so the
 	// broader reading keeps whatever it catches.
-	clause := annotActionClause("widget", level)
+	clause := annotActionClause("widgetAA", level)
 	var errs []Violation
 	check := func(dict *object.Dictionary, num int) {
 		if dict.Get("AA") != nil {
@@ -3828,6 +3834,9 @@ func checkImplementationLimits(doc core.View, level Level) []Violation {
 		lim.stringLen = 32767
 		lim.realLimit = 3.403e38 // PDF 1.7 Annex C (float32 range)
 		lim.realMin = 1.175e-38
+		// PDF 1.7's Annex C sets no array or dictionary capacity, and the
+		// PDF/A-2 profile has no such rule (veraPDF 6.1.13 has none).
+		lim.arrayLen, lim.dictEnt = 0, 0
 	}
 
 	var errs []Violation
@@ -3917,7 +3926,7 @@ func checkObjectLimits(obj object.Object, objNum int, level Level, lim implLimit
 			})
 			return // Don't recurse further
 		}
-		if v.Len() > lim.dictEnt {
+		if lim.dictEnt > 0 && v.Len() > lim.dictEnt {
 			*errs = append(*errs, Violation{
 				Rule:    lim.rule,
 				Level:   level,
@@ -3939,7 +3948,7 @@ func checkObjectLimits(obj object.Object, objNum int, level Level, lim implLimit
 			})
 			return // Don't recurse further
 		}
-		if len(v) > lim.arrayLen {
+		if lim.arrayLen > 0 && len(v) > lim.arrayLen {
 			*errs = append(*errs, Violation{
 				Rule:    lim.rule,
 				Level:   level,

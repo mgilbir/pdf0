@@ -153,6 +153,12 @@ type Simple struct {
 	// EncodingModelled is BaseEncodingModelled's answer: whether a code
 	// Encoding has no name for selects .notdef, or is unknown.
 	EncodingModelled bool
+	// ByCode is true for a TrueType font whose codes select glyphs through
+	// the program's (3,0) or (1,0) cmap by the code itself, not by glyph
+	// name: "When the font has no Encoding entry, or the font descriptor's
+	// Symbolic flag is set" (ISO 32000-1 9.6.6.4). veraPDF reads a
+	// non-symbolic font with no /Encoding so too.
+	ByCode bool
 	// NoStandardCmap is true for a non-symbolic TrueType program whose cmap
 	// has neither of the subtables ISO 32000-1 9.6.6.4 looks a named code up
 	// in, Microsoft Unicode (3,1) and Mac Roman (1,0), and whose post table
@@ -189,7 +195,8 @@ func newSimple(doc core.View, fontDict, fd *object.Dictionary, fp *font.Program)
 	s.Subtype, _ = doc.ResolveName(fontDict.Get("Subtype"))
 	s.Encoding = SimpleFontCodeToName(doc, fontDict, s.Symbolic)
 	s.EncodingModelled = BaseEncodingModelled(doc, fontDict, s.Symbolic)
-	if s.Subtype == "TrueType" && !s.Symbolic {
+	s.ByCode = s.Subtype == "TrueType" && (s.Symbolic || fontDict.Get("Encoding") == nil)
+	if s.Subtype == "TrueType" && !s.ByCode {
 		if encs, known := CmapEncodings(doc, fd); known &&
 			!slices.Contains(encs, CmapEncoding{3, 1}) && !slices.Contains(encs, CmapEncoding{1, 0}) &&
 			!PostGlyphNames(doc, fd) {
@@ -219,7 +226,7 @@ func newSimple(doc core.View, fontDict, fd *object.Dictionary, fp *font.Program)
 func (s *Simple) ProgramWidth(code byte) (float64, bool) {
 	name := s.Encoding[code]
 	if s.Subtype == "TrueType" {
-		gid, ok := simplefont.TrueTypeGlyph(s.Program, s.Symbolic, code, name)
+		gid, ok := simplefont.TrueTypeGlyph(s.Program, s.ByCode, code, name)
 		if s.NoStandardCmap && name != "" {
 			gid, ok = 0, true
 		}

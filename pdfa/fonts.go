@@ -729,7 +729,7 @@ func checkSimpleFontConsistency(doc core.View, level Level, rule string, fontDic
 				name = ".notdef"
 			}
 
-			glyphExists := simpleGlyphExists(fp, subtype, symbolic, code, name)
+			glyphExists := simpleGlyphExists(fp, subtype, sf.ByCode, code, name)
 			// A named code a non-symbolic TrueType program has no standard
 			// cmap for is a glyph it lacks, not a .notdef reference
 			// (fontcheck.Simple.NoStandardCmap).
@@ -769,7 +769,7 @@ func checkSimpleFontConsistency(doc core.View, level Level, rule string, fontDic
 			// It is gated on the cmap being complete for the same reason as
 			// the glyph rule above: a truncated cmap resolves an unread code
 			// to gid 0, which reads as .notdef.
-			if !(fp.CmapPartial && subtype == "TrueType") && !lacksStandardCmap && isNotdefGlyph(fp, subtype, symbolic, code, name) {
+			if !(fp.CmapPartial && subtype == "TrueType") && !lacksStandardCmap && isNotdefGlyph(fp, subtype, sf.ByCode, code, name) {
 				report("notdef", fmt.Sprintf("text showing operator references the .notdef glyph in %s font", string(subtype)))
 			}
 
@@ -928,12 +928,14 @@ func rendersVisibly(u *core.FontTextUsage) bool {
 	return false
 }
 
-func simpleGlyphExists(fp *font.Program, subtype object.Name, symbolic bool, code byte, name string) bool {
+// simpleGlyphExists and isNotdefGlyph look a TrueType code up by code when
+// byCode (fontcheck.Simple.ByCode), by its glyph name otherwise.
+func simpleGlyphExists(fp *font.Program, subtype object.Name, byCode bool, code byte, name string) bool {
 	if subtype == "TrueType" {
 		// Glyph 0 is the program's .notdef: present, and a .notdef
 		// reference (isNotdefGlyph), not a glyph the program lacks
 		// (veraPDF: PDF_A-4 6-2-10-4-1-t02-fail-c).
-		gid, ok := simplefont.TrueTypeGlyph(fp, symbolic, code, name)
+		gid, ok := simplefont.TrueTypeGlyph(fp, byCode, code, name)
 		return ok && gid < fp.NumGlyphs
 	}
 	if name == "" {
@@ -942,12 +944,12 @@ func simpleGlyphExists(fp *font.Program, subtype object.Name, symbolic bool, cod
 	return fp.GlyphNames[name]
 }
 
-func isNotdefGlyph(fp *font.Program, subtype object.Name, symbolic bool, code byte, name string) bool {
+func isNotdefGlyph(fp *font.Program, subtype object.Name, byCode bool, code byte, name string) bool {
 	if name == ".notdef" {
 		return true
 	}
 	if subtype == "TrueType" {
-		gid, ok := simplefont.TrueTypeGlyph(fp, symbolic, code, name)
+		gid, ok := simplefont.TrueTypeGlyph(fp, byCode, code, name)
 		return ok && gid == 0
 	}
 	return false

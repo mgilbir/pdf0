@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"compress/zlib"
 	"fmt"
 	"os"
 	"os/exec"
@@ -438,6 +439,271 @@ var defectFixtures = []defectFixture{
 			object.Entry{Key: "AP", Value: object.NewDictionary(object.Entry{Key: "N", Value: fxAppearance(d)})}))
 		return ""
 	}, want: [3][]string{{"6.5.2"}, nil, {"6.3.1"}}},
+	{name: "stream-length-wrong", build: func(d *Document, p, r *object.Dictionary) string {
+		return "0 0 m 1 1 l S"
+	},
+		patch: fxSameLength("<< /Length 13 >>\nstream\r\n0 0 m", "<< /Length 12 >>\nstream\r\n0 0 m"), want: [3][]string{{"6.1.7"}, {"6.1.7.1"}, {"6.1.6.1"}}},
+	{name: "stream-keyword-cr-only", build: func(d *Document, p, r *object.Dictionary) string {
+		return "0 0 m 1 1 l S"
+	},
+		patch: fxSameLength("<< /Length 13 >>\nstream\r\n0 0 m", "<< /Length 13  >>\nstream\r0 0 m"), want: [3][]string{{"6.1.7"}, {"6.1.7.1"}, nil}},
+	{name: "endstream-without-eol", build: func(d *Document, p, r *object.Dictionary) string {
+		return "0 0 m 1 1 l S"
+	},
+		patch: fxSameLength("l S\nendstream", "l S endstream"), want: [3][]string{{"6.1.7"}, {"6.1.7.1"}, {"6.1.6.1"}}},
+	{name: "stream-ffilter", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxStreamForm(d, r, nil, object.Entry{Key: "FFilter", Value: object.Name("FlateDecode")})
+	}, want: [3][]string{{"6.1.7"}, {"6.1.7.1"}, {"6.1.6.1"}}},
+	{name: "array-8192-elements", build: func(d *Document, p, r *object.Dictionary) string {
+		arr := make(object.Array, 8192)
+		for i := range arr {
+			arr[i] = fxInt(0)
+		}
+		p.Set("PieceInfo", object.NewDictionary(object.Entry{Key: "X", Value: object.NewDictionary(object.Entry{Key: "Private", Value: arr})}))
+		return ""
+	}, want: [3][]string{{"6.1.12"}, nil, nil}},
+	{name: "dictionary-4096-entries", build: func(d *Document, p, r *object.Dictionary) string {
+		dict := &object.Dictionary{}
+		for i := range 4096 {
+			dict.Set(object.Name(fmt.Sprintf("K%d", i)), fxInt(0))
+		}
+		p.Set("PieceInfo", object.NewDictionary(object.Entry{Key: "X", Value: object.NewDictionary(object.Entry{Key: "Private", Value: dict})}))
+		return ""
+	}, want: [3][]string{{"6.1.12"}, nil, nil}},
+	{name: "output-intents-different-profile-objects", build: func(d *Document, p, r *object.Dictionary) string {
+		cat := fxCatalog(d)
+		ois := d.Resolve(cat.Get("OutputIntents")).(object.Array)
+		x := d.ResolveDict(ois[0]).Clone()
+		x.Set("S", object.Name("GTS_PDFX"))
+		prof := d.Resolve(x.Get("DestOutputProfile")).(*object.Stream)
+		x.Set("DestOutputProfile", d.Add(object.NewStream(prof.Dict.Clone(), prof.Data)))
+		cat.Set("OutputIntents", append(slices.Clone(ois), d.Add(x)))
+		return ""
+	}, want: [3][]string{{"6.2.2"}, {"6.2.3"}, {"6.2.3"}}},
+	{name: "output-intents-same-profile-object", build: func(d *Document, p, r *object.Dictionary) string {
+		cat := fxCatalog(d)
+		ois := d.Resolve(cat.Get("OutputIntents")).(object.Array)
+		x := d.ResolveDict(ois[0]).Clone()
+		x.Set("S", object.Name("GTS_PDFX"))
+		cat.Set("OutputIntents", append(slices.Clone(ois), d.Add(x)))
+		return ""
+	}, want: [3][]string{nil, nil, nil}},
+	{name: "iccbased-profile-not-a-stream", build: func(d *Document, p, r *object.Dictionary) string {
+		r.Set("ColorSpace", object.NewDictionary(object.Entry{Key: "CS0", Value: object.Array{object.Name("ICCBased"),
+			object.NewDictionary(object.Entry{Key: "N", Value: fxInt(3)})}}))
+		return "/CS0 cs 1 0 0 sc 0 0 10 10 re f"
+	}, want: [3][]string{nil, nil, nil}},
+	{name: "image-alternates", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxImage(d, r, 8, func(i *object.Dictionary) { i.Set("Alternates", object.Array{}) })
+	}, want: [3][]string{{"6.2.4"}, {"6.2.8"}, {"6.2.7.1"}}},
+	{name: "image-opi", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxImage(d, r, 8, func(i *object.Dictionary) {
+			i.Set("OPI", object.NewDictionary(object.Entry{Key: "2.0", Value: object.NewDictionary(object.Entry{Key: "Type", Value: object.Name("OPI")})}))
+		})
+	}, want: [3][]string{{"6.2.4"}, {"6.2.8"}, {"6.2.7.1"}}},
+	{name: "form-opi", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxForm(d, r, "", object.Entry{Key: "OPI", Value: object.NewDictionary(object.Entry{Key: "2.0", Value: object.NewDictionary(object.Entry{Key: "Type", Value: object.Name("OPI")})})})
+	}, want: [3][]string{{"6.2.4"}, {"6.2.9"}, {"6.2.8.1"}}},
+	{name: "reference-xobject", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxForm(d, r, "", object.Entry{Key: "Ref", Value: object.NewDictionary(
+			object.Entry{Key: "F", Value: object.String{Value: []byte("other.pdf")}}, object.Entry{Key: "Page", Value: fxInt(0)})})
+	}, want: [3][]string{{"6.2.6"}, {"6.2.9"}, {"6.2.8.2"}}},
+	{name: "extgstate-tr", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxGS(r, object.Entry{Key: "TR", Value: object.Name("Identity")})
+	}, want: [3][]string{{"6.2.8"}, {"6.2.5"}, {"6.2.5"}}},
+	{name: "extgstate-tr2-default", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxGS(r, object.Entry{Key: "TR2", Value: object.Name("Default")})
+	}, want: [3][]string{nil, nil, nil}},
+	{name: "extgstate-tr2-identity", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxGS(r, object.Entry{Key: "TR2", Value: object.Name("Identity")})
+	}, want: [3][]string{{"6.2.8"}, {"6.2.5"}, {"6.2.5"}}},
+	{name: "extgstate-smask", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxGS(r, object.Entry{Key: "SMask", Value: object.NewDictionary(object.Entry{Key: "Type", Value: object.Name("Mask")},
+			object.Entry{Key: "S", Value: object.Name("Luminosity")}, object.Entry{Key: "G", Value: d.Add(object.NewStream(object.NewDictionary(
+				object.Entry{Key: "Type", Value: object.Name("XObject")}, object.Entry{Key: "Subtype", Value: object.Name("Form")},
+				object.Entry{Key: "BBox", Value: object.Array{fxInt(0), fxInt(0), fxInt(10), fxInt(10)}},
+				object.Entry{Key: "Group", Value: object.NewDictionary(object.Entry{Key: "S", Value: object.Name("Transparency")}, object.Entry{Key: "CS", Value: object.Name("DeviceRGB")})}), nil))})})
+	}, want: [3][]string{{"6.4"}, nil, nil}},
+	{name: "extgstate-smask-none", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxGS(r, object.Entry{Key: "SMask", Value: object.Name("None")})
+	}, want: [3][]string{nil, nil, nil}},
+	{name: "extgstate-ca-half", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxGS(r, object.Entry{Key: "CA", Value: object.Real(0.5)})
+	}, want: [3][]string{{"6.4"}, nil, nil}},
+	{name: "extgstate-fill-ca-half", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxGS(r, object.Entry{Key: "ca", Value: object.Real(0.5)})
+	}, want: [3][]string{{"6.4"}, nil, nil}},
+	{name: "extgstate-ca-one", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxGS(r, object.Entry{Key: "CA", Value: object.Real(1)}, object.Entry{Key: "ca", Value: fxInt(1)})
+	}, want: [3][]string{nil, nil, nil}},
+	{name: "image-smask", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxImage(d, r, 8, func(i *object.Dictionary) {
+			i.Set("SMask", d.Add(object.NewStream(object.NewDictionary(object.Entry{Key: "Type", Value: object.Name("XObject")},
+				object.Entry{Key: "Subtype", Value: object.Name("Image")}, object.Entry{Key: "Width", Value: fxInt(1)}, object.Entry{Key: "Height", Value: fxInt(1)},
+				object.Entry{Key: "ColorSpace", Value: object.Name("DeviceGray")}, object.Entry{Key: "BitsPerComponent", Value: fxInt(8)}), []byte{0})))
+		})
+	}, want: [3][]string{{"6.4"}, nil, nil}},
+	{name: "cid-font", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxCIDFont(d, r, nil)
+	}, want: [3][]string{nil, nil, nil}},
+	{name: "cid-font-without-cidtogidmap", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxCIDFont(d, r, func(t0, cid *object.Dictionary) { cid.Delete("CIDToGIDMap") })
+	}, want: [3][]string{{"6.3.3.2"}, {"6.2.11.3.2"}, {"6.2.10.3.2"}}},
+	{name: "cid-font-cmap-not-embedded", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxCIDFont(d, r, func(t0, cid *object.Dictionary) { t0.Set("Encoding", object.Name("Test-H")) })
+	}, want: [3][]string{{"6.3.3.1", "6.3.3.3"}, {"6.2.11.3.1", "6.2.11.3.3"}, {"6.2.10.3.1", "6.2.10.3.3"}}},
+	{name: "cid-font-embedded-cmap", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxCIDFont(d, r, func(t0, cid *object.Dictionary) { t0.Set("Encoding", fxEmbeddedCMap(d, 0)) })
+	}, want: [3][]string{nil, nil, nil}},
+	{name: "cid-font-embedded-cmap-wmode-differs", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxCIDFont(d, r, func(t0, cid *object.Dictionary) { t0.Set("Encoding", fxEmbeddedCMap(d, 1)) })
+	}, want: [3][]string{{"6.3.3.3"}, {"6.2.11.3.3"}, {"6.2.10.3.3"}}},
+	{name: "truetype-not-embedded", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxFont(d, r, fxTrueTypeProgram(nil), false, func(f *object.Dictionary) {
+			d.ResolveDict(f.Get("FontDescriptor")).Delete("FontFile2")
+		})
+	}, want: [3][]string{{"6.3.4"}, {"6.2.11.4.1"}, {"6.2.10.4.1"}}},
+	{name: "nonsymbolic-truetype-without-encoding", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxFont(d, r, fxTrueTypeProgram(nil), false, func(f *object.Dictionary) { f.Delete("Encoding") })
+	}, want: [3][]string{{"6.3.5", "6.3.7"}, {"6.2.11.4.1", "6.2.11.6"}, {"6.2.10.4.1", "6.2.10.6"}}},
+	{name: "nonsymbolic-truetype-without-encoding-with-10-cmap", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxFont(d, r, fxTrueTypeProgram([]fonttest.CmapSub{{Plat: 1, Enc: 0, Data: fxFormat0()}}), false, func(f *object.Dictionary) { f.Delete("Encoding") })
+	}, want: [3][]string{{"6.3.7"}, {"6.2.11.6"}, {"6.2.10.6"}}},
+	{name: "nonsymbolic-truetype-without-encoding-with-30-cmap", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxFont(d, r, fxTrueTypeProgram([]fonttest.CmapSub{{Plat: 3, Enc: 0, Data: fxFormat0()}}), false, func(f *object.Dictionary) { f.Delete("Encoding") })
+	}, want: [3][]string{{"6.3.7"}, {"6.2.11.6"}, {"6.2.10.6"}}},
+	{name: "symbolic-truetype-with-encoding", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxFont(d, r, fxTrueTypeProgram([]fonttest.CmapSub{{Plat: 3, Enc: 0, Data: fxFormat0()}}), true, func(f *object.Dictionary) {
+			f.Set("Encoding", object.Name("WinAnsiEncoding"))
+		})
+	}, want: [3][]string{{"6.3.7"}, {"6.2.11.6"}, {"6.2.10.6"}}},
+	{name: "annotation-ca-half", build: func(d *Document, p, r *object.Dictionary) string {
+		a := object.NewDictionary(object.Entry{Key: "Subtype", Value: object.Name("Square")}, object.Entry{Key: "CA", Value: object.Real(0.5)},
+			object.Entry{Key: "AP", Value: object.NewDictionary(object.Entry{Key: "N", Value: fxAppearance(d)})})
+		fxAnnot(d, p, a)
+		return ""
+	}, want: [3][]string{{"6.5.3"}, nil, nil}},
+	{name: "annotation-without-f", build: func(d *Document, p, r *object.Dictionary) string {
+		a := object.NewDictionary(object.Entry{Key: "Subtype", Value: object.Name("Square")},
+			object.Entry{Key: "AP", Value: object.NewDictionary(object.Entry{Key: "N", Value: fxAppearance(d)})})
+		fxAnnot(d, p, a)
+		a.Delete("F")
+		return ""
+	}, want: [3][]string{{"6.5.3"}, {"6.3.2"}, {"6.3.2"}}},
+	{name: "annotation-colour-under-rgb-intent", build: func(d *Document, p, r *object.Dictionary) string {
+		a := object.NewDictionary(object.Entry{Key: "Subtype", Value: object.Name("Square")}, object.Entry{Key: "C", Value: object.Array{fxInt(1), fxInt(0), fxInt(0)}},
+			object.Entry{Key: "IC", Value: object.Array{fxInt(0), fxInt(0), fxInt(1)}},
+			object.Entry{Key: "AP", Value: object.NewDictionary(object.Entry{Key: "N", Value: fxAppearance(d)})})
+		fxAnnot(d, p, a)
+		return ""
+	}, want: [3][]string{nil, nil, nil}},
+	{name: "link-named-action-print", build: func(d *Document, p, r *object.Dictionary) string {
+		fxAnnot(d, p, object.NewDictionary(object.Entry{Key: "Subtype", Value: object.Name("Link")},
+			object.Entry{Key: "A", Value: object.NewDictionary(object.Entry{Key: "S", Value: object.Name("Named")}, object.Entry{Key: "N", Value: object.Name("Print")})}))
+		return ""
+	}, want: [3][]string{{"6.6.1"}, {"6.5.1"}, {"6.6.1"}}},
+	{name: "link-named-action-next-page", build: func(d *Document, p, r *object.Dictionary) string {
+		fxAnnot(d, p, object.NewDictionary(object.Entry{Key: "Subtype", Value: object.Name("Link")},
+			object.Entry{Key: "A", Value: object.NewDictionary(object.Entry{Key: "S", Value: object.Name("Named")}, object.Entry{Key: "N", Value: object.Name("NextPage")})}))
+		return ""
+	}, want: [3][]string{nil, nil, nil}},
+	{name: "widget-with-action", build: func(d *Document, p, r *object.Dictionary) string {
+		w := object.NewDictionary(object.Entry{Key: "Subtype", Value: object.Name("Widget")},
+			object.Entry{Key: "FT", Value: object.Name("Btn")}, object.Entry{Key: "T", Value: object.String{Value: []byte("b")}}, object.Entry{Key: "Ff", Value: fxInt(65536)},
+			object.Entry{Key: "A", Value: object.NewDictionary(object.Entry{Key: "S", Value: object.Name("Named")}, object.Entry{Key: "N", Value: object.Name("NextPage")})},
+			object.Entry{Key: "AP", Value: object.NewDictionary(object.Entry{Key: "N", Value: fxAppearance(d)})})
+		fxAnnot(d, p, w)
+		fxCatalog(d).Set("AcroForm", object.NewDictionary(object.Entry{Key: "Fields", Value: p.Get("Annots")}))
+		return ""
+	}, want: [3][]string{{"6.5.3", "6.6.1"}, {"6.3.3", "6.4.1"}, {"6.3.3", "6.4.1"}}},
+	{name: "catalog-aa", build: func(d *Document, p, r *object.Dictionary) string {
+		fxCatalog(d).Set("AA", object.NewDictionary(object.Entry{Key: "WC", Value: object.NewDictionary(
+			object.Entry{Key: "S", Value: object.Name("Named")}, object.Entry{Key: "N", Value: object.Name("FirstPage")})}))
+		return ""
+	}, want: [3][]string{{"6.6.2"}, {"6.5.2"}, {"6.6.3"}}},
+	{name: "metadata-without-subtype", build: func(d *Document, p, r *object.Dictionary) string {
+		d.Resolve(fxCatalog(d).Get("Metadata")).(*object.Stream).Dict.Delete("Subtype")
+		return ""
+	}, want: [3][]string{{"6.7.2"}, {"6.6.2.1"}, {"6.7.2.1"}}},
+	{name: "metadata-flate", build: func(d *Document, p, r *object.Dictionary) string {
+		md := d.Resolve(fxCatalog(d).Get("Metadata")).(*object.Stream)
+		data, err := d.StreamData(md)
+		if err != nil {
+			panic(err)
+		}
+		var z bytes.Buffer
+		w := zlib.NewWriter(&z)
+		w.Write(data)
+		w.Close()
+		dict := md.Dict.Clone()
+		dict.Set("Filter", object.Name("FlateDecode"))
+		fxCatalog(d).Set("Metadata", d.Add(object.NewStream(dict, z.Bytes())))
+		return ""
+	}, want: [3][]string{{"6.7.2"}, nil, nil}},
+	{name: "xpacket-bytes-attribute", build: func(d *Document, p, r *object.Dictionary) string {
+		fxXMP(d, func(x []byte) []byte {
+			return bytes.Replace(x, []byte(`id="W5M0MpCehiHzreSzNTczkc9d"`), []byte(`id="W5M0MpCehiHzreSzNTczkc9d" bytes="1000"`), 1)
+		})
+		return ""
+	}, want: [3][]string{{"6.7.5"}, {"6.6.2.1"}, {"6.7.2.1"}}},
+	{name: "xpacket-encoding-attribute", build: func(d *Document, p, r *object.Dictionary) string {
+		fxXMP(d, func(x []byte) []byte {
+			return bytes.Replace(x, []byte(`id="W5M0MpCehiHzreSzNTczkc9d"`), []byte(`id="W5M0MpCehiHzreSzNTczkc9d" encoding="UTF-8"`), 1)
+		})
+		return ""
+	}, want: [3][]string{{"6.7.5"}, {"6.6.2.1"}, {"6.7.2.1"}}},
+	{name: "extension-schema", build: func(d *Document, p, r *object.Dictionary) string {
+		fxExtensionSchema(d, nil)
+		return ""
+	}, want: [3][]string{nil, nil, nil}},
+	{name: "extension-property-without-schema", build: func(d *Document, p, r *object.Dictionary) string {
+		fxXMP(d, func(x []byte) []byte {
+			return bytes.Replace(x, []byte("</rdf:RDF>"), []byte(`<rdf:Description rdf:about="" xmlns:ex="http://example.com/ns/"><ex:foo>bar</ex:foo></rdf:Description></rdf:RDF>`), 1)
+		})
+		return ""
+	}, want: [3][]string{{"6.7.9"}, {"6.6.2.3.1"}, nil}},
+	{name: "extension-schema-without-prefix", build: func(d *Document, p, r *object.Dictionary) string {
+		fxExtensionSchema(d, func(s string) string {
+			return strings.Replace(s, "<pdfaSchema:prefix>ex</pdfaSchema:prefix>", "", 1)
+		})
+		return ""
+	}, want: [3][]string{{"6.7.8"}, {"6.6.2.3.3"}, nil}},
+	{name: "extension-schema-property-without-category", build: func(d *Document, p, r *object.Dictionary) string {
+		fxExtensionSchema(d, func(s string) string {
+			return strings.Replace(s, "<pdfaProperty:category>external</pdfaProperty:category>", "", 1)
+		})
+		return ""
+	}, want: [3][]string{{"6.7.8"}, {"6.6.2.3.3"}, nil}},
+	{name: "extension-schema-property-without-description", build: func(d *Document, p, r *object.Dictionary) string {
+		fxExtensionSchema(d, func(s string) string {
+			return strings.Replace(s, "<pdfaProperty:description>a property</pdfaProperty:description>", "", 1)
+		})
+		return ""
+	}, want: [3][]string{{"6.7.8"}, {"6.6.2.3.3"}, nil}},
+	{name: "extension-schema-property-without-value-type", build: func(d *Document, p, r *object.Dictionary) string {
+		fxExtensionSchema(d, func(s string) string {
+			return strings.Replace(s, "<pdfaProperty:valueType>Text</pdfaProperty:valueType>", "", 1)
+		})
+		return ""
+	}, want: [3][]string{{"6.7.8", "6.7.9"}, {"6.6.2.3.1", "6.6.2.3.3"}, nil}},
+	{name: "extension-schema-container-other-prefix", build: func(d *Document, p, r *object.Dictionary) string {
+		fxExtensionSchema(d, func(s string) string { return strings.ReplaceAll(s, "pdfaExtension", "ext") })
+		return ""
+	}, want: [3][]string{{"6.7.8"}, {"6.6.2.3.3"}, nil}},
+	{name: "extension-schema-unknown-value-type", build: func(d *Document, p, r *object.Dictionary) string {
+		fxExtensionSchema(d, func(s string) string {
+			return strings.Replace(s, "<pdfaProperty:valueType>Text<", "<pdfaProperty:valueType>Widget<", 1)
+		})
+		return ""
+	}, want: [3][]string{{"6.7.8", "6.7.9"}, {"6.6.2.3.1", "6.6.2.3.3"}, nil}},
+	{name: "acroform-need-appearances", build: func(d *Document, p, r *object.Dictionary) string {
+		fxCatalog(d).Set("AcroForm", object.NewDictionary(object.Entry{Key: "Fields", Value: object.Array{}}, object.Entry{Key: "NeedAppearances", Value: object.Boolean(true)}))
+		return ""
+	}, want: [3][]string{{"6.9"}, {"6.4.1"}, {"6.4.1"}}},
+	{name: "acroform-need-appearances-false", build: func(d *Document, p, r *object.Dictionary) string {
+		fxCatalog(d).Set("AcroForm", object.NewDictionary(object.Entry{Key: "Fields", Value: object.Array{}}, object.Entry{Key: "NeedAppearances", Value: object.Boolean(false)}))
+		return ""
+	}, want: [3][]string{nil, nil, nil}},
 	{name: "data-after-eof", build: func(d *Document, p, r *object.Dictionary) string { return "" },
 		patch: func(b []byte) []byte { return append(b, "trailing junk\n"...) }, want: [3][]string{{"6.1.3"}, {"6.1.3"}, {"6.1.3"}}},
 	{name: "lzw-filter", build: func(d *Document, p, r *object.Dictionary) string {
@@ -589,6 +855,116 @@ var defectFixtures = []defectFixture{
 			object.Entry{Key: "Type", Value: object.Name("Requirement")}, object.Entry{Key: "S", Value: object.Name("EnableJavaScripts")})})
 		return ""
 	}, want: [3][]string{nil, {"6.11"}, {"6.12"}}},
+}
+
+// fxGS applies an ExtGState with the given entries.
+func fxGS(res *object.Dictionary, entries ...object.Entry) string {
+	res.Set("ExtGState", object.NewDictionary(object.Entry{Key: "GS0", Value: object.NewDictionary(
+		append([]object.Entry{{Key: "Type", Value: object.Name("ExtGState")}}, entries...)...)}))
+	return "/GS0 gs 0 0 m 1 1 l S"
+}
+
+// fxCIDFont shows glyph 1 through an Identity-H Type 0 font over a
+// CIDFontType2 on fxTrueTypeProgram; tweak changes the two dictionaries first.
+func fxCIDFont(d *Document, res *object.Dictionary, tweak func(type0, cid *object.Dictionary)) string {
+	program := fxTrueTypeProgram(nil)
+	fd := object.NewDictionary(
+		object.Entry{Key: "Type", Value: object.Name("FontDescriptor")},
+		object.Entry{Key: "FontName", Value: object.Name("Test")},
+		object.Entry{Key: "Flags", Value: fxInt(4)},
+		object.Entry{Key: "FontBBox", Value: object.Array{fxInt(0), fxInt(-200), fxInt(1000), fxInt(800)}},
+		object.Entry{Key: "ItalicAngle", Value: fxInt(0)},
+		object.Entry{Key: "Ascent", Value: fxInt(800)},
+		object.Entry{Key: "Descent", Value: fxInt(-200)},
+		object.Entry{Key: "CapHeight", Value: fxInt(700)},
+		object.Entry{Key: "StemV", Value: fxInt(80)},
+		object.Entry{Key: "FontFile2", Value: d.Add(object.NewStream(object.NewDictionary(
+			object.Entry{Key: "Length1", Value: fxInt(len(program))}), program))},
+	)
+	cid := object.NewDictionary(
+		object.Entry{Key: "Type", Value: object.Name("Font")},
+		object.Entry{Key: "Subtype", Value: object.Name("CIDFontType2")},
+		object.Entry{Key: "BaseFont", Value: object.Name("Test")},
+		object.Entry{Key: "CIDSystemInfo", Value: object.NewDictionary(
+			object.Entry{Key: "Registry", Value: object.String{Value: []byte("Adobe")}},
+			object.Entry{Key: "Ordering", Value: object.String{Value: []byte("Identity")}},
+			object.Entry{Key: "Supplement", Value: fxInt(0)})},
+		object.Entry{Key: "FontDescriptor", Value: d.Add(fd)},
+		object.Entry{Key: "CIDToGIDMap", Value: object.Name("Identity")},
+		object.Entry{Key: "DW", Value: fxInt(1000)},
+		object.Entry{Key: "W", Value: object.Array{fxInt(1), object.Array{fxInt(500)}}},
+	)
+	type0 := object.NewDictionary(
+		object.Entry{Key: "Type", Value: object.Name("Font")},
+		object.Entry{Key: "Subtype", Value: object.Name("Type0")},
+		object.Entry{Key: "BaseFont", Value: object.Name("Test")},
+		object.Entry{Key: "Encoding", Value: object.Name("Identity-H")},
+	)
+	if tweak != nil {
+		tweak(type0, cid)
+	}
+	type0.Set("DescendantFonts", object.Array{d.Add(cid)})
+	res.Set("Font", object.NewDictionary(object.Entry{Key: "F0", Value: d.Add(type0)}))
+	return "BT /F0 12 Tf 10 10 Td <0001> Tj ET"
+}
+
+// fxEmbeddedCMap is an embedded CMap mapping two-byte codes to the same CIDs,
+// its stream dictionary's /WMode wmode and its content's 0.
+func fxEmbeddedCMap(d *Document, wmode int) object.IndirectRef {
+	body := "/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n" +
+		"/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> def\n" +
+		"/CMapName /Test-H def /CMapType 1 def /WMode 0 def\n" +
+		"1 begincodespacerange <0000> <FFFF> endcodespacerange\n" +
+		"1 begincidrange <0000> <FFFF> 0 endcidrange\n" +
+		"endcmap CMapName currentdict /CMap defineresource pop end end\n"
+	return d.Add(object.NewStream(object.NewDictionary(
+		object.Entry{Key: "Type", Value: object.Name("CMap")},
+		object.Entry{Key: "CMapName", Value: object.Name("Test-H")},
+		object.Entry{Key: "CIDSystemInfo", Value: object.NewDictionary(
+			object.Entry{Key: "Registry", Value: object.String{Value: []byte("Adobe")}},
+			object.Entry{Key: "Ordering", Value: object.String{Value: []byte("Identity")}},
+			object.Entry{Key: "Supplement", Value: fxInt(0)})},
+		object.Entry{Key: "WMode", Value: fxInt(wmode)},
+	), []byte(body)))
+}
+
+// fxExtensionSchema adds to the metadata a property ex:foo, in a namespace
+// of its own, and the extension schema that describes it; edit changes the
+// schema description first.
+func fxExtensionSchema(d *Document, edit func(schema string) string) {
+	schema := `<rdf:Description rdf:about="" xmlns:pdfaExtension="http://www.aiim.org/pdfa/ns/extension/" xmlns:pdfaSchema="http://www.aiim.org/pdfa/ns/schema#" xmlns:pdfaProperty="http://www.aiim.org/pdfa/ns/property#">
+      <pdfaExtension:schemas><rdf:Bag><rdf:li rdf:parseType="Resource">
+        <pdfaSchema:schema>Example</pdfaSchema:schema>
+        <pdfaSchema:namespaceURI>http://example.com/ns/</pdfaSchema:namespaceURI>
+        <pdfaSchema:prefix>ex</pdfaSchema:prefix>
+        <pdfaSchema:property><rdf:Seq><rdf:li rdf:parseType="Resource">
+          <pdfaProperty:name>foo</pdfaProperty:name>
+          <pdfaProperty:valueType>Text</pdfaProperty:valueType>
+          <pdfaProperty:category>external</pdfaProperty:category>
+          <pdfaProperty:description>a property</pdfaProperty:description>
+        </rdf:li></rdf:Seq></pdfaSchema:property>
+      </rdf:li></rdf:Bag></pdfaExtension:schemas>
+    </rdf:Description>
+    <rdf:Description rdf:about="" xmlns:ex="http://example.com/ns/"><ex:foo>bar</ex:foo></rdf:Description>
+  </rdf:RDF>`
+	if edit != nil {
+		schema = edit(schema)
+	}
+	fxXMP(d, func(x []byte) []byte { return bytes.Replace(x, []byte("</rdf:RDF>"), []byte(schema), 1) })
+}
+
+// fxSameLength replaces old with new in a written file, which must be as
+// long, so that no offset the cross-reference table records moves.
+func fxSameLength(old, new string) func([]byte) []byte {
+	if len(old) != len(new) {
+		panic("fxSameLength: " + old + " and " + new + " differ in length")
+	}
+	return func(b []byte) []byte {
+		if !bytes.Contains(b, []byte(old)) {
+			panic("fxSameLength: no " + old)
+		}
+		return bytes.Replace(b, []byte(old), []byte(new), 1)
+	}
 }
 
 // fxDeviceN fills with a DeviceN colour space of n colourants over

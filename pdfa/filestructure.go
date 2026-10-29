@@ -819,11 +819,15 @@ func indexToken(b []byte, kw string) int {
 // the first word "stream" a search finds, and endstream is looked for inside
 // the object's own region.
 func checkStreamKeywordFormat(f *core.FileRecord, level Level) []Violation {
+	// ISO 19005-1 6.1.7, -2/-3 6.1.7.1 (veraPDF 6.1.7-2, 6.1.7.1-2). The
+	// PDF/A-4 profile has no such rule: its 6.1.6.1 asks only for /Length
+	// and no external-file keys.
 	rule := "6.1.7.1"
-	if level.Part() == 1 {
-		rule = "6.1.6"
-	} else if level.Part() == 4 {
-		rule = "6.1.6"
+	switch level.Part() {
+	case 1:
+		rule = "6.1.7"
+	case 4:
+		return nil
 	}
 	var errs []Violation
 	seen := map[string]bool{}

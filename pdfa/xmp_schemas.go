@@ -637,6 +637,7 @@ func isXMPDate(s string) bool {
 func extensionDeclared(props []xmpProperty) map[string]map[string]string {
 	declared := make(map[string]map[string]string)
 	broken, _ := incompleteValueTypes(props)
+	custom := extensionTypeFields(props)
 	for _, p := range props {
 		if p.NS != nsPDFAExtension || p.Name != "schemas" {
 			continue
@@ -676,12 +677,16 @@ func extensionDeclared(props []xmpProperty) map[string]map[string]string {
 						valueType = f.Value.Text
 					}
 				}
-				// A definition missing what a property definition must
-				// say, or of a value type whose own definition is
+				// A definition without the name or value type of what it
+				// defines, or of a value type whose own definition is
 				// incomplete, declares nothing: veraPDF counts the
 				// property as undefined (PDF_A-2b 6-6-2-3-3-t02-fail-d,
-				// -t03-fail-c).
-				if name == "" || !have["valueType"] || !have["category"] || !have["description"] || broken[valueType] {
+				// -t03-fail-c), and so does one whose value type is
+				// neither standard nor defined by an extension schema.
+				// One missing only its category or its description
+				// still declares it — the container rule alone fails
+				// (single-defect fixtures).
+				if name == "" || !have["valueType"] || broken[valueType] || !valueTypeDefined(valueType, custom) {
 					continue
 				}
 				declared[nsURI][name] = valueType
@@ -1015,6 +1020,19 @@ func checkXMPExtensionContainer(decls []xmp.Binding, props []xmpProperty, rule s
 			fields := requireFields("schema description", schema, nsPDFASchema,
 				[]string{"schema", "namespaceURI", "prefix"}, []string{"property", "valueType"})
 
+			// The custom value types this schema declares, which a
+			// property or a field may reference wherever it is declared.
+			declaredTypes := map[string]bool{}
+			if vtSeq, ok := fields["valueType"]; ok {
+				for _, vt := range vtSeq.Items {
+					for _, f := range vt.Fields {
+						if f.NS == nsPDFAType && f.Name == "type" {
+							declaredTypes[f.Value.Text] = true
+						}
+					}
+				}
+			}
+
 			if propSeq, ok := fields["property"]; ok {
 				if propSeq.Kind != xmpSeq {
 					report("pdfaSchema:property must be a Seq, got %s", propSeq.Kind)
@@ -1029,6 +1047,12 @@ func checkXMPExtensionContainer(decls []xmp.Binding, props []xmpProperty, rule s
 						if cat, ok := got["category"]; ok && cat.Text != "internal" && cat.Text != "external" {
 							report("pdfaProperty:category must be internal or external, got %q", cat.Text)
 						}
+						// A property's value type must be one XMP defines
+						// or one the schema declares (veraPDF 6.7.8-9,
+						// 6.6.2.3.3-8).
+						if vt, ok := got["valueType"]; ok && vt.Text != "" && !valueTypeDefined(vt.Text, declaredTypes) {
+							report("property value type %q is neither a standard type nor declared by the extension schema", vt.Text)
+						}
 					}
 				}
 			}
@@ -1037,19 +1061,6 @@ func checkXMPExtensionContainer(decls []xmp.Binding, props []xmpProperty, rule s
 				if vtSeq.Kind != xmpSeq {
 					report("pdfaSchema:valueType must be a Seq, got %s", vtSeq.Kind)
 					continue
-				}
-				// First pass: collect the custom value types this schema
-				// declares, so a field may reference one declared later.
-				declaredTypes := map[string]bool{}
-				for _, vt := range vtSeq.Items {
-					if vt.Kind != xmpStruct {
-						continue
-					}
-					for _, f := range vt.Fields {
-						if f.NS == nsPDFAType && f.Name == "type" {
-							declaredTypes[f.Value.Text] = true
-						}
-					}
 				}
 				for _, vt := range vtSeq.Items {
 					if vt.Kind != xmpStruct {
@@ -1086,6 +1097,24 @@ func checkXMPExtensionContainer(decls []xmp.Binding, props []xmpProperty, rule s
 		}
 	}
 	return errs
+}
+
+// valueTypeDefined reports whether an extension schema's valueType names a
+// type: a standard XMP one or one in custom, alone or as the items of a Bag,
+// Seq or Alt array (written in either case, as files write it), or Lang Alt.
+func valueTypeDefined[T any](vt string, custom map[string]T) bool {
+	vt = strings.TrimSpace(vt)
+	if strings.EqualFold(vt, "Lang Alt") {
+		return true
+	}
+	for _, form := range []string{"bag ", "seq ", "alt "} {
+		if len(vt) > len(form) && strings.EqualFold(vt[:len(form)], form) {
+			vt = strings.TrimSpace(vt[len(form):])
+			break
+		}
+	}
+	_, isCustom := custom[vt]
+	return standardXMPValueTypes[vt] || isCustom
 }
 
 // extensionTypeFields collects, per extension-declared custom value type
