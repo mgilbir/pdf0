@@ -115,6 +115,11 @@ var ruleVerdictBaselines = []struct {
 	{"PDF/A-2b", "PDFA-2B.xml", "PDF_A-2b", pdfa.PDFA2b, 104, 0},
 	{"PDF/A-3b", "PDFA-3B.xml", "PDF_A-3b", pdfa.PDFA3b, 2, 0},
 	{"PDF/A-4", "PDFA-4.xml", "PDF_A-4", pdfa.PDFA4, 91, 0},
+	{"PDF/A-1a", "PDFA-1A.xml", "PDF_A-1a", pdfa.PDFA1a, 7, 0},
+	{"PDF/A-2a", "PDFA-2A.xml", "PDF_A-2a", pdfa.PDFA2a, 7, 0},
+	{"PDF/A-2u", "PDFA-2U.xml", "PDF_A-2u", pdfa.PDFA2u, 4, 0},
+	{"PDF/A-4e", "PDFA-4E.xml", "PDF_A-4e", pdfa.PDFA4E, 5, 0},
+	{"PDF/A-4f", "PDFA-4F.xml", "PDF_A-4f", pdfa.PDFA4F, 4, 0},
 }
 
 // TestRuleCoverageByVeraPDF is TestRuleCoverage judged by veraPDF instead of

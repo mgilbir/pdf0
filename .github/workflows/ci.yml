@@ -186,7 +186,7 @@ jobs:
           check testdata/notocjk                 '*.otf'    1
           check testdata/notoemoji               '*.ttf'    2
           # One veraPDF report per PDF/A level of the corpus.
-          check testdata/verapdf-verdicts        '*.txt'    4
+          check testdata/verapdf-verdicts        '*.txt'    9
 
       # The rendering oracles: what Ghostscript and poppler paint for a page
       # pdf0 wrote, compared with what the font or the layout says should be

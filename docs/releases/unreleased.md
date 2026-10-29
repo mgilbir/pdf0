@@ -22,6 +22,14 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 
 ### Validation
 
+- **A Level A file without a structure tree is reported under the
+  structure-hierarchy clause** (#PR), 6.8.3.3 at PDF/A-1a and 6.7.3.3 at
+  -2a and -3a, as veraPDF's profiles number it; it was reported with the
+  MarkInfo rule under 6.8.2.2 / 6.7.2.2. Rule coverage by veraPDF's verdicts
+  now also covers PDF/A-1a, -2a, -2u, -4e and -4f: every rule veraPDF fails a
+  corpus file on there is reported under the same clause too, and pdf0 flags
+  no file veraPDF passes.
+
 - **Every rule veraPDF fails a corpus file on, pdf0 reports under the same
   clause** (#387), at PDF/A-1b, -2b, -3b and -4, and pdf0 flags no file veraPDF
   passes. What changed to get there, each checked against veraPDF on the

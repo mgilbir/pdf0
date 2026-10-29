@@ -13,7 +13,7 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 corpus=${VERAPDF_CORPUS:-$here/../verapdf-corpus}
 vera=${PDF0_VERAPDF:-$here/../verapdf/verapdf-docker.sh}
-for pair in PDF_A-1b:1b PDF_A-2b:2b PDF_A-3b:3b PDF_A-4:4; do
+for pair in PDF_A-1a:1a PDF_A-1b:1b PDF_A-2a:2a PDF_A-2b:2b PDF_A-2u:2u PDF_A-3b:3b PDF_A-4:4 PDF_A-4e:4e PDF_A-4f:4f; do
 	level=${pair%%:*}
 	flavour=${pair##*:}
 	if [ ! -d "$corpus/$level" ]; then
