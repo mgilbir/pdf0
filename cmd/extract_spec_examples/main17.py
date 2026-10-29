@@ -329,7 +329,12 @@ def classify_example(ex):
 
 
 def main():
-    text_file = sys.argv[1] if len(sys.argv) > 1 else "/tmp/pdf17_spec.txt"
+    # The pdftotext -layout text of the specification is the one argument. It
+    # used to default to a file under /tmp, which made a run read whatever was
+    # left there, or fail on a file that was never made.
+    if len(sys.argv) != 2:
+        sys.exit("usage: %s SPEC.txt  (the specification as pdftotext -layout writes it)" % sys.argv[0])
+    text_file = sys.argv[1]
 
     examples = extract_examples(text_file)
 
