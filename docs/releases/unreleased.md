@@ -352,7 +352,7 @@ v0.6.0.
 ## Added
 
 - **`pdfa.SkeletonOptions.Subject` and `pdfa.SkeletonOptions.Keywords`**
-  (#PR), written as `dc:description` and `pdf:Keywords`, as
+  (#377), written as `dc:description` and `pdf:Keywords`, as
   `SetDocumentInfo` writes them. A PDF/A render (`htmlpdf.Options.PDFA`) fills
   them from the document's first `<meta name="description">` and
   `<meta name="keywords">` when the caller leaves them empty.
