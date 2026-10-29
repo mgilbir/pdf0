@@ -77,15 +77,14 @@ var standardRenderingIntents = map[string]bool{
 // a standard rendering intent, and that named XObject/resource references
 // resolve within the associated resource dictionary.
 func checkContentStreamOperators(doc core.View, level Level) []Violation {
-	rule := "6.2.2"
 	var errs []Violation
 	seen := map[string]bool{}
-	add := func(msg string, obj int) {
-		if seen[msg] {
+	add := func(f contentFinding, obj int) {
+		if seen[f.msg] {
 			return
 		}
-		seen[msg] = true
-		errs = append(errs, Violation{Rule: rule, Level: level, Message: msg, Object: obj})
+		seen[f.msg] = true
+		errs = append(errs, Violation{Rule: contentClause(f.kind, level), Level: level, Message: f.msg, Object: obj})
 	}
 
 	catalog := doc.Catalog()
@@ -185,14 +184,14 @@ func collectAppearanceStreams(doc core.View) []appearanceStream {
 type contentWalk struct {
 	containers map[*object.Dictionary]bool
 	facts      map[*object.Stream]*contentTokenFacts
-	judged     core.ResMemo[[]string]
+	judged     core.ResMemo[[]contentFinding]
 }
 
 // tokens reports a content stream's undefined operators, custom rendering
 // intents and unresolved named resource references for (data, res), tokenising
 // each stream once (key; a nil key is tokenised every time) and judging its
 // resource references once per distinct resource dictionary.
-func (w *contentWalk) tokens(doc core.View, data []byte, key *object.Stream, res *object.Dictionary, objNum int, add func(string, int)) {
+func (w *contentWalk) tokens(doc core.View, data []byte, key *object.Stream, res *object.Dictionary, objNum int, add func(contentFinding, int)) {
 	if msgs, ok := w.judged.Get(doc, key, res); ok {
 		for _, m := range msgs {
 			add(m, objNum)
@@ -215,9 +214,57 @@ func (w *contentWalk) tokens(doc core.View, data []byte, key *object.Stream, res
 	}
 }
 
+// contentKind is what kind of finding the executed-content walk made, which
+// decides its clause (contentClause): the walk reports several of the
+// profiles' rules, and at each part they are numbered apart.
+type contentKind int
+
+const (
+	kindResource   contentKind = iota // a named resource absent from its dictionary
+	kindOperator                      // an operator not defined in ISO 32000
+	kindIntent                        // ri with a rendering intent not among the four
+	kindPostScript                    // a drawn PostScript XObject
+	kindSubtype2PS                    // a drawn form with /Subtype2 /PS
+	kindPSEntry                       // a drawn form with a /PS entry
+)
+
+// contentFinding is one finding of the executed-content walk.
+type contentFinding struct {
+	kind contentKind
+	msg  string
+}
+
+// contentClause is the clause each kind of finding is reported under, per
+// part, as the veraPDF profiles number the rules: [1, 2 and 3, 4]. PDF/A-1
+// numbers an undefined operator 6.2.10, a rendering intent 6.2.9, a PostScript
+// XObject 6.2.7 and a form's Subtype2 or PS entry 6.2.5; PDF/A-2 and -3 number
+// them 6.2.2, 6.2.6, 6.2.9 and 6.2.9. Where a part's profile has no rule for a
+// kind, the walk's old 6.2.2 is kept: what PDF/A-4 says of rendering intents
+// and PostScript, and what PDF/A-1 says of named resources, is a question for
+// the check, not the number.
+func contentClause(k contentKind, level Level) string {
+	m := map[contentKind][3]string{
+		kindResource:   {"6.2.2", "6.2.2", "6.2.2"},
+		kindOperator:   {"6.2.10", "6.2.2", "6.2.2"},
+		kindIntent:     {"6.2.9", "6.2.6", "6.2.2"},
+		kindPostScript: {"6.2.7", "6.2.9", "6.2.2"},
+		kindSubtype2PS: {"6.2.5", "6.2.9", "6.2.2"},
+		kindPSEntry:    {"6.2.5", "6.2.9", "6.2.2"},
+	}
+	c := m[k]
+	switch level.Part() {
+	case 1:
+		return c[0]
+	case 4:
+		return c[2]
+	default:
+		return c[1]
+	}
+}
+
 // walkExecutedContent validates a content stream and recurses into the form
 // XObjects and tiling patterns it actually invokes.
-func walkExecutedContent(doc core.View, container *object.Dictionary, data []byte, key *object.Stream, objNum int, w *contentWalk, add func(string, int), depth int) {
+func walkExecutedContent(doc core.View, container *object.Dictionary, data []byte, key *object.Stream, objNum int, w *contentWalk, add func(contentFinding, int), depth int) {
 	if !doc.Descend(depth) {
 		return
 	}
@@ -248,13 +295,13 @@ func walkExecutedContent(doc core.View, container *object.Dictionary, data []byt
 				// A PostScript XObject that is actually drawn is prohibited
 				// (ISO 19005-1 6.2.5, -2/-3/-4 6.2.9).
 				if st == "PS" {
-					add("a drawn PostScript XObject is not permitted", xnum)
+					add(contentFinding{kindPostScript, "a drawn PostScript XObject is not permitted"}, xnum)
 				} else if st == "Form" {
 					if s2, _ := doc.ResolveName(s.Dict.Get("Subtype2")); s2 == "PS" {
-						add("a drawn form XObject has /Subtype2 /PS (PostScript)", xnum)
+						add(contentFinding{kindSubtype2PS, "a drawn form XObject has /Subtype2 /PS (PostScript)"}, xnum)
 					}
 					if s.Dict.Get("PS") != nil {
-						add("a drawn form XObject dictionary contains a /PS entry", xnum)
+						add(contentFinding{kindPSEntry, "a drawn form XObject dictionary contains a /PS entry"}, xnum)
 					}
 					data, _ := doc.Content(s) // reason: presence-only; the producer recorded any declined trip
 					walkExecutedContent(doc, &s.Dict, data, s, xnum, w, add, depth+1)
@@ -289,6 +336,7 @@ type contentTokenFacts struct {
 }
 
 type contentTokenEvent struct {
+	kind     contentKind
 	msg      string // a finding; empty for a resource reference
 	category string // the resource category a reference names (XObject, Font, …)
 	name     string
@@ -306,14 +354,14 @@ var resourceAbsentMsg = map[string]string{
 
 // judge is the findings of the stream drawn with res, in the order a scan
 // would have reported them.
-func (f *contentTokenFacts) judge(doc core.View, res *object.Dictionary) []string {
-	var out []string
+func (f *contentTokenFacts) judge(doc core.View, res *object.Dictionary) []contentFinding {
+	var out []contentFinding
 	for _, e := range f.events {
 		doc.Charge(1)
 		if e.msg != "" {
-			out = append(out, e.msg)
+			out = append(out, contentFinding{e.kind, e.msg})
 		} else if !namedResourcePresent(doc, res, e.category, e.name) {
-			out = append(out, resourceAbsentMsg[e.category])
+			out = append(out, contentFinding{kindResource, resourceAbsentMsg[e.category]})
 		}
 	}
 	return out
@@ -357,13 +405,13 @@ func scanContentTokens(cancel core.Canceler, data []byte) *contentTokenFacts {
 			continue
 		}
 		if !contentOperators[s] {
-			add(contentTokenEvent{msg: fmt.Sprintf("content stream contains an operator %q not defined in ISO 32000", s)})
+			add(contentTokenEvent{kind: kindOperator, msg: fmt.Sprintf("content stream contains an operator %q not defined in ISO 32000", s)})
 			continue
 		}
 		switch s {
 		case "ri":
 			if lastName != "" && !standardRenderingIntents[lastName] {
-				add(contentTokenEvent{msg: fmt.Sprintf("rendering intent operator (ri) uses a non-standard value /%s", lastName)})
+				add(contentTokenEvent{kind: kindIntent, msg: fmt.Sprintf("rendering intent operator (ri) uses a non-standard value /%s", lastName)})
 			}
 		case "Do":
 			ref("XObject", lastName)
