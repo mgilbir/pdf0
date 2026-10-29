@@ -266,18 +266,38 @@ if err != nil {
 return doc.SetStructureTree([]pdf0.StructElem{{
 	Tag:  "Document",
 	Page: &pageRef, // inherited by the children
-	Children: []pdf0.StructElem{
-		{Tag: "H1", Content: []int{0}},
-		{Tag: "Summary", Content: []int{1}}, // mapped onto P below
+	Kids: []pdf0.StructKid{
+		pdf0.ElemKid(pdf0.StructElem{Tag: "H1", Kids: []pdf0.StructKid{pdf0.MCIDKid(0)}}),
+		pdf0.ElemKid(pdf0.StructElem{Tag: "Summary", Kids: []pdf0.StructKid{pdf0.MCIDKid(1)}}), // mapped onto P below
 	},
 }}, map[string]string{"Summary": "P"})
 ```
 
-`Content` lists the identifiers given to `BeginTagged`. A tag of your own is
-mapped onto the standard type it behaves like by the role map, the second
-argument; nil is fine when every tag is standard. Give a `Figure` its `Alt`
-text. `SetStructureTree` marks the document as tagged and builds the index from
-each page back into the tree.
+An element's `Kids` are what it contains, in the order a reader reads them:
+`pdf0.MCIDKid` names a span given to `BeginTagged`, `pdf0.ElemKid` a child
+element, and `pdf0.AnnotKid` an annotation. A paragraph with an emphasised word
+in it is three kids — the marks before the word, the `Em`, the marks after —
+and a link is a `Link` element holding both the marks that draw its text and
+its annotation, which `Document.PageAnnotations` gives in the order of
+`Page.Links`. Describe the link in words with `Link.Contents`.
+
+A tag of your own is mapped onto the standard type it behaves like by the role
+map, the second argument; nil is fine when every tag is standard. Give a
+`Figure` its `Alt` text. Attributes say what the tag alone cannot: a header
+cell's `Scope`, or which headers a data cell sits under, by their `ID`:
+
+```go
+th := pdf0.StructElem{Tag: "TH", ID: "quarter", Kids: []pdf0.StructKid{pdf0.MCIDKid(2)},
+	Attributes: []pdf0.StructAttr{{Owner: "Table", Key: "Scope", Value: object.Name("Column")}}}
+td := pdf0.StructElem{Tag: "TD", Kids: []pdf0.StructKid{pdf0.MCIDKid(3)},
+	Attributes: []pdf0.StructAttr{{Owner: "Table", Key: "Headers",
+		Value: object.Array{object.String{Value: []byte("quarter")}}}}}
+_, _ = th, td
+```
+
+`SetStructureTree` marks the document as tagged, builds the index from each
+page and each annotation back into the tree, and sets the tab order of a page
+whose annotations it names to follow the tree.
 
 A structure tree is most of PDF/UA, not all of it: [the next
 section](#an-accessible-document-pdfua) adds the rest.
@@ -320,10 +340,9 @@ if err != nil {
 }
 err = doc.SetStructureTree([]pdf0.StructElem{{
 	Tag: "Document", Page: &pageRef,
-	Children: []pdf0.StructElem{
-		{Tag: "H1", Content: []int{0}},
-		{Tag: "P", Content: []int{1}},
-	},
+	Kids: []pdf0.StructKid{
+		pdf0.ElemKid(pdf0.StructElem{Tag: "H1", Kids: []pdf0.StructKid{pdf0.MCIDKid(0)}}),
+		pdf0.ElemKid(pdf0.StructElem{Tag: "P", Kids: []pdf0.StructKid{pdf0.MCIDKid(1)}}),},
 }}, nil)
 if err != nil {
 	return err

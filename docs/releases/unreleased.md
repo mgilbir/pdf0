@@ -21,6 +21,19 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.5.0
 `gorelease -base=v0.5.0` reports the incompatible changes below and suggests
 v0.6.0.
 
+### `pdf0`
+
+- **A StructElem's Content and Children are one ordered Kids list** (#PR).
+  An element held its marked content, then its children, always in that
+  order, so a paragraph with an emphasised word in the middle could not be
+  described in the order it reads. `StructElem.Kids` is a `[]pdf0.StructKid`,
+  each made by `pdf0.MCIDKid` (a span given to `BeginTagged`),
+  `pdf0.ElemKid` (a child element) or `pdf0.AnnotKid` (an annotation).
+  *Migration:* `Content: []int{0, 1}` is
+  `Kids: []pdf0.StructKid{pdf0.MCIDKid(0), pdf0.MCIDKid(1)}`, and each child
+  `c` of `Children` is `pdf0.ElemKid(c)`; an element with both lists its
+  marks first, as it was written before.
+
 ### `pdfx`
 
 - **The zero `pdfx.Level` is `pdfx.LevelDeclared`, not `pdfx.PDFX4`, and every
@@ -350,6 +363,15 @@ v0.6.0.
   `TestPDFRef17ExamplesRegenerate`.
 
 ## Added
+
+- **Structure trees that describe links and tables** (#PR):
+  `pdf0.AnnotKid` puts an annotation in the tree as its element's kid (an
+  `/OBJR`, with the annotation's `/StructParent`, and `/Tabs /S` on its page);
+  `StructElem.Attributes` writes attributes such as a header cell's `Scope` or
+  a data cell's `Headers`; `StructElem.ID` names an element for `Headers` to
+  refer to (`/IDTree`); `Link.Contents` describes a link in words; and
+  `Document.PageAnnotations` gives a page's annotations for `AnnotKid`. A
+  document using all of them passes `ValidatePDFUA` and veraPDF as PDF/UA-1.
 
 - **htmlpdf writes PDF/A-1b** (#378), through `Options.PDFA` and
   `RenderInto`. PDF/A-1's PDF 1.4 has no transparency, so a page that uses

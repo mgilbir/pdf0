@@ -149,9 +149,10 @@ func TestType3DocumentsAreValidForVeraPDF(t *testing.T) {
 
 // veraPDFPasses runs veraPDF (PDF0_VERAPDF) over documents, each at the
 // level it claims, and fails the test for each it does not pass.
-func veraPDFPasses(t *testing.T, vera string, paths []string) {
+// args go before the files: a --flavour, say.
+func veraPDFPasses(t *testing.T, vera string, paths []string, args ...string) {
 	t.Helper()
-	cmd := exec.Command(vera, append([]string{"--format", "text"}, paths...)...)
+	cmd := exec.Command(vera, append(append([]string{"--format", "text"}, args...), paths...)...)
 	report, err := cmd.Output()
 	if err != nil && len(report) == 0 {
 		t.Fatalf("veraPDF: %v", err)

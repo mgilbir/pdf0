@@ -39,8 +39,8 @@ func TestReplacingTheTreeLeavesNoStaleIndex(t *testing.T) {
 	}
 	a, bb := refs[0], refs[1]
 	if err := d.SetStructureTree([]StructElem{
-		{Tag: "P", Page: &a, Content: []int{0}},
-		{Tag: "H1", Page: &bb, Content: []int{0}},
+		{Tag: "P", Page: &a, Kids: []StructKid{MCIDKid(0)}},
+		{Tag: "H1", Page: &bb, Kids: []StructKid{MCIDKid(0)}},
 	}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestReplacingTheTreeLeavesNoStaleIndex(t *testing.T) {
 	d.ResolveDict(d.ResolveDict(a).Get("Resources")).Set("XObject",
 		object.NewDictionary(object.Entry{Key: "Out", Value: d.Add(outer)}))
 
-	if err := d.SetStructureTree([]StructElem{{Tag: "H1", Page: &bb, Content: []int{0}}}, nil); err != nil {
+	if err := d.SetStructureTree([]StructElem{{Tag: "H1", Page: &bb, Kids: []StructKid{MCIDKid(0)}}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	got := structParents(d)
@@ -103,10 +103,9 @@ func TestReplacingTheTreeLeavesNoStaleIndex(t *testing.T) {
 func TestPDF20StructureTypesCarryTheirNamespace(t *testing.T) {
 	d := NewDocument() // PDF 2.0
 	page := taggedPage(t, d)
-	if err := d.SetStructureTree([]StructElem{{Tag: "Document", Page: &page, Children: []StructElem{
-		{Tag: "Title", Content: []int{0}},
-		{Tag: "P", Content: []int{1}, Children: []StructElem{{Tag: "Em"}, {Tag: "H7"}}},
-	}}}, nil); err != nil {
+	if err := d.SetStructureTree([]StructElem{{Tag: "Document", Page: &page, Kids: []StructKid{
+		ElemKid(StructElem{Tag: "Title", Kids: []StructKid{MCIDKid(0)}}),
+		ElemKid(StructElem{Tag: "P", Kids: []StructKid{MCIDKid(1), ElemKid(StructElem{Tag: "Em"}), ElemKid(StructElem{Tag: "H7"})}})}}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	catalog := d.ResolveDict(d.Trailer.Get("Root"))
@@ -155,7 +154,7 @@ func TestPDF20StructureTypesCarryTheirNamespace(t *testing.T) {
 	}
 
 	// A tree of 1.7 types alone declares no namespace at all.
-	if err := d.SetStructureTree([]StructElem{{Tag: "P", Page: &page, Content: []int{0}}}, nil); err != nil {
+	if err := d.SetStructureTree([]StructElem{{Tag: "P", Page: &page, Kids: []StructKid{MCIDKid(0)}}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	root = d.ResolveDict(d.ResolveDict(d.Trailer.Get("Root")).Get("StructTreeRoot"))
@@ -173,20 +172,20 @@ func TestPDF20StructureTypesNeedAPDF20Document(t *testing.T) {
 	d.Version = "1.7"
 	page := taggedPage(t, d)
 	for _, tag := range []string{"Title", "Aside", "Em", "Strong", "Sub", "FENote", "DocumentFragment", "Artifact", "H7"} {
-		err := d.SetStructureTree([]StructElem{{Tag: tag, Page: &page, Content: []int{0}}}, nil)
+		err := d.SetStructureTree([]StructElem{{Tag: tag, Page: &page, Kids: []StructKid{MCIDKid(0)}}}, nil)
 		if err == nil || !strings.Contains(err.Error(), "2.0") {
 			t.Errorf("%s in a PDF 1.7 document: err = %v, want a refusal naming PDF 2.0", tag, err)
 		}
 	}
 	// A catalog /Version of 2.0 makes it a PDF 2.0 document whatever the header says.
 	d.ResolveDict(d.Trailer.Get("Root")).Set("Version", object.Name("2.0"))
-	if err := d.SetStructureTree([]StructElem{{Tag: "Title", Page: &page, Content: []int{0}}}, nil); err != nil {
+	if err := d.SetStructureTree([]StructElem{{Tag: "Title", Page: &page, Kids: []StructKid{MCIDKid(0)}}}, nil); err != nil {
 		t.Errorf("Title with catalog /Version 2.0 was refused: %v", err)
 	}
 
 	d2 := NewDocument()
 	page2 := taggedPage(t, d2)
-	err := d2.SetStructureTree([]StructElem{{Tag: "Heading", Page: &page2, Content: []int{0}}},
+	err := d2.SetStructureTree([]StructElem{{Tag: "Heading", Page: &page2, Kids: []StructKid{MCIDKid(0)}}},
 		map[string]string{"Heading": "Title"})
 	if err == nil {
 		t.Error("a role map onto Title, a PDF 2.0-only type, was accepted")
@@ -202,7 +201,7 @@ func TestHugeMCIDIsRefused(t *testing.T) {
 		d := NewDocument()
 		page := taggedPage(t, d)
 		before := docSnapshot(t, d)
-		err := d.SetStructureTree([]StructElem{{Tag: "P", Page: &page, Content: []int{1 << 28}}}, nil)
+		err := d.SetStructureTree([]StructElem{{Tag: "P", Page: &page, Kids: []StructKid{MCIDKid(1 << 28)}}}, nil)
 		if err == nil || !strings.Contains(err.Error(), "marked-content identifier") {
 			t.Fatalf("err = %v, want the identifier refused", err)
 		}
@@ -230,10 +229,9 @@ func TestAStructureTreeRefusalChangesNothing(t *testing.T) {
 	d := NewDocument()
 	page := taggedPage(t, d)
 	before := docSnapshot(t, d)
-	err := d.SetStructureTree([]StructElem{{Tag: "Document", Page: &page, Children: []StructElem{
-		{Tag: "H1", Content: []int{0}},
-		{Tag: "P", Content: []int{0}},
-	}}}, nil)
+	err := d.SetStructureTree([]StructElem{{Tag: "Document", Page: &page, Kids: []StructKid{
+		ElemKid(StructElem{Tag: "H1", Kids: []StructKid{MCIDKid(0)}}),
+		ElemKid(StructElem{Tag: "P", Kids: []StructKid{MCIDKid(0)}})}}}, nil)
 	if err == nil {
 		t.Fatal("accepted")
 	}

@@ -42,7 +42,7 @@ func accessiblePage(t *testing.T, d *Document) {
 	}
 	if err := d.SetStructureTree([]StructElem{{
 		Tag: "Document", Page: &page,
-		Children: []StructElem{{Tag: "H1", Content: []int{0}}, {Tag: "P", Content: []int{1}}},
+		Kids: []StructKid{ElemKid(StructElem{Tag: "H1", Kids: []StructKid{MCIDKid(0)}}), ElemKid(StructElem{Tag: "P", Kids: []StructKid{MCIDKid(1)}})},
 	}}, nil); err != nil {
 		t.Fatalf("setting the structure tree: %v", err)
 	}

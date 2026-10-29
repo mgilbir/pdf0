@@ -59,10 +59,9 @@ func TestStructureTreeIsWrittenAndMarked(t *testing.T) {
 	err := doc.SetStructureTree([]StructElem{{
 		Tag:  "Document",
 		Page: &page,
-		Children: []StructElem{
-			{Tag: "H1", Content: []int{0}},
-			{Tag: "P", Content: []int{1}},
-		},
+		Kids: []StructKid{
+			ElemKid(StructElem{Tag: "H1", Kids: []StructKid{MCIDKid(0)}}),
+			ElemKid(StructElem{Tag: "P", Kids: []StructKid{MCIDKid(1)}})},
 	}}, nil)
 	if err != nil {
 		t.Fatalf("setting the tree: %v", err)
@@ -112,10 +111,9 @@ func TestParentTreeTakesAMarkBackToItsElement(t *testing.T) {
 	err := doc.SetStructureTree([]StructElem{{
 		Tag:  "Document",
 		Page: &page,
-		Children: []StructElem{
-			{Tag: "H1", Content: []int{0}},
-			{Tag: "P", Content: []int{1}},
-		},
+		Kids: []StructKid{
+			ElemKid(StructElem{Tag: "H1", Kids: []StructKid{MCIDKid(0)}}),
+			ElemKid(StructElem{Tag: "P", Kids: []StructKid{MCIDKid(1)}})},
 	}}, nil)
 	if err != nil {
 		t.Fatalf("setting the tree: %v", err)
@@ -162,7 +160,7 @@ func TestParentTreeEntriesAreDense(t *testing.T) {
 		t.Fatalf("adding the page: %v", err)
 	}
 	// Only identifier 3 is used; 0, 1 and 2 are not.
-	if err := doc.SetStructureTree([]StructElem{{Tag: "P", Page: &page, Content: []int{3}}}, nil); err != nil {
+	if err := doc.SetStructureTree([]StructElem{{Tag: "P", Page: &page, Kids: []StructKid{MCIDKid(3)}}}, nil); err != nil {
 		t.Fatalf("setting the tree: %v", err)
 	}
 
@@ -192,8 +190,8 @@ func TestSeveralPagesEachGetTheirOwnIndex(t *testing.T) {
 	first := taggedPage(t, doc)
 	second := taggedPage(t, doc)
 	err := doc.SetStructureTree([]StructElem{
-		{Tag: "Sect", Page: &first, Children: []StructElem{{Tag: "P", Content: []int{0}}}},
-		{Tag: "Sect", Page: &second, Children: []StructElem{{Tag: "P", Content: []int{0}}}},
+		{Tag: "Sect", Page: &first, Kids: []StructKid{ElemKid(StructElem{Tag: "P", Kids: []StructKid{MCIDKid(0)}})}},
+		{Tag: "Sect", Page: &second, Kids: []StructKid{ElemKid(StructElem{Tag: "P", Kids: []StructKid{MCIDKid(0)}})}},
 	}, nil)
 	if err != nil {
 		t.Fatalf("setting the tree: %v", err)
@@ -220,9 +218,9 @@ func TestAnIdentifierBelongsToOneElement(t *testing.T) {
 	err := doc.SetStructureTree([]StructElem{{
 		Tag:  "Document",
 		Page: &page,
-		Children: []StructElem{
-			{Tag: "H1", Content: []int{0}},
-			{Tag: "P", Content: []int{0}}, // the same identifier again
+		Kids: []StructKid{
+			ElemKid(StructElem{Tag: "H1", Kids: []StructKid{MCIDKid(0)}}),
+			ElemKid(StructElem{Tag: "P", Kids: []StructKid{MCIDKid(0)}}), // the same identifier again
 		},
 	}}, nil)
 	if err == nil {
@@ -275,9 +273,9 @@ func TestStructureTreeRefusesWhatCannotBeResolved(t *testing.T) {
 	page := taggedPage(t, doc)
 	cases := map[string][]StructElem{
 		"no tag":                 {{Page: &page}},
-		"content without a page": {{Tag: "P", Content: []int{0}}},
-		"negative identifier":    {{Tag: "P", Page: &page, Content: []int{-1}}},
-		"unknown nested tag":     {{Tag: "Sect", Page: &page, Children: []StructElem{{Tag: "Bogus"}}}},
+		"content without a page": {{Tag: "P", Kids: []StructKid{MCIDKid(0)}}},
+		"negative identifier":    {{Tag: "P", Page: &page, Kids: []StructKid{MCIDKid(-1)}}},
+		"unknown nested tag":     {{Tag: "Sect", Page: &page, Kids: []StructKid{ElemKid(StructElem{Tag: "Bogus"})}}},
 	}
 	for name, elems := range cases {
 		if err := doc.SetStructureTree(elems, nil); err == nil {
@@ -286,12 +284,12 @@ func TestStructureTreeRefusesWhatCannotBeResolved(t *testing.T) {
 	}
 
 	// And a tree nested past the bound.
-	deep := StructElem{Tag: "Div", Page: &page}
-	node := &deep
+	// Built from the innermost out: ElemKid takes its element by value.
+	deep := StructElem{Tag: "Div"}
 	for i := 0; i < maxStructureDepth+2; i++ {
-		node.Children = []StructElem{{Tag: "Div"}}
-		node = &node.Children[0]
+		deep = StructElem{Tag: "Div", Kids: []StructKid{ElemKid(deep)}}
 	}
+	deep.Page = &page
 	if err := doc.SetStructureTree([]StructElem{deep}, nil); err == nil {
 		t.Error("a tree nested past the depth bound was accepted")
 	}
@@ -303,7 +301,7 @@ func TestStructureTreeRefusesWhatCannotBeResolved(t *testing.T) {
 func TestEmptyTreeRemovesTheTagging(t *testing.T) {
 	doc := NewDocument()
 	page := taggedPage(t, doc)
-	if err := doc.SetStructureTree([]StructElem{{Tag: "P", Page: &page, Content: []int{0}}}, nil); err != nil {
+	if err := doc.SetStructureTree([]StructElem{{Tag: "P", Page: &page, Kids: []StructKid{MCIDKid(0)}}}, nil); err != nil {
 		t.Fatalf("setting: %v", err)
 	}
 	if err := doc.SetStructureTree(nil, nil); err != nil {
@@ -325,7 +323,7 @@ func TestAlternateTextReachesTheElement(t *testing.T) {
 	doc := NewDocument()
 	page := taggedPage(t, doc)
 	err := doc.SetStructureTree([]StructElem{{
-		Tag: "Figure", Page: &page, Content: []int{0},
+		Tag: "Figure", Page: &page, Kids: []StructKid{MCIDKid(0)},
 		Alt: "A bar chart of quarterly revenue", Lang: "en-GB",
 		ActualText: "chart",
 	}}, nil)
@@ -361,7 +359,7 @@ func TestTaggedDocumentValidatesAtLevelA(t *testing.T) {
 			}
 			err = doc.SetStructureTree([]StructElem{{
 				Tag: "Document", Page: &page,
-				Children: []StructElem{{Tag: "P", Content: []int{0}}},
+				Kids: []StructKid{ElemKid(StructElem{Tag: "P", Kids: []StructKid{MCIDKid(0)}})},
 			}}, nil)
 			if err != nil {
 				t.Fatalf("setting the tree: %v", err)

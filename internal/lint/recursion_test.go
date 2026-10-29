@@ -109,7 +109,7 @@ var recursionAllowlist = map[string]string{
 	"github.com/mgilbir/pdf0.(*Document).checkOutlinePages":   "the caller's []OutlineItem tree",
 	"github.com/mgilbir/pdf0.(*Document).writeOutlineLevel":   "the caller's []OutlineItem tree",
 	"github.com/mgilbir/pdf0.(*Document).checkStructurePages": "the caller's []StructElem tree",
-	"github.com/mgilbir/pdf0.(*Document).writeStructLevel":    "the caller's []StructElem tree",
+	"github.com/mgilbir/pdf0.(*Document).writeStructElem":     "the caller's []StructElem tree",
 
 	// Bounded by a depth kept outside the parameter list.
 	"github.com/mgilbir/pdf0/images.(*csResolver).resolve":             "csResolver.depth, against maxColorSpaceDepth (audit 2026-09-22 C13)",

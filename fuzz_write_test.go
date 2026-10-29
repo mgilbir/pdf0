@@ -209,7 +209,7 @@ func FuzzWriteSurface(f *testing.F) {
 		if p.byte()%2 == 0 {
 			_ = doc.SetStructureTree([]StructElem{{
 				Tag: "Document", Page: &pageRef,
-				Children: []StructElem{{Tag: "P", Alt: p.text()}},
+				Kids: []StructKid{ElemKid(StructElem{Tag: "P", Alt: p.text()})},
 			}}, nil)
 		}
 

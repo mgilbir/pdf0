@@ -119,7 +119,7 @@ func TestDocumentBuildersSurviveABrokenDocument(t *testing.T) {
 		},
 		"SetOutline(nil)": func(d *Document) error { return d.SetOutline(nil) },
 		"SetStructureTree": func(d *Document) error {
-			return d.SetStructureTree([]StructElem{{Tag: "P", Page: &page, Content: []int{0}}}, nil)
+			return d.SetStructureTree([]StructElem{{Tag: "P", Page: &page, Kids: []StructKid{MCIDKid(0)}}}, nil)
 		},
 		"SetStructureTree(nil)": func(d *Document) error { return d.SetStructureTree(nil, nil) },
 		"SetDocumentInfo": func(d *Document) error {
@@ -197,7 +197,7 @@ func TestBuildersSurviveDegenerateArguments(t *testing.T) {
 			return d.SetStructureTree([]StructElem{{Page: &page}}, nil)
 		},
 		"structure with a nil page and content": func(d *Document) error {
-			return d.SetStructureTree([]StructElem{{Tag: "P", Content: []int{0}}}, nil)
+			return d.SetStructureTree([]StructElem{{Tag: "P", Kids: []StructKid{MCIDKid(0)}}}, nil)
 		},
 		"structure with a nil role map value": func(d *Document) error {
 			return d.SetStructureTree([]StructElem{{Tag: "Zzz", Page: &page}}, map[string]string{"Zzz": ""})

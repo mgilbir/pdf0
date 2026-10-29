@@ -94,10 +94,9 @@ func everyBuilderDoc(t *testing.T) []byte {
 	if err := doc.SetOutline([]OutlineItem{{Title: "One", Page: pages[0]}, {Title: "Two", Page: pages[1]}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := doc.SetStructureTree([]StructElem{{Tag: "Chapter", Children: []StructElem{
-		{Tag: "Para", Page: &pages[0], Content: []int{0, 1}},
-		{Tag: "Aside2", Page: &pages[1], Content: []int{0, 1}},
-	}}}, map[string]string{"Chapter": "Sect", "Para": "P", "Aside2": "Div",
+	if err := doc.SetStructureTree([]StructElem{{Tag: "Chapter", Kids: []StructKid{
+		ElemKid(StructElem{Tag: "Para", Page: &pages[0], Kids: []StructKid{MCIDKid(0), MCIDKid(1)}}),
+		ElemKid(StructElem{Tag: "Aside2", Page: &pages[1], Kids: []StructKid{MCIDKid(0), MCIDKid(1)}})}}}, map[string]string{"Chapter": "Sect", "Para": "P", "Aside2": "Div",
 		"Unused1": "Span", "Unused2": "Note", "Unused3": "Code"}); err != nil {
 		t.Fatal(err)
 	}

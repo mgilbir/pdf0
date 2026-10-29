@@ -98,6 +98,27 @@ type Page struct {
 // A link's Page must already be a page of this document, so a link can only
 // lead backwards; a Locked document is refused, since Write passes its content
 // through as ciphertext and the new page would be read back as noise.
+// PageAnnotations is the annotations of a page, in its /Annots order, as the
+// references a structure tree names them by (AnnotKid). The links AddPage
+// writes come first among them, in the order of Page.Links. An annotation
+// written directly into /Annots, which no reference can name, is left out.
+func (d *Document) PageAnnotations(page object.IndirectRef) ([]object.IndirectRef, error) {
+	if d == nil {
+		return nil, errNilDocument
+	}
+	if err := d.requirePage(page, "PageAnnotations"); err != nil {
+		return nil, err
+	}
+	arr, _ := d.Resolve(d.ResolveDict(page).Get("Annots")).(object.Array)
+	var out []object.IndirectRef
+	for _, v := range arr {
+		if r, ok := v.(object.IndirectRef); ok {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
 func (d *Document) AddPage(p Page) (object.IndirectRef, error) {
 	if d == nil {
 		return object.IndirectRef{}, errNilDocument

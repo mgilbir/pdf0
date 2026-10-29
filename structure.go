@@ -63,19 +63,82 @@ type StructElem struct {
 	// where it differs from the document's.
 	Lang string
 
-	// Page is the page whose content stream carries this element's marks. It is
-	// required when Content is non-empty, and inherited by children that do not
-	// state their own.
-	// It must be one of PageList's pages.
+	// ID names the element, unique in the tree, so that another can refer to
+	// it: a table cell's Headers attribute lists the IDs of its header cells
+	// (ISO 32000-2 14.8.5.7). It is written as the element's /ID and entered
+	// in the tree root's /IDTree.
+	ID string
+
+	// Page is the page whose content stream carries this element's marks, and
+	// whose /Annots holds its annotations. It is required when Kids name either,
+	// and inherited by child elements that do not state their own. It must be
+	// one of PageList's pages.
 	Page *object.IndirectRef
 
-	// Content are the marked-content identifiers on Page that make up this
-	// element — the numbers passed to content.Builder.BeginTagged. Each is at
-	// most content.MaxMCID.
-	Content []int
+	// Attributes are the element's attributes (ISO 32000-2 14.8.5), written as
+	// one attribute dictionary per owner in the order the owners first appear.
+	Attributes []StructAttr
 
-	// Children are the elements nested inside this one.
-	Children []StructElem
+	// Kids are what the element contains, in reading order: spans of marked
+	// content on Page, child elements and annotations, interleaved as the
+	// document reads them. A paragraph with an emphasised word in it is three
+	// kids — the marks before the word, an Em element, the marks after —
+	// because the order of the kids is the order a reader reads them in.
+	Kids []StructKid
+}
+
+// StructKid is one thing a structure element contains: a span of marked
+// content, a child element or an annotation. Make one with MCIDKid, ElemKid or
+// AnnotKid; the zero StructKid is none of them, and SetStructureTree refuses it.
+type StructKid struct {
+	kind  structKidKind
+	mcid  int
+	elem  *StructElem
+	annot object.IndirectRef
+}
+
+type structKidKind uint8
+
+const (
+	kidNone structKidKind = iota
+	kidMCID
+	kidElem
+	kidAnnot
+)
+
+// MCIDKid is the span of the element's page's content stream that
+// content.Builder.BeginTagged opened with identifier mcid.
+func MCIDKid(mcid int) StructKid { return StructKid{kind: kidMCID, mcid: mcid} }
+
+// ElemKid is a child element.
+func ElemKid(e StructElem) StructKid { return StructKid{kind: kidElem, elem: &e} }
+
+// AnnotKid is an annotation on the element's page: a link's annotation is the
+// kid of its Link element, beside the marks that draw the link's text (ISO
+// 32000-2 14.7.5.3). It is written as an object reference (/OBJR), and the
+// annotation is given the /StructParent that leads a reader from it back to
+// the element. The annotation must be in the page's /Annots.
+func AnnotKid(annot object.IndirectRef) StructKid { return StructKid{kind: kidAnnot, annot: annot} }
+
+// StructAttr is one attribute of a structure element: Key, with Value, in the
+// attribute dictionary Owner says how to read (ISO 32000-2 14.8.5): "Table"
+// for a cell's Scope, Headers, RowSpan and ColSpan, "List" for a list's
+// ListNumbering, "Layout" and "PrintField" for theirs, and under PDF 2.0
+// "Artifact". A Table attribute named Headers is an array of strings, each
+// the ID of an element in the same tree.
+type StructAttr struct {
+	Owner string
+	Key   string
+	Value object.Object
+}
+
+// structAttrOwners are the attribute owners SetStructureTree writes: the
+// standard ones whose attributes describe structure (ISO 32000-2 Table 376),
+// with whether they need PDF 2.0. The format-specific owners (XML-1.00,
+// HTML-*, CSS-*, …) and UserProperties are not offered.
+var structAttrOwners = map[string]bool{
+	"Layout": false, "List": false, "PrintField": false, "Table": false,
+	"Artifact": true,
 }
 
 // SetStructureTree replaces the document's logical structure.
@@ -120,14 +183,18 @@ func (d *Document) SetStructureTree(root []StructElem, roleMap map[string]string
 		catalog.Delete("MarkInfo")
 		return nil
 	}
-	check := structureCheck{roleMap: roleMap, pdf20: d.isPDF20(), claimed: map[int]map[int]bool{}}
+	check := structureCheck{roleMap: roleMap, pdf20: d.isPDF20(), claimed: map[int]map[int]bool{},
+		annots: map[int]bool{}, ids: map[string]bool{}}
 	if err := check.elems(root, 0, nil); err != nil {
+		return err
+	}
+	if err := check.references(); err != nil {
 		return err
 	}
 	if err := check.roles(); err != nil {
 		return err
 	}
-	if err := d.checkStructurePages(root); err != nil {
+	if err := d.checkStructurePages(root, nil); err != nil {
 		return err
 	}
 
@@ -195,7 +262,16 @@ type structureCheck struct {
 	pdf20, usesPDF20 bool
 	// claimed is, per page object number, the identifiers already owned.
 	claimed map[int]map[int]bool
+	// annots is the annotations already owned, by object number.
+	annots map[int]bool
+	// ids is the element IDs, and headers the IDs Headers attributes name,
+	// with the tag of the element naming each, checked against ids once the
+	// whole tree is seen.
+	ids     map[string]bool
+	headers []namedID
 }
+
+type namedID struct{ id, by string }
 
 // elems carries the inherited page down exactly as the writer does, because an
 // element's page may come from an ancestor: a section states the page once and
@@ -205,7 +281,8 @@ func (c *structureCheck) elems(elems []StructElem, depth int, inheritedPage *obj
 	if depth > maxStructureDepth {
 		return fmt.Errorf("pdf0: the structure tree is nested more than %d deep", maxStructureDepth)
 	}
-	for _, e := range elems {
+	for i := range elems {
+		e := &elems[i]
 		if e.Tag == "" {
 			return fmt.Errorf("pdf0: a structure element has no tag")
 		}
@@ -230,32 +307,112 @@ func (c *structureCheck) elems(elems []StructElem, depth int, inheritedPage *obj
 						"a reader would treat the element as meaningless", e.Tag)
 			}
 		}
-		if len(e.Content) > 0 && page == nil {
-			return fmt.Errorf(
-				"pdf0: structure element %q names marked content but no page, and no ancestor states one; "+
-					"an identifier is only unique within one page", e.Tag)
+		if e.ID != "" {
+			if c.ids[e.ID] {
+				return fmt.Errorf("pdf0: structure element ID %q is given twice; an ID names one element", e.ID)
+			}
+			c.ids[e.ID] = true
 		}
-		for _, mcid := range e.Content {
-			if mcid < 0 || mcid > content.MaxMCID {
-				return fmt.Errorf("pdf0: structure element %q names marked-content identifier %d, outside [0, %d]; "+
-					"a page's parent-tree entry is an array as long as its largest identifier",
-					e.Tag, mcid, content.MaxMCID)
-			}
-			on := c.claimed[page.Number]
-			if on == nil {
-				on = map[int]bool{}
-				c.claimed[page.Number] = on
-			}
-			if on[mcid] {
-				return fmt.Errorf(
-					"pdf0: marked-content identifier %d on page %d is claimed twice; "+
-						"the second claim is by %q, and an identifier belongs to one element",
-					mcid, page.Number, e.Tag)
-			}
-			on[mcid] = true
-		}
-		if err := c.elems(e.Children, depth+1, page); err != nil {
+		if err := c.attributes(e); err != nil {
 			return err
+		}
+		var children []StructElem
+		for _, k := range e.Kids {
+			switch k.kind {
+			case kidMCID:
+				if err := c.mcid(e.Tag, page, k.mcid); err != nil {
+					return err
+				}
+			case kidAnnot:
+				if page == nil {
+					return fmt.Errorf(
+						"pdf0: structure element %q names an annotation but no page, and no ancestor states one; "+
+							"an annotation is the kid of an element on its page", e.Tag)
+				}
+				if c.annots[k.annot.Number] {
+					return fmt.Errorf("pdf0: annotation %d is the kid of two structure elements; "+
+						"the second is %q, and an annotation has one parent", k.annot.Number, e.Tag)
+				}
+				c.annots[k.annot.Number] = true
+			case kidElem:
+				children = append(children, *k.elem)
+			default:
+				return fmt.Errorf("pdf0: structure element %q has a kid that is none of MCIDKid, ElemKid and AnnotKid", e.Tag)
+			}
+		}
+		if err := c.elems(children, depth+1, page); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// mcid checks one marked-content identifier an element names.
+func (c *structureCheck) mcid(tag string, page *object.IndirectRef, mcid int) error {
+	if page == nil {
+		return fmt.Errorf(
+			"pdf0: structure element %q names marked content but no page, and no ancestor states one; "+
+				"an identifier is only unique within one page", tag)
+	}
+	if mcid < 0 || mcid > content.MaxMCID {
+		return fmt.Errorf("pdf0: structure element %q names marked-content identifier %d, outside [0, %d]; "+
+			"a page's parent-tree entry is an array as long as its largest identifier",
+			tag, mcid, content.MaxMCID)
+	}
+	on := c.claimed[page.Number]
+	if on == nil {
+		on = map[int]bool{}
+		c.claimed[page.Number] = on
+	}
+	if on[mcid] {
+		return fmt.Errorf(
+			"pdf0: marked-content identifier %d on page %d is claimed twice; "+
+				"the second claim is by %q, and an identifier belongs to one element",
+			mcid, page.Number, tag)
+	}
+	on[mcid] = true
+	return nil
+}
+
+// attributes checks an element's attributes: a known owner, a key, a value,
+// and a Table Headers that is a list of IDs.
+func (c *structureCheck) attributes(e *StructElem) error {
+	for _, a := range e.Attributes {
+		needs20, known := structAttrOwners[a.Owner]
+		if !known {
+			return fmt.Errorf("pdf0: structure element %q has an attribute owned by %q, which is not one of "+
+				"Layout, List, PrintField, Table and Artifact", e.Tag, a.Owner)
+		}
+		if needs20 && !c.pdf20 {
+			return fmt.Errorf("pdf0: structure element %q has an attribute owned by %q, which PDF 2.0 added; "+
+				"this is not a PDF 2.0 document", e.Tag, a.Owner)
+		}
+		if a.Key == "" || a.Value == nil {
+			return fmt.Errorf("pdf0: structure element %q has a %s attribute with no key or no value", e.Tag, a.Owner)
+		}
+		if a.Owner == "Table" && a.Key == "Headers" {
+			arr, ok := a.Value.(object.Array)
+			if !ok {
+				return fmt.Errorf("pdf0: structure element %q has a Headers attribute that is not an array of IDs", e.Tag)
+			}
+			for _, v := range arr {
+				id, ok := v.(object.String)
+				if !ok {
+					return fmt.Errorf("pdf0: structure element %q has a Headers attribute that is not an array of IDs", e.Tag)
+				}
+				c.headers = append(c.headers, namedID{id: string(id.Value), by: e.Tag})
+			}
+		}
+	}
+	return nil
+}
+
+// references checks, once every ID is known, that each one a Headers
+// attribute names is an element's.
+func (c *structureCheck) references() error {
+	for _, h := range c.headers {
+		if !c.ids[h.id] {
+			return fmt.Errorf("pdf0: structure element %q lists header %q, which is no element's ID", h.by, h.id)
 		}
 	}
 	return nil
@@ -280,20 +437,53 @@ func (c *structureCheck) roles() error {
 // checkStructurePages checks that every page an element names is a page of
 // this document (audit 2026-09-22 C136): /Pg on the element and /StructParents
 // on the page are both written from it, so a reference to anything else would
-// put a page-only key on whatever object it happens to name. The structure
-// check (structureCheck.elems) has already bounded the depth.
-func (d *Document) checkStructurePages(elems []StructElem) error {
+// put a page-only key on whatever object it happens to name. An annotation kid
+// must be in its page's /Annots, which is what makes it that page's. The
+// structure check (structureCheck.elems) has already bounded the depth and
+// required a page wherever an annotation is named.
+func (d *Document) checkStructurePages(elems []StructElem, inheritedPage *object.IndirectRef) error {
 	for _, e := range elems {
+		page := e.Page
+		if page == nil {
+			page = inheritedPage
+		}
 		if e.Page != nil {
 			if err := d.requirePage(*e.Page, fmt.Sprintf("structure element %q", e.Tag)); err != nil {
 				return err
 			}
 		}
-		if err := d.checkStructurePages(e.Children); err != nil {
+		var children []StructElem
+		for _, k := range e.Kids {
+			switch k.kind {
+			case kidElem:
+				children = append(children, *k.elem)
+			case kidAnnot:
+				if !d.pageHasAnnot(*page, k.annot) {
+					return fmt.Errorf("pdf0: structure element %q names annotation %d, which is not in the /Annots of page %d",
+						e.Tag, k.annot.Number, page.Number)
+				}
+			}
+		}
+		if err := d.checkStructurePages(children, page); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// pageHasAnnot reports whether annot is in the page's /Annots, by reference.
+func (d *Document) pageHasAnnot(page, annot object.IndirectRef) bool {
+	pd := d.ResolveDict(page)
+	if pd == nil {
+		return false
+	}
+	arr, _ := d.Resolve(pd.Get("Annots")).(object.Array)
+	for _, v := range arr {
+		if r, ok := v.(object.IndirectRef); ok && r.Number == annot.Number && r.Generation == annot.Generation {
+			return d.ResolveDict(r) != nil
+		}
+	}
+	return false
 }
 
 // writeStructLevel writes one level of the tree and returns what its parent's
@@ -302,63 +492,10 @@ func (d *Document) writeStructLevel(elems []StructElem, parent object.IndirectRe
 	inheritedPage *object.IndirectRef, owners *mcidOwners, ns *object.IndirectRef) (object.Object, error) {
 
 	out := make(object.Array, 0, len(elems))
-	for _, e := range elems {
-		dict := &object.Dictionary{}
-		dict.Set("Type", object.Name("StructElem"))
-		dict.Set("S", object.Name(e.Tag))
-		dict.Set("P", parent)
-		if !core.StandardStructTypes[object.Name(e.Tag)] && core.IsPDF20OnlyStructType(object.Name(e.Tag)) {
-			dict.Set("NS", *ns)
-		}
-
-		page := e.Page
-		if page == nil {
-			page = inheritedPage
-		}
-		if page != nil {
-			dict.Set("Pg", *page)
-		}
-		if e.Alt != "" {
-			dict.Set("Alt", object.String{Value: encodePDFText(e.Alt)})
-		}
-		if e.ActualText != "" {
-			dict.Set("ActualText", object.String{Value: encodePDFText(e.ActualText)})
-		}
-		if e.Lang != "" {
-			dict.Set("Lang", object.String{Value: []byte(e.Lang)})
-		}
-		ref := d.Add(dict)
-
-		// An element's own marks come first, then its children — which is the
-		// reading order, and reading order is the whole point of the tree.
-		kids := make(object.Array, 0, len(e.Content)+len(e.Children))
-		for _, mcid := range e.Content {
-			if err := owners.claim(*page, mcid, ref, e.Tag); err != nil {
-				return nil, err
-			}
-			kids = append(kids, object.Integer(mcid))
-		}
-		if len(e.Children) > 0 {
-			childKids, err := d.writeStructLevel(e.Children, ref, page, owners, ns)
-			if err != nil {
-				return nil, err
-			}
-			if arr, ok := childKids.(object.Array); ok {
-				kids = append(kids, arr...)
-			} else {
-				kids = append(kids, childKids)
-			}
-		}
-		switch len(kids) {
-		case 0:
-			// No /K at all: an element with neither content nor children is
-			// legal and describes a structure that is there but empty.
-		case 1:
-			// A single kid is written directly rather than in a one-element
-			// array, which is what a reader expects to see.
-			dict.Set("K", kids[0])
-		default:
-			dict.Set("K", kids)
+	for i := range elems {
+		ref, err := d.writeStructElem(&elems[i], parent, inheritedPage, owners, ns)
+		if err != nil {
+			return nil, err
 		}
 		out = append(out, ref)
 	}
@@ -366,6 +503,115 @@ func (d *Document) writeStructLevel(elems []StructElem, parent object.IndirectRe
 		return out[0], nil
 	}
 	return out, nil
+}
+
+// writeStructElem writes one element and, in reading order, its kids.
+func (d *Document) writeStructElem(e *StructElem, parent object.IndirectRef,
+	inheritedPage *object.IndirectRef, owners *mcidOwners, ns *object.IndirectRef) (object.IndirectRef, error) {
+
+	dict := &object.Dictionary{}
+	dict.Set("Type", object.Name("StructElem"))
+	dict.Set("S", object.Name(e.Tag))
+	dict.Set("P", parent)
+	if !core.StandardStructTypes[object.Name(e.Tag)] && core.IsPDF20OnlyStructType(object.Name(e.Tag)) {
+		dict.Set("NS", *ns)
+	}
+
+	page := e.Page
+	if page == nil {
+		page = inheritedPage
+	}
+	if page != nil {
+		dict.Set("Pg", *page)
+	}
+	if e.ID != "" {
+		dict.Set("ID", object.String{Value: []byte(e.ID)})
+	}
+	if a := structAttributes(e.Attributes); a != nil {
+		dict.Set("A", a)
+	}
+	if e.Alt != "" {
+		dict.Set("Alt", object.String{Value: encodePDFText(e.Alt)})
+	}
+	if e.ActualText != "" {
+		dict.Set("ActualText", object.String{Value: encodePDFText(e.ActualText)})
+	}
+	if e.Lang != "" {
+		dict.Set("Lang", object.String{Value: []byte(e.Lang)})
+	}
+	ref := d.Add(dict)
+	if e.ID != "" {
+		owners.ids[e.ID] = ref
+	}
+
+	// The kids in the order given, which is the reading order, and reading
+	// order is the whole point of the tree.
+	kids := make(object.Array, 0, len(e.Kids))
+	for _, k := range e.Kids {
+		switch k.kind {
+		case kidMCID:
+			if err := owners.claim(*page, k.mcid, ref, e.Tag); err != nil {
+				return ref, err
+			}
+			kids = append(kids, object.Integer(k.mcid))
+		case kidElem:
+			child, err := d.writeStructElem(k.elem, ref, page, owners, ns)
+			if err != nil {
+				return ref, err
+			}
+			kids = append(kids, child)
+		case kidAnnot:
+			// An object reference names the page it is on, which is the
+			// element's own; /Pg is optional then and written anyway, so
+			// that the reference reads alone.
+			objr := object.NewDictionary(
+				object.Entry{Key: "Type", Value: object.Name("OBJR")},
+				object.Entry{Key: "Pg", Value: *page},
+				object.Entry{Key: "Obj", Value: k.annot},
+			)
+			owners.annots = append(owners.annots, annotOwner{annot: k.annot, owner: ref, page: *page})
+			kids = append(kids, d.Add(objr))
+		}
+	}
+	switch len(kids) {
+	case 0:
+		// No /K at all: an element with no kids is legal and describes a
+		// structure that is there but empty.
+	case 1:
+		// A single kid is written directly rather than in a one-element
+		// array, which is what a reader expects to see.
+		dict.Set("K", kids[0])
+	default:
+		dict.Set("K", kids)
+	}
+	return ref, nil
+}
+
+// structAttributes is an element's /A: one attribute dictionary per owner, in
+// the order the owners first appear, a single one written alone.
+func structAttributes(attrs []StructAttr) object.Object {
+	var dicts []*object.Dictionary
+	byOwner := map[string]*object.Dictionary{}
+	for _, a := range attrs {
+		dict, ok := byOwner[a.Owner]
+		if !ok {
+			dict = object.NewDictionary(object.Entry{Key: "O", Value: object.Name(a.Owner)})
+			byOwner[a.Owner] = dict
+			dicts = append(dicts, dict)
+		}
+		dict.Set(object.Name(a.Key), a.Value)
+	}
+	switch len(dicts) {
+	case 0:
+		return nil
+	case 1:
+		return dicts[0]
+	}
+	arr := make(object.Array, len(dicts))
+	for i, dict := range dicts {
+		arr[i] = dict
+	}
+	return arr
 }
 
 // mcidOwners records which structure element owns each marked-content
@@ -381,12 +627,20 @@ type mcidOwners struct {
 	// order is the pages in the order they were first claimed, so the indices
 	// assigned are stable rather than dependent on map iteration.
 	order []int
+	// annots is each annotation kid and the element that owns it, in the
+	// order the tree names them.
+	annots []annotOwner
+	// ids is each element ID and its element.
+	ids map[string]object.IndirectRef
 }
+
+type annotOwner struct{ annot, owner, page object.IndirectRef }
 
 func newMCIDOwners() *mcidOwners {
 	return &mcidOwners{
 		byPage:   map[int]map[int]object.IndirectRef{},
 		pageRefs: map[int]object.IndirectRef{},
+		ids:      map[string]object.IndirectRef{},
 	}
 }
 
@@ -446,10 +700,37 @@ func (d *Document) writeParentTree(treeRoot *object.Dictionary, owners *mcidOwne
 		}
 		nums = append(nums, object.Integer(index), d.Add(elems))
 	}
+	// An annotation's entry is the element itself, keyed by the annotation's
+	// /StructParent (ISO 32000-2 14.7.5.4), after the pages' keys.
+	next := len(owners.order)
+	for _, ao := range owners.annots {
+		annot := d.ResolveDict(ao.annot)
+		if annot == nil {
+			return fmt.Errorf("pdf0: the structure tree names object %d as an annotation, and no such annotation exists", ao.annot.Number)
+		}
+		annot.Set("StructParent", object.Integer(next))
+		nums = append(nums, object.Integer(next), ao.owner)
+		next++
+		// Tabbing through a page whose annotations are in the tree goes in
+		// the tree's order (ISO 32000-2 12.5, /Tabs /S), which is the order the
+		// tree reads them in; PDF/UA requires it of every page with
+		// annotations (ISO 14289-1 7.18.3).
+		if page := d.ResolveDict(ao.page); page != nil {
+			page.Set("Tabs", object.Name("S"))
+		}
+	}
 	parentTree := &object.Dictionary{}
 	parentTree.Set("Nums", nums)
 	treeRoot.Set("ParentTree", d.Add(parentTree))
-	treeRoot.Set("ParentTreeNextKey", object.Integer(len(owners.order)))
+	treeRoot.Set("ParentTreeNextKey", object.Integer(next))
+	if len(owners.ids) > 0 {
+		// A name tree's keys are in byte order (ISO 32000-2 7.9.6).
+		names := object.Array{}
+		for _, id := range slices.Sorted(maps.Keys(owners.ids)) {
+			names = append(names, object.String{Value: []byte(id)}, owners.ids[id])
+		}
+		treeRoot.Set("IDTree", d.Add(object.NewDictionary(object.Entry{Key: "Names", Value: names})))
+	}
 	return nil
 }
 
