@@ -731,11 +731,13 @@ func checkSimpleFontConsistency(doc core.View, level Level, rule string, fontDic
 
 			glyphExists := simpleGlyphExists(fp, subtype, sf.ByCode, code, name)
 			// A named code a non-symbolic TrueType program has no standard
-			// cmap for is a glyph it lacks, not a .notdef reference
-			// (fontcheck.Simple.NoStandardCmap).
-			lacksStandardCmap := sf.NoStandardCmap && name != ""
+			// cmap for is the glyph its post table names so, and a glyph it
+			// lacks, not a .notdef reference, where it names none
+			// (fontcheck.Simple.ByName).
+			lacksStandardCmap := sf.ByName && name != ""
 			if lacksStandardCmap {
-				glyphExists = false
+				gid, named := sf.NamedGlyph(name)
+				glyphExists = named && gid < fp.NumGlyphs
 			}
 
 			// A Type 1/CFF code with no glyph name is only evidence of a

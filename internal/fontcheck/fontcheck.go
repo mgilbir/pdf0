@@ -159,15 +159,15 @@ type Simple struct {
 	// Symbolic flag is set" (ISO 32000-1 9.6.6.4). veraPDF reads a
 	// non-symbolic font with no /Encoding so too.
 	ByCode bool
-	// NoStandardCmap is true for a non-symbolic TrueType program whose cmap
-	// has neither of the subtables ISO 32000-1 9.6.6.4 looks a named code up
-	// in, Microsoft Unicode (3,1) and Mac Roman (1,0), and whose post table
-	// names no glyphs. Such a program has no glyph for a named code — veraPDF
-	// reads it so, with what is drawn glyph 0's width — though pdf0's program
-	// reader folds a Unicode-platform (0,x) subtable into the program's Cmap.
-	// One whose post table names its glyphs is left as that Cmap reads it:
-	// veraPDF looks a name up there, and pdf0 does not read post names.
-	NoStandardCmap bool
+	// ByName is true for a non-symbolic TrueType program whose cmap has
+	// neither of the subtables ISO 32000-1 9.6.6.4 looks a named code up in,
+	// Microsoft Unicode (3,1) and Mac Roman (1,0). A named code's glyph is
+	// then the one the program's post table gives that name (NamedGlyph), as
+	// veraPDF looks it up, and none when the table names no such glyph —
+	// what is drawn is then glyph 0, whose width is compared. pdf0's program
+	// reader folds a Unicode-platform (0,x) subtable into the program's
+	// Cmap, which is not consulted here.
+	ByName bool
 
 	codes        codeRange
 	widths       object.Array
@@ -198,9 +198,8 @@ func newSimple(doc core.View, fontDict, fd *object.Dictionary, fp *font.Program)
 	s.ByCode = s.Subtype == "TrueType" && (s.Symbolic || fontDict.Get("Encoding") == nil)
 	if s.Subtype == "TrueType" && !s.ByCode {
 		if encs, known := CmapEncodings(doc, fd); known &&
-			!slices.Contains(encs, CmapEncoding{3, 1}) && !slices.Contains(encs, CmapEncoding{1, 0}) &&
-			!PostGlyphNames(doc, fd) {
-			s.NoStandardCmap = true
+			!slices.Contains(encs, CmapEncoding{3, 1}) && !slices.Contains(encs, CmapEncoding{1, 0}) {
+			s.ByName = true
 		}
 	}
 	s.codes = readCodeRange(doc, fontDict)
@@ -227,8 +226,9 @@ func (s *Simple) ProgramWidth(code byte) (float64, bool) {
 	name := s.Encoding[code]
 	if s.Subtype == "TrueType" {
 		gid, ok := simplefont.TrueTypeGlyph(s.Program, s.ByCode, code, name)
-		if s.NoStandardCmap && name != "" {
-			gid, ok = 0, true
+		if s.ByName && name != "" {
+			gid, _ = s.NamedGlyph(name) // glyph 0 when the program has none
+			ok = true
 		}
 		if !ok || gid >= len(s.Program.WidthByGID) {
 			return 0, false
@@ -244,6 +244,13 @@ func (s *Simple) ProgramWidth(code byte) (float64, bool) {
 	}
 	w, ok := s.Program.WidthByName[name]
 	return w, ok
+}
+
+// NamedGlyph is the glyph a ByName program's post table gives name, and
+// whether it names one.
+func (s *Simple) NamedGlyph(name string) (int, bool) {
+	gid, ok := s.Program.GlyphByName[name]
+	return gid, ok
 }
 
 // DeclaredWidth is the width the font dictionary declares for a code:

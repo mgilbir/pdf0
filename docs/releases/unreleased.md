@@ -24,8 +24,8 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 
 - **forme v0.13.2** (#398), which reads a TrueType font's post table so a glyph
   can be looked up by name (`font.Program.GlyphByName`, forme#967). No page
-  lays out differently, and no validator finding changes: pdf0 does not use
-  the names yet.
+  lays out differently. The validators use the names for a non-symbolic
+  TrueType font without a (3,1) or (1,0) cmap (see Validation).
 
 - **What a CSS `filter` draws is tagged as what it is** (#386). A tagged page
   used to make everything a filter group held one span of the filtered
@@ -90,8 +90,11 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
   - A dictionary whose `/Subtype` names no kind of font is not judged as a
     font; at PDF/A-4 a `Tf` naming it selects an undefined resource (6.2.2).
   - A non-symbolic TrueType program whose cmap has neither a Microsoft
-    Unicode (3,1) nor a Mac Roman (1,0) subtable, and whose post table names
-    no glyphs, has no glyph for a named code (a missing glyph, not `.notdef`).
+    Unicode (3,1) nor a Mac Roman (1,0) subtable shows, for a named code, the
+    glyph its post table gives that name, and none where it names none (a
+    missing glyph, not `.notdef`, its width glyph 0's), as veraPDF reads it;
+    a Unicode-platform (0,x) subtable is not consulted. Before forme v0.13.2
+    a post table with names left such a font unjudged.
     At PDF/A-4 such a cmap fails 6.2.10.6 whatever the post table holds, and
     at PDF/A-2 and -3 a cmap with no subtable but Microsoft Symbol (3,0) fails
     6.2.11.6.
