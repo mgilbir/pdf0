@@ -412,6 +412,11 @@ var defectFixtures = []defectFixture{
 	{name: "truetype-font", build: func(d *Document, p, r *object.Dictionary) string {
 		return fxFont(d, r, fxTrueTypeProgram(nil), false, nil)
 	}, want: [3][]string{nil, nil, nil}},
+	{name: "truetype-code-outside-the-cmap", build: func(d *Document, p, r *object.Dictionary) string {
+		// "B" is named by WinAnsiEncoding, and the program's cmap has no
+		// glyph for it.
+		return strings.Replace(fxFont(d, r, fxTrueTypeProgram(nil), false, nil), "(A)", "(AB)", 1)
+	}, want: [3][]string{{"6.3.5"}, {"6.2.11.4.1"}, {"6.2.10.4.1"}}},
 	{name: "font-without-type", build: func(d *Document, p, r *object.Dictionary) string {
 		return fxFont(d, r, fxTrueTypeProgram(nil), false, func(f *object.Dictionary) { f.Delete("Type") })
 	}, want: [3][]string{{"6.3.2"}, {"6.2.11.2"}, {"6.2.10.2"}}},

@@ -34,6 +34,21 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 
 ### Validation
 
+- **PDF/UA's font rules the corpus does not test, checked against veraPDF**,
+  and a TrueType glyph reading fixed in both validators:
+  - `ValidatePDFUA` and `ValidatePDFUA2` report a glyph an embedded simple
+    font shows but does not define (7.21.4.1 / 8.4.5.5.1), a TrueType
+    program's cmap without the subtables the part asks for (7.21.6 /
+    8.4.5.7), and a code of a simple font with no Unicode value — no
+    `ToUnicode` entry and no glyph name with one (7.21.7 / 8.4.5.8); they
+    reported the last only for Identity-encoded Type 0 fonts. The glyph and
+    cmap logic is PDF/A's, now shared (`internal/fontcheck`).
+  - A TrueType code its encoding names (WinAnsi "B") that the program's
+    Unicode cmap has no entry for is a missing glyph, at every PDF/A level
+    (6.3.5 / 6.2.11.4.1 / 6.2.10.4.1) and in PDF/UA. It was read as a
+    `.notdef` reference (6.2.11.8 / 6.2.10.9), and at PDF/A-1 not reported.
+    An unnamed code is `.notdef`'s still.
+
 - **JPEG 2000 images and digital signatures checked against veraPDF on
   single-defect files** (#402): fourteen more fixtures at every PDF/A level, the
   JPEG 2000 data made with gopenjpeg. What changed to agree:

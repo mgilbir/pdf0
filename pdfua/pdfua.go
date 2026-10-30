@@ -121,6 +121,11 @@ func validateView(doc core.View, part string) []Violation {
 
 	// 7.2 — text must map to Unicode (Matterhorn 10-001).
 	runAs(ua2Fonts.number, checkUACharMapping)
+	runAs(ua2Fonts.number, checkUASimpleCharMapping)
+	// 7.21.4.1 — an embedded font defines the glyphs shown with it; 7.21.6 —
+	// a TrueType program's cmap subtables.
+	runAs(ua2Fonts.number, checkUAGlyphsPresent)
+	runAs(ua2Fonts.number, func(d core.View) []Violation { return checkUATrueTypeCmaps(d, part) })
 
 	// 7.18.3 — pages with annotations must use structure tab order.
 	runAs(ua2Map{"7.18.3": "8.9.3.3"}.number, checkUATabOrder)

@@ -7,8 +7,6 @@ import (
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/fontcheck"
 	"github.com/mgilbir/pdf0/object"
-	"github.com/mgilbir/pdf0/simplefont"
-	"slices"
 	"unicode"
 )
 
@@ -411,7 +409,8 @@ func checkCMapEmbedded(doc core.View, level Level) []Violation {
 // checkTrueTypeEncoding enforces the PDF/A TrueType encoding rules
 // (ISO 19005-1, 6.3.7; -2/-3, 6.2.11.6; -4, 6.2.10.6; grounded in ISO
 // 32000-1, 9.6.6.4): a symbolic TrueType font shall have no Encoding entry,
-// and its program's cmap the subtables the part asks for (symbolicCmapProblem);
+// and its program's cmap the subtables the part asks for
+// (fontcheck.SymbolicCmapProblem);
 // a non-symbolic one shall specify WinAnsiEncoding or MacRomanEncoding —
 // directly or as BaseEncoding. An Encoding dictionary shall have no
 // Differences entry at all at PDF/A-1; from PDF/A-2 on, its names must be
@@ -454,7 +453,7 @@ func checkTrueTypeEncoding(doc core.View, level Level, rule string, fontDict *ob
 			bad("symbolic TrueType font must not have an Encoding entry")
 		}
 		if fd != nil {
-			if msg := symbolicCmapProblem(doc, level, fd); msg != "" {
+			if msg := fontcheck.SymbolicCmapProblem(doc, fd, cmapRules(level)); msg != "" {
 				bad("%s", msg)
 			}
 		}
@@ -462,7 +461,7 @@ func checkTrueTypeEncoding(doc core.View, level Level, rule string, fontDict *ob
 	}
 
 	if fd != nil {
-		if msg := nonSymbolicCmapProblem(doc, level, fd); msg != "" {
+		if msg := fontcheck.NonSymbolicCmapProblem(doc, fd, cmapRules(level)); msg != "" {
 			bad("%s", msg)
 		}
 	}
@@ -517,74 +516,16 @@ func checkTrueTypeEncoding(doc core.View, level Level, rule string, fontDict *ob
 	return errs
 }
 
-// symbolicCmapProblem says what is wrong with a symbolic TrueType font's cmap
-// table for the level, or "" when nothing is. Each part has its own rule:
-//
-//   - ISO 19005-1 6.3.7: the cmap shall "contain exactly one encoding".
-//   - ISO 19005-2/-3 6.2.11.6: "either exactly one encoding or ... at least,
-//     the Microsoft Symbol (3,0 – Platform ID=3, Encoding ID=0) encoding".
-//   - ISO 19005-4 6.2.10.6: "either the Microsoft Symbol (3,0 ...) or the Mac
-//     Roman (1,0 – Platform ID=1, Encoding ID=0) encoding". Exactly one
-//     encoding is no longer enough by itself.
-//
-// The records are fontcheck.CmapEncodings'. A program pdf0 could not read, or
-// one with no cmap records at all, is not judged.
-func symbolicCmapProblem(doc core.View, level Level, fd *object.Dictionary) string {
-	encs, known := fontcheck.CmapEncodings(doc, fd)
-	if !known || len(encs) == 0 {
-		return ""
-	}
-	has := func(platform, encoding int) bool {
-		return slices.Contains(encs, fontcheck.CmapEncoding{Platform: platform, Encoding: encoding})
-	}
+// cmapRules is the level's part's rules on a TrueType cmap
+// (fontcheck.CmapRules).
+func cmapRules(level Level) fontcheck.CmapRules {
 	switch level.Part() {
 	case 1:
-		if len(encs) != 1 {
-			return fmt.Sprintf("symbolic TrueType font must have exactly one cmap subtable, found %d", len(encs))
-		}
+		return fontcheck.CmapExactlyOne
 	case 4:
-		if !has(3, 0) && !has(1, 0) {
-			return "symbolic TrueType font's cmap must have a Microsoft Symbol (3,0) or Mac Roman (1,0) subtable"
-		}
-	default:
-		if len(encs) != 1 && !has(3, 0) {
-			return fmt.Sprintf("symbolic TrueType font's cmap must have exactly one subtable or a Microsoft Symbol (3,0) subtable; it has %d and no (3,0)", len(encs))
-		}
+		return fontcheck.Cmap30Or10
 	}
-	return ""
-}
-
-// nonSymbolicCmapProblem says what is wrong with a non-symbolic TrueType
-// font's cmap table for the level, or "" when nothing is. ISO 19005-1 has no
-// such rule. The veraPDF profiles read the others so:
-//
-//   - PDF/A-2 and -3 6.2.11.6-1: a subtable other than Microsoft Symbol (3,0).
-//   - ISO 19005-4 6.2.10.6: "the Microsoft Unicode (3,1 ...) or the Mac Roman
-//     (1,0 ...) encoding" (veraPDF 6.2.10.6-1).
-//
-// The records are fontcheck.CmapEncodings'; a program pdf0 could not read is
-// not judged.
-func nonSymbolicCmapProblem(doc core.View, level Level, fd *object.Dictionary) string {
-	if level.Part() == 1 {
-		return ""
-	}
-	encs, known := fontcheck.CmapEncodings(doc, fd)
-	if !known {
-		return ""
-	}
-	has := func(platform, encoding int) bool {
-		return slices.Contains(encs, fontcheck.CmapEncoding{Platform: platform, Encoding: encoding})
-	}
-	if level.Part() == 4 {
-		if !has(3, 1) && !has(1, 0) {
-			return "non-symbolic TrueType font's cmap must have a Microsoft Unicode (3,1) or Mac Roman (1,0) subtable"
-		}
-		return ""
-	}
-	if n := len(encs); n == 0 || n == 1 && has(3, 0) {
-		return "non-symbolic TrueType font's cmap has no subtable but Microsoft Symbol (3,0)"
-	}
-	return ""
+	return fontcheck.CmapOneOr30
 }
 
 // --- font program loading ---
@@ -689,8 +630,7 @@ func checkSimpleFontConsistency(doc core.View, level Level, rule string, fontDic
 	if sf == nil {
 		return damagedFontProgramError(doc, level, rule, fontDict, fd, u, r)
 	}
-	fp, subtype, symbolic, enc := sf.Program, sf.Subtype, sf.Symbolic, sf.Encoding
-	baseEncodingModelled := simpleFontBaseEncodingModelled(doc, fontDict, symbolic)
+	subtype, enc := sf.Subtype, sf.Encoding
 
 	var errs []Violation
 	reported := map[string]bool{}
@@ -720,58 +660,13 @@ func checkSimpleFontConsistency(doc core.View, level Level, rule string, fontDic
 					report("toUnicode", fmt.Sprintf("a code shown in %s font has no Unicode value: neither its ToUnicode CMap nor its encoding maps code %d", string(subtype), code))
 				}
 			}
-			// A code the modelled encoding leaves unnamed selects .notdef
-			// (ISO 32000-1 9.6.6.1), the glyph the program carries for it:
-			// that is a .notdef reference, not a glyph the program lacks.
-			// veraPDF reads it so (6-2-11-8-t01-fail-a at PDF/A-2b, code 0
-			// under /WinAnsiEncoding; 6-2-10-9-t01-fail-a at -4, code 31).
-			if name == "" && subtype != "TrueType" && baseEncodingModelled {
-				name = ".notdef"
-			}
-
-			glyphExists := simpleGlyphExists(fp, subtype, sf.ByCode, code, name)
-			// A named code a non-symbolic TrueType program has no standard
-			// cmap for is the glyph its post table names so, and a glyph it
-			// lacks, not a .notdef reference, where it names none
-			// (fontcheck.Simple.ByName).
-			lacksStandardCmap := sf.ByName && name != ""
-			if lacksStandardCmap {
-				gid, named := sf.NamedGlyph(name)
-				glyphExists = named && gid < fp.NumGlyphs
-			}
-
-			// A Type 1/CFF code with no glyph name is only evidence of a
-			// missing glyph when the base encoding is one this package
-			// models; otherwise the name comes from the font program's
-			// built-in encoding, which is not parsed here, and reporting
-			// the glyph absent asserts a fact not in evidence. That
-			// false-positives on the conforming corpus files PDF_A-1a
-			// 6-3-8-t01-pass-b (/MacExpertEncoding) and -pass-e (symbolic,
-			// no /Encoding), whose /CharSet lists the very glyph reported
-			// missing. TrueType is unaffected: its codes go through the
-			// program's cmap, not a glyph name.
-			codeMapped := subtype == "TrueType" || name != "" || baseEncodingModelled
-
-			// A code that the cmap does not resolve is only evidence of a
-			// missing glyph when the cmap is complete. When the work budget
-			// truncated it (fp.cmapPartial) the code is *unknown*, and
-			// simplefont.TrueTypeGlyph's "non-nil cmap is authoritative" contract would
-			// otherwise turn every unread mapping into glyph 0 — audit C46's
-			// false positive, reached through the budget instead of the
-			// dropped-segment bug.
-			if fp.CmapPartial && subtype == "TrueType" {
-				codeMapped = false
-			}
-
-			if renders && codeMapped && !glyphExists {
+			g := sf.Glyph(code)
+			if renders && g.Known && !g.Present {
 				report("glyph", fmt.Sprintf("embedded %s font does not define a glyph referenced for rendering (code %d)", string(subtype), code))
 			}
 			// A .notdef reference is prohibited even in invisible text
 			// (rendering mode 3), so this is not gated on visible rendering.
-			// It is gated on the cmap being complete for the same reason as
-			// the glyph rule above: a truncated cmap resolves an unread code
-			// to gid 0, which reads as .notdef.
-			if !(fp.CmapPartial && subtype == "TrueType") && !lacksStandardCmap && isNotdefGlyph(fp, subtype, sf.ByCode, code, name) {
+			if g.Notdef {
 				report("notdef", fmt.Sprintf("text showing operator references the .notdef glyph in %s font", string(subtype)))
 			}
 
@@ -926,33 +821,6 @@ func rendersVisibly(u *core.FontTextUsage) bool {
 		if m != 3 {
 			return true
 		}
-	}
-	return false
-}
-
-// simpleGlyphExists and isNotdefGlyph look a TrueType code up by code when
-// byCode (fontcheck.Simple.ByCode), by its glyph name otherwise.
-func simpleGlyphExists(fp *font.Program, subtype object.Name, byCode bool, code byte, name string) bool {
-	if subtype == "TrueType" {
-		// Glyph 0 is the program's .notdef: present, and a .notdef
-		// reference (isNotdefGlyph), not a glyph the program lacks
-		// (veraPDF: PDF_A-4 6-2-10-4-1-t02-fail-c).
-		gid, ok := simplefont.TrueTypeGlyph(fp, byCode, code, name)
-		return ok && gid < fp.NumGlyphs
-	}
-	if name == "" {
-		return false
-	}
-	return fp.GlyphNames[name]
-}
-
-func isNotdefGlyph(fp *font.Program, subtype object.Name, byCode bool, code byte, name string) bool {
-	if name == ".notdef" {
-		return true
-	}
-	if subtype == "TrueType" {
-		gid, ok := simplefont.TrueTypeGlyph(fp, byCode, code, name)
-		return ok && gid == 0
 	}
 	return false
 }

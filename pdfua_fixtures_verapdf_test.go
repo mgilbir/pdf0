@@ -8,6 +8,7 @@ import (
 	"testing"
 	"unicode/utf16"
 
+	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/pdf0/object"
 )
 
@@ -121,6 +122,66 @@ func (u *uaDoc) fenote(refer, back bool, attrs *object.Dictionary) {
 	if back {
 		note.Set("Ref", object.Array{spanRef})
 	}
+}
+
+// text shows shown on the page in a TrueType font over program, built as
+// fxFont builds it (non-symbolic under WinAnsiEncoding unless symbolic;
+// tweak changes the font dictionary), tagged as a P under the Document
+// element with the parent-tree entry that leads back to it.
+func (u *uaDoc) text(program []byte, symbolic bool, tweak func(*object.Dictionary), shown string) {
+	scratch := &object.Dictionary{}
+	fxFont(u.Document, scratch, program, symbolic, tweak)
+	u.textIn(u.ResolveDict(scratch.Get("Font")).Get("F1"), shown)
+}
+
+// type3 shows "A" in a Type 3 font whose one glyph, for code 65, is named
+// name, with no ToUnicode: tagged as text shows it.
+func (u *uaDoc) type3(name string) {
+	proc := u.Add(object.NewStream(&object.Dictionary{}, []byte("500 0 d0")))
+	font := u.Add(object.NewDictionary(
+		object.Entry{Key: "Type", Value: object.Name("Font")},
+		object.Entry{Key: "Subtype", Value: object.Name("Type3")},
+		object.Entry{Key: "FontBBox", Value: object.Array{fxInt(0), fxInt(0), fxInt(500), fxInt(700)}},
+		object.Entry{Key: "FontMatrix", Value: object.Array{object.Real(0.001), fxInt(0), fxInt(0), object.Real(0.001), fxInt(0), fxInt(0)}},
+		object.Entry{Key: "CharProcs", Value: object.NewDictionary(object.Entry{Key: object.Name(name), Value: proc})},
+		object.Entry{Key: "Encoding", Value: object.NewDictionary(
+			object.Entry{Key: "Type", Value: object.Name("Encoding")},
+			object.Entry{Key: "Differences", Value: object.Array{fxInt('A'), object.Name(name)}})},
+		object.Entry{Key: "FirstChar", Value: fxInt('A')},
+		object.Entry{Key: "LastChar", Value: fxInt('A')},
+		object.Entry{Key: "Widths", Value: object.Array{fxInt(500)}},
+		object.Entry{Key: "Resources", Value: &object.Dictionary{}},
+	))
+	u.textIn(font, "A")
+}
+
+// textIn shows shown in the font fontRef names, tagged as text shows it.
+func (u *uaDoc) textIn(fontRef object.Object, shown string) {
+	res := u.ResolveDict(u.page.Get("Resources"))
+	fonts := u.ResolveDict(res.Get("Font"))
+	fonts.Set("F9", fontRef)
+	const mcid = 2 // the base page's content has MCIDs 0 and 1
+	run := u.Add(object.NewStream(&object.Dictionary{}, []byte("/P <</MCID 2>> BDC BT /F9 12 Tf 72 600 Td ("+shown+") Tj ET EMC")))
+	contents, ok := u.Resolve(u.page.Get("Contents")).(object.Array)
+	if !ok {
+		contents = object.Array{u.page.Get("Contents")}
+	}
+	u.page.Set("Contents", append(slices.Clone(contents), run))
+	_, pRef := u.elem(nil, object.IndirectRef{}, "P", object.Integer(mcid))
+	root := u.ResolveDict(u.cat.Get("StructTreeRoot"))
+	key, _ := u.Resolve(u.page.Get("StructParents")).(object.Integer)
+	nums := u.Resolve(u.ResolveDict(root.Get("ParentTree")).Get("Nums")).(object.Array)
+	for i := 0; i+1 < len(nums); i += 2 {
+		if k, _ := u.Resolve(nums[i]).(object.Integer); k == key {
+			arr := slices.Clone(u.Resolve(nums[i+1]).(object.Array))
+			for len(arr) < mcid {
+				arr = append(arr, object.Null{})
+			}
+			nums[i+1] = append(arr, pRef)
+			return
+		}
+	}
+	panic("uaDoc.text: the page has no parent-tree entry")
 }
 
 // annot puts a on the page, 100pt square and printable, with /Contents,
@@ -459,6 +520,26 @@ var uaFixtures = []uaFixture{
 	{name: "fenote-refs-paired", build: func(u *uaDoc) { u.fenote(true, true, nil) }, want: [2][]string{{"7.1"}, nil}},
 	{name: "fenote-referrer-not-named", build: func(u *uaDoc) { u.fenote(true, false, nil) }, want: [2][]string{{"7.1"}, {"8.2.5.14"}}},
 	{name: "fenote-names-a-non-referrer", build: func(u *uaDoc) { u.fenote(false, true, nil) }, want: [2][]string{{"7.1"}, {"8.2.5.14"}}},
+	{name: "truetype-text", build: func(u *uaDoc) { u.text(fxTrueTypeProgram(nil), false, nil, "A") }, want: [2][]string{nil, nil}},
+	{name: "truetype-glyph-missing", build: func(u *uaDoc) { u.text(fxTrueTypeProgram(nil), false, nil, "AB") }, want: [2][]string{{"7.21.4.1"}, {"8.4.5.5.1"}}},
+	{name: "nonsymbolic-truetype-with-only-30-cmap", build: func(u *uaDoc) {
+		u.text(fxTrueTypeProgram([]fonttest.CmapSub{{Plat: 3, Enc: 0, Data: fxFormat0()}}), false, nil, "A")
+	}, want: [2][]string{{"7.21.4.1", "7.21.5", "7.21.6"}, {"8.4.5.5.1", "8.4.5.6", "8.4.5.7"}}},
+	{name: "nonsymbolic-truetype-without-31-or-10-cmap", build: func(u *uaDoc) {
+		u.text(fxTrueTypeProgram([]fonttest.CmapSub{{Plat: 0, Enc: 3, Data: fxFormat0()}}), false, nil, "A")
+	}, want: [2][]string{{"7.21.4.1", "7.21.5"}, {"8.4.5.5.1", "8.4.5.6", "8.4.5.7"}}},
+	{name: "symbolic-truetype-without-30-or-10-cmap", build: func(u *uaDoc) {
+		u.text(fxTrueTypeProgram([]fonttest.CmapSub{{Plat: 3, Enc: 1, Data: fxFormat0()}}), true, nil, "A")
+	}, want: [2][]string{{"7.21.4.1", "7.21.7"}, {"8.4.5.5.1", "8.4.5.7", "8.4.5.8"}}},
+	{name: "symbolic-truetype-with-two-cmaps-and-30", build: func(u *uaDoc) {
+		u.text(fxTrueTypeProgram([]fonttest.CmapSub{{Plat: 1, Enc: 0, Data: fxFormat0()}, {Plat: 3, Enc: 0, Data: fxFormat0()}}), true, nil, "A")
+	}, want: [2][]string{{"7.21.7"}, {"8.4.5.8"}}},
+	{name: "symbolic-truetype-with-two-cmaps-no-30", build: func(u *uaDoc) {
+		u.text(fxTrueTypeProgram([]fonttest.CmapSub{{Plat: 1, Enc: 0, Data: fxFormat0()}, {Plat: 3, Enc: 1, Data: fxFormat0()}}), true, nil, "A")
+	}, want: [2][]string{{"7.21.6", "7.21.7"}, {"8.4.5.8"}}},
+	{name: "type3-glyph-named-a", build: func(u *uaDoc) { u.type3("A") }, want: [2][]string{nil, nil}},
+	{name: "type3-glyph-named-g12", build: func(u *uaDoc) { u.type3("g12") }, want: [2][]string{{"7.21.7"}, {"8.4.5.8"}}},
+	{name: "header-pdf-2-0", build: func(u *uaDoc) { u.Version = "2.0" }, want: [2][]string{{"6.1"}, nil}},
 	{name: "alt-with-pua", build: func(u *uaDoc) {
 		f, _ := u.elem(nil, object.IndirectRef{}, "Span")
 		f.Set("Alt", uaText(""))
