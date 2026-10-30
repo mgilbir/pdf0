@@ -350,9 +350,9 @@ and correctly reports the encryption itself (`[PDF/A-2b 6.1.3] trailer must not 
 ```
 $ pdf0 ua simple.pdf
 [PDF/UA-1 6.1] PDF/UA-1 requires a PDF 1.x header, got 2.0
+[PDF/UA-1 6.2] document is not marked as tagged (/MarkInfo << /Marked true >>)
 [PDF/UA-1 7.1] /ViewerPreferences /DisplayDocTitle must be true
 [PDF/UA-1 7.1] document has no structure tree (/StructTreeRoot)
-[PDF/UA-1 7.1] document is not marked as tagged (/MarkInfo << /Marked true >>)
 [PDF/UA-1 7.1] the catalog has no /Metadata stream (an XMP packet with the PDF/UA identifier is required)
 [PDF/UA-1 7.1] object 5: page contains text that is neither tagged nor marked as an /Artifact
 [PDF/UA-1 7.1] object 5: page paints a path that is neither tagged nor marked as an /Artifact

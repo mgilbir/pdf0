@@ -21,14 +21,15 @@ func utf16Text(s string) object.String {
 }
 
 // TestPDFUA2NumbersTheRulesItShares: a check PDF/UA-1 and -2 share reports
-// PDF/UA-1's clause on a part-1 run and ISO 14289-2's on a part-2 one.
+// PDF/UA-1's clause on a part-1 run and ISO 14289-2's on a part-2 one. The
+// tagged-PDF rule is 6.2 in both (veraPDF 6.2-1).
 func TestPDFUA2NumbersTheRulesItShares(t *testing.T) {
 	f := newUAFixture("")
 	f.cat.Delete("MarkInfo")
 	f.cat.Delete("ViewerPreferences")
 	f.cat.Delete("StructTreeRoot")
 	for _, c := range []struct{ sub, ua1, ua2 string }{
-		{"/MarkInfo", "7.1", "6.2"},
+		{"/MarkInfo", "6.2", "6.2"},
 		{"/StructTreeRoot", "7.1", "8.2.1"},
 		{"DisplayDocTitle", "7.1", "8.11.2"},
 	} {
@@ -38,14 +39,15 @@ func TestPDFUA2NumbersTheRulesItShares(t *testing.T) {
 		if got := findings(f.run("2"), c.ua2, c.sub); len(got) == 0 {
 			t.Errorf("PDF/UA-2, %s: no finding under %s", c.sub, c.ua2)
 		}
-		if got := findings(f.run("2"), c.ua1, c.sub); len(got) != 0 {
+		if got := findings(f.run("2"), c.ua1, c.sub); c.ua1 != c.ua2 && len(got) != 0 {
 			t.Errorf("PDF/UA-2, %s: still reported under PDF/UA-1's %s: %v", c.sub, c.ua1, got)
 		}
 	}
 }
 
-// TestUAMissingMetadata: PDF/UA-1 requires the catalog's /Metadata (7.1,
-// veraPDF 7.1-8); PDF/UA-2 says it through its identification rule (5).
+// TestUAMissingMetadata: both parts require the catalog's /Metadata, PDF/UA-1
+// under 7.1 (veraPDF 7.1-8) and PDF/UA-2 under 8.11.1 (veraPDF 8.11.1-2);
+// neither says it again under the identification rule (5).
 func TestUAMissingMetadata(t *testing.T) {
 	f := newUAFixture("")
 	if got := findings(f.run("1"), "7.1", "/Metadata"); len(got) != 1 {
@@ -54,8 +56,11 @@ func TestUAMissingMetadata(t *testing.T) {
 	if got := findings(f.run("1"), "5", ""); len(got) != 0 {
 		t.Errorf("PDF/UA-1 without /Metadata: also reported under 5: %v", got)
 	}
-	if got := findings(f.run("2"), "5", "no XMP metadata"); len(got) != 1 {
-		t.Errorf("PDF/UA-2 without /Metadata: %v, want one 5 finding", got)
+	if got := findings(f.run("2"), "8.11.1", "/Metadata"); len(got) != 1 {
+		t.Errorf("PDF/UA-2 without /Metadata: %v, want one 8.11.1 finding", got)
+	}
+	if got := findings(f.run("2"), "5", ""); len(got) != 0 {
+		t.Errorf("PDF/UA-2 without /Metadata: also reported under 5: %v", got)
 	}
 }
 
