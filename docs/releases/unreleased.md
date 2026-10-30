@@ -34,7 +34,7 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 
 ### Validation
 
-- **A `Figure` in a `WP` is permitted at PDF/UA-2**, as ISO 32000-2 Annex L's
+- **A `Figure` in a `WP` is permitted at PDF/UA-2** (#404), as ISO 32000-2 Annex L's
   errata (July 2024) give it; the 2023 ISO/TS 32005 table, which veraPDF
   follows, forbids it. pdf0's encoding of that table now agrees with Annex L's
   machine-readable matrix on every pair of PDF 2.0 elements.
