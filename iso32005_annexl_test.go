@@ -1,17 +1,13 @@
 package pdf0
 
 import (
-	"archive/zip"
 	"bytes"
-	"encoding/xml"
-	"io"
 	"os"
-	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/mgilbir/pdf0/internal/iso32005"
+	"github.com/mgilbir/pdf0/internal/xlsxgrid"
 	"github.com/mgilbir/pdf0/object"
 )
 
@@ -38,7 +34,14 @@ func TestISO32005TableAgreesWithAnnexL(t *testing.T) {
 		t.Fatal(err)
 	}
 	xlsx := annexLMatrix(t, d)
-	matrix := readXLSXGrid(t, xlsx)
+	cells, err := xlsxgrid.Sheet(xlsx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	matrix := map[[2]int]string{}
+	for c, v := range cells {
+		matrix[[2]int{c.Row, c.Col}] = v
+	}
 
 	// Row 2 names the parents from column 3; column 2 the children from row
 	// 3, until the legend.
@@ -122,85 +125,4 @@ func annexLMatrix(t *testing.T, d *Document) []byte {
 	}
 	t.Fatal("the PDF has no Annex L matrix (…AnnexL_matrix….xlsx) attached")
 	return nil
-}
-
-// readXLSXGrid reads the first worksheet of an xlsx as cell text by (row,
-// column), both from 1.
-func readXLSXGrid(t *testing.T, xlsx []byte) map[[2]int]string {
-	t.Helper()
-	zr, err := zip.NewReader(bytes.NewReader(xlsx), int64(len(xlsx)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	read := func(name string) []byte {
-		f, err := zr.Open(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer f.Close()
-		b, err := io.ReadAll(f)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return b
-	}
-	var sst struct {
-		SI []struct {
-			T []string `xml:"t"`
-			R []struct {
-				T string `xml:"t"`
-			} `xml:"r"`
-		} `xml:"si"`
-	}
-	if err := xml.Unmarshal(read("xl/sharedStrings.xml"), &sst); err != nil {
-		t.Fatal(err)
-	}
-	shared := make([]string, len(sst.SI))
-	for i, si := range sst.SI {
-		var b strings.Builder
-		for _, s := range si.T {
-			b.WriteString(s)
-		}
-		for _, r := range si.R {
-			b.WriteString(r.T)
-		}
-		shared[i] = b.String()
-	}
-	var sheet struct {
-		Rows []struct {
-			C []struct {
-				R string `xml:"r,attr"`
-				T string `xml:"t,attr"`
-				V string `xml:"v"`
-			} `xml:"c"`
-		} `xml:"sheetData>row"`
-	}
-	if err := xml.Unmarshal(read("xl/worksheets/sheet1.xml"), &sheet); err != nil {
-		t.Fatal(err)
-	}
-	ref := regexp.MustCompile(`^([A-Z]+)(\d+)$`)
-	grid := map[[2]int]string{}
-	for _, row := range sheet.Rows {
-		for _, c := range row.C {
-			m := ref.FindStringSubmatch(c.R)
-			if m == nil || c.V == "" {
-				continue
-			}
-			col := 0
-			for _, ch := range m[1] {
-				col = col*26 + int(ch-'A'+1)
-			}
-			r, _ := strconv.Atoi(m[2])
-			v := c.V
-			if c.T == "s" {
-				i, err := strconv.Atoi(c.V)
-				if err != nil || i >= len(shared) {
-					t.Fatalf("cell %s: a shared string index %q out of range", c.R, c.V)
-				}
-				v = shared[i]
-			}
-			grid[[2]int{r, col}] = v
-		}
-	}
-	return grid
 }

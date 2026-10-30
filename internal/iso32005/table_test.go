@@ -31,17 +31,23 @@ func iso32005Rules() map[string]bool {
 		for _, c := range types {
 			key := string(p) + "|" + c
 			switch inc := row[object.Name(c)]; {
-			case Unenforced[string(p)+"-"+c]:
-				if inc == Grouping && c == "Caption" {
-					rules["maxOneGrouping|"+key] = true
+			case c == "Caption":
+				// At most one, under any parent (ISO 32000-2 Table 372),
+				// besides what the row says.
+				rules["maxOne|"+key] = true
+				switch {
+				case Unenforced[string(p)+"-"+c]:
+				case inc == 0:
+					rules["not|"+key] = true
+				case inc == Grouping:
+					rules["notNonGrouping|"+key] = true
 				}
+				continue
+			case Unenforced[string(p)+"-"+c]:
 			case inc == 0:
 				rules["not|"+key] = true
 			case inc == Grouping:
 				rules["notNonGrouping|"+key] = true
-				if c == "Caption" {
-					rules["maxOneGrouping|"+key] = true
-				}
 			case inc == AtMostOne:
 				rules["maxOne|"+key] = true
 			case inc == ExactlyOne:
@@ -56,10 +62,14 @@ func iso32005Rules() map[string]bool {
 }
 
 // iso32005Stricter are pdf0 rules veraPDF states more strictly: it forbids
-// an Art in a heading outright where the table permits one, and allows a
-// Note one Caption however the Note is used. Every file pdf0 fails on them,
-// veraPDF fails too.
-var iso32005Stricter = []string{"maxOne|H|Art", "maxOne|Hn|Art", "maxOneGrouping|Note|Caption"}
+// an Art in a heading outright where the table permits one. Every file pdf0
+// fails on them, veraPDF fails too.
+var iso32005Stricter = []string{"maxOne|H|Art", "maxOne|Hn|Art",
+	// And pdf0 rules beyond veraPDF's: "The number of captions cannot
+	// exceed 1" (ISO 32000-2 Table 372) under every parent, where veraPDF
+	// leaves a Sect and a Private unlimited.
+	"maxOne|Private|Caption", "maxOne|Sect|Caption",
+}
 
 // iso32005NotImplemented are veraPDF's rules the published table does not
 // state, which pdf0 therefore does not report.
@@ -70,8 +80,11 @@ var iso32005NotImplemented = []string{
 	// Not in the published table, nor in the errata the PDF Association's
 	// working groups resolved in public (pdf-association/pdf-issues):
 	// veraPDF has them from the hierarchical inclusion rules.
-	"maxOne|Art|Caption", "maxOne|Code|Caption", "maxOne|Index|Caption", "maxOne|Note|Caption",
-	"not|BlockQuote|Title", "not|H|Art", "not|Hn|Art", "notNonGrouping|Quote|Div",
+	"not|H|Art", "not|Hn|Art", "notNonGrouping|Quote|Div",
+	// The published table permits a Title in a BlockQuote; the PDF
+	// Association's spreadsheet of it does not, and veraPDF follows the
+	// spreadsheet. The standard's text governs.
+	"not|BlockQuote|Title",
 }
 
 // TestISO32005TableAgreesWithVeraPDF compares the rules pdf0's encoding of
@@ -108,13 +121,26 @@ func TestISO32005TableAgreesWithVeraPDF(t *testing.T) {
 		t.Fatalf("read %d veraPDF ISO 32005 rules; the profile has 1636", len(vera))
 	}
 	mine := iso32005Rules()
+	// A Caption is at most one under every parent, which veraPDF states as
+	// maxOne, as maxOneGrouping beside notNonGrouping, or implies by not:
+	// each is the same verdict on two Captions, under the same clause.
+	captionCovered := func(p string) bool {
+		k := func(kind string) bool { return vera[kind+"|"+p+"|Caption"] }
+		return k("maxOne") || k("not") || k("maxOneGrouping") && k("notNonGrouping")
+	}
 	var extra, missing []string
 	for r := range mine {
+		if strings.HasPrefix(r, "maxOne|") && strings.HasSuffix(r, "|Caption") && captionCovered(strings.Split(r, "|")[1]) {
+			continue
+		}
 		if !vera[r] && !slices.Contains(iso32005Stricter, r) {
 			extra = append(extra, r)
 		}
 	}
 	for r := range vera {
+		if p := strings.Split(r, "|"); p[0] == "maxOneGrouping" && p[2] == "Caption" && mine["maxOne|"+p[1]+"|Caption"] {
+			continue
+		}
 		if !mine[r] && !slices.Contains(iso32005NotImplemented, r) {
 			missing = append(missing, r)
 		}

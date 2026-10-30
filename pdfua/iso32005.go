@@ -22,8 +22,8 @@ import (
 // and a grouping element is itself judged as its parent's child.
 //
 // An ø* child is permitted only where its parent is used as a grouping
-// element: one with no marked content of its own. A Caption permitted so may
-// occur once.
+// element: one with no marked content of its own. A Caption occurs at most
+// once under any parent (ISO 32000-2 Table 372).
 func checkUA2Containment(d core.View, cat *object.Dictionary) []Violation {
 	if d.ResolveDict(cat.Get("StructTreeRoot")) == nil {
 		return nil
@@ -89,19 +89,19 @@ func checkUA2Containment(d core.View, cat *object.Dictionary) []Violation {
 		}
 	}
 
-	// Occurrences: at most one where the row says 0..1, and a Caption a
-	// grouping element may hold once; exactly one Document under the root.
+	// Occurrences: at most one where the row says 0..1, and one Caption
+	// under any parent; exactly one Document under the root.
 	for parent, byType := range counts {
 		parentType, parentElem := object.Name("StructTreeRoot"), (*object.Dictionary)(nil)
-		grouping := true
 		if parent >= 0 {
 			parentType, _ = iso32005Type(nodes[parent])
 			parentElem = nodes[parent].Elem
-			grouping = !content[parent]
 		}
 		row := iso32005.Children[parentType]
 		for t, c := range byType {
-			atMostOne := row[t] == iso32005.AtMostOne || row[t] == iso32005.Grouping && t == "Caption" && grouping
+			// "The number of captions cannot exceed 1" (ISO 32000-2 Table
+			// 372), under any parent, wherever the table lets one in.
+			atMostOne := row[t] == iso32005.AtMostOne || t == "Caption"
 			if atMostOne && c > 1 {
 				report(string(parentType)+"-"+string(t), describe(parentType)+" shall contain at most one <"+string(t)+">", parentElem)
 			}

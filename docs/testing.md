@@ -289,6 +289,7 @@ program the list does not describe.
 | `PDF0_SKIA_PYTHON` | a Python with the packages in `testdata/colrv1/requirements.txt`, which renders COLR glyphs with Skia ([testdata/colrv1/README.md](../testdata/colrv1/README.md)) | the Skia comparison skips | `TestColourGlyphsAreWhatSkiaPaints` |
 | `PDF0_CLI_BIN` | a prebuilt `pdf0` command for the CLI's black-box tests, to point them at an older build and watch them fail | the tests build the command from the checkout | `cmd/pdf0: TestMain` |
 | `PDF0_ISO32000_2` | a copy of ISO 32000-2 (with errata collection 3 or later), whose attached Annex L matrix the ISO/TS 32005 table is checked against; the standard is never committed | the check skips | `TestISO32005TableAgreesWithAnnexL` |
+| `PDF0_ISO32005_RULES` | a copy of the PDF Association's spreadsheet of the ISO/TS 32005 hierarchical inclusion rules with errata, which the ISO/TS 32005 table is checked against; never committed | the check skips | `internal/iso32005: TestISO32005TableAgreesWithTheInclusionRules` |
 | `PDF0_LARGE_PDF` | a large real PDF to measure cancellation latency on | the measurement skips | `TestCancelLargeRealFile` |
 | `PDF0_WORK_CORPUS` | a directory of further PDFs for the work-budget headroom measurement | only the data sets present are measured | `TestWorkMeterHeadroom` |
 | `PDF0_WORK_BIG` | any value: include files larger than the headroom measurement's size cap | the largest files are left out | `TestWorkMeterHeadroom` |

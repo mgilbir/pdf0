@@ -27,6 +27,10 @@ type uaFixture struct {
 	name  string
 	build func(u *uaDoc)
 	want  [2][]string
+	// beyond are clauses pdf0 reports, by part, that veraPDF's profile has
+	// no rule for: requirements of the standards themselves, each said where
+	// it is recorded. veraPDF is held to want, pdf0 to want and beyond.
+	beyond [2][]string
 }
 
 // uaDoc is the base document being given its defect, read back from its
@@ -500,6 +504,20 @@ var uaFixtures = []uaFixture{
 		r, rRef := u.elem(nil, object.IndirectRef{}, "Reference")
 		u.elem(r, rRef, "Sect")
 	}, want: [2][]string{nil, {"Table 5. Document-Reference"}}},
+	{name: "art-with-two-captions", build: func(u *uaDoc) {
+		a, aRef := u.elem(nil, object.IndirectRef{}, "Art")
+		u.elem(a, aRef, "Caption")
+		u.elem(a, aRef, "P")
+		u.elem(a, aRef, "Caption")
+	}, want: [2][]string{nil, {"Table 5. Art-Caption"}}},
+	{name: "sect-with-two-captions", build: func(u *uaDoc) {
+		// "The number of captions cannot exceed 1" (ISO 32000-2 Table
+		// 372); veraPDF's profile leaves a Sect unlimited.
+		a, aRef := u.elem(nil, object.IndirectRef{}, "Sect")
+		u.elem(a, aRef, "Caption")
+		u.elem(a, aRef, "P")
+		u.elem(a, aRef, "Caption")
+	}, want: [2][]string{nil, nil}, beyond: [2][]string{nil, {"Table 5. Sect-Caption"}}},
 	{name: "heading-holding-two-arts", build: func(u *uaDoc) {
 		h, hRef := u.elem(nil, object.IndirectRef{}, "H1")
 		u.elem(h, hRef, "Art")
@@ -586,10 +604,10 @@ func TestSingleDefectFilesAgreeWithVeraPDFOnPDFUA(t *testing.T) {
 				t.Fatalf("%s at %s: %v", f.name, flavour, err)
 			}
 			data := buf.Bytes()
-			want := slices.Clone(f.want[i])
+			want := slices.Concat(f.want[i], f.beyond[i])
 			slices.Sort(want)
 			if got := pdf0UAClauses(t, data, part); !slices.Equal(got, want) {
-				t.Errorf("%s at %s: pdf0 fails it on %v; veraPDF, as the fixture records, on %v", f.name, flavour, got, want)
+				t.Errorf("%s at %s: pdf0 fails it on %v; the fixture records %v", f.name, flavour, got, want)
 			}
 			if err := os.WriteFile(filepath.Join(dir, f.name+".pdf"), data, 0o644); err != nil {
 				t.Fatal(err)
