@@ -29,7 +29,7 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 
 ### Validation
 
-- **Every single-defect fixture is checked at all eleven PDF/A levels**, not
+- **Every single-defect fixture is checked at all eleven PDF/A levels** (#395), not
   only 1b, 2b and 4, and pdf0 agrees with veraPDF on all of them. What
   changed at the levels that need Unicode mappings (1a, 2a, 2u, 3a, 3u):
   - A TrueType font with no `/Encoding` has no Unicode value from its
