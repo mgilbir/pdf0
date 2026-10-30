@@ -217,8 +217,23 @@ func (ln *listNumbering) own(e *object.Dictionary) (string, bool) {
 // checkUA2FormOneWidget is ISO 14289-2 8.10.1: a Form structure element
 // encloses at most one widget annotation (veraPDF 8.10.1-t02,
 // SEForm.widgetAnnotsCount: the element's own OBJR children whose object is a
-// /Widget annotation).
+// /Widget annotation). checkUAFormOneWidget is PDF/UA-1's.
 func checkUA2FormOneWidget(d core.View, cat *object.Dictionary) []Violation {
+	return formWidgets(d, cat, "8.10.1", false)
+}
+
+// checkUAFormOneWidget is ISO 14289-1 7.18.4: a Form element without a Role
+// attribute (ISO 32000-1 Table 348) has one child, the object reference to
+// its widget (veraPDF 7.18.4-2). It is reported, as PDF/UA-2's is, when the
+// element encloses more than one widget.
+func checkUAFormOneWidget(d core.View, cat *object.Dictionary) []Violation {
+	return formWidgets(d, cat, "7.18.4", true)
+}
+
+// formWidgets reports each Form element enclosing more than one widget
+// annotation, under clause; one with a Role attribute is exempt when
+// roleExempts.
+func formWidgets(d core.View, cat *object.Dictionary, clause string, roleExempts bool) []Violation {
 	nodes := structTree(d, cat)
 	widgets := map[int]int{} // Form index -> its widget OBJR children
 	for _, n := range nodes {
@@ -236,11 +251,31 @@ func checkUA2FormOneWidget(d core.View, cat *object.Dictionary) []Violation {
 	}
 	var v []Violation
 	for i, n := range nodes {
+		if roleExempts && hasRoleAttribute(d, n.Elem) {
+			continue
+		}
 		if c := widgets[i]; c > 1 {
-			v = append(v, Violation{Clause: "8.10.1", Message: "a Form structure element encloses " + strconv.Itoa(c) + " widget annotations; it may enclose at most one", Object: anchorOf(d, n.Elem)})
+			v = append(v, Violation{Clause: clause, Message: "a Form structure element encloses " + strconv.Itoa(c) + " widget annotations; it may enclose at most one", Object: anchorOf(d, n.Elem)})
 		}
 	}
 	return v
+}
+
+// hasRoleAttribute reports whether a structure element's attributes, a
+// dictionary or an array of them (with revision numbers among them), carry
+// /Role (ISO 32000-1 Table 348, the PrintField attributes).
+func hasRoleAttribute(d core.View, elem *object.Dictionary) bool {
+	attrs := d.Resolve(elem.Get("A"))
+	if one, ok := attrs.(*object.Dictionary); ok {
+		attrs = object.Array{one}
+	}
+	arr, _ := attrs.(object.Array)
+	for _, a := range arr {
+		if ad := d.ResolveDict(a); ad != nil && ad.Get("Role") != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // pdfua2TextStringKeys are the entries ISO 32000-2 types as text strings
@@ -272,9 +307,15 @@ func checkUA2TextStringPUA(d core.View, cat *object.Dictionary) []Violation {
 			if why != core.ReasonOK || len(s.Value) < 2 || !(s.Value[0] == 0xFE && s.Value[1] == 0xFF || len(s.Value) >= 3 && s.Value[0] == 0xEF && s.Value[1] == 0xBB && s.Value[2] == 0xBF) {
 				continue
 			}
+			// Alternate and actual text have a rule of their own (8.4.3;
+			// veraPDF 8.4.3-2, -3).
+			clause := "8.6"
+			if k == "Alt" || k == "ActualText" {
+				clause = "8.4.3"
+			}
 			for _, c := range core.DecodePDFTextString(s.Value) {
 				if c >= 0xE000 && c <= 0xF8FF || c >= 0xF0000 && c <= 0xFFFFD || c >= 0x100000 && c <= 0x10FFFD {
-					v = append(v, Violation{Clause: "8.6", Object: r.ObjNum,
+					v = append(v, Violation{Clause: clause, Object: r.ObjNum,
 						Message: fmt.Sprintf("the text string %s uses the Unicode Private Use Area (U+%04X)", k, c)})
 					break
 				}
