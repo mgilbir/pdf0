@@ -1,4 +1,4 @@
-package pdfua
+package iso32005
 
 import (
 	"html"
@@ -12,43 +12,43 @@ import (
 	"github.com/mgilbir/pdf0/object"
 )
 
-// iso32005Rules is the set of rules iso32005Children implies, as the
+// iso32005Rules is the set of rules Children implies, as the
 // checker enforces them, each "kind|Parent|Child": not (the row does not
 // list the child), notNonGrouping (ø*), maxOne (0..1), maxOneGrouping (an ø*
 // Caption), exactlyOne (1), noContent (no content item).
 func iso32005Rules() map[string]bool {
 	var types []string
-	for t := range iso32005Children {
+	for t := range Children {
 		if t != "StructTreeRoot" {
 			types = append(types, string(t))
 		}
 	}
 	rules := map[string]bool{}
-	for p, row := range iso32005Children {
-		if allDescribed(row) {
+	for p, row := range Children {
+		if AllDescribed(row) {
 			continue
 		}
 		for _, c := range types {
 			key := string(p) + "|" + c
 			switch inc := row[object.Name(c)]; {
-			case iso32005Unenforced[string(p)+"-"+c]:
-				if inc == incGrouping && c == "Caption" {
+			case Unenforced[string(p)+"-"+c]:
+				if inc == Grouping && c == "Caption" {
 					rules["maxOneGrouping|"+key] = true
 				}
 			case inc == 0:
 				rules["not|"+key] = true
-			case inc == incGrouping:
+			case inc == Grouping:
 				rules["notNonGrouping|"+key] = true
 				if c == "Caption" {
 					rules["maxOneGrouping|"+key] = true
 				}
-			case inc == incAtMostOne:
+			case inc == AtMostOne:
 				rules["maxOne|"+key] = true
-			case inc == incExactlyOne:
+			case inc == ExactlyOne:
 				rules["exactlyOne|"+key] = true
 			}
 		}
-		if row[contentItem] == 0 {
+		if row[ContentItem] == 0 {
 			rules["noContent|"+string(p)+"|"] = true
 		}
 	}
@@ -63,7 +63,11 @@ var iso32005Stricter = []string{"maxOne|H|Art", "maxOne|Hn|Art", "maxOneGrouping
 
 // iso32005NotImplemented are veraPDF's rules the published table does not
 // state, which pdf0 therefore does not report.
-var iso32005NotImplemented = []string{"maxOne|Art|Caption", "maxOne|Code|Caption", "maxOne|Index|Caption", "maxOne|Note|Caption", "maxOneGrouping|Reference|Caption", "not|BlockQuote|Title", "not|H|Art", "not|Hn|Art", "notNonGrouping|Quote|Div", "notNonGrouping|Reference|Aside", "notNonGrouping|Reference|BlockQuote", "notNonGrouping|Reference|Caption", "notNonGrouping|Reference|DocumentFragment", "notNonGrouping|Reference|Form", "notNonGrouping|Reference|H", "notNonGrouping|Reference|Hn", "notNonGrouping|Reference|L", "notNonGrouping|Reference|P", "notNonGrouping|Reference|Part", "notNonGrouping|Reference|Table", "notNonGrouping|Reference|Title"}
+var iso32005NotImplemented = []string{
+	// ISO 32000-2 Annex L's errata (July 2024) permit a Figure in a WP;
+	// veraPDF follows the 2023 table, which does not.
+	"not|WP|Figure",
+	"maxOne|Art|Caption", "maxOne|Code|Caption", "maxOne|Index|Caption", "maxOne|Note|Caption", "maxOneGrouping|Reference|Caption", "not|BlockQuote|Title", "not|H|Art", "not|Hn|Art", "notNonGrouping|Quote|Div", "notNonGrouping|Reference|Aside", "notNonGrouping|Reference|BlockQuote", "notNonGrouping|Reference|Caption", "notNonGrouping|Reference|DocumentFragment", "notNonGrouping|Reference|Form", "notNonGrouping|Reference|H", "notNonGrouping|Reference|Hn", "notNonGrouping|Reference|L", "notNonGrouping|Reference|P", "notNonGrouping|Reference|Part", "notNonGrouping|Reference|Table", "notNonGrouping|Reference|Title"}
 
 // TestISO32005TableAgreesWithVeraPDF compares the rules pdf0's encoding of
 // ISO/TS 32005 Table 5 implies with the ones veraPDF's PDF/UA-2 profile

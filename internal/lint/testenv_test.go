@@ -40,6 +40,7 @@ var testEnvironment = []struct {
 	{name: "PDF0_VERAPDF", what: "the veraPDF command the Type 3, CIDSet, RenderInto and PDF/A render tests validate their documents with; [testdata/verapdf/verapdf-docker.sh](../testdata/verapdf/README.md) runs the official image (needs docker)", without: "those checks skip"},
 	{name: "PDF0_SKIA_PYTHON", what: "a Python with the packages in `testdata/colrv1/requirements.txt`, which renders COLR glyphs with Skia ([testdata/colrv1/README.md](../testdata/colrv1/README.md))", without: "the Skia comparison skips"},
 	{name: "PDF0_CLI_BIN", what: "a prebuilt `pdf0` command for the CLI's black-box tests, to point them at an older build and watch them fail", without: "the tests build the command from the checkout"},
+	{name: "PDF0_ISO32000_2", what: "a copy of ISO 32000-2 (with errata collection 3 or later), whose attached Annex L matrix the ISO/TS 32005 table is checked against; the standard is never committed", without: "the check skips"},
 	{name: "PDF0_LARGE_PDF", what: "a large real PDF to measure cancellation latency on", without: "the measurement skips"},
 	{name: "PDF0_WORK_CORPUS", what: "a directory of further PDFs for the work-budget headroom measurement", without: "only the data sets present are measured"},
 	{name: "PDF0_WORK_BIG", what: "any value: include files larger than the headroom measurement's size cap", without: "the largest files are left out"},

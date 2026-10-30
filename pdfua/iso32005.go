@@ -2,11 +2,12 @@ package pdfua
 
 import (
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/iso32005"
 	"github.com/mgilbir/pdf0/object"
 )
 
 // checkUA2Containment holds the structure tree to ISO/TS 32005:2023 Table 5
-// (iso32005Children), which ISO 14289-2 makes the containment rules of a
+// (iso32005.Children), which ISO 14289-2 makes the containment rules of a
 // PDF/UA-2 file. Each finding is named as veraPDF's PDF/UA-2 profile names
 // the rule — "Table 5. Parent-Child", or "Table 5. Parent-content" for
 // marked content where the row lists none — so its verdicts and pdf0's can
@@ -63,7 +64,7 @@ func checkUA2Containment(d core.View, cat *object.Dictionary) []Violation {
 				continue
 			}
 		}
-		row, ok := iso32005Children[parentType]
+		row, ok := iso32005.Children[parentType]
 		if !ok {
 			continue
 		}
@@ -75,13 +76,13 @@ func checkUA2Containment(d core.View, cat *object.Dictionary) []Violation {
 		if parent >= 0 {
 			parentElem = nodes[parent].Elem
 		}
-		if iso32005Unenforced[string(parentType)+"-"+string(t)] {
+		if iso32005.Unenforced[string(parentType)+"-"+string(t)] {
 			continue
 		}
 		switch row[t] {
 		case 0:
 			report(string(parentType)+"-"+string(t), describe(parentType)+" shall not contain <"+string(t)+">", n.Elem)
-		case incGrouping:
+		case iso32005.Grouping:
 			if parent >= 0 && content[parent] {
 				report(string(parentType)+"-"+string(t), describe(parentType)+", when used as a non-grouping element, shall not contain <"+string(t)+">", parentElem)
 			}
@@ -98,15 +99,15 @@ func checkUA2Containment(d core.View, cat *object.Dictionary) []Violation {
 			parentElem = nodes[parent].Elem
 			grouping = !content[parent]
 		}
-		row := iso32005Children[parentType]
+		row := iso32005.Children[parentType]
 		for t, c := range byType {
-			atMostOne := row[t] == incAtMostOne || row[t] == incGrouping && t == "Caption" && grouping
+			atMostOne := row[t] == iso32005.AtMostOne || row[t] == iso32005.Grouping && t == "Caption" && grouping
 			if atMostOne && c > 1 {
 				report(string(parentType)+"-"+string(t), describe(parentType)+" shall contain at most one <"+string(t)+">", parentElem)
 			}
 		}
 	}
-	if root := iso32005Children["StructTreeRoot"]; root["Document"] == incExactlyOne {
+	if root := iso32005.Children["StructTreeRoot"]; root["Document"] == iso32005.ExactlyOne {
 		if c := counts[-1]["Document"]; c != 1 {
 			report("StructTreeRoot-Document", "StructTreeRoot shall contain exactly one <Document>", nil)
 		}
@@ -121,7 +122,7 @@ func checkUA2Containment(d core.View, cat *object.Dictionary) []Violation {
 		if !ok {
 			continue
 		}
-		if row, ok := iso32005Children[t]; ok && row[contentItem] == 0 && !allDescribed(row) {
+		if row, ok := iso32005.Children[t]; ok && row[iso32005.ContentItem] == 0 && !iso32005.AllDescribed(row) {
 			report(string(t)+"-content", "<"+string(t)+"> shall not contain content items", n.Elem)
 		}
 	}
@@ -141,7 +142,7 @@ func iso32005Type(n structNode) (object.Name, bool) {
 	if isNumberedHeading(n.StdType) {
 		return "Hn", true
 	}
-	if _, ok := iso32005Children[n.StdType]; !ok {
+	if _, ok := iso32005.Children[n.StdType]; !ok {
 		return "", false
 	}
 	return n.StdType, true
@@ -166,17 +167,6 @@ func describe(t object.Name) string {
 		return "StructTreeRoot"
 	}
 	return "<" + string(t) + ">"
-}
-
-// allDescribed reports whether a row defers every child to the types'
-// descriptions (‡): the grouping elements Part, Div and NonStruct.
-func allDescribed(row map[object.Name]inclusion) bool {
-	for _, inc := range row {
-		if inc != incDescribed {
-			return false
-		}
-	}
-	return true
 }
 
 // hasContentItems reports whether a structure element (or the structure
