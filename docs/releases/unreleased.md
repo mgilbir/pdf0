@@ -30,7 +30,7 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 ### Validation
 
 - **`ValidatePDFUA2` checks the structure tree against ISO/TS 32005 Table
-  5**, the containment rules ISO 14289-2 requires: a child the parent's
+  5** (#397), the containment rules ISO 14289-2 requires: a child the parent's
   type does not permit, marked content where the type allows none, more
   occurrences than allowed, and a root without exactly one `Document`.
   Findings are named as veraPDF names the rules (`Table 5. Parent-Child`).
