@@ -34,6 +34,28 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 
 ### Validation
 
+- **Rules no corpus file tests, checked against veraPDF** (#407), twenty-seven
+  more single-defect files (nineteen PDF/A, eight PDF/UA), and
+  what they found:
+  - A font file whose `/Subtype` names no kind of program (ISO 32000 Table
+    126) is reported at every part, not only at PDF/A-1 (6.2.11.2 /
+    6.2.10.2); `/OpenType` is one from PDF/A-2 on. Such a program is still
+    read for what it is, and no longer reported damaged besides.
+  - A Type 0 font whose descendant is neither a `CIDFontType0` nor a
+    `CIDFontType2` is reported (6.3.2 / 6.2.11.2 / 6.2.10.2), and as not
+    embedded (6.3.4 / 6.2.11.4.1 / 6.2.10.4.1): there is no program a
+    reader knows how to use.
+  - LZW in an inline image is ISO 19005-1 6.1.10 at PDF/A-1, as in a
+    stream (was 6.1.7).
+  - At PDF/A-2a and -3a, a standard structure type the `/RoleMap` remaps to
+    a non-standard one is reported (6.7.3.4).
+  - At PDF/UA-2, a `Caption` that is neither the first nor the last child
+    of its element (8.2.5.27), and a character of real content mapped into
+    a Private Use Area with no `/ActualText` or `/Alt` (8.4.3).
+  - An element with no `/P` is reported under 8.2.1 at PDF/UA-2 (was 8.2.2),
+    and the content it leaves unreachable from the structure tree root is
+    reported as untagged (7.1 / 8.2.2), as veraPDF reports it.
+
 - **A `Caption` occurs at most once under any parent at PDF/UA-2** (#406), as ISO
   32000-2 Table 372 says ("The number of captions cannot exceed 1"); it was
   checked only where the ISO/TS 32005 table says 0..1. veraPDF checks it under

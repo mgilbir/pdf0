@@ -95,6 +95,21 @@ func LoadFontCodes(doc View, fontDict *object.Dictionary) (FontCodes, bool) {
 // wrong for anything else, which is why LoadFontCodes is asked first.
 func TwoByteFontCodes() FontCodes { return FontCodes{cmap: IdentityCMap()} }
 
+// ShownCodes is how a font's shown strings are cut into codes: nil for a
+// simple font, whose codes are its bytes, and the font's CMap codespace for a
+// composite one — or, when its /Encoding gives none, the two-byte guess
+// (TwoByteFontCodes).
+func ShownCodes(doc View, font *object.Dictionary) *FontCodes {
+	if st, _ := doc.ResolveName(font.Get("Subtype")); st != "Type0" {
+		return nil
+	}
+	codes, ok := LoadFontCodes(doc, font)
+	if !ok {
+		codes = TwoByteFontCodes()
+	}
+	return &codes
+}
+
 // Codes cuts a shown string into codes. A zero FontCodes cuts nothing.
 func (f FontCodes) Codes(s []byte) []Code {
 	return f.cmap.Decode(s)

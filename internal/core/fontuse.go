@@ -121,6 +121,13 @@ func LoadFontProgram(doc View, fd *object.Dictionary) (*font.Program, Reason) {
 			return nil, r
 		}
 		subtype, _ := doc.ResolveName(s.Dict.Get("Subtype"))
+		// A /Subtype that names no kind of program (ISO 32000-1 Table 126)
+		// is its own finding (pdfa's font-file kind rule); the program is
+		// still read for what it is, an sfnt by its version tag and
+		// otherwise CFF, and not reported damaged besides.
+		if subtype != "Type1C" && subtype != "CIDFontType0C" && isSFNT(data) {
+			subtype = "OpenType"
+		}
 		if subtype == "OpenType" {
 			if fp := ParseSFNTCFF(data); fp != nil {
 				return program(fp)
@@ -130,6 +137,19 @@ func LoadFontProgram(doc View, fd *object.Dictionary) (*font.Program, Reason) {
 		return program(font.ParseCFF(data))
 	}
 	return nil, ReasonAbsent
+}
+
+// isSFNT reports whether data begins with an sfnt version tag: TrueType
+// outlines (0x00010000 or 'true') or CFF ones ('OTTO').
+func isSFNT(data []byte) bool {
+	if len(data) < 4 {
+		return false
+	}
+	switch string(data[:4]) {
+	case "\x00\x01\x00\x00", "true", "OTTO":
+		return true
+	}
+	return false
 }
 
 // noteFontProgramLimits reports the guard trips the font-program parsers

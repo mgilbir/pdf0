@@ -210,3 +210,12 @@ func decodeUnits(units []uint16) []rune {
 	}
 	return utf16.Decode(units)
 }
+
+// PrivateUseArea reports whether r lies in one of Unicode's three Private Use
+// Areas: the BMP area and the two supplementary planes. The PDF/A Level A and
+// PDF/UA rules on replacement text for such characters both read it.
+func PrivateUseArea(r rune) bool {
+	return r >= 0xE000 && r <= 0xF8FF ||
+		r >= 0xF0000 && r <= 0xFFFFD ||
+		r >= 0x100000 && r <= 0x10FFFD
+}

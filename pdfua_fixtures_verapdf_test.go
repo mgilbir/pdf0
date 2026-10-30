@@ -249,10 +249,18 @@ func uaDict(kv ...any) *object.Dictionary {
 
 var uaFixtures = []uaFixture{
 	{name: "base", build: func(u *uaDoc) {}},
+	// veraPDF reports the element's content as untagged, its /P chain
+	// broken; its rule for the missing /P itself (7.1-12, 8.2.1-2) does not
+	// fire, its tree walk supplying the parent. ISO 32000-1 Table 323 and
+	// -2 Table 355 require the entry, and veraPDF's profile numbers it 8.2.1.
 	{name: "struct-elem-without-parent", build: func(u *uaDoc) {
 		k := u.Resolve(u.docElem.Get("K")).(object.Array)
 		u.ResolveDict(k[0]).Delete("P")
-	}, want: [2][]string{{"7.1"}, {"8.2.2"}}},
+	}, want: [2][]string{{"7.1"}, {"8.2.2"}}, beyond: [2][]string{nil, {"8.2.1"}}},
+	{name: "empty-sect-without-parent", build: func(u *uaDoc) {
+		s, _ := u.elem(nil, object.IndirectRef{}, "Sect")
+		s.Delete("P")
+	}, beyond: [2][]string{{"7.1"}, {"8.2.1"}}},
 	{name: "markinfo-not-marked", build: func(u *uaDoc) {
 		u.cat.Set("MarkInfo", uaDict("Marked", object.Boolean(false)))
 	}, want: [2][]string{{"6.2"}, {"6.2"}}},
@@ -584,6 +592,53 @@ var uaFixtures = []uaFixture{
 	{name: "catalog-without-metadata", build: func(u *uaDoc) {
 		u.cat.Delete("Metadata")
 	}, want: [2][]string{{"7.1"}, {"8.11.1"}}},
+	{name: "table-colspan-over-rowspan", build: func(u *uaDoc) {
+		tb, tbRef := u.elem(nil, object.IndirectRef{}, "Table")
+		r1, r1Ref := u.elem(tb, tbRef, "TR")
+		u.elem(r1, r1Ref, "TD")
+		c, _ := u.elem(r1, r1Ref, "TD")
+		c.Set("A", uaDict("O", object.Name("Table"), "RowSpan", fxInt(2)))
+		r2, r2Ref := u.elem(tb, tbRef, "TR")
+		c2, _ := u.elem(r2, r2Ref, "TD")
+		c2.Set("A", uaDict("O", object.Name("Table"), "ColSpan", fxInt(2)))
+	}, want: [2][]string{{"7.2"}, {"8.2.5.26"}}},
+	{name: "table-caption-in-the-middle", build: func(u *uaDoc) {
+		tb, tbRef := u.elem(nil, object.IndirectRef{}, "Table")
+		r1, r1Ref := u.elem(tb, tbRef, "TR")
+		u.elem(r1, r1Ref, "TD")
+		u.elem(tb, tbRef, "Caption")
+		r2, r2Ref := u.elem(tb, tbRef, "TR")
+		u.elem(r2, r2Ref, "TD")
+	}, want: [2][]string{{"7.2"}, {"8.2.5.27"}}},
+	{name: "div-caption-in-the-middle", build: func(u *uaDoc) {
+		f, fRef := u.elem(nil, object.IndirectRef{}, "Div")
+		u.elem(f, fRef, "P")
+		u.elem(f, fRef, "Caption")
+		u.elem(f, fRef, "P")
+	}, want: [2][]string{nil, {"8.2.5.27", "Table 5. Document-Caption"}}},
+	// The Divs are looked through: the Sect's children are P, Caption, P.
+	{name: "sect-caption-between-divs", build: func(u *uaDoc) {
+		f, fRef := u.elem(nil, object.IndirectRef{}, "Sect")
+		d1, d1Ref := u.elem(f, fRef, "Div")
+		u.elem(d1, d1Ref, "P")
+		u.elem(f, fRef, "Caption")
+		d2, d2Ref := u.elem(f, fRef, "Div")
+		u.elem(d2, d2Ref, "P")
+	}, want: [2][]string{nil, {"8.2.5.27"}}},
+	{name: "text-pua", build: func(u *uaDoc) {
+		u.text(fxTrueTypeProgram(nil), false, func(f *object.Dictionary) { f.Set("ToUnicode", fxToUnicode(u.Document, "E000")) }, "A")
+	}, want: [2][]string{nil, {"8.4.3"}}},
+	{name: "text-pua-with-actualtext", build: func(u *uaDoc) {
+		u.text(fxTrueTypeProgram(nil), false, func(f *object.Dictionary) { f.Set("ToUnicode", fxToUnicode(u.Document, "E000")) }, "A")
+		k := u.Resolve(u.docElem.Get("K")).(object.Array)
+		u.ResolveDict(k[len(k)-1]).Set("ActualText", uaText("A"))
+	}},
+	{name: "text-pua-with-alt-on-the-sequence", build: func(u *uaDoc) {
+		u.text(fxTrueTypeProgram(nil), false, func(f *object.Dictionary) { f.Set("ToUnicode", fxToUnicode(u.Document, "E000")) }, "A")
+		contents := u.Resolve(u.page.Get("Contents")).(object.Array)
+		run := u.Resolve(contents[len(contents)-1]).(*object.Stream)
+		run.Data = bytes.Replace(run.Data, []byte("<</MCID 2>>"), []byte("<</MCID 2 /Alt (a letter)>>"), 1)
+	}},
 }
 
 // TestSingleDefectFilesAgreeWithVeraPDFOnPDFUA is the PDF/UA counterpart of

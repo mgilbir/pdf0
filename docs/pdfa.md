@@ -241,8 +241,9 @@ and intent, name UTF-8 validity. It also hosts `checkStreamLength` and
 recovered from during `Read`.
 
 **`pdfa/pdfa_levela.go`, `pdfa/pdfa_levela_content.go`, `pdfa/pdfa_levela_fonts.go`** — the
-Level A families (Tagged PDF, artifacts, structure types, language, ActualText
-for Private Use Area code points), each returning early unless `level.IsA()`,
+Level A families (Tagged PDF, artifacts, structure types — from part 2 on,
+a standard type the `/RoleMap` remaps to a non-standard one among them —
+language, ActualText for Private Use Area code points), each returning early unless `level.IsA()`,
 and the Unicode character-map rule shared by Level A and Level U
 (`checkUnicodeMapping`, gated on `level.requiresUnicode()`): a rendered font
 needs a ToUnicode CMap or one of the three exemptions, and at parts 2/3 a

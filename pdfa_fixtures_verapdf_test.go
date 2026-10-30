@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/mgilbir/forme/fonttest"
+	lcms2 "github.com/mgilbir/golittlecms"
 	"github.com/mgilbir/gopenjpeg"
 	"github.com/mgilbir/pdf0/internal/signtest"
 	"github.com/mgilbir/pdf0/object"
@@ -986,6 +987,152 @@ var defectFixtures = []defectFixture{
 			object.Entry{Key: "Type", Value: object.Name("Requirement")}, object.Entry{Key: "S", Value: object.Name("EnableJavaScripts")})})
 		return ""
 	}, want: [3][]string{nil, {"6.11"}, {"6.12"}}},
+	{name: "inline-image-lzw", build: func(d *Document, p, r *object.Dictionary) string {
+		// One sample, 0: clear code, 0, end of data, 9 bits each.
+		return "q 10 0 0 10 0 0 cm BI /W 1 /H 1 /CS /G /BPC 8 /F /LZW ID \x80\x00\x20\x20 EI Q"
+	}, want: [3][]string{{"6.1.10"}, {"6.1.10"}, {"6.1.9"}}},
+	{name: "font-file3-opentype", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxFont(d, r, fxTrueTypeProgram(nil), false, fxFontFile3(d, "OpenType"))
+	}, want: [3][]string{{"6.3.2"}, nil, nil}},
+	{name: "font-file3-unknown-subtype", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxFont(d, r, fxTrueTypeProgram(nil), false, fxFontFile3(d, "TrueTypeX"))
+	}, want: [3][]string{{"6.3.2"}, {"6.2.11.2"}, {"6.2.10.2"}}},
+	{name: "font-file2-with-subtype", build: func(d *Document, p, r *object.Dictionary) string {
+		s := fxFont(d, r, fxTrueTypeProgram(nil), false, nil)
+		fd := d.ResolveDict(d.ResolveDict(d.ResolveDict(r.Get("Font")).Get("F1")).Get("FontDescriptor"))
+		d.Resolve(fd.Get("FontFile2")).(*object.Stream).Dict.Set("Subtype", object.Name("TrueTypeX"))
+		return s
+	}, want: [3][]string{{"6.3.2"}, {"6.2.11.2"}, {"6.2.10.2"}}},
+	{name: "cid-font-unknown-subtype", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxCIDFont(d, r, func(t0, cid *object.Dictionary) { cid.Set("Subtype", object.Name("CIDFontType1")) })
+	}, want: [3][]string{{"6.3.2", "6.3.4"}, {"6.2.11.2", "6.2.11.4.1"}, {"6.2.10.2", "6.2.10.4.1"}},
+		except: map[string][]string{"1a": {"6.3.2", "6.3.4", "6.3.8"},
+			"2u": {"6.2.11.2", "6.2.11.4.1", "6.2.11.7.2"}, "2a": {"6.2.11.2", "6.2.11.4.1", "6.2.11.7.2"},
+			"3u": {"6.2.11.2", "6.2.11.4.1", "6.2.11.7.2"}, "3a": {"6.2.11.2", "6.2.11.4.1", "6.2.11.7.2"}}},
+	{name: "symbolic-truetype-two-cmaps-without-30", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxFont(d, r, fxTrueTypeProgram([]fonttest.CmapSub{{Plat: 1, Enc: 0, Data: fxFormat0()}, {Plat: 3, Enc: 1, Data: fxFormat0()}}), true, nil)
+	}, want: [3][]string{{"6.3.7"}, {"6.2.11.6"}, nil},
+		except: map[string][]string{"1a": {"6.3.7", "6.3.8"}, "2u": {"6.2.11.6", "6.2.11.7.2"}, "2a": {"6.2.11.6", "6.2.11.7.2"}, "3u": {"6.2.11.6", "6.2.11.7.2"}, "3a": {"6.2.11.6", "6.2.11.7.2"}}},
+	{name: "tounicode-to-zero", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxFont(d, r, fxTrueTypeProgram(nil), false, func(f *object.Dictionary) { f.Set("ToUnicode", fxToUnicode(d, "0000")) })
+	}, want: [3][]string{nil, nil, {"6.2.10.7"}},
+		except: map[string][]string{"2u": {"6.2.11.7.2"}, "2a": {"6.2.11.7.2"}, "3u": {"6.2.11.7.2"}, "3a": {"6.2.11.7.2"}}},
+	{name: "tounicode-to-fffe", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxFont(d, r, fxTrueTypeProgram(nil), false, func(f *object.Dictionary) { f.Set("ToUnicode", fxToUnicode(d, "FFFE")) })
+	}, want: [3][]string{nil, nil, {"6.2.10.7"}},
+		except: map[string][]string{"2u": {"6.2.11.7.2"}, "2a": {"6.2.11.7.2"}, "3u": {"6.2.11.7.2"}, "3a": {"6.2.11.7.2"}}},
+	{name: "extension-schema-undefined-field", build: func(d *Document, p, r *object.Dictionary) string {
+		fxExtensionSchema(d, func(s string) string {
+			return strings.Replace(s, "<pdfaSchema:prefix>", "<pdfaSchema:extra>x</pdfaSchema:extra><pdfaSchema:prefix>", 1)
+		})
+		return ""
+	}, want: [3][]string{{"6.7.8"}, {"6.6.2.3.2"}, nil}},
+	{name: "extension-property-undefined-field", build: func(d *Document, p, r *object.Dictionary) string {
+		fxExtensionSchema(d, func(s string) string {
+			return strings.Replace(s, "<pdfaProperty:name>", "<pdfaProperty:extra>x</pdfaProperty:extra><pdfaProperty:name>", 1)
+		})
+		return ""
+	}, want: [3][]string{{"6.7.8"}, {"6.6.2.3.2"}, nil}},
+	{name: "gray-output-intent", build: func(d *Document, p, r *object.Dictionary) string { fxGrayIntent(d); return "" },
+		want: [3][]string{nil, nil, nil}},
+	{name: "annotation-colour-under-gray-intent", build: func(d *Document, p, r *object.Dictionary) string {
+		fxGrayIntent(d)
+		fxAnnot(d, p, object.NewDictionary(object.Entry{Key: "Subtype", Value: object.Name("Square")}, object.Entry{Key: "C", Value: object.Array{fxInt(1)}},
+			object.Entry{Key: "AP", Value: object.NewDictionary(object.Entry{Key: "N", Value: fxAppearance(d)})}))
+		return ""
+	}, want: [3][]string{{"6.5.3"}, nil, nil}},
+	{name: "role-map-standard-to-nonstandard", build: func(d *Document, p, r *object.Dictionary) string {
+		fxStructElemP(d, object.Entry{Key: "P", Value: object.Name("Foo")})
+		return ""
+	}, want: [3][]string{nil, nil, nil}, except: map[string][]string{"2a": {"6.7.3.4"}, "3a": {"6.7.3.4"}}},
+	{name: "role-map-standard-to-standard", build: func(d *Document, p, r *object.Dictionary) string {
+		fxStructElemP(d, object.Entry{Key: "P", Value: object.Name("H1")})
+		return ""
+	}, want: [3][]string{nil, nil, nil}},
+	{name: "role-map-standard-through-nonstandard-to-standard", build: func(d *Document, p, r *object.Dictionary) string {
+		fxStructElemP(d, object.Entry{Key: "P", Value: object.Name("Foo")}, object.Entry{Key: "Foo", Value: object.Name("H1")})
+		return ""
+	}, want: [3][]string{nil, nil, nil}},
+	{name: "xmp-pdfaid-part-wrong", build: func(d *Document, p, r *object.Dictionary) string {
+		fxXMP(d, func(x []byte) []byte {
+			return regexp.MustCompile(`<pdfaid:part>\d</pdfaid:part>`).ReplaceAll(x, []byte("<pdfaid:part>9</pdfaid:part>"))
+		})
+		return ""
+	}, want: [3][]string{{"6.7.11"}, {"6.6.4"}, {"6.7.3"}}},
+	{name: "embedded-pdfa-without-mime-type", build: func(d *Document, p, r *object.Dictionary) string {
+		fxEmbed(d, fxPDFA(pdfa.PDFA2b), "application/pdf", func(fs *object.Dictionary) {
+			d.Resolve(d.ResolveDict(fs.Get("EF")).Get("F")).(*object.Stream).Dict.Delete("Subtype")
+		})
+		return ""
+	}, want: [3][]string{{"6.1.11"}, nil, {"6.9"}}, except: map[string][]string{"3b": {"6.8"}, "3u": {"6.8"}, "3a": {"6.8"}}},
+	{name: "link-launch-action", build: func(d *Document, p, r *object.Dictionary) string {
+		fxAnnot(d, p, object.NewDictionary(object.Entry{Key: "Subtype", Value: object.Name("Link")},
+			object.Entry{Key: "A", Value: object.NewDictionary(object.Entry{Key: "S", Value: object.Name("Launch")}, object.Entry{Key: "F", Value: object.String{Value: []byte("a.exe")}})}))
+		return ""
+	}, want: [3][]string{{"6.6.1"}, {"6.5.1"}, {"6.6.1"}}},
+	{name: "sound-annotation", build: func(d *Document, p, r *object.Dictionary) string {
+		fxAnnot(d, p, object.NewDictionary(object.Entry{Key: "Subtype", Value: object.Name("Sound")},
+			object.Entry{Key: "AP", Value: object.NewDictionary(object.Entry{Key: "N", Value: fxAppearance(d)})}))
+		return ""
+	}, want: [3][]string{{"6.5.2"}, {"6.3.1"}, {"6.3.1"}}},
+}
+
+// fxFontFile3 moves a font's program from /FontFile2 to /FontFile3, of the
+// given /Subtype.
+func fxFontFile3(d *Document, subtype object.Name) func(font *object.Dictionary) {
+	return func(font *object.Dictionary) {
+		fd := d.ResolveDict(font.Get("FontDescriptor"))
+		ff := fd.Get("FontFile2")
+		d.Resolve(ff).(*object.Stream).Dict.Set("Subtype", subtype)
+		fd.Set("FontFile3", ff)
+		fd.Delete("FontFile2")
+	}
+}
+
+// fxToUnicode is a ToUnicode CMap mapping code 'A' to the UTF-16BE hex
+// digits target.
+func fxToUnicode(d *Document, target string) object.IndirectRef {
+	body := "/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n/CMapName /Test-UCS def /CMapType 2 def\n" +
+		"1 begincodespacerange <00> <FF> endcodespacerange\n1 beginbfchar <41> <" + target + "> endbfchar\n" +
+		"endcmap CMapName currentdict /CMap defineresource pop end end\n"
+	return d.Add(object.NewStream(&object.Dictionary{}, []byte(body)))
+}
+
+// fxGrayIntent makes the output intent's profile a grey one, an ICC v2
+// profile of gamma 2.2 built by golittlecms.
+func fxGrayIntent(d *Document) {
+	wp := lcms2.D50xyY()
+	g, err := lcms2.BuildGamma(2.2)
+	if err != nil {
+		panic(err)
+	}
+	prof, err := lcms2.CreateGrayProfile(&wp, g)
+	if err != nil {
+		panic(err)
+	}
+	prof.SetProfileVersion(2.1)
+	b, err := prof.SaveProfileToMem()
+	if err != nil {
+		panic(err)
+	}
+	oi := d.ResolveDict(d.Resolve(fxCatalog(d).Get("OutputIntents")).(object.Array)[0])
+	oi.Set("DestOutputProfile", d.Add(object.NewStream(object.NewDictionary(object.Entry{Key: "N", Value: fxInt(1)}), b)))
+}
+
+// fxStructElemP gives the document a structure tree (keeping the one a Level
+// A skeleton has) holding one P element, under the given /RoleMap.
+func fxStructElemP(d *Document, roleMap ...object.Entry) {
+	cat := fxCatalog(d)
+	if cat.Get("StructTreeRoot") == nil {
+		cat.Set("StructTreeRoot", d.Add(object.NewDictionary(object.Entry{Key: "Type", Value: object.Name("StructTreeRoot")})))
+	}
+	rootRef := cat.Get("StructTreeRoot")
+	root := d.ResolveDict(rootRef)
+	root.Set("RoleMap", object.NewDictionary(roleMap...))
+	root.Set("K", object.Array{d.Add(object.NewDictionary(
+		object.Entry{Key: "Type", Value: object.Name("StructElem")},
+		object.Entry{Key: "S", Value: object.Name("P")},
+		object.Entry{Key: "P", Value: rootRef}))})
 }
 
 // fxGS applies an ExtGState with the given entries.

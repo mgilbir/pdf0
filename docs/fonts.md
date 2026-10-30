@@ -52,9 +52,11 @@ values follow the veraPDF profiles, not a reading of the standard. Level-gated
 rules:
 
 - PDF/A-1 only: `/CharSet` and `/CIDSet` *presence* on subset fonts, the
-  CMap-must-be-embedded rule, and the font file's kind — PDF 1.4 names two
-  `/FontFile3` subtypes, `/Type1C` and `/CIDFontType0C`, so a `/FontFile3
-  /OpenType` program is a finding under the `general` concept (6.3.2). And a
+  CMap-must-be-embedded rule, and `/OpenType` as a font file's kind — PDF 1.4
+  names two font file subtypes, `/Type1C` and `/CIDFontType0C`, so a
+  `/FontFile3 /OpenType` program is a finding under the `general` concept
+  (6.3.2); from PDF/A-2 on `/OpenType` is the third, and any other
+  `/Subtype` on any of the three font files is a finding at every part. And a
   non-symbolic TrueType font's `/Encoding` dictionary may not carry a
   `/Differences` entry at all, even an empty one (6.3.7); from PDF/A-2 on, the
   array is allowed if it names only Adobe Glyph List glyphs.
@@ -136,7 +138,7 @@ flowchart TD
     D --> FD
     FD -->|"/FontFile"| P1["font.ParseType1 — PFB unwrap, eexec decrypt"]
     FD -->|"/FontFile2"| P2["font.ParseSFNT — table directory"]
-    FD -->|"/FontFile3"| OT{"stream /Subtype is /OpenType?"}
+    FD -->|"/FontFile3"| OT{"stream /Subtype is /OpenType,<br/>or names no kind and the data is an sfnt?"}
     OT -->|yes| PSC["core.ParseSFNTCFF — CFF table<br/>falls back to font.ParseSFNT"]
     OT -->|no| PC["font.ParseCFF — Type1C or CIDFontType0C"]
     P1 --> FP["font.Program"]

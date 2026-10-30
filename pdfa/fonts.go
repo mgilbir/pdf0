@@ -120,6 +120,20 @@ func checkOneFontDict(doc core.View, level Level, rule string, fontDict *object.
 		desc := core.Type0Descendant(doc, fontDict)
 		encObj := fontDict.Get("Encoding")
 
+		// The descendant is a CIDFont, of one of the two kinds ISO 32000-1
+		// 9.7.4 names (veraPDF 6.x.2-2, which judges the descendant as a font
+		// of its own); of any other, there is no program a reader knows how
+		// to use, so the font is not embedded either (veraPDF 6.x.4(.1)-1,
+		// whose PDFont.containsFontFile is a program it parsed).
+		if desc != nil {
+			if dsub, _ := doc.ResolveName(desc.Get("Subtype")); dsub != "CIDFontType0" && dsub != "CIDFontType2" {
+				bad("general", "the Type0 font's descendant has /Subtype /%s; a CIDFont is a /CIDFontType0 or a /CIDFontType2", string(dsub))
+				if rendersVisibly(u) {
+					bad("embed", "the Type0 font's descendant, of /Subtype /%s, has no font program of a kind a reader can use", string(dsub))
+				}
+			}
+		}
+
 		// CMap legality (9.7.5.2): the Encoding must be a predefined CMap
 		// name or an embedded CMap stream.
 		var cmapStreamInfo *object.Dictionary
@@ -263,11 +277,14 @@ func checkOneFontDict(doc core.View, level Level, rule string, fontDict *object.
 		}
 	}
 
-	// The font file's kind at PDF/A-1 (ISO 19005-1 6.3.2; veraPDF 6.3.2-7):
-	// PDF 1.4 names two, Type1C and CIDFontType0C, and a font file with any
-	// other /Subtype — OpenType, which PDF 1.6 added — is one PDF/A-1 does
-	// not allow. FontFile and FontFile2 carry no /Subtype.
-	if level.Part() == 1 {
+	// The font file's kind (ISO 19005-1 6.3.2, -2/-3 6.2.11.2, -4 6.2.10.2;
+	// veraPDF 6.x.2-7): a font file's /Subtype, whichever of the three it is,
+	// names one the PDF version defines. PDF 1.4 names two, Type1C and
+	// CIDFontType0C; PDF 1.6 added OpenType, which PDF/A-1 therefore does not
+	// allow and the later parts do (ISO 32000-1 Table 126, ISO 32000-2 Table
+	// 124). FontFile and FontFile2 carry no /Subtype, and one that does is
+	// held to the same names.
+	{
 		fd := doc.ResolveDict(fontDict.Get("FontDescriptor"))
 		if subtype == "Type0" {
 			fd = nil
@@ -275,15 +292,21 @@ func checkOneFontDict(doc core.View, level Level, rule string, fontDict *object.
 				fd = doc.ResolveDict(desc.Get("FontDescriptor"))
 			}
 		}
+		names := "/Type1C and /CIDFontType0C"
+		known := func(st object.Name) bool { return st == "Type1C" || st == "CIDFontType0C" }
+		if level.Part() != 1 {
+			names = "/Type1C, /CIDFontType0C and /OpenType"
+			known = func(st object.Name) bool { return st == "Type1C" || st == "CIDFontType0C" || st == "OpenType" }
+		}
 		if fd != nil {
 			for _, key := range []object.Name{"FontFile", "FontFile2", "FontFile3"} {
 				s, ok := doc.Resolve(fd.Get(key)).(*object.Stream)
 				if !ok {
 					continue
 				}
-				if st, ok := doc.ResolveName(s.Dict.Get("Subtype")); ok && st != "Type1C" && st != "CIDFontType0C" {
-					bad("general", "the embedded font file's /Subtype is /%s; PDF 1.4 defines only "+
-						"/Type1C and /CIDFontType0C", string(st))
+				if st, ok := doc.ResolveName(s.Dict.Get("Subtype")); ok && !known(st) {
+					bad("general", "the embedded font file's /Subtype is /%s; the PDF version PDF/A-%d is based on defines only %s",
+						string(st), level.Part(), names)
 				}
 			}
 		}

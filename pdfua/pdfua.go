@@ -133,10 +133,10 @@ func validateView(doc core.View, part string) []Violation {
 	// 7.1 — structure types must be standard or mapped via /RoleMap.
 	runCatAs(ua2Map{"7.1": "8.2.4"}.number, checkUARoleMap)
 	runCatAs(ua2Map{"7.1": "8.2.4"}.number, checkUARoleMapIntegrity)
-	// An element with no /P leaves its content untagged as veraPDF's
-	// PDF/UA-2 profile reads it (8.2.2; single-defect fixture
-	// struct-elem-without-parent).
-	runCatAs(ua2Map{"7.1": "8.2.2"}.number, checkUAStructParent)
+	// An element with no /P (ISO 32000-1 Table 323, -2 Table 355; veraPDF 7.1-12,
+	// 8.2.1-2), and the content it leaves untagged (7.1, 8.2.2).
+	runCatAs(ua2Map{"7.1": "8.2.1"}.number, checkUAStructParent)
+	runCatAs(ua2Map{"7.1": "8.2.2"}.number, checkUAContentOffTheTree)
 
 	// 7.2 — structure-element nesting (tables, lists, TOC) per the UA profile;
 	// 7.5 — in a regular table, every data cell's headers determinable.
@@ -212,7 +212,7 @@ func validateView(doc core.View, part string) []Violation {
 	// The rest of what only PDF/UA-2 asks (pdfua2_ident.go, pdfua2_struct.go,
 	// pdfua2_interactive.go): pdfuaid:rev (5); one Document root in the PDF
 	// 2.0 namespace (8.2.5.2); no H (8.2.5.12); ListNumbering on a labelled
-	// list (8.2.5.25); structure destinations (8.8); invisible annotations as
+	// list (8.2.5.25); a Caption first or last (8.2.5.27); structure destinations (8.8); invisible annotations as
 	// artifacts (8.9.2.2); a file attachment's AFRelationship (8.9.2.4.10);
 	// one widget per Form (8.10.1) and a widget's label or /Contents
 	// (8.10.2.3); an embedded file's /Desc (8.14.1).
@@ -221,6 +221,7 @@ func validateView(doc core.View, part string) []Violation {
 		runCat(checkUA2DocumentRoot)
 		runCat(checkUA2NoH)
 		runCat(checkUA2ListNumbering)
+		runCat(checkUA2CaptionPosition)
 		runCat(checkUA2StructDestinations)
 		runCat(checkUA2InvisibleAnnots)
 		runCat(checkUA2FileAttachments)
@@ -228,6 +229,7 @@ func validateView(doc core.View, part string) []Violation {
 		runCat(checkUA2WidgetDescription)
 		runCat(checkUA2EmbeddedFileDesc)
 		runCat(checkUA2TextStringPUA)
+		runCat(checkUA2ContentPUA)
 		runCat(checkUA2Annotations)
 		runCat(checkUA2Forms)
 		runCat(checkUA2StructureTypes)
@@ -529,6 +531,78 @@ func checkUAStructParent(d core.View, cat *object.Dictionary) []Violation {
 			v = append(v, Violation{Clause: "7.1", Message: "structure element <" + string(t) + "> has no /P (parent) entry", Object: 0})
 		}
 	})
+	return v
+}
+
+// checkUAContentOffTheTree is ISO 14289-1 7.1 / -2 8.2.2 for marked content
+// that belongs to a structure element from which the /P entries do not lead
+// back to the structure tree root. A reader goes from content to its element
+// through the parent tree and from there up through /P, and so does veraPDF
+// (GFSEGroupedContent.isTaggedContent, which 7.1-t03 / 8.2.2-t01 test): when
+// the climb ends short of the StructTreeRoot, the content is neither tagged
+// nor an artifact. An MCID is judged where the page's content uses it, which
+// is the only place it is content.
+//
+// veraPDF's own rule for the missing /P (7.1-t12, 8.2.1-t02) does not fire:
+// its tree walk supplies the parent itself (GFPDStructTreeNode, which only
+// logs the difference). checkUAStructParent reports that, as ISO 32000
+// requires the entry, and this the content veraPDF reports instead.
+func checkUAContentOffTheTree(d core.View, cat *object.Dictionary) []Violation {
+	nodes := structTree(d, cat)
+	reaches := map[*object.Dictionary]bool{} // element -> its /P chain reaches the root
+	climb := func(e *object.Dictionary) bool {
+		var path []*object.Dictionary
+		seen := map[*object.Dictionary]bool{}
+		ok := false
+		for cur := e; cur != nil; cur = d.ResolveDict(cur.Get("P")) {
+			d.Charge(1)
+			if r, known := reaches[cur]; known {
+				ok = r
+				break
+			}
+			if t, _ := d.ResolveName(cur.Get("Type")); t == "StructTreeRoot" {
+				ok = true
+				break
+			}
+			if seen[cur] {
+				break
+			}
+			seen[cur] = true
+			path = append(path, cur)
+		}
+		for _, p := range path {
+			reaches[p] = ok
+		}
+		return ok
+	}
+	off := make([]bool, len(nodes))
+	anyOff := false
+	for i, n := range nodes {
+		if n.HasS && !climb(n.Elem) {
+			off[i], anyOff = true, true
+		}
+	}
+	if !anyOff {
+		return nil
+	}
+	untagged := mcidFlags(d, nodes, off)
+	var v []Violation
+	for _, pg := range d.Pages(cat.Get("Pages")) {
+		data, key, _ := d.ContentBytesAndKey(pg.Dict.Get("Contents")) // reason: presence-only; the producer recorded any declined trip
+		props := d.ResolveDict(d.Resources(pg.Dict).Get("Properties"))
+		for _, ev := range langEvents(d, data, key) {
+			if ev.kind != evBDC {
+				continue
+			}
+			mc := ev.mc
+			if mc.propName != "" {
+				mc = mcFromDict(d, d.ResolveDict(props.Get(object.Name(mc.propName))), mc.tag)
+			}
+			if mc.hasMCID && untagged[[2]int{pg.ObjNum, mc.mcid}] {
+				v = append(v, Violation{Clause: "7.1", Message: fmt.Sprintf("the content of MCID %d belongs to a structure element whose /P entries do not lead to the structure tree root, so it is not tagged", mc.mcid), Object: pg.ObjNum})
+			}
+		}
+	}
 	return v
 }
 

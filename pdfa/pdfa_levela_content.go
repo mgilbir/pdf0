@@ -5,7 +5,6 @@ import (
 
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
-	"github.com/mgilbir/pdf0/syntax"
 )
 
 // This file supplies the two Level A rules that cannot be decided from the
@@ -261,7 +260,7 @@ func scanLevelATrace(doc core.View, data []byte, res *object.Dictionary, toUni m
 		// CMap); a simple font's codes are its bytes.
 		codes, ok := fontCodes[font]
 		if !ok {
-			codes = pendingFontCodes(doc, font)
+			codes = core.ShownCodes(doc, font)
 			fontCodes[font] = codes
 		}
 		for _, s := range pending {
@@ -277,7 +276,7 @@ func scanLevelATrace(doc core.View, data []byte, res *object.Dictionary, toUni m
 			for _, c := range cut {
 				rs, _ := m.Runes(int(c.Value))
 				for _, r := range rs {
-					if privateUseArea(r) {
+					if core.PrivateUseArea(r) {
 						k := fmt.Sprint(r, mcids)
 						if !seenShow[k] {
 							seenShow[k] = true
@@ -298,7 +297,7 @@ func scanLevelATrace(doc core.View, data []byte, res *object.Dictionary, toUni m
 			lastName = t.Name()
 			dictIsLatest = false
 		case core.ContentDictStart:
-			lastDict = parseContentDict(lx.SkipDict(&t))
+			lastDict = core.ParsePropertyList(lx.SkipDict(&t))
 			dictIsLatest = true
 		case core.ContentString, core.ContentHexString:
 			pending = append(pending, t.Bytes())
@@ -360,42 +359,6 @@ var paintingOperators = map[string]bool{
 	"f": true, "F": true, "f*": true,
 	"B": true, "B*": true, "b": true, "b*": true,
 	"sh": true,
-}
-
-// parseContentDict parses the raw << … >> bytes of a property list. A property
-// list is a PDF object, so it is read with the object parser rather than picked
-// apart by the content tokenizer: only the parser can tell /Lang's value from
-// the next key.
-func parseContentDict(raw []byte) *object.Dictionary {
-	obj, err := syntax.NewParser(raw).ParseObject()
-	if err != nil {
-		return nil
-	}
-	d, _ := obj.(*object.Dictionary)
-	return d
-}
-
-// pendingFontCodes is how the Level A scan cuts a font's shown strings into
-// codes: nil for a simple font, whose codes are its bytes, and the font's CMap
-// codespace for a composite one — or, when its /Encoding gives none, the
-// two-byte guess, which is what the scan always assumed.
-func pendingFontCodes(doc core.View, font *object.Dictionary) *core.FontCodes {
-	if st, _ := doc.ResolveName(font.Get("Subtype")); st != "Type0" {
-		return nil
-	}
-	codes, ok := core.LoadFontCodes(doc, font)
-	if !ok {
-		codes = core.TwoByteFontCodes()
-	}
-	return &codes
-}
-
-// privateUseArea reports whether r lies in one of Unicode's three Private Use
-// Areas: the BMP area and the two supplementary planes.
-func privateUseArea(r rune) bool {
-	return r >= 0xE000 && r <= 0xF8FF ||
-		r >= 0xF0000 && r <= 0xFFFFD ||
-		r >= 0x100000 && r <= 0x10FFFD
 }
 
 // mcKey identifies a marked-content sequence: an identifier is unique only

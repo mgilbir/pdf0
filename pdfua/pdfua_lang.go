@@ -265,9 +265,15 @@ type langScope struct {
 }
 
 func newLangScope(d core.View, cat *object.Dictionary, nodes []structNode, inScope []bool) *langScope {
-	s := &langScope{d: d, mcidLang: map[[2]int]bool{}}
-	// pg is the page an element's content is on: its own /Pg, else the
-	// nearest ancestor's.
+	return &langScope{d: d, mcidLang: mcidFlags(d, nodes, inScope)}
+}
+
+// mcidFlags carries a per-element answer to the marked content that belongs
+// to the element: by (content container, MCID), flag of the structure element
+// the MCID belongs to. The container is the page an element's /Pg names (its
+// own, else the nearest ancestor's), or the stream an MCR's /Stm names.
+func mcidFlags(d core.View, nodes []structNode, flag []bool) map[[2]int]bool {
+	out := map[[2]int]bool{}
 	pg := make([]int, len(nodes))
 	for i, n := range nodes {
 		pg[i] = object.RefNum(n.Elem.Get("Pg"))
@@ -279,7 +285,7 @@ func newLangScope(d core.View, cat *object.Dictionary, nodes []structNode, inSco
 			for _, k := range structKids(d, n.Elem) {
 				d.Charge(1)
 				if mcid, ok := d.Resolve(k).(object.Integer); ok {
-					s.mcidLang[[2]int{pg[i], int(mcid)}] = inScope[i]
+					out[[2]int{pg[i], int(mcid)}] = flag[i]
 				}
 			}
 		case n.Parent >= 0:
@@ -294,10 +300,10 @@ func newLangScope(d core.View, cat *object.Dictionary, nodes []structNode, inSco
 			if stm := object.RefNum(n.Elem.Get("Stm")); stm != 0 {
 				container = stm
 			}
-			s.mcidLang[[2]int{container, int(mcid)}] = inScope[n.Parent]
+			out[[2]int{container, int(mcid)}] = flag[n.Parent]
 		}
 	}
-	return s
+	return out
 }
 
 // content replays one content stream in the given container and returns what
