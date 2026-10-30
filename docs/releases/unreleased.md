@@ -30,7 +30,7 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 ### Validation
 
 - **PDF/UA rules the corpus does not test, checked against veraPDF on
-  single-defect files**: fifty-six PDF/UA fixtures at both parts, and what
+  single-defect files** (#396): fifty-six PDF/UA fixtures at both parts, and what
   pdf0 changed to agree on every one:
   - `ValidatePDFUA2` checks PDF/UA-2's own annotation rules: a link in a
     `Link` or `Reference` element (8.2.5.20), a markup annotation in `Annot`
