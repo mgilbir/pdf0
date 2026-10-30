@@ -94,7 +94,7 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
     glyph its post table gives that name, and none where it names none (a
     missing glyph, not `.notdef`, its width glyph 0's), as veraPDF reads it;
     a Unicode-platform (0,x) subtable is not consulted. Before forme v0.13.2
-    a post table with names left such a font unjudged.
+    a post table with names left such a font unjudged (#399).
     At PDF/A-4 such a cmap fails 6.2.10.6 whatever the post table holds, and
     at PDF/A-2 and -3 a cmap with no subtable but Microsoft Symbol (3,0) fails
     6.2.11.6.
