@@ -166,19 +166,3 @@ func sfntTables(doc core.View, fd *object.Dictionary) map[string][]byte {
 	}
 	return font.SFNTTables(data)
 }
-
-// PostGlyphNames reports whether a TrueType font descriptor's embedded program
-// may name its glyphs in its post table: false only for a readable program
-// whose post table is version 3.0, which carries no names, or that has none.
-// Versions 1.0, 2.0 and 2.5 name glyphs, and one this does not know might.
-func PostGlyphNames(doc core.View, fd *object.Dictionary) bool {
-	tables := sfntTables(doc, fd)
-	if tables == nil {
-		return true
-	}
-	post, ok := tables["post"]
-	if !ok {
-		return false
-	}
-	return len(post) < 4 || !(post[0] == 0 && post[1] == 3 && post[2] == 0 && post[3] == 0)
-}

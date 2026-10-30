@@ -246,12 +246,13 @@ func fxTrueTypeProgramWith(cmap []fonttest.CmapSub, extra map[string][]byte) []b
 }
 
 // fxPostNames is a version 2.0 post table naming fxTrueTypeProgram's glyph 1
-// "A" (Macintosh standard name 36); the program's own post table names none.
-func fxPostNames() []byte {
+// by the given Macintosh standard name index (36 is "A", 37 "B"); the
+// program's own post table names none.
+func fxPostNames(glyph1 byte) []byte {
 	post := make([]byte, 32+2+2*2)
-	post[1] = 2   // version 2.0
-	post[33] = 2  // numGlyphs
-	post[37] = 36 // glyph 1; glyph 0 is name 0, .notdef
+	post[1] = 2       // version 2.0
+	post[33] = 2      // numGlyphs
+	post[37] = glyph1 // glyph 1; glyph 0 is name 0, .notdef
 	return post
 }
 
@@ -416,9 +417,16 @@ var defectFixtures = []defectFixture{
 		return fxFont(d, r, fxTrueTypeProgram([]fonttest.CmapSub{{Plat: 3, Enc: 0, Data: fxFormat0()}}), false, nil)
 	}, want: [3][]string{{"6.3.5", "6.3.6"}, {"6.2.11.4.1", "6.2.11.5", "6.2.11.6"}, {"6.2.10.4.1", "6.2.10.5", "6.2.10.6"}}},
 	{name: "nonsymbolic-truetype-without-31-or-10-cmap-with-post-names", build: func(d *Document, p, r *object.Dictionary) string {
-		program := fxTrueTypeProgramWith([]fonttest.CmapSub{{Plat: 0, Enc: 3, Data: fxFormat0()}}, map[string][]byte{"post": fxPostNames()})
+		program := fxTrueTypeProgramWith([]fonttest.CmapSub{{Plat: 0, Enc: 3, Data: fxFormat0()}}, map[string][]byte{"post": fxPostNames(36)})
 		return fxFont(d, r, program, false, nil)
 	}, want: [3][]string{nil, nil, {"6.2.10.6"}}},
+	{name: "nonsymbolic-truetype-without-31-or-10-cmap-post-names-another-glyph", build: func(d *Document, p, r *object.Dictionary) string {
+		// The (0,3) cmap maps "A" to glyph 1, and the post table names glyph
+		// 1 "B": looked up by its name, as a reader must here, "A" has no
+		// glyph.
+		program := fxTrueTypeProgramWith([]fonttest.CmapSub{{Plat: 0, Enc: 3, Data: fxFormat0()}}, map[string][]byte{"post": fxPostNames(37)})
+		return fxFont(d, r, program, false, nil)
+	}, want: [3][]string{{"6.3.5", "6.3.6"}, {"6.2.11.4.1", "6.2.11.5"}, {"6.2.10.4.1", "6.2.10.5", "6.2.10.6"}}},
 	{name: "symbolic-truetype-without-30-or-10-cmap", build: func(d *Document, p, r *object.Dictionary) string {
 		return fxFont(d, r, fxTrueTypeProgram([]fonttest.CmapSub{{Plat: 3, Enc: 1, Data: fxFormat0()}}), true, nil)
 	}, want: [3][]string{{"6.3.5"}, {"6.2.11.4.1"}, {"6.2.10.4.1", "6.2.10.6"}},

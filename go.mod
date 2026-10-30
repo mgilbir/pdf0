@@ -6,7 +6,7 @@ toolchain go1.27.3
 
 require (
 	github.com/mgilbir/formalis v0.3.1
-	github.com/mgilbir/forme v0.13.1
+	github.com/mgilbir/forme v0.13.2
 	github.com/mgilbir/golittlecms v0.0.0-20260727161601-f6af7cfe1556
 	github.com/mgilbir/gopenjpeg v0.1.1
 	golang.org/x/text v0.40.0
