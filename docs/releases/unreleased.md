@@ -22,7 +22,7 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 
 ### htmlpdf
 
-- **forme v0.13.2**, which reads a TrueType font's post table so a glyph
+- **forme v0.13.2** (#398), which reads a TrueType font's post table so a glyph
   can be looked up by name (`font.Program.GlyphByName`, forme#967). No page
   lays out differently, and no validator finding changes: pdf0 does not use
   the names yet.
