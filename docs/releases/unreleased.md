@@ -29,6 +29,15 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 
 ### Validation
 
+- **Every single-defect fixture is checked at all eleven PDF/A levels**, not
+  only 1b, 2b and 4, and pdf0 agrees with veraPDF on all of them. What
+  changed at the levels that need Unicode mappings (1a, 2a, 2u, 3a, 3u):
+  - A TrueType font with no `/Encoding` has no Unicode value from its
+    encoding, its codes selecting glyphs by code, so it needs a ToUnicode
+    CMap (6.3.8 / 6.2.11.7.2).
+  - A Type 0 font whose CMap is neither predefined nor embedded is reported
+    under the CMap rule alone, not also under the Unicode-mapping one.
+
 - **PDF/A-1 rules the corpus does not test, checked against veraPDF on
   single-defect files** (#393): fifty-three more fixtures at PDF/A-1b, -2b and -4,
   covering stream syntax, implementation limits, output intents, images and

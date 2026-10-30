@@ -84,6 +84,15 @@ func toUnicodeExempt(doc core.View, fontDict *object.Dictionary, u *core.FontTex
 		if desc == nil {
 			return true // no descendant to judge; not evidence of a violation
 		}
+		// A CMap that is neither predefined nor embedded cuts no codes from
+		// the font's strings, so no glyph is shown to lack a Unicode value:
+		// the CMap rule reports the font (6.3.3.3 / 6.2.11.3.3), and veraPDF
+		// this one not (single-defect fixture cid-font-cmap-not-embedded).
+		if name, ok := doc.Resolve(fontDict.Get("Encoding")).(object.Name); ok {
+			if _, predefined := core.PredefinedCMaps[string(name)]; !predefined {
+				return true
+			}
+		}
 		csi := doc.ResolveDict(desc.Get("CIDSystemInfo"))
 		if csi == nil {
 			return true
@@ -167,6 +176,13 @@ func predefinedLatinEncoding(doc core.View, fontDict *object.Dictionary) bool {
 // built-in encoding, that is read out of an embedded Type 1 program
 // (type1BuiltinEncoding).
 func referencedGlyphNames(doc core.View, fontDict *object.Dictionary, u *core.FontTextUsage) (map[string]bool, bool) {
+	// A TrueType font with no /Encoding selects its glyphs by code
+	// (fontcheck.Simple.ByCode), and a code there names no glyph: veraPDF
+	// finds no Unicode value for it (single-defect fixtures
+	// nonsymbolic-truetype-without-encoding*).
+	if st, _ := doc.ResolveName(fontDict.Get("Subtype")); st == "TrueType" && fontDict.Get("Encoding") == nil {
+		return nil, false
+	}
 	fd := doc.ResolveDict(fontDict.Get("FontDescriptor"))
 	symbolic := fd != nil && descriptorSymbolic(doc, fd)
 	enc := simpleFontCodeToName(doc, fontDict, symbolic)

@@ -578,8 +578,11 @@ The corpus does not test every rule, and some of pdf0's verdicts were wrong
 on files it does not have. `TestSingleDefectFilesAgreeWithVeraPDF`
 (`pdfa_fixtures_verapdf_test.go`) builds a PDF/A skeleton veraPDF passes, gives
 it one page with one thing wrong — or one thing that only looks wrong — and
-holds pdf0 to the clauses veraPDF fails it on, at PDF/A-1b, -2b and -4. Each
-fixture records veraPDF's answer, so the comparison runs in every job; with
+holds pdf0 to the clauses veraPDF fails it on, at all eleven levels. Each
+fixture records veraPDF's answer at 1b, 2b and 4; every other level is held to
+its part's answer unless the fixture's `except` records a different one (a
+4f file may embed anything, 2u and the a levels need Unicode mappings), so the
+comparison runs in every job; with
 `PDF0_VERAPDF` set (CI's corpus job), veraPDF is run over the files as well, so
 the recorded answers cannot drift from it. The files are built by the test and
 never committed. Add a fixture with the rule you are fixing: write what
