@@ -588,6 +588,13 @@ the recorded answers cannot drift from it. The files are built by the test and
 never committed. Add a fixture with the rule you are fixing: write what
 veraPDF says, and watch pdf0 disagree before you change it.
 
+`TestSingleDefectFilesAgreeWithVeraPDFOnPDFUA` (`pdfua_fixtures_verapdf_test.go`)
+does the same for PDF/UA: a tagged, declared document veraPDF passes at both
+parts, given one defect, held to the clauses veraPDF fails it on with `--flavour
+ua1` and `ua2`. veraPDF's PDF/UA-2 profile also checks ISO/TS 32005's
+containment tables (rules named `Table 5. Parent-Child`); pdf0 does not
+implement that standard, and those verdicts are left out of the comparison.
+
 ## CI
 
 CI fetches every data set with a make target, counts what arrived, and runs the

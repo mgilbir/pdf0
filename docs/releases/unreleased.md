@@ -29,6 +29,32 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 
 ### Validation
 
+- **PDF/UA rules the corpus does not test, checked against veraPDF on
+  single-defect files**: fifty-six PDF/UA fixtures at both parts, and what
+  pdf0 changed to agree on every one:
+  - `ValidatePDFUA2` checks PDF/UA-2's own annotation rules: a link in a
+    `Link` or `Reference` element (8.2.5.20), a markup annotation in `Annot`
+    and its `/RC` the same text as its `/Contents` (8.9.2.3), NoView
+    annotations as artifacts (8.9.2.2), `/Contents` on stamps (or `/Name`),
+    ink, screen, 3D and rich media annotations, no `Popup` in the structure
+    tree, no `Sound`, `Movie` or `TrapNet`, zero-size widgets, printer's
+    marks and watermarks (8.9.2.4.7–19), an annotation's `/Contents` the
+    same as its element's `/Alt` (8.9.4.2), a field's widget in `Form` and
+    no XFA (8.10.1), a text field's `/RV` beside the same `/V` (8.10.3.3),
+    `TOCI` `/Ref` (8.2.5.8), no `Note` (8.2.5.14), and `Ruby` and `Warichu`
+    children (8.2.5.23–24).
+  - `ValidatePDFUA2` numbers by ISO 14289-2 what it reported under PDF/UA-1's
+    clauses: `/Alt` and `/ActualText` in the Private Use Area are 8.4.3 (were
+    8.6), a missing catalog `/Metadata` 8.11.1 (was 5), an element with no
+    `/P` 8.2.2; and PDF/UA-1's nesting table, `Note` IDs and annotation
+    placement are no longer reported at part 2.
+  - Both parts: a document not marked as tagged is 6.2 (was 7.1 at part 1).
+  - `ValidatePDFUA`: a `Popup` annotation is held to 7.18.1 like any other
+    (it was exempt); an annotation outside its page's crop box is exempt
+    from the tagging rule, as it was from the description rules; and a
+    `Form` element with no `Role` enclosing more than one widget is
+    reported (7.18.4).
+
 - **Every single-defect fixture is checked at all eleven PDF/A levels** (#395), not
   only 1b, 2b and 4, and pdf0 agrees with veraPDF on all of them. What
   changed at the levels that need Unicode mappings (1a, 2a, 2u, 3a, 3u):

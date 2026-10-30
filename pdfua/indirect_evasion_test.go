@@ -38,9 +38,10 @@ func has(v []Violation, want string) bool {
 
 // TestAnAnnotationSubtypeWrittenIndirectlyIsStillRead, in both directions.
 //
-// A TrapNet annotation is not permitted at all; a Popup is exempt from the
-// alternate-description rule. Reading /Subtype without resolving lost the
-// first and broke the second.
+// A TrapNet annotation is not permitted at all; a printer's mark is exempt
+// from the alternate-description and tagging rules (an artifact, veraPDF
+// 7.18.1-1, -2). Reading /Subtype without resolving lost the first and broke
+// the second.
 func TestAnAnnotationSubtypeWrittenIndirectlyIsStillRead(t *testing.T) {
 	build := func(form string, subtype object.Name) []Violation {
 		objs := map[int]*object.IndirectObject{}
@@ -59,10 +60,11 @@ func TestAnAnnotationSubtypeWrittenIndirectlyIsStillRead(t *testing.T) {
 		if v := build(form, "TrapNet"); !has(v, "TrapNet annotations are not permitted") {
 			t.Errorf("%s /Subtype: a TrapNet annotation was not reported: %v", form, v)
 		}
-		// And the exemption, which fails the opposite way: a Popup that did
-		// not read as one was reported for a description it does not need.
-		if v := build(form, "Popup"); len(v) != 0 {
-			t.Errorf("%s /Subtype: a Popup annotation, which is exempt, was "+
+		// And the exemption, which fails the opposite way: a printer's mark
+		// that did not read as one was reported for a description it does
+		// not need.
+		if v := build(form, "PrinterMark"); len(v) != 0 {
+			t.Errorf("%s /Subtype: a PrinterMark annotation, which is exempt, was "+
 				"reported: %v", form, v)
 		}
 	}
