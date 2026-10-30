@@ -442,9 +442,6 @@ func checkUAAnnotStructType(d core.View, cat *object.Dictionary) []Violation {
 			continue
 		}
 		st, _ := d.ResolveName(a.Get("Subtype"))
-		if st == "Popup" {
-			continue
-		}
 		if f, _ := d.Resolve(a.Get("F")).(object.Integer); int(f)&0x2 != 0 {
 			continue
 		}

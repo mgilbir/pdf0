@@ -128,12 +128,22 @@ func validateView(doc core.View, part string) []Violation {
 	// 7.1 — structure types must be standard or mapped via /RoleMap.
 	runCatAs(ua2Map{"7.1": "8.2.4"}.number, checkUARoleMap)
 	runCatAs(ua2Map{"7.1": "8.2.4"}.number, checkUARoleMapIntegrity)
-	runCat(checkUAStructParent)
+	// An element with no /P leaves its content untagged as veraPDF's
+	// PDF/UA-2 profile reads it (8.2.2; single-defect fixture
+	// struct-elem-without-parent).
+	runCatAs(ua2Map{"7.1": "8.2.2"}.number, checkUAStructParent)
 
 	// 7.2 — structure-element nesting (tables, lists, TOC) per the UA profile;
 	// 7.5 — in a regular table, every data cell's headers determinable.
-	runCat(checkUAStructNesting)
-	runCat(checkUATableListStructure)
+	// The nesting and container rules are PDF/UA-1's (7.2). PDF/UA-2
+	// leaves containment to ISO/TS 32005 (checkUA2Containment); reported
+	// under 7.2, which PDF/UA-2 does not have, they would name a rule the
+	// part has not got (single-defect fixtures list-item-without-lbody,
+	// table-with-two-captions).
+	if part == "1" {
+		runCat(checkUAStructNesting)
+		runCat(checkUATableListStructure)
+	}
 	runCatAs(ua2Map{"7.2": "8.2.5.26", "7.5": "8.2.5.26"}.number, func(d core.View, cat *object.Dictionary) []Violation { return checkUATableGrid(d, cat, part) })
 
 	// 7.4.2 — heading levels must not be skipped, and start at H1; 7.4.4 —
@@ -161,6 +171,10 @@ func validateView(doc core.View, part string) []Violation {
 
 	// 7.18.1 — a form field description belongs on the field, not its widgets.
 	runCat(checkUAFieldDescription)
+	// 7.18.4 — a Form element without a Role encloses one widget.
+	if part == "1" {
+		runCat(checkUAFormOneWidget)
+	}
 
 	// 7.18.6.2 — media clip data dictionaries need /CT and /Alt.
 	run(checkUAMediaClips)
@@ -209,17 +223,28 @@ func validateView(doc core.View, part string) []Violation {
 		runCat(checkUA2WidgetDescription)
 		runCat(checkUA2EmbeddedFileDesc)
 		runCat(checkUA2TextStringPUA)
+		runCat(checkUA2Annotations)
+		runCat(checkUA2Forms)
+		runCat(checkUA2StructureTypes)
+		runCat(checkUA2Containment)
 	}
 
-	// 7.1 — Suspects must not be true; 7.9 Note IDs.
+	// 7.1 — Suspects must not be true; 7.9 Note IDs, PDF/UA-1 only: PDF/UA-2
+	// has no Note (checkUA2StructureTypes).
 	runCat(checkUASuspects)
-	runCat(checkUANotes)
+	if part == "1" {
+		runCat(checkUANotes)
+	}
 
 	// 7.1 — real content must be tagged or marked as an artifact (Matterhorn 01).
 	runCatAs(ua2Map{"7.1": "8.2.2"}.number, checkUARealContent)
 
-	// 7.18 — annotation must sit under the right structure element (28-010/011).
-	runCat(checkUAAnnotStructType)
+	// 7.18 — annotation must sit under the right structure element
+	// (28-010/011). PDF/UA-2 asks it of links, markup annotations, widgets
+	// and watermarks only, each under its own clause (checkUA2Annotations).
+	if part == "1" {
+		runCat(checkUAAnnotStructType)
+	}
 
 	// 7.3 — every figure needs alternate text; 7.7 — so does a formula.
 	runCatAs(ua2Map{"7.3": "8.2.5.28.2"}.number, func(d core.View, cat *object.Dictionary) []Violation { return checkFigureAlt(d, cat, part) })
@@ -260,11 +285,9 @@ var ua2Fonts = ua2Map{
 }
 
 // ua2CatalogBasics numbers checkUACatalogBasics's findings, which PDF/UA-1
-// gives one clause and PDF/UA-2 three.
+// gives two clauses (6.2, 7.1) and PDF/UA-2 three.
 func ua2CatalogBasics(v Violation) string {
 	switch {
-	case strings.Contains(v.Message, "/MarkInfo"):
-		return "6.2"
 	case strings.Contains(v.Message, "/StructTreeRoot"):
 		return "8.2.1"
 	case strings.Contains(v.Message, "DisplayDocTitle"):
@@ -294,10 +317,11 @@ func renumberUA2(part string, numbered ua2Numbering, vs []Violation) []Violation
 func checkUACatalogBasics(d core.View, cat *object.Dictionary) []Violation {
 	var v []Violation
 
-	// 7.1 — the file must be a tagged PDF.
+	// 6.2 — the file must be a tagged PDF (veraPDF 6.2-1 at both parts:
+	// CosDocument Marked == true).
 	mark := d.ResolveDict(cat.Get("MarkInfo"))
 	if mark == nil || !d.IsTrue(mark.Get("Marked")) {
-		v = append(v, Violation{Clause: "7.1", Message: "document is not marked as tagged (/MarkInfo << /Marked true >>)", Object: 0})
+		v = append(v, Violation{Clause: "6.2", Message: "document is not marked as tagged (/MarkInfo << /Marked true >>)", Object: 0})
 	}
 	if cat.Get("StructTreeRoot") == nil {
 		v = append(v, Violation{Clause: "7.1", Message: "document has no structure tree (/StructTreeRoot)", Object: 0})
@@ -428,13 +452,14 @@ func checkUARoleMap(d core.View, cat *object.Dictionary) []Violation {
 func checkUAIdentifier(d core.View, cat *object.Dictionary, want string) []Violation {
 	stream, ok := d.Resolve(cat.Get("Metadata")).(*object.Stream)
 	if !ok {
-		// PDF/UA-1 requires the catalog's /Metadata itself (7.1; veraPDF
-		// 7.1-8), which the identifier is then read from. PDF/UA-2's profile
-		// has no such rule, and its identification rule (5) says it.
-		if want == "1" {
-			return []Violation{{Clause: "7.1", Message: "the catalog has no /Metadata stream (an XMP packet with the PDF/UA identifier is required)", Object: 0}}
+		// Both parts require the catalog's /Metadata itself (PDF/UA-1 7.1,
+		// veraPDF 7.1-8; PDF/UA-2 8.11.1, veraPDF 8.11.1-2), which the
+		// identifier is then read from.
+		clause := "7.1"
+		if want == "2" {
+			clause = "8.11.1"
 		}
-		return []Violation{{Clause: "5", Message: "document has no XMP metadata (a PDF/UA identifier is required)", Object: 0}}
+		return []Violation{{Clause: clause, Message: "the catalog has no /Metadata stream (an XMP packet with the PDF/UA identifier is required)", Object: 0}}
 	}
 	packet, status := d.XMPPacketOf(stream, object.RefNum(cat.Get("Metadata")))
 	switch status {
@@ -602,13 +627,19 @@ func checkUAAnnotations(d core.View, cat *object.Dictionary, part string) []Viol
 			continue
 		}
 		st, _ := d.ResolveName(a.Get("Subtype"))
-		if st == "Popup" {
+		// A Popup is held to the annotation rules at PDF/UA-1 like any
+		// other: veraPDF's 7.18.1-1 exempts widgets, printer's marks and
+		// links only (single-defect fixture popup-not-in-structure). At
+		// PDF/UA-2 one must not be in the structure tree at all
+		// (checkUA2Annotations).
+		if st == "Popup" && part == "2" {
 			continue
 		}
 		if f, _ := d.Resolve(a.Get("F")).(object.Integer); int(f)&0x2 != 0 {
 			continue // hidden
 		}
-		if st == "TrapNet" {
+		// PDF/UA-2's TrapNet and PrinterMark rules are checkUA2Annotations'.
+		if st == "TrapNet" && part == "1" {
 			v = append(v, Violation{Clause: "7.18.2", Message: "TrapNet annotations are not permitted", Object: num})
 		}
 		// An /Alt on the annotation dictionary itself is not one ISO 32000
@@ -645,7 +676,7 @@ func checkUAAnnotations(d core.View, cat *object.Dictionary, part string) []Viol
 		// 7.18.8: a PrinterMark is an incidental artifact and must NOT be tagged;
 		// a visible one carrying a /StructParent is a violation.
 		if st == "PrinterMark" {
-			if a.Get("StructParent") != nil {
+			if part == "1" && a.Get("StructParent") != nil {
 				v = append(v, Violation{Clause: "7.18.8", Message: "PrinterMark annotation must be an artifact, not tagged (has /StructParent)", Object: num})
 			}
 			continue
@@ -656,7 +687,10 @@ func checkUAAnnotations(d core.View, cat *object.Dictionary, part string) []Viol
 		// PDF/UA-1 only: ISO 14289-2 8.9.2.2 lets any annotation be an artifact,
 		// and one "not present in the structure tree" is one; every rule of the
 		// veraPDF PDF/UA-2 profile passes an annotation with no structure parent.
-		if part == "1" && a.Get("StructParent") == nil {
+		// One outside its page's crop box is exempt, as from the description
+		// rules (veraPDF 7.18.1-1; PDF_UA-1
+		// 7.18.1-t02-pass-a to -d, popups drawn beside the page).
+		if part == "1" && a.Get("StructParent") == nil && !ctx.outsideCropBox(d, a) {
 			v = append(v, Violation{Clause: "7.18.1", Message: "annotation is not tagged (no /StructParent linking it to the structure tree)", Object: num})
 		}
 	}

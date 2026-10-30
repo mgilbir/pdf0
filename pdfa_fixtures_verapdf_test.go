@@ -18,8 +18,10 @@ import (
 
 // Single-defect files, made here: a PDF/A skeleton veraPDF passes at each
 // part, given one page and one thing wrong with it — or one thing that only
-// looks wrong. Each records the clauses veraPDF fails it on at PDF/A-1b, -2b
-// and -4, and pdf0 must report exactly those. The files are built by the
+// looks wrong. Each records the clauses veraPDF fails it on at every level
+// (defectLevels), and pdf0 must report exactly those. The page's content is
+// marked as an artifact, so that at Level A it is tagged as it must be. The
+// files are built by the
 // test, never committed, and when PDF0_VERAPDF names veraPDF it is run over
 // them too, so the recorded answers cannot drift from it.
 //
@@ -30,20 +32,42 @@ import (
 // at PDF/A-1) or less (BitsPerComponent, FileAttachment at PDF/A-4).
 
 // defectFixture is one file: what is wrong with it, and veraPDF's clauses at
-// 1b, 2b and 4 — none for a file it passes.
+// 1b, 2b and 4 — none for a file it passes. Every other level is held to its
+// part's column (1a to 1b's; 2u, 2a and part 3 to 2b's; 4e and 4f to 4's)
+// unless except records what veraPDF says there instead.
 type defectFixture struct {
 	name  string
 	build func(d *Document, page, res *object.Dictionary) string // the page's content
 	// patch, when set, changes the written file: for a defect in the bytes
 	// rather than the objects.
-	patch func([]byte) []byte
-	want  [3][]string
+	patch  func([]byte) []byte
+	want   [3][]string
+	except map[string][]string // by veraPDF flavour
 }
 
-var defectLevels = [3]struct {
+// defectLevels are the levels the fixtures are built and judged at, each with
+// the want column it is held to by default.
+var defectLevels = []struct {
 	level   pdfa.Level
 	flavour string
-}{{pdfa.PDFA1b, "1b"}, {pdfa.PDFA2b, "2b"}, {pdfa.PDFA4, "4"}}
+	column  int
+}{
+	{pdfa.PDFA1b, "1b", 0}, {pdfa.PDFA1a, "1a", 0},
+	{pdfa.PDFA2b, "2b", 1}, {pdfa.PDFA2u, "2u", 1}, {pdfa.PDFA2a, "2a", 1},
+	{pdfa.PDFA3b, "3b", 1}, {pdfa.PDFA3u, "3u", 1}, {pdfa.PDFA3a, "3a", 1},
+	{pdfa.PDFA4, "4", 2}, {pdfa.PDFA4E, "4e", 2}, {pdfa.PDFA4F, "4f", 2},
+}
+
+// wantAt is the clauses f records for a level.
+func (f defectFixture) wantAt(flavour string, column int) []string {
+	want, ok := f.except[flavour]
+	if !ok {
+		want = f.want[column]
+	}
+	want = slices.Clone(want)
+	slices.Sort(want)
+	return want
+}
 
 func fxInt(v int) object.Integer { return object.Integer(v) }
 
@@ -405,7 +429,8 @@ var defectFixtures = []defectFixture{
 	}, want: [3][]string{{"6.3.5", "6.3.6"}, {"6.2.11.4.1", "6.2.11.5"}, {"6.2.10.4.1", "6.2.10.5", "6.2.10.6"}}},
 	{name: "symbolic-truetype-without-30-or-10-cmap", build: func(d *Document, p, r *object.Dictionary) string {
 		return fxFont(d, r, fxTrueTypeProgram([]fonttest.CmapSub{{Plat: 3, Enc: 1, Data: fxFormat0()}}), true, nil)
-	}, want: [3][]string{{"6.3.5"}, {"6.2.11.4.1"}, {"6.2.10.4.1", "6.2.10.6"}}},
+	}, want: [3][]string{{"6.3.5"}, {"6.2.11.4.1"}, {"6.2.10.4.1", "6.2.10.6"}},
+		except: map[string][]string{"1a": {"6.3.5", "6.3.8"}, "2u": {"6.2.11.4.1", "6.2.11.7.2"}, "2a": {"6.2.11.4.1", "6.2.11.7.2"}, "3u": {"6.2.11.4.1", "6.2.11.7.2"}, "3a": {"6.2.11.4.1", "6.2.11.7.2"}}},
 	{name: "image-mask-bpc2", build: func(d *Document, p, r *object.Dictionary) string {
 		return fxImage(d, r, 2, func(i *object.Dictionary) { i.Delete("ColorSpace"); i.Set("ImageMask", object.Boolean(true)) })
 	}, want: [3][]string{nil, nil, nil}},
@@ -446,19 +471,20 @@ var defectFixtures = []defectFixture{
 		fxAnnot(d, p, object.NewDictionary(object.Entry{Key: "Subtype", Value: object.Name("FileAttachment")},
 			object.Entry{Key: "AP", Value: object.NewDictionary(object.Entry{Key: "N", Value: fxAppearance(d)})}))
 		return ""
-	}, want: [3][]string{{"6.5.2"}, nil, {"6.3.1"}}},
+	}, want: [3][]string{{"6.5.2"}, nil, {"6.3.1"}},
+		except: map[string][]string{"4f": nil}},
 	{name: "stream-length-wrong", build: func(d *Document, p, r *object.Dictionary) string {
 		return "0 0 m 1 1 l S"
 	},
-		patch: fxSameLength("<< /Length 13 >>\nstream\r\n0 0 m", "<< /Length 12 >>\nstream\r\n0 0 m"), want: [3][]string{{"6.1.7"}, {"6.1.7.1"}, {"6.1.6.1"}}},
+		patch: fxSameLength("<< /Length 31 >>\nstream\r\n/Artifact", "<< /Length 30 >>\nstream\r\n/Artifact"), want: [3][]string{{"6.1.7"}, {"6.1.7.1"}, {"6.1.6.1"}}},
 	{name: "stream-keyword-cr-only", build: func(d *Document, p, r *object.Dictionary) string {
 		return "0 0 m 1 1 l S"
 	},
-		patch: fxSameLength("<< /Length 13 >>\nstream\r\n0 0 m", "<< /Length 13  >>\nstream\r0 0 m"), want: [3][]string{{"6.1.7"}, {"6.1.7.1"}, nil}},
+		patch: fxSameLength("<< /Length 31 >>\nstream\r\n/Artifact", "<< /Length 31  >>\nstream\r/Artifact"), want: [3][]string{{"6.1.7"}, {"6.1.7.1"}, nil}},
 	{name: "endstream-without-eol", build: func(d *Document, p, r *object.Dictionary) string {
 		return "0 0 m 1 1 l S"
 	},
-		patch: fxSameLength("l S\nendstream", "l S endstream"), want: [3][]string{{"6.1.7"}, {"6.1.7.1"}, {"6.1.6.1"}}},
+		patch: fxSameLength("EMC\nendstream", "EMC endstream"), want: [3][]string{{"6.1.7"}, {"6.1.7.1"}, {"6.1.6.1"}}},
 	{name: "stream-ffilter", build: func(d *Document, p, r *object.Dictionary) string {
 		return fxStreamForm(d, r, nil, object.Entry{Key: "FFilter", Value: object.Name("FlateDecode")})
 	}, want: [3][]string{{"6.1.7"}, {"6.1.7.1"}, {"6.1.6.1"}}},
@@ -553,19 +579,23 @@ var defectFixtures = []defectFixture{
 	}, want: [3][]string{{"6.4"}, nil, nil}},
 	{name: "cid-font", build: func(d *Document, p, r *object.Dictionary) string {
 		return fxCIDFont(d, r, nil)
-	}, want: [3][]string{nil, nil, nil}},
+	}, want: [3][]string{nil, nil, nil},
+		except: map[string][]string{"1a": {"6.3.8"}, "2u": {"6.2.11.7.2"}, "2a": {"6.2.11.7.2"}, "3u": {"6.2.11.7.2"}, "3a": {"6.2.11.7.2"}}},
 	{name: "cid-font-without-cidtogidmap", build: func(d *Document, p, r *object.Dictionary) string {
 		return fxCIDFont(d, r, func(t0, cid *object.Dictionary) { cid.Delete("CIDToGIDMap") })
-	}, want: [3][]string{{"6.3.3.2"}, {"6.2.11.3.2"}, {"6.2.10.3.2"}}},
+	}, want: [3][]string{{"6.3.3.2"}, {"6.2.11.3.2"}, {"6.2.10.3.2"}},
+		except: map[string][]string{"1a": {"6.3.3.2", "6.3.8"}, "2u": {"6.2.11.3.2", "6.2.11.7.2"}, "2a": {"6.2.11.3.2", "6.2.11.7.2"}, "3u": {"6.2.11.3.2", "6.2.11.7.2"}, "3a": {"6.2.11.3.2", "6.2.11.7.2"}}},
 	{name: "cid-font-cmap-not-embedded", build: func(d *Document, p, r *object.Dictionary) string {
 		return fxCIDFont(d, r, func(t0, cid *object.Dictionary) { t0.Set("Encoding", object.Name("Test-H")) })
 	}, want: [3][]string{{"6.3.3.1", "6.3.3.3"}, {"6.2.11.3.1", "6.2.11.3.3"}, {"6.2.10.3.1", "6.2.10.3.3"}}},
 	{name: "cid-font-embedded-cmap", build: func(d *Document, p, r *object.Dictionary) string {
 		return fxCIDFont(d, r, func(t0, cid *object.Dictionary) { t0.Set("Encoding", fxEmbeddedCMap(d, 0)) })
-	}, want: [3][]string{nil, nil, nil}},
+	}, want: [3][]string{nil, nil, nil},
+		except: map[string][]string{"1a": {"6.3.8"}, "2u": {"6.2.11.7.2"}, "2a": {"6.2.11.7.2"}, "3u": {"6.2.11.7.2"}, "3a": {"6.2.11.7.2"}}},
 	{name: "cid-font-embedded-cmap-wmode-differs", build: func(d *Document, p, r *object.Dictionary) string {
 		return fxCIDFont(d, r, func(t0, cid *object.Dictionary) { t0.Set("Encoding", fxEmbeddedCMap(d, 1)) })
-	}, want: [3][]string{{"6.3.3.3"}, {"6.2.11.3.3"}, {"6.2.10.3.3"}}},
+	}, want: [3][]string{{"6.3.3.3"}, {"6.2.11.3.3"}, {"6.2.10.3.3"}},
+		except: map[string][]string{"1a": {"6.3.3.3", "6.3.8"}, "2u": {"6.2.11.3.3", "6.2.11.7.2"}, "2a": {"6.2.11.3.3", "6.2.11.7.2"}, "3u": {"6.2.11.3.3", "6.2.11.7.2"}, "3a": {"6.2.11.3.3", "6.2.11.7.2"}}},
 	{name: "truetype-not-embedded", build: func(d *Document, p, r *object.Dictionary) string {
 		return fxFont(d, r, fxTrueTypeProgram(nil), false, func(f *object.Dictionary) {
 			d.ResolveDict(f.Get("FontDescriptor")).Delete("FontFile2")
@@ -573,13 +603,16 @@ var defectFixtures = []defectFixture{
 	}, want: [3][]string{{"6.3.4"}, {"6.2.11.4.1"}, {"6.2.10.4.1"}}},
 	{name: "nonsymbolic-truetype-without-encoding", build: func(d *Document, p, r *object.Dictionary) string {
 		return fxFont(d, r, fxTrueTypeProgram(nil), false, func(f *object.Dictionary) { f.Delete("Encoding") })
-	}, want: [3][]string{{"6.3.5", "6.3.7"}, {"6.2.11.4.1", "6.2.11.6"}, {"6.2.10.4.1", "6.2.10.6"}}},
+	}, want: [3][]string{{"6.3.5", "6.3.7"}, {"6.2.11.4.1", "6.2.11.6"}, {"6.2.10.4.1", "6.2.10.6"}},
+		except: map[string][]string{"1a": {"6.3.5", "6.3.7", "6.3.8"}, "2u": {"6.2.11.4.1", "6.2.11.6", "6.2.11.7.2"}, "2a": {"6.2.11.4.1", "6.2.11.6", "6.2.11.7.2"}, "3u": {"6.2.11.4.1", "6.2.11.6", "6.2.11.7.2"}, "3a": {"6.2.11.4.1", "6.2.11.6", "6.2.11.7.2"}}},
 	{name: "nonsymbolic-truetype-without-encoding-with-10-cmap", build: func(d *Document, p, r *object.Dictionary) string {
 		return fxFont(d, r, fxTrueTypeProgram([]fonttest.CmapSub{{Plat: 1, Enc: 0, Data: fxFormat0()}}), false, func(f *object.Dictionary) { f.Delete("Encoding") })
-	}, want: [3][]string{{"6.3.7"}, {"6.2.11.6"}, {"6.2.10.6"}}},
+	}, want: [3][]string{{"6.3.7"}, {"6.2.11.6"}, {"6.2.10.6"}},
+		except: map[string][]string{"1a": {"6.3.7", "6.3.8"}, "2u": {"6.2.11.6", "6.2.11.7.2"}, "2a": {"6.2.11.6", "6.2.11.7.2"}, "3u": {"6.2.11.6", "6.2.11.7.2"}, "3a": {"6.2.11.6", "6.2.11.7.2"}}},
 	{name: "nonsymbolic-truetype-without-encoding-with-30-cmap", build: func(d *Document, p, r *object.Dictionary) string {
 		return fxFont(d, r, fxTrueTypeProgram([]fonttest.CmapSub{{Plat: 3, Enc: 0, Data: fxFormat0()}}), false, func(f *object.Dictionary) { f.Delete("Encoding") })
-	}, want: [3][]string{{"6.3.7"}, {"6.2.11.6"}, {"6.2.10.6"}}},
+	}, want: [3][]string{{"6.3.7"}, {"6.2.11.6"}, {"6.2.10.6"}},
+		except: map[string][]string{"1a": {"6.3.7", "6.3.8"}, "2u": {"6.2.11.6", "6.2.11.7.2"}, "2a": {"6.2.11.6", "6.2.11.7.2"}, "3u": {"6.2.11.6", "6.2.11.7.2"}, "3a": {"6.2.11.6", "6.2.11.7.2"}}},
 	{name: "symbolic-truetype-with-encoding", build: func(d *Document, p, r *object.Dictionary) string {
 		return fxFont(d, r, fxTrueTypeProgram([]fonttest.CmapSub{{Plat: 3, Enc: 0, Data: fxFormat0()}}), true, func(f *object.Dictionary) {
 			f.Set("Encoding", object.Name("WinAnsiEncoding"))
@@ -815,7 +848,8 @@ var defectFixtures = []defectFixture{
 	{name: "embedded-pdfa4", build: func(d *Document, p, r *object.Dictionary) string {
 		fxEmbed(d, fxPDFA(pdfa.PDFA4), "application/pdf", nil)
 		return ""
-	}, want: [3][]string{{"6.1.11"}, {"6.8"}, nil}},
+	}, want: [3][]string{{"6.1.11"}, {"6.8"}, nil},
+		except: map[string][]string{"3b": nil, "3u": nil, "3a": nil}},
 	{name: "embedded-pdfa1b", build: func(d *Document, p, r *object.Dictionary) string {
 		fxEmbed(d, fxPDFA(pdfa.PDFA1b), "application/pdf", nil)
 		return ""
@@ -827,7 +861,8 @@ var defectFixtures = []defectFixture{
 	{name: "embedded-text-file", build: func(d *Document, p, r *object.Dictionary) string {
 		fxEmbed(d, []byte("hello\n"), "text/plain", nil)
 		return ""
-	}, want: [3][]string{{"6.1.11"}, {"6.8"}, {"6.9"}}},
+	}, want: [3][]string{{"6.1.11"}, {"6.8"}, {"6.9"}},
+		except: map[string][]string{"3b": nil, "3u": nil, "3a": nil, "4e": nil, "4f": nil}},
 	{name: "optional-content", build: func(d *Document, p, r *object.Dictionary) string { fxOC(d, nil); return "" },
 		want: [3][]string{{"6.1.13"}, nil, nil}},
 	{name: "optional-content-config-without-name", build: func(d *Document, p, r *object.Dictionary) string {
@@ -853,7 +888,8 @@ var defectFixtures = []defectFixture{
 		fxCatalog(d).Set("Names", object.NewDictionary(object.Entry{Key: "AlternatePresentations", Value: object.NewDictionary(
 			object.Entry{Key: "Names", Value: object.Array{}})}))
 		return ""
-	}, want: [3][]string{nil, {"6.10"}, {"6.11"}}},
+	}, want: [3][]string{nil, {"6.10"}, {"6.11"}},
+		except: map[string][]string{"4f": {"6.11", "6.9"}}},
 	{name: "page-pressteps", build: func(d *Document, p, r *object.Dictionary) string {
 		p.Set("PresSteps", d.Add(object.NewDictionary(object.Entry{Key: "Type", Value: object.Name("NavNode")})))
 		return ""
@@ -1008,6 +1044,12 @@ func buildDefect(t *testing.T, f defectFixture, level pdfa.Level) []byte {
 	page.Set("Parent", pagesRef)
 	page.Set("MediaBox", object.Array{fxInt(0), fxInt(0), fxInt(200), fxInt(200)})
 	page.Set("Resources", res)
+	// The page's content is marked as an artifact, so that at Level A it is
+	// not a second defect: content outside every marked-content sequence
+	// fails ISO 19005-1 6.8.3.2 and -2/-3 6.7.3.2 (checkLevelAArtifacts).
+	if drawn != "" {
+		drawn = "/Artifact BMC\n" + drawn + "\nEMC"
+	}
 	page.Set("Contents", d.Add(object.NewStream(&object.Dictionary{}, []byte(drawn))))
 	pages := d.ResolveDict(pagesRef)
 	pages.Set("Kids", object.Array{d.Add(page)})
@@ -1045,15 +1087,14 @@ func pdf0Clauses(t *testing.T, data []byte, level pdfa.Level) []string {
 // veraPDF, veraPDF still says what the fixtures record.
 func TestSingleDefectFilesAgreeWithVeraPDF(t *testing.T) {
 	vera := os.Getenv("PDF0_VERAPDF")
-	for i, lv := range defectLevels {
+	for _, lv := range defectLevels {
 		dir := filepath.Join(t.TempDir(), lv.flavour)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
 		for _, f := range defectFixtures {
 			data := buildDefect(t, f, lv.level)
-			want := slices.Clone(f.want[i])
-			slices.Sort(want)
+			want := f.wantAt(lv.flavour, lv.column)
 			if got := pdf0Clauses(t, data, lv.level); !slices.Equal(got, want) {
 				t.Errorf("%s at %s: pdf0 fails it on %v; veraPDF, as the fixture records, on %v", f.name, lv.flavour, got, want)
 			}
@@ -1066,8 +1107,7 @@ func TestSingleDefectFilesAgreeWithVeraPDF(t *testing.T) {
 		}
 		verdicts := veraPDFClauses(t, vera, lv.flavour, dir)
 		for _, f := range defectFixtures {
-			want := slices.Clone(f.want[i])
-			slices.Sort(want)
+			want := f.wantAt(lv.flavour, lv.column)
 			got, ok := verdicts[f.name+".pdf"]
 			if !ok {
 				t.Errorf("%s at %s: veraPDF gave no verdict", f.name, lv.flavour)
