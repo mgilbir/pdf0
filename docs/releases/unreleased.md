@@ -34,7 +34,7 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 
 ### Validation
 
-- **ISO/TS 32005 errata applied at PDF/UA-2**, as the PDF Association's
+- **ISO/TS 32005 errata applied at PDF/UA-2** (#405), as the PDF Association's
   working groups resolved them in public (pdf-association/pdf-issues): a
   `Sub` in a `Code` is permitted (#336); a `Reference` has `Link`'s content
   model and each may hold the other (#488), so a `Reference` used as a
