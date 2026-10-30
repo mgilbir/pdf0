@@ -34,6 +34,13 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 
 ### Validation
 
+- **ISO/TS 32005 errata applied at PDF/UA-2**, as the PDF Association's
+  working groups resolved them in public (pdf-association/pdf-issues): a
+  `Sub` in a `Code` is permitted (#336); a `Reference` has `Link`'s content
+  model and each may hold the other (#488), so a `Reference` used as a
+  non-grouping element may not hold block-level content such as a `P`, and
+  one used as a grouping element may hold `Sect`, `Div` and the like.
+
 - **A `Figure` in a `WP` is permitted at PDF/UA-2** (#404), as ISO 32000-2 Annex L's
   errata (July 2024) give it; the 2023 ISO/TS 32005 table, which veraPDF
   follows, forbids it. pdf0's encoding of that table now agrees with Annex L's

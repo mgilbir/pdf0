@@ -13,6 +13,11 @@ import "github.com/mgilbir/pdf0/object"
 // is ISO 32000-2 Annex L's too, as its errata of July 2024 give it: the one
 // pair the two disagree on, a Figure in a WP, is the errata's.
 //
+// Three rows follow errata the PDF Association's working groups resolved
+// on the published table (pdf-association/pdf-issues, label ISO/TS 32005):
+// a Sub in a Code (#336), Reference's content model (#488), a Figure in a WP
+// (#440).
+//
 // TestISO32005TableAgreesWithAnnexL compares the table with Annex L's
 // machine-readable matrix, read from a copy of ISO 32000-2 named by
 // PDF0_ISO32000_2, when there is one.
@@ -186,6 +191,10 @@ var Children = map[object.Name]map[object.Name]Inclusion{
 		"Private": Any, "Note": Any, "Em": Any, "Strong": Any, "Span": Any,
 		"Link": Any, "Reference": Any, "Annot": Any, "FENote": Any, "BibEntry": Any,
 		"Artifact": Any, ContentItem: Any,
+		// A line of source code, the example ISO 32000-2 Table 367 gives of
+		// Sub; its omission was an oversight, corrected as an erratum the
+		// PDF/UA and PDF TWGs approved (pdf-association/pdf-issues#336).
+		"Sub": Any,
 	},
 	"Hn": {
 		"Art": AtMostOne, "Sect": AtMostOne, "NonStruct": Any, "Private": Any,
@@ -246,10 +255,20 @@ var Children = map[object.Name]map[object.Name]Inclusion{
 		"BibEntry": Any, "Table": Grouping, "Caption": Grouping, "Figure": Any,
 		"Formula": Any, "Artifact": Any, ContentItem: Any,
 	},
+	// The published table gives Reference a narrower content model than
+	// Link; the PDF/UA Reuse TWG resolved that the two match, each also
+	// permitting the other (pdf-association/pdf-issues#488, fixed in the
+	// revision of ISO/TS 32005 in preparation): Link's row, Link and
+	// Reference.
 	"Reference": {
-		"NonStruct": Any, "Private": Any, "Note": Any, "Lbl": Any, "Em": Any,
-		"Strong": Any, "Span": Any, "Link": Any, "Annot": Any, "FENote": Any,
-		"BibEntry": Any, "Figure": Any, "Artifact": Any, ContentItem: Any,
+		"DocumentFragment": Grouping, "Part": Grouping, "Art": Any, "Div": Any,
+		"Sect": Any, "Aside": Grouping, "BlockQuote": Grouping, "NonStruct": Any,
+		"Private": Any, "P": Grouping, "Note": Any, "Code": Any, "Hn": Grouping,
+		"H": Grouping, "Title": Grouping, "Sub": Any, "Lbl": Any, "Em": Any,
+		"Strong": Any, "Span": Any, "Quote": Any, "Link": Any, "Reference": Any,
+		"Annot": Any, "Form": Grouping, "Ruby": Any, "Warichu": Any, "FENote": Any,
+		"L": Grouping, "BibEntry": Any, "Table": Grouping, "Caption": Grouping,
+		"Figure": Any, "Formula": Any, "Artifact": Any, ContentItem: Any,
 	},
 	"Annot": {
 		"DocumentFragment": Grouping, "Part": Grouping, "Art": Any, "Div": Any,
@@ -299,10 +318,10 @@ var Children = map[object.Name]map[object.Name]Inclusion{
 		"NonStruct": Any, "Private": Any, "Sub": Any, "Em": Any, "Strong": Any,
 		"Span": Any, "Quote": Any, "Link": Any, "Reference": Any, "Annot": Any,
 		"Form": Any, "Artifact": Any, ContentItem: Described,
-		// The published Technical Specification omits it; ISO 32000-2's
-		// Annex L, as its errata of July 2024 give it, permits a Figure in
-		// a WP, and ISO/TS 32005 7.2 defers to ISO 32000-2 "and associated
-		// errata for PDF 2.0 elements".
+		// The published table marks it "c", which neither it nor ISO
+		// 32000-2 defines; the PDF/UA TWG corrected it to 0..n, ISO approved
+		// (pdf-association/pdf-issues#440), as ISO 32000-2 Annex L's errata
+		// of July 2024 give it.
 		"Figure": Any,
 	},
 	"FENote": {
@@ -416,37 +435,24 @@ var Children = map[object.Name]map[object.Name]Inclusion{
 	},
 }
 
-// Unenforced are Table 5 rules pdf0 does not report: relationships
-// the published table (ISO/TS 32005:2023) does not list, which veraPDF's
-// PDF/UA-2 profile permits and conforming documents use — a Code element
-// holding its lines as Sub elements, as the WTPDF examples do, a Reference
-// holding block-level content. Where the published table forbids what
-// veraPDF permits, pdf0 reports nothing, so that it never fails a file
-// veraPDF and the documents it was written for pass. The rules veraPDF has that the
-// published table does not are not implemented
-// (TestISO32005TableAgreesWithVeraPDF lists both).
+// Unenforced are Table 5 rules pdf0 does not report: relationships the
+// published table (ISO/TS 32005:2023), with the errata above, does not list
+// and veraPDF's PDF/UA-2 profile permits — most of them block-level content
+// in a Code. veraPDF follows the PDF Association's hierarchical inclusion
+// rules, which carry errata beyond the published ones; where the two
+// disagree pdf0 reports nothing, so that it never fails a file veraPDF
+// passes. A Link in a Link is one too, though ISO 32000-2 Annex L forbids
+// it as well. The rules veraPDF has that the table does not are not
+// implemented (TestISO32005TableAgreesWithVeraPDF lists both).
 var Unenforced = map[string]bool{
-	"Annot-Private":     true,
-	"Art-Reference":     true,
-	"BibEntry-BibEntry": true, "BibEntry-Form": true, "BibEntry-Formula": true,
-	"BibEntry-Quote": true, "BibEntry-Ruby": true, "BibEntry-Sub": true, "BibEntry-Warichu": true,
-	"Code-Art": true, "Code-Aside": true, "Code-BlockQuote": true, "Code-Caption": true,
-	"Code-Code": true, "Code-Figure": true, "Code-Form": true, "Code-Formula": true,
-	"Code-Index": true, "Code-L": true, "Code-Lbl": true, "Code-P": true, "Code-Quote": true,
-	"Code-Ruby": true, "Code-Sect": true, "Code-Sub": true, "Code-Table": true, "Code-Warichu": true,
-	"FENote-BibEntry": true, "FENote-Index": true,
-	"Link-Link":     true,
-	"Quote-Div":     true,
-	"Reference-Art": true, "Reference-Aside": true, "Reference-BlockQuote": true,
-	"Reference-Caption": true, "Reference-Code": true, "Reference-Div": true,
-	"Reference-DocumentFragment": true, "Reference-Form": true, "Reference-Formula": true,
-	"Reference-H": true, "Reference-Hn": true, "Reference-L": true, "Reference-P": true,
-	"Reference-Part": true, "Reference-Quote": true, "Reference-Reference": true,
-	"Reference-Ruby": true, "Reference-Sect": true, "Reference-Sub": true, "Reference-Table": true,
-	"Reference-Title": true, "Reference-Warichu": true,
-	"Sect-Reference": true,
-	"TOCI-Annot":     true,
-	"Note-Caption":   true,
+	"Annot-Private": true, "Art-Reference": true, "BibEntry-BibEntry": true, "BibEntry-Form": true,
+	"BibEntry-Formula": true, "BibEntry-Quote": true, "BibEntry-Ruby": true, "BibEntry-Sub": true,
+	"BibEntry-Warichu": true, "Code-Art": true, "Code-Aside": true, "Code-BlockQuote": true,
+	"Code-Caption": true, "Code-Code": true, "Code-Figure": true, "Code-Form": true,
+	"Code-Formula": true, "Code-Index": true, "Code-L": true, "Code-Lbl": true, "Code-P": true,
+	"Code-Quote": true, "Code-Ruby": true, "Code-Sect": true, "Code-Table": true,
+	"Code-Warichu": true, "FENote-BibEntry": true, "FENote-Index": true, "Link-Link": true,
+	"Quote-Div": true, "Sect-Reference": true, "TOCI-Annot": true, "Note-Caption": true,
 }
 
 // AllDescribed reports whether a row defers every child to the types'

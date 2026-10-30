@@ -67,7 +67,12 @@ var iso32005NotImplemented = []string{
 	// ISO 32000-2 Annex L's errata (July 2024) permit a Figure in a WP;
 	// veraPDF follows the 2023 table, which does not.
 	"not|WP|Figure",
-	"maxOne|Art|Caption", "maxOne|Code|Caption", "maxOne|Index|Caption", "maxOne|Note|Caption", "maxOneGrouping|Reference|Caption", "not|BlockQuote|Title", "not|H|Art", "not|Hn|Art", "notNonGrouping|Quote|Div", "notNonGrouping|Reference|Aside", "notNonGrouping|Reference|BlockQuote", "notNonGrouping|Reference|Caption", "notNonGrouping|Reference|DocumentFragment", "notNonGrouping|Reference|Form", "notNonGrouping|Reference|H", "notNonGrouping|Reference|Hn", "notNonGrouping|Reference|L", "notNonGrouping|Reference|P", "notNonGrouping|Reference|Part", "notNonGrouping|Reference|Table", "notNonGrouping|Reference|Title"}
+	// Not in the published table, nor in the errata the PDF Association's
+	// working groups resolved in public (pdf-association/pdf-issues):
+	// veraPDF has them from the hierarchical inclusion rules.
+	"maxOne|Art|Caption", "maxOne|Code|Caption", "maxOne|Index|Caption", "maxOne|Note|Caption",
+	"not|BlockQuote|Title", "not|H|Art", "not|Hn|Art", "notNonGrouping|Quote|Div",
+}
 
 // TestISO32005TableAgreesWithVeraPDF compares the rules pdf0's encoding of
 // ISO/TS 32005 Table 5 implies with the ones veraPDF's PDF/UA-2 profile

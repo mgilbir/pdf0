@@ -435,22 +435,24 @@ its nearest ancestor that is not one; a child the table permits only under
 a grouping element (`ø*`) is reported where the parent has marked content of
 its own; and each finding is named as veraPDF names the rule.
 
-veraPDF's PDF/UA-2 profile states the same table as 1636 rules, and
-`TestISO32005TableAgreesWithVeraPDF` compares them with the ones pdf0's
-encoding implies. They differ in two directions. The published table omits
-relationships veraPDF permits and conforming documents use — a `Code`
-holding its lines as `Sub` elements (the WTPDF examples do), a `Reference`
-holding block-level content — and pdf0 does not report those
-(`iso32005.Unenforced`), so that it never fails a file veraPDF passes. And
-veraPDF states 22 rules pdf0 does not: 21 the published table does not state
-(a `Caption` at most once in an `Art`, `Code`, `Index` or `Note`, or in a
-`Reference` used as a grouping element; an `Art` nowhere in a heading; a
-`Title` nowhere in a `BlockQuote`; no `Div` in a `Quote`, and no block-level
-content in a `Reference`, used as non-grouping elements), all about PDF 1.7
-types that only the Technical Specification governs, and no `Figure` in a
-`WP`, which veraPDF takes from the 2023 table and Annex L's errata permit.
-pdf0 does not implement them, as they are not in the standards it was
-written from. The fourteen WTPDF examples, real PDF/UA-2 documents that veraPDF
+Three rows follow errata the PDF Association's working groups resolved in
+public on the published table (pdf-association/pdf-issues, label ISO/TS
+32005): a `Sub` in a `Code` (#336), `Reference` with `Link`'s content model and
+each permitting the other (#488), and a `Figure` in a `WP` (#440).
+
+veraPDF's PDF/UA-2 profile states the same table as 1636 rules, from the PDF
+Association's hierarchical inclusion rules, and
+`TestISO32005TableAgreesWithVeraPDF` compares them with the 1630 pdf0's
+encoding implies. They differ in two directions. Relationships the table
+and its public errata forbid and veraPDF permits — block-level content in a
+`Code`, mostly, and a `Link` in a `Link`, which Annex L forbids too — pdf0
+does not report (`iso32005.Unenforced`), so that it never fails a file
+veraPDF passes. And veraPDF states 9 rules pdf0 does not: 8 neither the table
+nor its public errata state (a `Caption` at most once in an `Art`, `Code`,
+`Index` or `Note`; an `Art` nowhere in a heading; a `Title` nowhere in a
+`BlockQuote`; no `Div` in a `Quote` used as a non-grouping element), all about
+PDF 1.7 types that only the Technical Specification governs, and no `Figure`
+in a `WP`, which veraPDF takes from the 2023 table and the errata permit. The fourteen WTPDF examples, real PDF/UA-2 documents that veraPDF
 1.30.3 passes, are held to `ValidatePDFUA2` by `TestWTPDFValidatePDFUA2`:
 thirteen are clean, and `tb139mitt-deims24` has the one finding veraPDF does
 not make. Its XMP packet holds a U+0001, which XML 1.0 does not allow, so the

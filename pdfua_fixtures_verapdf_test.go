@@ -490,6 +490,16 @@ var uaFixtures = []uaFixture{
 			sub.Set("NS", ns)
 		}
 	}, want: [2][]string{{"7.1"}, nil}},
+	{name: "reference-holding-p-and-content", build: func(u *uaDoc) {
+		k := u.Resolve(u.docElem.Get("K")).(object.Array)
+		para := u.ResolveDict(k[1])
+		para.Set("S", object.Name("Reference"))
+		u.elem(para, k[1].(object.IndirectRef), "P")
+	}, want: [2][]string{nil, {"Table 5. Document-Reference", "Table 5. Reference-P"}}},
+	{name: "reference-holding-sect", build: func(u *uaDoc) {
+		r, rRef := u.elem(nil, object.IndirectRef{}, "Reference")
+		u.elem(r, rRef, "Sect")
+	}, want: [2][]string{nil, {"Table 5. Document-Reference"}}},
 	{name: "heading-holding-two-arts", build: func(u *uaDoc) {
 		h, hRef := u.elem(nil, object.IndirectRef{}, "H1")
 		u.elem(h, hRef, "Art")
