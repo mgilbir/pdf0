@@ -72,14 +72,17 @@ func checkUATableGrid(d core.View, cat *object.Dictionary, part string) []Violat
 		}
 		var l layout
 		l.complete = true
-		if rows := collectTableRows(d, n.Elem, roleMap, classMap); len(rows) > 0 {
+		if rows, groups := collectTableRows(d, n.Elem, roleMap, classMap); len(rows) > 0 {
 			maxFills := d.Limits.TableGridFills
 			lay := layoutTable(rows, maxFills)
 			l.defects, l.complete = lay.defects, lay.complete
 			d.Charge(int(min(lay.fills, maxFills)))
 			if !l.complete {
 				d.Note(core.GuardGridFills, "a table's RowSpan/ColSpan values imply more than "+core.LimitBound(maxFills, core.DefaultMaxTableGridFills)+" grid slots; that table was not laid out, so none of its grid rules ran", d.ObjNumOf(n.Elem))
-			} else if len(l.defects) == 0 {
+			} else if part == "2" {
+				l.defects = append(l.defects, rowGroupDefects(lay, groups)...)
+			}
+			if l.complete && len(l.defects) == 0 {
 				l.defects = tableHeaderDefects(d, lay, part)
 			}
 			v = append(v, l.defects...)
@@ -92,28 +95,36 @@ func checkUATableGrid(d core.View, cat *object.Dictionary, part string) []Violat
 }
 
 // collectTableRows returns the table's rows in document order, descending
-// through THead/TBody/TFoot row groups (but not into nested tables).
+// through THead/TBody/TFoot row groups (but not into nested tables), and the
+// row groups' boundaries: for each group, the index of its first row and the
+// index after its last.
 //
 // The walk is iterative (kids pushed in reverse, so rows come out in document
 // order): a table's structure is as deep as the file says (audit 2026-09-22
 // C84). Each node visited is charged to the run's work meter.
-func collectTableRows(d core.View, table *object.Dictionary, roleMap, classMap *object.Dictionary) []tableRow {
+func collectTableRows(d core.View, table *object.Dictionary, roleMap, classMap *object.Dictionary) ([]tableRow, []int) {
 	var rows []tableRow
+	var groups []int
 	type item struct {
-		node object.Object
-		top  bool
+		node     object.Object
+		top      bool
+		groupEnd bool // marks where a row group's kids end
 	}
 	seen := map[int]bool{}
-	stack := []item{{table, true}}
+	stack := []item{{node: table, top: true}}
 	push := func(kids []object.Object) {
 		for i := len(kids) - 1; i >= 0; i-- {
-			stack = append(stack, item{kids[i], false})
+			stack = append(stack, item{node: kids[i]})
 		}
 	}
 	for len(stack) > 0 {
 		it := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 		d.Charge(1)
+		if it.groupEnd {
+			groups = append(groups, len(rows))
+			continue
+		}
 		node, top := it.node, it.top
 		if ref, ok := node.(object.IndirectRef); ok {
 			if seen[ref.Number] {
@@ -125,7 +136,7 @@ func collectTableRows(d core.View, table *object.Dictionary, roleMap, classMap *
 		if elem == nil {
 			if arr, ok := d.Resolve(node).(object.Array); ok {
 				for i := len(arr) - 1; i >= 0; i-- {
-					stack = append(stack, item{arr[i], top})
+					stack = append(stack, item{node: arr[i], top: top})
 				}
 			}
 			continue
@@ -138,9 +149,28 @@ func collectTableRows(d core.View, table *object.Dictionary, roleMap, classMap *
 			rows = append(rows, collectRowCells(d, elem, roleMap, classMap))
 			continue
 		}
+		if t == "THead" || t == "TBody" || t == "TFoot" {
+			groups = append(groups, len(rows))
+			stack = append(stack, item{groupEnd: true})
+		}
 		push(structKids(d, elem))
 	}
-	return rows
+	return rows, groups
+}
+
+// rowGroupDefects is ISO 14289-2 8.2.5.26's "Row groupings formed by THead,
+// TBody and TFoot structure elements shall be regular": no cell's RowSpan
+// carries it across a group's first or last row into the next (veraPDF
+// 8.2.5.26-t02, GFSETable.checkRegular, PDF/UA-2 only).
+func rowGroupDefects(l tableLayout, groups []int) []Violation {
+	for _, c := range l.cells {
+		for _, b := range groups {
+			if c.row < b && c.rowSpan > b-c.row {
+				return []Violation{{Clause: "7.2", Message: "a table cell's RowSpan crosses the boundary of a THead, TBody or TFoot row group", Object: 0}}
+			}
+		}
+	}
+	return nil
 }
 
 // collectRowCells returns the TH/TD cells of a TR with their spans.

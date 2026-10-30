@@ -34,8 +34,8 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 
 ### Validation
 
-- **Rules no corpus file tests, checked against veraPDF** (#407), twenty-seven
-  more single-defect files (nineteen PDF/A, eight PDF/UA), and
+- **Rules no corpus file tests, checked against veraPDF** (#407), thirty
+  more single-defect files (nineteen PDF/A, eleven PDF/UA), and
   what they found:
   - A font file whose `/Subtype` names no kind of program (ISO 32000 Table
     126) is reported at every part, not only at PDF/A-1 (6.2.11.2 /
@@ -52,6 +52,8 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
   - At PDF/UA-2, a `Caption` that is neither the first nor the last child
     of its element (8.2.5.27), and a character of real content mapped into
     a Private Use Area with no `/ActualText` or `/Alt` (8.4.3).
+  - At PDF/UA-2, a table cell whose `RowSpan` crosses the boundary of a
+    `THead`, `TBody` or `TFoot` row group (8.2.5.26).
   - An element with no `/P` is reported under 8.2.1 at PDF/UA-2 (was 8.2.2),
     and the content it leaves unreachable from the structure tree root is
     reported as untagged (7.1 / 8.2.2), as veraPDF reports it.

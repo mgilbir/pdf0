@@ -224,6 +224,16 @@ func (u *uaDoc) annot(a *object.Dictionary, tag string) (annotRef object.Indirec
 	return annotRef, el
 }
 
+// signatureWidget puts on the page a signature field's widget, its own
+// field, enclosed in a Form element, whose normal appearance draws content.
+func (u *uaDoc) signatureWidget(content string) {
+	ap := u.Add(object.NewStream(uaDict("Type", object.Name("XObject"), "Subtype", object.Name("Form"),
+		"BBox", object.Array{fxInt(0), fxInt(0), fxInt(100), fxInt(100)}), []byte(content)))
+	a, _ := u.annot(uaDict("Subtype", object.Name("Widget"), "FT", object.Name("Sig"), "T", uaStr("sig"), "TU", uaStr("a signature"),
+		"AP", uaDict("N", ap)), "Form")
+	u.cat.Set("AcroForm", uaDict("Fields", object.Array{a}, "SigFlags", fxInt(1)))
+}
+
 // uaText is s as a UTF-16BE text string.
 func uaText(s string) object.String {
 	b := []byte{0xFE, 0xFF}
@@ -625,6 +635,34 @@ var uaFixtures = []uaFixture{
 		d2, d2Ref := u.elem(f, fRef, "Div")
 		u.elem(d2, d2Ref, "P")
 	}, want: [2][]string{nil, {"8.2.5.27"}}},
+	{name: "table-rowspan-past-the-last-row", build: func(u *uaDoc) {
+		tb, tbRef := u.elem(nil, object.IndirectRef{}, "Table")
+		r1, r1Ref := u.elem(tb, tbRef, "TR")
+		u.elem(r1, r1Ref, "TD")
+		u.elem(r1, r1Ref, "TD")
+		r2, r2Ref := u.elem(tb, tbRef, "TR")
+		u.elem(r2, r2Ref, "TD")
+		c, _ := u.elem(r2, r2Ref, "TD")
+		c.Set("A", uaDict("O", object.Name("Table"), "RowSpan", fxInt(2)))
+	}, want: [2][]string{{"7.2"}, {"8.2.5.26"}}},
+	{name: "table-rowspan-across-row-groups", build: func(u *uaDoc) {
+		tb, tbRef := u.elem(nil, object.IndirectRef{}, "Table")
+		h, hRef := u.elem(tb, tbRef, "THead")
+		r1, r1Ref := u.elem(h, hRef, "TR")
+		c, _ := u.elem(r1, r1Ref, "TD")
+		c.Set("A", uaDict("O", object.Name("Table"), "RowSpan", fxInt(2)))
+		u.elem(r1, r1Ref, "TD")
+		b, bRef := u.elem(tb, tbRef, "TBody")
+		r2, r2Ref := u.elem(b, bRef, "TR")
+		u.elem(r2, r2Ref, "TD")
+	}, want: [2][]string{nil, {"8.2.5.26"}}},
+	// ISO 14289-2 8.10.3.5 asks for alternative text for a graphic in a
+	// signature's appearance. veraPDF's rule (8.10.3.5-t01) cannot fire: it
+	// reads an annotation's appearance stream without content items
+	// (GFPDXForm.parseContentStream), so the graphic it would judge is never
+	// made; and the clause's alternative text may be the widget's /Contents
+	// (8.9.4.1), which 8.10.2.3 already requires. Neither reports this file.
+	{name: "signature-widget-path-without-alt", build: func(u *uaDoc) { u.signatureWidget("0 0 m 50 50 l S") }},
 	{name: "text-pua", build: func(u *uaDoc) {
 		u.text(fxTrueTypeProgram(nil), false, func(f *object.Dictionary) { f.Set("ToUnicode", fxToUnicode(u.Document, "E000")) }, "A")
 	}, want: [2][]string{nil, {"8.4.3"}}},

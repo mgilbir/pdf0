@@ -259,7 +259,10 @@ two-dimensional fact and needs a two-dimensional model.
 
 `collectTableRows` gathers the rows in document order, descending through
 `THead`/`TBody`/`TFoot` row groups but stopping at a nested `Table` (which is
-laid out separately, on its own pass through the flattened tree).
+laid out separately, on its own pass through the flattened tree), and records
+where each row group starts and ends: at PDF/UA-2 a cell whose `RowSpan`
+crosses one of those boundaries is a defect too (`rowGroupDefects`; ISO
+14289-2 8.2.5.26, "row groupings … shall be regular").
 `collectRowCells` reduces each `TR` to `TH`/`TD` cells with their spans, read by
 `cellSpan` from an attribute dictionary whose owner `/O` is `Table`; a missing or
 non-positive value becomes 1. A cell's attribute dictionaries are those
@@ -282,6 +285,7 @@ flowchart TD
     P --> D1["RowSpan exceeds the rows remaining<br/>→ 'extends beyond the last row'"]
     P --> D2["slot already occupied<br/>→ 'cells overlap'"]
     P --> D3["some row fills fewer columns than<br/>the widest row → 'a grid cell is empty'"]
+    P --> D4["PDF/UA-2: a RowSpan crosses a THead,<br/>TBody or TFoot boundary"]
     P --> BUD{"filled slots over `WithMaxTableGridFills`<br/>— 2^24 ?"}
     BUD -->|yes| STOP["report nothing — bounded, not fabricated"]
 ```
