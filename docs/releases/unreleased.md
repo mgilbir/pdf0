@@ -34,7 +34,8 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 
 ### Validation
 
-- **PDF/UA's font rules the corpus does not test, checked against veraPDF**,
+- **PDF/UA's font rules the corpus does not test, checked against veraPDF**
+  (#403),
   and a TrueType glyph reading fixed in both validators:
   - `ValidatePDFUA` and `ValidatePDFUA2` report a glyph an embedded simple
     font shows but does not define (7.21.4.1 / 8.4.5.5.1), a TrueType
