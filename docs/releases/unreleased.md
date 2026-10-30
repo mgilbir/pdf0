@@ -34,6 +34,20 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 
 ### Validation
 
+- **JPEG 2000 images and digital signatures checked against veraPDF on
+  single-defect files**: fourteen more fixtures at every PDF/A level, the
+  JPEG 2000 data made with gopenjpeg. What changed to agree:
+  - A JPEG 2000 image whose channels have different bit depths (a `bpcc`
+    box) is reported (6.2.8.3 / 6.2.7.3); it was passed.
+  - An image dictionary with `/ColorSpace` exempts the JPEG 2000 data's
+    own colour specification from the METH and enumerated-colour-space
+    rules, as it already did from the APPROX one.
+  - Of the enumerated colour spaces, only 19 (CIEJab) is reported, as ISO
+    19005-2 and -4 forbid it alone; 12, 16, 17 and 18 were the only ones
+    passed.
+  - At PDF/A-1 a JPEG 2000 image is still reported under 6.1.10 (PDF 1.4
+    has no JPXDecode), which veraPDF's profile does not check.
+
 - **`ValidatePDFUA2` checks the structure tree against ISO/TS 32005 Table
   5** (#397), the containment rules ISO 14289-2 requires: a child the parent's
   type does not permit, marked content where the type allows none, more
