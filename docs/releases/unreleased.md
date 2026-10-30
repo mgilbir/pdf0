@@ -34,7 +34,7 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 
 ### Validation
 
-- **A `Caption` occurs at most once under any parent at PDF/UA-2**, as ISO
+- **A `Caption` occurs at most once under any parent at PDF/UA-2** (#406), as ISO
   32000-2 Table 372 says ("The number of captions cannot exceed 1"); it was
   checked only where the ISO/TS 32005 table says 0..1. veraPDF checks it under
   most parents too, but not under a `Sect` or a `Private`.
