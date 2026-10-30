@@ -35,7 +35,7 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 ### Validation
 
 - **JPEG 2000 images and digital signatures checked against veraPDF on
-  single-defect files**: fourteen more fixtures at every PDF/A level, the
+  single-defect files** (#402): fourteen more fixtures at every PDF/A level, the
   JPEG 2000 data made with gopenjpeg. What changed to agree:
   - A JPEG 2000 image whose channels have different bit depths (a `bpcc`
     box) is reported (6.2.8.3 / 6.2.7.3); it was passed.
