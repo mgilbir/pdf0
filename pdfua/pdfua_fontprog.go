@@ -1,6 +1,8 @@
 package pdfua
 
 import (
+	"fmt"
+
 	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/internal/fontcheck"
 	"github.com/mgilbir/pdf0/object"
@@ -113,4 +115,146 @@ func onlyInvisible(u *core.FontTextUsage) bool {
 		}
 	}
 	return true
+}
+
+// checkUAGlyphsPresent is ISO 14289-1 7.21.4.1 (veraPDF 7.21.4.1-2; ISO
+// 14289-2 8.4.5.5.1): an embedded simple font defines every glyph shown
+// with it, text in rendering mode 3 alone aside. A glyph's presence is
+// fontcheck.Simple.Glyph's, the reading PDF/A's glyph rule makes; a font
+// whose program cannot be read, or a code it cannot be asked about, is not
+// judged. Type 3 glyphs are procedures, and a Type 0 font's are its CIDs'
+// (checkUANotdefCID).
+func checkUAGlyphsPresent(d core.View) []Violation {
+	var v []Violation
+	for fontDict, u := range core.CollectFontTextUsage(d) {
+		if onlyInvisible(u) {
+			continue
+		}
+		switch st, _ := d.ResolveName(fontDict.Get("Subtype")); st {
+		case "Type1", "MMType1", "TrueType":
+		default:
+			continue
+		}
+		sf, _, _ := fontcheck.LoadSimple(d, fontDict) // reason: a program that cannot be read is not judged; LoadFontProgram recorded any declined trip
+		if sf == nil {
+			continue
+		}
+	codes:
+		for _, s := range u.Strings {
+			for _, code := range s {
+				d.Charge(1)
+				if g := sf.Glyph(code); g.Known && !g.Present {
+					v = append(v, Violation{Clause: "7.21.4.1", Message: fmt.Sprintf("the embedded %s font does not define a glyph shown with it (code %d)", sf.Subtype, code), Object: d.ObjNumOf(fontDict)})
+					break codes
+				}
+			}
+		}
+	}
+	return v
+}
+
+// checkUATrueTypeCmaps is the cmap half of ISO 14289-1 7.21.6 (veraPDF
+// 7.21.6-1, -4) and ISO 14289-2 8.4.5.7 (-1, -4): the subtables a TrueType
+// program's cmap must have, which are PDF/A-2's at part 1 and PDF/A-4's at
+// part 2 (fontcheck.CmapRules).
+func checkUATrueTypeCmaps(d core.View, part string) []Violation {
+	rules := fontcheck.CmapOneOr30
+	if part == "2" {
+		rules = fontcheck.Cmap30Or10
+	}
+	var v []Violation
+	for fontDict := range core.CollectFontTextUsage(d) {
+		if st, _ := d.ResolveName(fontDict.Get("Subtype")); st != "TrueType" {
+			continue
+		}
+		fd := d.ResolveDict(fontDict.Get("FontDescriptor"))
+		if fd == nil {
+			continue
+		}
+		msg := fontcheck.NonSymbolicCmapProblem(d, fd, rules)
+		if fontcheck.Symbolic(d, fd) {
+			msg = fontcheck.SymbolicCmapProblem(d, fd, rules)
+		}
+		if msg != "" {
+			v = append(v, Violation{Clause: "7.21.6", Message: msg, Object: d.ObjNumOf(fontDict)})
+		}
+	}
+	return v
+}
+
+// checkUASimpleCharMapping is ISO 14289-1 7.21.7 (veraPDF 7.21.7-1; ISO
+// 14289-2 8.4.5.8) for simple fonts: every code shown, in any rendering
+// mode, maps to Unicode — through the font's ToUnicode CMap, or through the
+// glyph name its encoding gives it, a name of the Adobe Glyph List or one in
+// the uniXXXX or uXXXX form. A TrueType font whose codes select glyphs by
+// code (fontcheck.Simple.ByCode: symbolic, or no /Encoding) names none, and
+// needs the CMap. A code with no name under an encoding pdf0 does not model —
+// a Type 1 program's own — is not evidence either way.
+func checkUASimpleCharMapping(d core.View) []Violation {
+	var v []Violation
+	for fontDict, u := range core.CollectFontTextUsage(d) {
+		st, _ := d.ResolveName(fontDict.Get("Subtype"))
+		switch st {
+		case "Type1", "MMType1", "TrueType", "Type3":
+		default:
+			continue
+		}
+		toUni, _ := core.ParseToUnicode(d, fontDict) // reason: a CMap not read is not evidence; the producer recorded any declined trip
+		if fontDict.Get("ToUnicode") != nil && toUni == nil {
+			continue
+		}
+		fd := d.ResolveDict(fontDict.Get("FontDescriptor"))
+		symbolic := fd != nil && fontcheck.Symbolic(d, fd)
+		byCode := st == "TrueType" && (symbolic || fontDict.Get("Encoding") == nil)
+		enc := fontcheck.SimpleFontCodeToName(d, fontDict, symbolic && st != "Type3")
+		modelled := st == "Type3" || fontcheck.BaseEncodingModelled(d, fontDict, symbolic)
+	codes:
+		for _, s := range u.Strings {
+			for _, code := range s {
+				d.Charge(1)
+				if toUni != nil {
+					if _, ok := toUni.Runes(int(code)); ok {
+						continue
+					}
+				}
+				name := enc[code]
+				switch {
+				case byCode:
+				case name == "" && !modelled:
+					continue // the program's own encoding names it; not read
+				case nameHasUnicode(name):
+					continue
+				}
+				v = append(v, Violation{Clause: "7.21.7", Message: fmt.Sprintf("a code shown with the %s font (%d) maps to no Unicode value: no ToUnicode entry, and no glyph name with one", st, code), Object: d.ObjNumOf(fontDict)})
+				break codes
+			}
+		}
+	}
+	return v
+}
+
+// nameHasUnicode reports whether a glyph name gives a Unicode value: a name
+// of the Adobe Glyph List, or one in the uniXXXX or uXXXX[XX] form.
+func nameHasUnicode(name string) bool {
+	if name == "" || name == ".notdef" {
+		return false
+	}
+	if fontcheck.AGLListed(name) {
+		return true
+	}
+	hex := func(s string) bool {
+		for _, c := range s {
+			if !('0' <= c && c <= '9' || 'A' <= c && c <= 'F') {
+				return false
+			}
+		}
+		return true
+	}
+	switch {
+	case len(name) == 7 && name[:3] == "uni":
+		return hex(name[3:])
+	case len(name) >= 5 && len(name) <= 7 && name[0] == 'u':
+		return hex(name[1:])
+	}
+	return false
 }

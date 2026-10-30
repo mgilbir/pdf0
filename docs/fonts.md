@@ -52,15 +52,19 @@ values follow the veraPDF profiles, not a reading of the standard. Level-gated
 rules:
 
 - PDF/A-1 only: `/CharSet` and `/CIDSet` *presence* on subset fonts, the
-  CMap-must-be-embedded rule, and the font file's kind — PDF 1.4 names two
-  `/FontFile3` subtypes, `/Type1C` and `/CIDFontType0C`, so a `/FontFile3
-  /OpenType` program is a finding under the `general` concept (6.3.2). And a
+  CMap-must-be-embedded rule, and `/OpenType` as a font file's kind — PDF 1.4
+  names two font file subtypes, `/Type1C` and `/CIDFontType0C`, so a
+  `/FontFile3 /OpenType` program is a finding under the `general` concept
+  (6.3.2); from PDF/A-2 on `/OpenType` is the third, and any other
+  `/Subtype` on any of the three font files is a finding at every part. And a
   non-symbolic TrueType font's `/Encoding` dictionary may not carry a
   `/Differences` entry at all, even an empty one (6.3.7); from PDF/A-2 on, the
   array is allowed if it names only Adobe Glyph List glyphs.
 - PDF/A-4 only: the forbidden ToUnicode targets U+0000, U+FEFF and U+FFFE.
 - Per part: what a symbolic TrueType font's cmap must hold
-  (`symbolicCmapProblem`, under the `encoding` concept). PDF/A-1: exactly one
+  (`fontcheck.SymbolicCmapProblem`, under the `encoding` concept; PDF/UA holds
+  a TrueType cmap to the same rules, PDF/A-2's at part 1 and PDF/A-4's at part
+  2). PDF/A-1: exactly one
   subtable (6.3.7). PDF/A-2 and -3: exactly one, or a Microsoft Symbol (3,0)
   among several (6.2.11.6). PDF/A-4: a (3,0) or a Mac Roman (1,0) subtable,
   however many there are (6.2.10.6), so a lone (3,1) passes at 1 to 3 and fails
@@ -134,7 +138,7 @@ flowchart TD
     D --> FD
     FD -->|"/FontFile"| P1["font.ParseType1 — PFB unwrap, eexec decrypt"]
     FD -->|"/FontFile2"| P2["font.ParseSFNT — table directory"]
-    FD -->|"/FontFile3"| OT{"stream /Subtype is /OpenType?"}
+    FD -->|"/FontFile3"| OT{"stream /Subtype is /OpenType,<br/>or names no kind and the data is an sfnt?"}
     OT -->|yes| PSC["core.ParseSFNTCFF — CFF table<br/>falls back to font.ParseSFNT"]
     OT -->|no| PC["font.ParseCFF — Type1C or CIDFontType0C"]
     P1 --> FP["font.Program"]
@@ -213,7 +217,12 @@ about only through their rendering-mode gates, which both exempt mode 3 alone,
 as veraPDF's test reads. A non-symbolic TrueType code is compared through the
 code-to-name table ISO 32000-1 9.6.6.4 builds, `StandardEncoding` filling what
 an Encoding dictionary leaves undefined; a name the (3,1) cmap lacks selects
-glyph 0, and is compared against `.notdef`'s width, as veraPDF compares it. If a
+glyph 0, and is compared against `.notdef`'s width, as veraPDF compares it. That
+glyph is one the program lacks, not a `.notdef` reference: a code its encoding
+names no glyph for draws `.notdef`, a code it names a glyph the cmap does not
+have draws nothing of its own, and veraPDF reports the second under the glyph
+rule at every PDF/A level and in PDF/UA. `fontcheck.Simple.Glyph` gives both
+engines that reading. If a
 descriptor carries a `FontFile*` stream no parser accepts and the font renders
 visibly, `damagedFontProgramError` reports it under the `embed` clause rather
 than silently exempting the font — across the corpus every valid embedded
@@ -489,9 +498,6 @@ a second field and a second option; nothing here forecloses it.
   group.
 - **No standard-14 metrics in validation**, so only the embedding rule fires on
   an unembedded standard font.
-- **`simpleGlyphExists` treats GID 0 as non-existent** for TrueType, merging
-  "code maps to `.notdef`" with "code maps to nothing"; only `isNotdefGlyph`
-  separates them.
 
 ## Third-party data
 

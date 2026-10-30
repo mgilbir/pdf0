@@ -3,6 +3,7 @@ package core
 import (
 	"strconv"
 
+	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/syntax"
 )
 
@@ -410,4 +411,18 @@ func ParseInlineImageParams(params []byte) []InlineImageParam {
 		cur = nil
 	}
 	return out
+}
+
+// ParsePropertyList parses the raw << … >> bytes SkipDict returns for a
+// marked-content property list. A property list is a PDF object, so it is
+// read with the object parser rather than picked apart token by token: only
+// the parser can tell one key's value from the next key. Nil when the bytes
+// are no dictionary.
+func ParsePropertyList(raw []byte) *object.Dictionary {
+	obj, err := syntax.NewParser(raw).ParseObject()
+	if err != nil {
+		return nil
+	}
+	d, _ := obj.(*object.Dictionary)
+	return d
 }

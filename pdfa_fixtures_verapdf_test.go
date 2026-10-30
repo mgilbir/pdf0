@@ -3,15 +3,22 @@ package pdf0
 import (
 	"bytes"
 	"compress/zlib"
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/mgilbir/forme/fonttest"
+	lcms2 "github.com/mgilbir/golittlecms"
+	"github.com/mgilbir/gopenjpeg"
+	"github.com/mgilbir/pdf0/internal/signtest"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/pdfa"
 )
@@ -41,8 +48,14 @@ type defectFixture struct {
 	// patch, when set, changes the written file: for a defect in the bytes
 	// rather than the objects.
 	patch  func([]byte) []byte
+	signed bool // written with WriteSigned, before patch
 	want   [3][]string
 	except map[string][]string // by veraPDF flavour
+	// beyond are clauses pdf0 reports, by flavour, that veraPDF's profile
+	// has no rule for: requirements of the ISO 19005 part itself, each
+	// said where it is recorded. veraPDF is held to want, pdf0 to want and
+	// beyond together.
+	beyond map[string][]string
 }
 
 // defectLevels are the levels the fixtures are built and judged at, each with
@@ -56,6 +69,14 @@ var defectLevels = []struct {
 	{pdfa.PDFA2b, "2b", 1}, {pdfa.PDFA2u, "2u", 1}, {pdfa.PDFA2a, "2a", 1},
 	{pdfa.PDFA3b, "3b", 1}, {pdfa.PDFA3u, "3u", 1}, {pdfa.PDFA3a, "3a", 1},
 	{pdfa.PDFA4, "4", 2}, {pdfa.PDFA4E, "4e", 2}, {pdfa.PDFA4F, "4f", 2},
+}
+
+// pdf0WantAt is the clauses pdf0 must report for a level: veraPDF's and
+// f's beyond.
+func (f defectFixture) pdf0WantAt(flavour string, column int) []string {
+	want := append(f.wantAt(flavour, column), f.beyond[flavour]...)
+	slices.Sort(want)
+	return slices.Compact(want)
 }
 
 // wantAt is the clauses f records for a level.
@@ -392,6 +413,11 @@ var defectFixtures = []defectFixture{
 	{name: "truetype-font", build: func(d *Document, p, r *object.Dictionary) string {
 		return fxFont(d, r, fxTrueTypeProgram(nil), false, nil)
 	}, want: [3][]string{nil, nil, nil}},
+	{name: "truetype-code-outside-the-cmap", build: func(d *Document, p, r *object.Dictionary) string {
+		// "B" is named by WinAnsiEncoding, and the program's cmap has no
+		// glyph for it.
+		return strings.Replace(fxFont(d, r, fxTrueTypeProgram(nil), false, nil), "(A)", "(AB)", 1)
+	}, want: [3][]string{{"6.3.5"}, {"6.2.11.4.1"}, {"6.2.10.4.1"}}},
 	{name: "font-without-type", build: func(d *Document, p, r *object.Dictionary) string {
 		return fxFont(d, r, fxTrueTypeProgram(nil), false, func(f *object.Dictionary) { f.Delete("Type") })
 	}, want: [3][]string{{"6.3.2"}, {"6.2.11.2"}, {"6.2.10.2"}}},
@@ -884,6 +910,68 @@ var defectFixtures = []defectFixture{
 		})
 		return ""
 	}, want: [3][]string{{"6.1.13"}, {"6.9"}, nil}},
+	{name: "jpx-gray", build: func(d *Document, p, r *object.Dictionary) string { return fxJPX(d, r, []uint32{8}, nil, nil) },
+		want: [3][]string{nil, nil, nil}, beyond: jpxAtPDFA1},
+	{name: "jpx-rgb", build: func(d *Document, p, r *object.Dictionary) string { return fxJPX(d, r, []uint32{8, 8, 8}, nil, nil) },
+		want: [3][]string{nil, nil, nil}, beyond: jpxAtPDFA1},
+	{name: "jpx-two-channels", build: func(d *Document, p, r *object.Dictionary) string { return fxJPX(d, r, []uint32{8, 8}, nil, nil) },
+		want: [3][]string{nil, {"6.2.8.3"}, {"6.2.7.3"}}, beyond: jpxAtPDFA1},
+	{name: "jpx-channels-of-different-depths", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxJPX(d, r, []uint32{8, 8, 4}, nil, nil)
+	}, want: [3][]string{nil, {"6.2.8.3"}, {"6.2.7.3"}}, beyond: jpxAtPDFA1},
+	{name: "jpx-colr-meth-4", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxJPX(d, r, []uint32{8}, func(b []byte) []byte {
+			colr, _ := fxColr(b)
+			b = slices.Clone(b)
+			b[colr] = 4
+			return b
+		}, nil)
+	}, want: [3][]string{nil, {"6.2.8.3"}, {"6.2.7.3"}}, beyond: jpxAtPDFA1},
+	{name: "jpx-colr-meth-4-with-colorspace", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxJPX(d, r, []uint32{8}, func(b []byte) []byte {
+			colr, _ := fxColr(b)
+			b = slices.Clone(b)
+			b[colr] = 4
+			return b
+		}, func(i *object.Dictionary) { i.Set("ColorSpace", object.Name("DeviceGray")) })
+	}, want: [3][]string{nil, nil, nil}, beyond: jpxAtPDFA1},
+	{name: "jpx-enumcs-19", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxJPX(d, r, []uint32{8}, func(b []byte) []byte {
+			colr, _ := fxColr(b)
+			b = slices.Clone(b)
+			binary.BigEndian.PutUint32(b[colr+3:], 19)
+			return b
+		}, nil)
+	}, want: [3][]string{nil, {"6.2.8.3"}, {"6.2.7.3"}}, beyond: jpxAtPDFA1},
+	{name: "jpx-enumcs-20", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxJPX(d, r, []uint32{8}, func(b []byte) []byte {
+			colr, _ := fxColr(b)
+			b = slices.Clone(b)
+			binary.BigEndian.PutUint32(b[colr+3:], 20)
+			return b
+		}, nil)
+	}, want: [3][]string{nil, nil, nil}, beyond: jpxAtPDFA1},
+	{name: "jpx-two-colr-none-approx", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxJPX(d, r, []uint32{8}, fxSecondColr(0, 0), nil)
+	}, want: [3][]string{nil, {"6.2.8.3"}, {"6.2.7.3"}}, beyond: jpxAtPDFA1},
+	{name: "jpx-two-colr-one-approx", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxJPX(d, r, []uint32{8}, fxSecondColr(1, 0), nil)
+	}, want: [3][]string{nil, nil, nil}, beyond: jpxAtPDFA1},
+	{name: "signed", build: func(d *Document, p, r *object.Dictionary) string { return "" }, signed: true,
+		want: [3][]string{{"6.9"}, nil, nil}},
+	{name: "signed-byterange-short", build: func(d *Document, p, r *object.Dictionary) string { return "" }, signed: true,
+		patch: fxShortByteRange, want: [3][]string{{"6.9"}, {"6.4.3"}, nil}},
+	{name: "signed-cms-without-certificates", build: func(d *Document, p, r *object.Dictionary) string { return "" }, signed: true,
+		patch: fxSigContents(func(e [][]byte) [][]byte {
+			return slices.DeleteFunc(e, func(x []byte) bool { return x[0] == 0xA0 })
+		}), want: [3][]string{{"6.9"}, {"6.4.3"}, nil}},
+	{name: "signed-cms-two-signer-infos", build: func(d *Document, p, r *object.Dictionary) string { return "" }, signed: true,
+		patch: fxSigContents(func(e [][]byte) [][]byte {
+			last := e[len(e)-1]
+			infos := derElems(derBody(last))
+			e[len(e)-1] = derTLV(0x31, slices.Concat(infos[0], infos[0]))
+			return e
+		}), want: [3][]string{{"6.9"}, {"6.4.3"}, nil}},
 	{name: "alternate-presentations", build: func(d *Document, p, r *object.Dictionary) string {
 		fxCatalog(d).Set("Names", object.NewDictionary(object.Entry{Key: "AlternatePresentations", Value: object.NewDictionary(
 			object.Entry{Key: "Names", Value: object.Array{}})}))
@@ -899,6 +987,152 @@ var defectFixtures = []defectFixture{
 			object.Entry{Key: "Type", Value: object.Name("Requirement")}, object.Entry{Key: "S", Value: object.Name("EnableJavaScripts")})})
 		return ""
 	}, want: [3][]string{nil, {"6.11"}, {"6.12"}}},
+	{name: "inline-image-lzw", build: func(d *Document, p, r *object.Dictionary) string {
+		// One sample, 0: clear code, 0, end of data, 9 bits each.
+		return "q 10 0 0 10 0 0 cm BI /W 1 /H 1 /CS /G /BPC 8 /F /LZW ID \x80\x00\x20\x20 EI Q"
+	}, want: [3][]string{{"6.1.10"}, {"6.1.10"}, {"6.1.9"}}},
+	{name: "font-file3-opentype", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxFont(d, r, fxTrueTypeProgram(nil), false, fxFontFile3(d, "OpenType"))
+	}, want: [3][]string{{"6.3.2"}, nil, nil}},
+	{name: "font-file3-unknown-subtype", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxFont(d, r, fxTrueTypeProgram(nil), false, fxFontFile3(d, "TrueTypeX"))
+	}, want: [3][]string{{"6.3.2"}, {"6.2.11.2"}, {"6.2.10.2"}}},
+	{name: "font-file2-with-subtype", build: func(d *Document, p, r *object.Dictionary) string {
+		s := fxFont(d, r, fxTrueTypeProgram(nil), false, nil)
+		fd := d.ResolveDict(d.ResolveDict(d.ResolveDict(r.Get("Font")).Get("F1")).Get("FontDescriptor"))
+		d.Resolve(fd.Get("FontFile2")).(*object.Stream).Dict.Set("Subtype", object.Name("TrueTypeX"))
+		return s
+	}, want: [3][]string{{"6.3.2"}, {"6.2.11.2"}, {"6.2.10.2"}}},
+	{name: "cid-font-unknown-subtype", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxCIDFont(d, r, func(t0, cid *object.Dictionary) { cid.Set("Subtype", object.Name("CIDFontType1")) })
+	}, want: [3][]string{{"6.3.2", "6.3.4"}, {"6.2.11.2", "6.2.11.4.1"}, {"6.2.10.2", "6.2.10.4.1"}},
+		except: map[string][]string{"1a": {"6.3.2", "6.3.4", "6.3.8"},
+			"2u": {"6.2.11.2", "6.2.11.4.1", "6.2.11.7.2"}, "2a": {"6.2.11.2", "6.2.11.4.1", "6.2.11.7.2"},
+			"3u": {"6.2.11.2", "6.2.11.4.1", "6.2.11.7.2"}, "3a": {"6.2.11.2", "6.2.11.4.1", "6.2.11.7.2"}}},
+	{name: "symbolic-truetype-two-cmaps-without-30", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxFont(d, r, fxTrueTypeProgram([]fonttest.CmapSub{{Plat: 1, Enc: 0, Data: fxFormat0()}, {Plat: 3, Enc: 1, Data: fxFormat0()}}), true, nil)
+	}, want: [3][]string{{"6.3.7"}, {"6.2.11.6"}, nil},
+		except: map[string][]string{"1a": {"6.3.7", "6.3.8"}, "2u": {"6.2.11.6", "6.2.11.7.2"}, "2a": {"6.2.11.6", "6.2.11.7.2"}, "3u": {"6.2.11.6", "6.2.11.7.2"}, "3a": {"6.2.11.6", "6.2.11.7.2"}}},
+	{name: "tounicode-to-zero", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxFont(d, r, fxTrueTypeProgram(nil), false, func(f *object.Dictionary) { f.Set("ToUnicode", fxToUnicode(d, "0000")) })
+	}, want: [3][]string{nil, nil, {"6.2.10.7"}},
+		except: map[string][]string{"2u": {"6.2.11.7.2"}, "2a": {"6.2.11.7.2"}, "3u": {"6.2.11.7.2"}, "3a": {"6.2.11.7.2"}}},
+	{name: "tounicode-to-fffe", build: func(d *Document, p, r *object.Dictionary) string {
+		return fxFont(d, r, fxTrueTypeProgram(nil), false, func(f *object.Dictionary) { f.Set("ToUnicode", fxToUnicode(d, "FFFE")) })
+	}, want: [3][]string{nil, nil, {"6.2.10.7"}},
+		except: map[string][]string{"2u": {"6.2.11.7.2"}, "2a": {"6.2.11.7.2"}, "3u": {"6.2.11.7.2"}, "3a": {"6.2.11.7.2"}}},
+	{name: "extension-schema-undefined-field", build: func(d *Document, p, r *object.Dictionary) string {
+		fxExtensionSchema(d, func(s string) string {
+			return strings.Replace(s, "<pdfaSchema:prefix>", "<pdfaSchema:extra>x</pdfaSchema:extra><pdfaSchema:prefix>", 1)
+		})
+		return ""
+	}, want: [3][]string{{"6.7.8"}, {"6.6.2.3.2"}, nil}},
+	{name: "extension-property-undefined-field", build: func(d *Document, p, r *object.Dictionary) string {
+		fxExtensionSchema(d, func(s string) string {
+			return strings.Replace(s, "<pdfaProperty:name>", "<pdfaProperty:extra>x</pdfaProperty:extra><pdfaProperty:name>", 1)
+		})
+		return ""
+	}, want: [3][]string{{"6.7.8"}, {"6.6.2.3.2"}, nil}},
+	{name: "gray-output-intent", build: func(d *Document, p, r *object.Dictionary) string { fxGrayIntent(d); return "" },
+		want: [3][]string{nil, nil, nil}},
+	{name: "annotation-colour-under-gray-intent", build: func(d *Document, p, r *object.Dictionary) string {
+		fxGrayIntent(d)
+		fxAnnot(d, p, object.NewDictionary(object.Entry{Key: "Subtype", Value: object.Name("Square")}, object.Entry{Key: "C", Value: object.Array{fxInt(1)}},
+			object.Entry{Key: "AP", Value: object.NewDictionary(object.Entry{Key: "N", Value: fxAppearance(d)})}))
+		return ""
+	}, want: [3][]string{{"6.5.3"}, nil, nil}},
+	{name: "role-map-standard-to-nonstandard", build: func(d *Document, p, r *object.Dictionary) string {
+		fxStructElemP(d, object.Entry{Key: "P", Value: object.Name("Foo")})
+		return ""
+	}, want: [3][]string{nil, nil, nil}, except: map[string][]string{"2a": {"6.7.3.4"}, "3a": {"6.7.3.4"}}},
+	{name: "role-map-standard-to-standard", build: func(d *Document, p, r *object.Dictionary) string {
+		fxStructElemP(d, object.Entry{Key: "P", Value: object.Name("H1")})
+		return ""
+	}, want: [3][]string{nil, nil, nil}},
+	{name: "role-map-standard-through-nonstandard-to-standard", build: func(d *Document, p, r *object.Dictionary) string {
+		fxStructElemP(d, object.Entry{Key: "P", Value: object.Name("Foo")}, object.Entry{Key: "Foo", Value: object.Name("H1")})
+		return ""
+	}, want: [3][]string{nil, nil, nil}},
+	{name: "xmp-pdfaid-part-wrong", build: func(d *Document, p, r *object.Dictionary) string {
+		fxXMP(d, func(x []byte) []byte {
+			return regexp.MustCompile(`<pdfaid:part>\d</pdfaid:part>`).ReplaceAll(x, []byte("<pdfaid:part>9</pdfaid:part>"))
+		})
+		return ""
+	}, want: [3][]string{{"6.7.11"}, {"6.6.4"}, {"6.7.3"}}},
+	{name: "embedded-pdfa-without-mime-type", build: func(d *Document, p, r *object.Dictionary) string {
+		fxEmbed(d, fxPDFA(pdfa.PDFA2b), "application/pdf", func(fs *object.Dictionary) {
+			d.Resolve(d.ResolveDict(fs.Get("EF")).Get("F")).(*object.Stream).Dict.Delete("Subtype")
+		})
+		return ""
+	}, want: [3][]string{{"6.1.11"}, nil, {"6.9"}}, except: map[string][]string{"3b": {"6.8"}, "3u": {"6.8"}, "3a": {"6.8"}}},
+	{name: "link-launch-action", build: func(d *Document, p, r *object.Dictionary) string {
+		fxAnnot(d, p, object.NewDictionary(object.Entry{Key: "Subtype", Value: object.Name("Link")},
+			object.Entry{Key: "A", Value: object.NewDictionary(object.Entry{Key: "S", Value: object.Name("Launch")}, object.Entry{Key: "F", Value: object.String{Value: []byte("a.exe")}})}))
+		return ""
+	}, want: [3][]string{{"6.6.1"}, {"6.5.1"}, {"6.6.1"}}},
+	{name: "sound-annotation", build: func(d *Document, p, r *object.Dictionary) string {
+		fxAnnot(d, p, object.NewDictionary(object.Entry{Key: "Subtype", Value: object.Name("Sound")},
+			object.Entry{Key: "AP", Value: object.NewDictionary(object.Entry{Key: "N", Value: fxAppearance(d)})}))
+		return ""
+	}, want: [3][]string{{"6.5.2"}, {"6.3.1"}, {"6.3.1"}}},
+}
+
+// fxFontFile3 moves a font's program from /FontFile2 to /FontFile3, of the
+// given /Subtype.
+func fxFontFile3(d *Document, subtype object.Name) func(font *object.Dictionary) {
+	return func(font *object.Dictionary) {
+		fd := d.ResolveDict(font.Get("FontDescriptor"))
+		ff := fd.Get("FontFile2")
+		d.Resolve(ff).(*object.Stream).Dict.Set("Subtype", subtype)
+		fd.Set("FontFile3", ff)
+		fd.Delete("FontFile2")
+	}
+}
+
+// fxToUnicode is a ToUnicode CMap mapping code 'A' to the UTF-16BE hex
+// digits target.
+func fxToUnicode(d *Document, target string) object.IndirectRef {
+	body := "/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n/CMapName /Test-UCS def /CMapType 2 def\n" +
+		"1 begincodespacerange <00> <FF> endcodespacerange\n1 beginbfchar <41> <" + target + "> endbfchar\n" +
+		"endcmap CMapName currentdict /CMap defineresource pop end end\n"
+	return d.Add(object.NewStream(&object.Dictionary{}, []byte(body)))
+}
+
+// fxGrayIntent makes the output intent's profile a grey one, an ICC v2
+// profile of gamma 2.2 built by golittlecms.
+func fxGrayIntent(d *Document) {
+	wp := lcms2.D50xyY()
+	g, err := lcms2.BuildGamma(2.2)
+	if err != nil {
+		panic(err)
+	}
+	prof, err := lcms2.CreateGrayProfile(&wp, g)
+	if err != nil {
+		panic(err)
+	}
+	prof.SetProfileVersion(2.1)
+	b, err := prof.SaveProfileToMem()
+	if err != nil {
+		panic(err)
+	}
+	oi := d.ResolveDict(d.Resolve(fxCatalog(d).Get("OutputIntents")).(object.Array)[0])
+	oi.Set("DestOutputProfile", d.Add(object.NewStream(object.NewDictionary(object.Entry{Key: "N", Value: fxInt(1)}), b)))
+}
+
+// fxStructElemP gives the document a structure tree (keeping the one a Level
+// A skeleton has) holding one P element, under the given /RoleMap.
+func fxStructElemP(d *Document, roleMap ...object.Entry) {
+	cat := fxCatalog(d)
+	if cat.Get("StructTreeRoot") == nil {
+		cat.Set("StructTreeRoot", d.Add(object.NewDictionary(object.Entry{Key: "Type", Value: object.Name("StructTreeRoot")})))
+	}
+	rootRef := cat.Get("StructTreeRoot")
+	root := d.ResolveDict(rootRef)
+	root.Set("RoleMap", object.NewDictionary(roleMap...))
+	root.Set("K", object.Array{d.Add(object.NewDictionary(
+		object.Entry{Key: "Type", Value: object.Name("StructElem")},
+		object.Entry{Key: "S", Value: object.Name("P")},
+		object.Entry{Key: "P", Value: rootRef}))})
 }
 
 // fxGS applies an ExtGState with the given entries.
@@ -1011,6 +1245,160 @@ func fxSameLength(old, new string) func([]byte) []byte {
 	}
 }
 
+// fxJPX draws a 4×4 JPEG 2000 image, JP2-wrapped, of one component per
+// precision in prec, its colour space the JP2 data's own (no /ColorSpace);
+// edit changes the JP2 bytes first, and tweak the image dictionary.
+func fxJPX(d *Document, res *object.Dictionary, prec []uint32, edit func([]byte) []byte, tweak func(*object.Dictionary)) string {
+	cs := gopenjpeg.ColorSpaceGray
+	if len(prec) == 3 {
+		cs = gopenjpeg.ColorSpaceSRGB
+	}
+	comps := make([]gopenjpeg.Component, len(prec))
+	for i, p := range prec {
+		comps[i] = gopenjpeg.Component{Dx: 1, Dy: 1, W: 4, H: 4, Prec: p, Data: make([]int32, 16)}
+	}
+	var jp2 bytes.Buffer
+	if err := gopenjpeg.Encode(gopenjpeg.NewImage(cs, 0, 0, 4, 4, comps), &jp2, gopenjpeg.WithEncodeFormat(gopenjpeg.FormatJP2), gopenjpeg.WithResolutions(1)); err != nil {
+		panic(err)
+	}
+	data := jp2.Bytes()
+	if edit != nil {
+		data = edit(data)
+	}
+	dict := object.NewDictionary(
+		object.Entry{Key: "Type", Value: object.Name("XObject")},
+		object.Entry{Key: "Subtype", Value: object.Name("Image")},
+		object.Entry{Key: "Width", Value: fxInt(4)},
+		object.Entry{Key: "Height", Value: fxInt(4)},
+		object.Entry{Key: "Filter", Value: object.Name("JPXDecode")},
+	)
+	if tweak != nil {
+		tweak(dict)
+	}
+	res.Set("XObject", object.NewDictionary(object.Entry{Key: "Im0", Value: d.Add(object.NewStream(dict, data))}))
+	return "q 10 0 0 10 0 0 cm /Im0 Do Q"
+}
+
+// jpxAtPDFA1 is what pdf0 reports of any JPEG 2000 image at PDF/A-1 beyond
+// veraPDF: JPXDecode is a PDF 1.5 filter, and PDF/A-1, on PDF 1.4, has no
+// such filter to use (6.1.10; audit 2026-07-26 C17). veraPDF's PDF/A-1
+// profiles forbid LZWDecode alone.
+var jpxAtPDFA1 = map[string][]string{"1b": {"6.1.10"}, "1a": {"6.1.10"}}
+
+// fxColr is the offset of the payload of a JP2 file's first colour
+// specification box (METH, PREC, APPROX, then EnumCS for METH 1), and of
+// the jp2h header box that holds it.
+func fxColr(b []byte) (colr, jp2h int) {
+	jp2h = bytes.Index(b, []byte("jp2h")) - 4
+	colr = bytes.Index(b, []byte("colr")) + 4
+	if jp2h < 0 || colr < 4 {
+		panic("fxColr: no jp2h or colr box")
+	}
+	return colr, jp2h
+}
+
+// fxSecondColr gives a JP2 file a second colour specification box, a copy
+// of its first with APPROX approx, after it, and the first APPROX first.
+func fxSecondColr(first, approx byte) func([]byte) []byte {
+	return func(b []byte) []byte {
+		colr, jp2h := fxColr(b)
+		box := slices.Clone(b[colr-8 : colr-8+int(binary.BigEndian.Uint32(b[colr-8:]))])
+		b = slices.Clone(b)
+		b[colr+2] = first
+		box[8+2] = approx
+		end := colr - 8 + len(box)
+		b = slices.Concat(b[:end], box, b[end:])
+		binary.BigEndian.PutUint32(b[jp2h:], binary.BigEndian.Uint32(b[jp2h:])+uint32(len(box)))
+		return b
+	}
+}
+
+// fxSigContents rewrites, in place, the CMS a signed file's /Contents
+// holds: edit gets the SignedData's elements (version, digest algorithms,
+// encapsulated content, [0] certificates, ..., signer infos) and returns
+// the ones to write. The new DER must fit the placeholder, which is padded
+// with zeros as written.
+func fxSigContents(edit func(elems [][]byte) [][]byte) func([]byte) []byte {
+	return func(b []byte) []byte {
+		m := regexp.MustCompile(`/Contents\s*<([0-9A-Fa-f]+)>`).FindSubmatchIndex(b)
+		if m == nil {
+			panic("fxSigContents: no /Contents")
+		}
+		der, err := hex.DecodeString(string(b[m[2]:m[3]]))
+		if err != nil {
+			panic(err)
+		}
+		ci := derElems(derBody(der))            // ContentInfo: OID, [0]
+		sd := derElems(derBody(derBody(ci[1]))) // [0] EXPLICIT SignedData
+		sdNew := derTLV(0x30, slices.Concat(edit(sd)...))
+		ciNew := derTLV(0x30, slices.Concat(ci[0], derTLV(0xA0, sdNew)))
+		out := []byte(strings.ToUpper(hex.EncodeToString(ciNew)))
+		if len(out) > m[3]-m[2] {
+			panic("fxSigContents: the new CMS does not fit")
+		}
+		b = slices.Clone(b)
+		copy(b[m[2]:m[3]], bytes.Repeat([]byte("0"), m[3]-m[2]))
+		copy(b[m[2]:], out)
+		return b
+	}
+}
+
+// fxShortByteRange makes a signed file's /ByteRange stop one byte short of
+// the end of the file, its length unchanged.
+func fxShortByteRange(b []byte) []byte {
+	m := regexp.MustCompile(`/ByteRange\s*\[\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*\]`).FindSubmatchIndex(b)
+	if m == nil {
+		panic("fxShortByteRange: no /ByteRange")
+	}
+	n, _ := strconv.Atoi(string(b[m[8]:m[9]]))
+	short := strconv.Itoa(n - 1)
+	short += strings.Repeat(" ", m[9]-m[8]-len(short))
+	b = slices.Clone(b)
+	copy(b[m[8]:m[9]], short)
+	return b
+}
+
+// derTLV, derBody and derElems read and write the DER the CMS is made of:
+// a tag, a definite length, the contents.
+func derTLV(tag byte, body []byte) []byte {
+	n := len(body)
+	switch {
+	case n < 0x80:
+		return slices.Concat([]byte{tag, byte(n)}, body)
+	case n < 0x100:
+		return slices.Concat([]byte{tag, 0x81, byte(n)}, body)
+	case n < 0x10000:
+		return slices.Concat([]byte{tag, 0x82, byte(n >> 8), byte(n)}, body)
+	}
+	return slices.Concat([]byte{tag, 0x83, byte(n >> 16), byte(n >> 8), byte(n)}, body)
+}
+
+func derHeader(b []byte) (hdr, n int) {
+	if b[1] < 0x80 {
+		return 2, int(b[1])
+	}
+	k := int(b[1] & 0x7F)
+	for i := 0; i < k; i++ {
+		n = n<<8 | int(b[2+i])
+	}
+	return 2 + k, n
+}
+
+func derBody(b []byte) []byte {
+	h, n := derHeader(b)
+	return b[h : h+n]
+}
+
+func derElems(b []byte) [][]byte {
+	var out [][]byte
+	for len(b) > 0 {
+		h, n := derHeader(b)
+		out = append(out, b[:h+n])
+		b = b[h+n:]
+	}
+	return out
+}
+
 // fxDeviceN fills with a DeviceN colour space of n colourants over
 // DeviceGray, whose tint transform drops all but the first.
 func fxDeviceN(d *Document, res *object.Dictionary, n int) string {
@@ -1055,7 +1443,12 @@ func buildDefect(t *testing.T, f defectFixture, level pdfa.Level) []byte {
 	pages.Set("Kids", object.Array{d.Add(page)})
 	pages.Set("Count", fxInt(1))
 	var buf bytes.Buffer
-	if err := d.Write(&buf); err != nil {
+	write := func() error { return d.Write(&buf) }
+	if f.signed {
+		cert, key := signtest.CertKey(t)
+		write = func() error { return d.WriteSigned(&buf, cert, key) }
+	}
+	if err := write(); err != nil {
 		t.Fatal(err)
 	}
 	if f.patch != nil {
@@ -1094,9 +1487,9 @@ func TestSingleDefectFilesAgreeWithVeraPDF(t *testing.T) {
 		}
 		for _, f := range defectFixtures {
 			data := buildDefect(t, f, lv.level)
-			want := f.wantAt(lv.flavour, lv.column)
+			want := f.pdf0WantAt(lv.flavour, lv.column)
 			if got := pdf0Clauses(t, data, lv.level); !slices.Equal(got, want) {
-				t.Errorf("%s at %s: pdf0 fails it on %v; veraPDF, as the fixture records, on %v", f.name, lv.flavour, got, want)
+				t.Errorf("%s at %s: pdf0 fails it on %v; the fixture records %v", f.name, lv.flavour, got, want)
 			}
 			if err := os.WriteFile(filepath.Join(dir, f.name+".pdf"), data, 0o644); err != nil {
 				t.Fatal(err)

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"unicode/utf16"
 
+	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/pdf0/object"
 )
 
@@ -26,6 +27,10 @@ type uaFixture struct {
 	name  string
 	build func(u *uaDoc)
 	want  [2][]string
+	// beyond are clauses pdf0 reports, by part, that veraPDF's profile has
+	// no rule for: requirements of the standards themselves, each said where
+	// it is recorded. veraPDF is held to want, pdf0 to want and beyond.
+	beyond [2][]string
 }
 
 // uaDoc is the base document being given its defect, read back from its
@@ -123,6 +128,66 @@ func (u *uaDoc) fenote(refer, back bool, attrs *object.Dictionary) {
 	}
 }
 
+// text shows shown on the page in a TrueType font over program, built as
+// fxFont builds it (non-symbolic under WinAnsiEncoding unless symbolic;
+// tweak changes the font dictionary), tagged as a P under the Document
+// element with the parent-tree entry that leads back to it.
+func (u *uaDoc) text(program []byte, symbolic bool, tweak func(*object.Dictionary), shown string) {
+	scratch := &object.Dictionary{}
+	fxFont(u.Document, scratch, program, symbolic, tweak)
+	u.textIn(u.ResolveDict(scratch.Get("Font")).Get("F1"), shown)
+}
+
+// type3 shows "A" in a Type 3 font whose one glyph, for code 65, is named
+// name, with no ToUnicode: tagged as text shows it.
+func (u *uaDoc) type3(name string) {
+	proc := u.Add(object.NewStream(&object.Dictionary{}, []byte("500 0 d0")))
+	font := u.Add(object.NewDictionary(
+		object.Entry{Key: "Type", Value: object.Name("Font")},
+		object.Entry{Key: "Subtype", Value: object.Name("Type3")},
+		object.Entry{Key: "FontBBox", Value: object.Array{fxInt(0), fxInt(0), fxInt(500), fxInt(700)}},
+		object.Entry{Key: "FontMatrix", Value: object.Array{object.Real(0.001), fxInt(0), fxInt(0), object.Real(0.001), fxInt(0), fxInt(0)}},
+		object.Entry{Key: "CharProcs", Value: object.NewDictionary(object.Entry{Key: object.Name(name), Value: proc})},
+		object.Entry{Key: "Encoding", Value: object.NewDictionary(
+			object.Entry{Key: "Type", Value: object.Name("Encoding")},
+			object.Entry{Key: "Differences", Value: object.Array{fxInt('A'), object.Name(name)}})},
+		object.Entry{Key: "FirstChar", Value: fxInt('A')},
+		object.Entry{Key: "LastChar", Value: fxInt('A')},
+		object.Entry{Key: "Widths", Value: object.Array{fxInt(500)}},
+		object.Entry{Key: "Resources", Value: &object.Dictionary{}},
+	))
+	u.textIn(font, "A")
+}
+
+// textIn shows shown in the font fontRef names, tagged as text shows it.
+func (u *uaDoc) textIn(fontRef object.Object, shown string) {
+	res := u.ResolveDict(u.page.Get("Resources"))
+	fonts := u.ResolveDict(res.Get("Font"))
+	fonts.Set("F9", fontRef)
+	const mcid = 2 // the base page's content has MCIDs 0 and 1
+	run := u.Add(object.NewStream(&object.Dictionary{}, []byte("/P <</MCID 2>> BDC BT /F9 12 Tf 72 600 Td ("+shown+") Tj ET EMC")))
+	contents, ok := u.Resolve(u.page.Get("Contents")).(object.Array)
+	if !ok {
+		contents = object.Array{u.page.Get("Contents")}
+	}
+	u.page.Set("Contents", append(slices.Clone(contents), run))
+	_, pRef := u.elem(nil, object.IndirectRef{}, "P", object.Integer(mcid))
+	root := u.ResolveDict(u.cat.Get("StructTreeRoot"))
+	key, _ := u.Resolve(u.page.Get("StructParents")).(object.Integer)
+	nums := u.Resolve(u.ResolveDict(root.Get("ParentTree")).Get("Nums")).(object.Array)
+	for i := 0; i+1 < len(nums); i += 2 {
+		if k, _ := u.Resolve(nums[i]).(object.Integer); k == key {
+			arr := slices.Clone(u.Resolve(nums[i+1]).(object.Array))
+			for len(arr) < mcid {
+				arr = append(arr, object.Null{})
+			}
+			nums[i+1] = append(arr, pRef)
+			return
+		}
+	}
+	panic("uaDoc.text: the page has no parent-tree entry")
+}
+
 // annot puts a on the page, 100pt square and printable, with /Contents,
 // enclosed in a structure element of type tag (none when tag is empty) by
 // an object reference, with the parent-tree entry that leads back to it. The
@@ -159,6 +224,16 @@ func (u *uaDoc) annot(a *object.Dictionary, tag string) (annotRef object.Indirec
 	return annotRef, el
 }
 
+// signatureWidget puts on the page a signature field's widget, its own
+// field, enclosed in a Form element, whose normal appearance draws content.
+func (u *uaDoc) signatureWidget(content string) {
+	ap := u.Add(object.NewStream(uaDict("Type", object.Name("XObject"), "Subtype", object.Name("Form"),
+		"BBox", object.Array{fxInt(0), fxInt(0), fxInt(100), fxInt(100)}), []byte(content)))
+	a, _ := u.annot(uaDict("Subtype", object.Name("Widget"), "FT", object.Name("Sig"), "T", uaStr("sig"), "TU", uaStr("a signature"),
+		"AP", uaDict("N", ap)), "Form")
+	u.cat.Set("AcroForm", uaDict("Fields", object.Array{a}, "SigFlags", fxInt(1)))
+}
+
 // uaText is s as a UTF-16BE text string.
 func uaText(s string) object.String {
 	b := []byte{0xFE, 0xFF}
@@ -184,10 +259,18 @@ func uaDict(kv ...any) *object.Dictionary {
 
 var uaFixtures = []uaFixture{
 	{name: "base", build: func(u *uaDoc) {}},
+	// veraPDF reports the element's content as untagged, its /P chain
+	// broken; its rule for the missing /P itself (7.1-12, 8.2.1-2) does not
+	// fire, its tree walk supplying the parent. ISO 32000-1 Table 323 and
+	// -2 Table 355 require the entry, and veraPDF's profile numbers it 8.2.1.
 	{name: "struct-elem-without-parent", build: func(u *uaDoc) {
 		k := u.Resolve(u.docElem.Get("K")).(object.Array)
 		u.ResolveDict(k[0]).Delete("P")
-	}, want: [2][]string{{"7.1"}, {"8.2.2"}}},
+	}, want: [2][]string{{"7.1"}, {"8.2.2"}}, beyond: [2][]string{nil, {"8.2.1"}}},
+	{name: "empty-sect-without-parent", build: func(u *uaDoc) {
+		s, _ := u.elem(nil, object.IndirectRef{}, "Sect")
+		s.Delete("P")
+	}, beyond: [2][]string{{"7.1"}, {"8.2.1"}}},
 	{name: "markinfo-not-marked", build: func(u *uaDoc) {
 		u.cat.Set("MarkInfo", uaDict("Marked", object.Boolean(false)))
 	}, want: [2][]string{{"6.2"}, {"6.2"}}},
@@ -429,6 +512,30 @@ var uaFixtures = []uaFixture{
 			sub.Set("NS", ns)
 		}
 	}, want: [2][]string{{"7.1"}, nil}},
+	{name: "reference-holding-p-and-content", build: func(u *uaDoc) {
+		k := u.Resolve(u.docElem.Get("K")).(object.Array)
+		para := u.ResolveDict(k[1])
+		para.Set("S", object.Name("Reference"))
+		u.elem(para, k[1].(object.IndirectRef), "P")
+	}, want: [2][]string{nil, {"Table 5. Document-Reference", "Table 5. Reference-P"}}},
+	{name: "reference-holding-sect", build: func(u *uaDoc) {
+		r, rRef := u.elem(nil, object.IndirectRef{}, "Reference")
+		u.elem(r, rRef, "Sect")
+	}, want: [2][]string{nil, {"Table 5. Document-Reference"}}},
+	{name: "art-with-two-captions", build: func(u *uaDoc) {
+		a, aRef := u.elem(nil, object.IndirectRef{}, "Art")
+		u.elem(a, aRef, "Caption")
+		u.elem(a, aRef, "P")
+		u.elem(a, aRef, "Caption")
+	}, want: [2][]string{nil, {"Table 5. Art-Caption"}}},
+	{name: "sect-with-two-captions", build: func(u *uaDoc) {
+		// "The number of captions cannot exceed 1" (ISO 32000-2 Table
+		// 372); veraPDF's profile leaves a Sect unlimited.
+		a, aRef := u.elem(nil, object.IndirectRef{}, "Sect")
+		u.elem(a, aRef, "Caption")
+		u.elem(a, aRef, "P")
+		u.elem(a, aRef, "Caption")
+	}, want: [2][]string{nil, nil}, beyond: [2][]string{nil, {"Table 5. Sect-Caption"}}},
 	{name: "heading-holding-two-arts", build: func(u *uaDoc) {
 		h, hRef := u.elem(nil, object.IndirectRef{}, "H1")
 		u.elem(h, hRef, "Art")
@@ -459,6 +566,26 @@ var uaFixtures = []uaFixture{
 	{name: "fenote-refs-paired", build: func(u *uaDoc) { u.fenote(true, true, nil) }, want: [2][]string{{"7.1"}, nil}},
 	{name: "fenote-referrer-not-named", build: func(u *uaDoc) { u.fenote(true, false, nil) }, want: [2][]string{{"7.1"}, {"8.2.5.14"}}},
 	{name: "fenote-names-a-non-referrer", build: func(u *uaDoc) { u.fenote(false, true, nil) }, want: [2][]string{{"7.1"}, {"8.2.5.14"}}},
+	{name: "truetype-text", build: func(u *uaDoc) { u.text(fxTrueTypeProgram(nil), false, nil, "A") }, want: [2][]string{nil, nil}},
+	{name: "truetype-glyph-missing", build: func(u *uaDoc) { u.text(fxTrueTypeProgram(nil), false, nil, "AB") }, want: [2][]string{{"7.21.4.1"}, {"8.4.5.5.1"}}},
+	{name: "nonsymbolic-truetype-with-only-30-cmap", build: func(u *uaDoc) {
+		u.text(fxTrueTypeProgram([]fonttest.CmapSub{{Plat: 3, Enc: 0, Data: fxFormat0()}}), false, nil, "A")
+	}, want: [2][]string{{"7.21.4.1", "7.21.5", "7.21.6"}, {"8.4.5.5.1", "8.4.5.6", "8.4.5.7"}}},
+	{name: "nonsymbolic-truetype-without-31-or-10-cmap", build: func(u *uaDoc) {
+		u.text(fxTrueTypeProgram([]fonttest.CmapSub{{Plat: 0, Enc: 3, Data: fxFormat0()}}), false, nil, "A")
+	}, want: [2][]string{{"7.21.4.1", "7.21.5"}, {"8.4.5.5.1", "8.4.5.6", "8.4.5.7"}}},
+	{name: "symbolic-truetype-without-30-or-10-cmap", build: func(u *uaDoc) {
+		u.text(fxTrueTypeProgram([]fonttest.CmapSub{{Plat: 3, Enc: 1, Data: fxFormat0()}}), true, nil, "A")
+	}, want: [2][]string{{"7.21.4.1", "7.21.7"}, {"8.4.5.5.1", "8.4.5.7", "8.4.5.8"}}},
+	{name: "symbolic-truetype-with-two-cmaps-and-30", build: func(u *uaDoc) {
+		u.text(fxTrueTypeProgram([]fonttest.CmapSub{{Plat: 1, Enc: 0, Data: fxFormat0()}, {Plat: 3, Enc: 0, Data: fxFormat0()}}), true, nil, "A")
+	}, want: [2][]string{{"7.21.7"}, {"8.4.5.8"}}},
+	{name: "symbolic-truetype-with-two-cmaps-no-30", build: func(u *uaDoc) {
+		u.text(fxTrueTypeProgram([]fonttest.CmapSub{{Plat: 1, Enc: 0, Data: fxFormat0()}, {Plat: 3, Enc: 1, Data: fxFormat0()}}), true, nil, "A")
+	}, want: [2][]string{{"7.21.6", "7.21.7"}, {"8.4.5.8"}}},
+	{name: "type3-glyph-named-a", build: func(u *uaDoc) { u.type3("A") }, want: [2][]string{nil, nil}},
+	{name: "type3-glyph-named-g12", build: func(u *uaDoc) { u.type3("g12") }, want: [2][]string{{"7.21.7"}, {"8.4.5.8"}}},
+	{name: "header-pdf-2-0", build: func(u *uaDoc) { u.Version = "2.0" }, want: [2][]string{{"6.1"}, nil}},
 	{name: "alt-with-pua", build: func(u *uaDoc) {
 		f, _ := u.elem(nil, object.IndirectRef{}, "Span")
 		f.Set("Alt", uaText(""))
@@ -475,6 +602,81 @@ var uaFixtures = []uaFixture{
 	{name: "catalog-without-metadata", build: func(u *uaDoc) {
 		u.cat.Delete("Metadata")
 	}, want: [2][]string{{"7.1"}, {"8.11.1"}}},
+	{name: "table-colspan-over-rowspan", build: func(u *uaDoc) {
+		tb, tbRef := u.elem(nil, object.IndirectRef{}, "Table")
+		r1, r1Ref := u.elem(tb, tbRef, "TR")
+		u.elem(r1, r1Ref, "TD")
+		c, _ := u.elem(r1, r1Ref, "TD")
+		c.Set("A", uaDict("O", object.Name("Table"), "RowSpan", fxInt(2)))
+		r2, r2Ref := u.elem(tb, tbRef, "TR")
+		c2, _ := u.elem(r2, r2Ref, "TD")
+		c2.Set("A", uaDict("O", object.Name("Table"), "ColSpan", fxInt(2)))
+	}, want: [2][]string{{"7.2"}, {"8.2.5.26"}}},
+	{name: "table-caption-in-the-middle", build: func(u *uaDoc) {
+		tb, tbRef := u.elem(nil, object.IndirectRef{}, "Table")
+		r1, r1Ref := u.elem(tb, tbRef, "TR")
+		u.elem(r1, r1Ref, "TD")
+		u.elem(tb, tbRef, "Caption")
+		r2, r2Ref := u.elem(tb, tbRef, "TR")
+		u.elem(r2, r2Ref, "TD")
+	}, want: [2][]string{{"7.2"}, {"8.2.5.27"}}},
+	{name: "div-caption-in-the-middle", build: func(u *uaDoc) {
+		f, fRef := u.elem(nil, object.IndirectRef{}, "Div")
+		u.elem(f, fRef, "P")
+		u.elem(f, fRef, "Caption")
+		u.elem(f, fRef, "P")
+	}, want: [2][]string{nil, {"8.2.5.27", "Table 5. Document-Caption"}}},
+	// The Divs are looked through: the Sect's children are P, Caption, P.
+	{name: "sect-caption-between-divs", build: func(u *uaDoc) {
+		f, fRef := u.elem(nil, object.IndirectRef{}, "Sect")
+		d1, d1Ref := u.elem(f, fRef, "Div")
+		u.elem(d1, d1Ref, "P")
+		u.elem(f, fRef, "Caption")
+		d2, d2Ref := u.elem(f, fRef, "Div")
+		u.elem(d2, d2Ref, "P")
+	}, want: [2][]string{nil, {"8.2.5.27"}}},
+	{name: "table-rowspan-past-the-last-row", build: func(u *uaDoc) {
+		tb, tbRef := u.elem(nil, object.IndirectRef{}, "Table")
+		r1, r1Ref := u.elem(tb, tbRef, "TR")
+		u.elem(r1, r1Ref, "TD")
+		u.elem(r1, r1Ref, "TD")
+		r2, r2Ref := u.elem(tb, tbRef, "TR")
+		u.elem(r2, r2Ref, "TD")
+		c, _ := u.elem(r2, r2Ref, "TD")
+		c.Set("A", uaDict("O", object.Name("Table"), "RowSpan", fxInt(2)))
+	}, want: [2][]string{{"7.2"}, {"8.2.5.26"}}},
+	{name: "table-rowspan-across-row-groups", build: func(u *uaDoc) {
+		tb, tbRef := u.elem(nil, object.IndirectRef{}, "Table")
+		h, hRef := u.elem(tb, tbRef, "THead")
+		r1, r1Ref := u.elem(h, hRef, "TR")
+		c, _ := u.elem(r1, r1Ref, "TD")
+		c.Set("A", uaDict("O", object.Name("Table"), "RowSpan", fxInt(2)))
+		u.elem(r1, r1Ref, "TD")
+		b, bRef := u.elem(tb, tbRef, "TBody")
+		r2, r2Ref := u.elem(b, bRef, "TR")
+		u.elem(r2, r2Ref, "TD")
+	}, want: [2][]string{nil, {"8.2.5.26"}}},
+	// ISO 14289-2 8.10.3.5 asks for alternative text for a graphic in a
+	// signature's appearance. veraPDF's rule (8.10.3.5-t01) cannot fire: it
+	// reads an annotation's appearance stream without content items
+	// (GFPDXForm.parseContentStream), so the graphic it would judge is never
+	// made; and the clause's alternative text may be the widget's /Contents
+	// (8.9.4.1), which 8.10.2.3 already requires. Neither reports this file.
+	{name: "signature-widget-path-without-alt", build: func(u *uaDoc) { u.signatureWidget("0 0 m 50 50 l S") }},
+	{name: "text-pua", build: func(u *uaDoc) {
+		u.text(fxTrueTypeProgram(nil), false, func(f *object.Dictionary) { f.Set("ToUnicode", fxToUnicode(u.Document, "E000")) }, "A")
+	}, want: [2][]string{nil, {"8.4.3"}}},
+	{name: "text-pua-with-actualtext", build: func(u *uaDoc) {
+		u.text(fxTrueTypeProgram(nil), false, func(f *object.Dictionary) { f.Set("ToUnicode", fxToUnicode(u.Document, "E000")) }, "A")
+		k := u.Resolve(u.docElem.Get("K")).(object.Array)
+		u.ResolveDict(k[len(k)-1]).Set("ActualText", uaText("A"))
+	}},
+	{name: "text-pua-with-alt-on-the-sequence", build: func(u *uaDoc) {
+		u.text(fxTrueTypeProgram(nil), false, func(f *object.Dictionary) { f.Set("ToUnicode", fxToUnicode(u.Document, "E000")) }, "A")
+		contents := u.Resolve(u.page.Get("Contents")).(object.Array)
+		run := u.Resolve(contents[len(contents)-1]).(*object.Stream)
+		run.Data = bytes.Replace(run.Data, []byte("<</MCID 2>>"), []byte("<</MCID 2 /Alt (a letter)>>"), 1)
+	}},
 }
 
 // TestSingleDefectFilesAgreeWithVeraPDFOnPDFUA is the PDF/UA counterpart of
@@ -495,10 +697,10 @@ func TestSingleDefectFilesAgreeWithVeraPDFOnPDFUA(t *testing.T) {
 				t.Fatalf("%s at %s: %v", f.name, flavour, err)
 			}
 			data := buf.Bytes()
-			want := slices.Clone(f.want[i])
+			want := slices.Concat(f.want[i], f.beyond[i])
 			slices.Sort(want)
 			if got := pdf0UAClauses(t, data, part); !slices.Equal(got, want) {
-				t.Errorf("%s at %s: pdf0 fails it on %v; veraPDF, as the fixture records, on %v", f.name, flavour, got, want)
+				t.Errorf("%s at %s: pdf0 fails it on %v; the fixture records %v", f.name, flavour, got, want)
 			}
 			if err := os.WriteFile(filepath.Join(dir, f.name+".pdf"), data, 0o644); err != nil {
 				t.Fatal(err)

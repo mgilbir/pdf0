@@ -108,6 +108,43 @@ func checkUA2DocumentRoot(d core.View, cat *object.Dictionary) []Violation {
 	return nil
 }
 
+// checkUA2CaptionPosition is ISO 14289-2 8.2.5.27: a Caption is the first or
+// the last child of the structure element whose content it captions.
+//
+// It reads an element's children as veraPDF does (8.2.5.27-t01,
+// PDStructElem.kidsStandardTypes): through the grouping types, so a Div's
+// children stand in its place, and only those whose type resolves to a
+// standard one, the rest left out of the count. Each element is judged,
+// grouping ones too, so a Caption between two children of a Div is reported
+// for the Div and for the element the Div stands in.
+func checkUA2CaptionPosition(d core.View, cat *object.Dictionary) []Violation {
+	nodes := structTree(d, cat)
+	kids := map[int][]int{} // element index -> its children through grouping elements
+	for j, n := range nodes {
+		if !n.HasS || !n.Mapped || isGroupingType(n) {
+			continue
+		}
+		for p := n.Parent; p >= 0; p = nodes[p].Parent {
+			d.Charge(1)
+			kids[p] = append(kids[p], j)
+			if !isGroupingType(nodes[p]) {
+				break
+			}
+		}
+	}
+	var v []Violation
+	for p := range nodes {
+		ks := kids[p]
+		for k := 1; k < len(ks)-1; k++ {
+			if isStdType(nodes[ks[k]], "Caption") {
+				v = append(v, Violation{Clause: "8.2.5.27", Message: fmt.Sprintf("<%s> has a Caption as its child %d of %d; a Caption is the first or the last child", nodes[p].StdType, k+1, len(ks)), Object: anchorOf(d, nodes[p].Elem)})
+				break
+			}
+		}
+	}
+	return v
+}
+
 // checkUA2NoH is ISO 14289-2 8.2.5.12: a conforming file uses the numbered
 // headings H1–Hn and not H (veraPDF 8.2.5.12-t01, every SEH object). An
 // element whose type resolves to H through a role map is an H.

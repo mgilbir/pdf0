@@ -34,6 +34,77 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 
 ### Validation
 
+- **Rules no corpus file tests, checked against veraPDF** (#407), thirty
+  more single-defect files (nineteen PDF/A, eleven PDF/UA), and
+  what they found:
+  - A font file whose `/Subtype` names no kind of program (ISO 32000 Table
+    126) is reported at every part, not only at PDF/A-1 (6.2.11.2 /
+    6.2.10.2); `/OpenType` is one from PDF/A-2 on. Such a program is still
+    read for what it is, and no longer reported damaged besides.
+  - A Type 0 font whose descendant is neither a `CIDFontType0` nor a
+    `CIDFontType2` is reported (6.3.2 / 6.2.11.2 / 6.2.10.2), and as not
+    embedded (6.3.4 / 6.2.11.4.1 / 6.2.10.4.1): there is no program a
+    reader knows how to use.
+  - LZW in an inline image is ISO 19005-1 6.1.10 at PDF/A-1, as in a
+    stream (was 6.1.7).
+  - At PDF/A-2a and -3a, a standard structure type the `/RoleMap` remaps to
+    a non-standard one is reported (6.7.3.4).
+  - At PDF/UA-2, a `Caption` that is neither the first nor the last child
+    of its element (8.2.5.27), and a character of real content mapped into
+    a Private Use Area with no `/ActualText` or `/Alt` (8.4.3).
+  - At PDF/UA-2, a table cell whose `RowSpan` crosses the boundary of a
+    `THead`, `TBody` or `TFoot` row group (8.2.5.26).
+  - An element with no `/P` is reported under 8.2.1 at PDF/UA-2 (was 8.2.2),
+    and the content it leaves unreachable from the structure tree root is
+    reported as untagged (7.1 / 8.2.2), as veraPDF reports it.
+
+- **A `Caption` occurs at most once under any parent at PDF/UA-2** (#406), as ISO
+  32000-2 Table 372 says ("The number of captions cannot exceed 1"); it was
+  checked only where the ISO/TS 32005 table says 0..1. veraPDF checks it under
+  most parents too, but not under a `Sect` or a `Private`.
+
+- **ISO/TS 32005 errata applied at PDF/UA-2** (#405), as the PDF Association's
+  working groups resolved them in public (pdf-association/pdf-issues): a
+  `Sub` in a `Code` is permitted (#336); a `Reference` has `Link`'s content
+  model and each may hold the other (#488), so a `Reference` used as a
+  non-grouping element may not hold block-level content such as a `P`, and
+  one used as a grouping element may hold `Sect`, `Div` and the like.
+
+- **A `Figure` in a `WP` is permitted at PDF/UA-2** (#404), as ISO 32000-2 Annex L's
+  errata (July 2024) give it; the 2023 ISO/TS 32005 table, which veraPDF
+  follows, forbids it. pdf0's encoding of that table now agrees with Annex L's
+  machine-readable matrix on every pair of PDF 2.0 elements.
+
+- **PDF/UA's font rules the corpus does not test, checked against veraPDF**
+  (#403),
+  and a TrueType glyph reading fixed in both validators:
+  - `ValidatePDFUA` and `ValidatePDFUA2` report a glyph an embedded simple
+    font shows but does not define (7.21.4.1 / 8.4.5.5.1), a TrueType
+    program's cmap without the subtables the part asks for (7.21.6 /
+    8.4.5.7), and a code of a simple font with no Unicode value — no
+    `ToUnicode` entry and no glyph name with one (7.21.7 / 8.4.5.8); they
+    reported the last only for Identity-encoded Type 0 fonts. The glyph and
+    cmap logic is PDF/A's, now shared (`internal/fontcheck`).
+  - A TrueType code its encoding names (WinAnsi "B") that the program's
+    Unicode cmap has no entry for is a missing glyph, at every PDF/A level
+    (6.3.5 / 6.2.11.4.1 / 6.2.10.4.1) and in PDF/UA. It was read as a
+    `.notdef` reference (6.2.11.8 / 6.2.10.9), and at PDF/A-1 not reported.
+    An unnamed code is `.notdef`'s still.
+
+- **JPEG 2000 images and digital signatures checked against veraPDF on
+  single-defect files** (#402): fourteen more fixtures at every PDF/A level, the
+  JPEG 2000 data made with gopenjpeg. What changed to agree:
+  - A JPEG 2000 image whose channels have different bit depths (a `bpcc`
+    box) is reported (6.2.8.3 / 6.2.7.3); it was passed.
+  - An image dictionary with `/ColorSpace` exempts the JPEG 2000 data's
+    own colour specification from the METH and enumerated-colour-space
+    rules, as it already did from the APPROX one.
+  - Of the enumerated colour spaces, only 19 (CIEJab) is reported, as ISO
+    19005-2 and -4 forbid it alone; 12, 16, 17 and 18 were the only ones
+    passed.
+  - At PDF/A-1 a JPEG 2000 image is still reported under 6.1.10 (PDF 1.4
+    has no JPXDecode), which veraPDF's profile does not check.
+
 - **`ValidatePDFUA2` checks the structure tree against ISO/TS 32005 Table
   5** (#397), the containment rules ISO 14289-2 requires: a child the parent's
   type does not permit, marked content where the type allows none, more

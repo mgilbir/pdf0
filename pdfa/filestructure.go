@@ -922,8 +922,14 @@ func checkInlineImageFilters(doc core.View, level Level) []Violation {
 	// One example per distinct message, attributed to the lowest object number
 	// that produced it — contentBytesFactsOf returns a map.
 	var found exampleFindings
-	add := func(msg string, obj int) {
+	add := func(rule, msg string, obj int) {
 		found.add(Violation{Rule: rule, Level: level, Message: msg, Object: obj})
+	}
+	// LZW is ISO 19005-1's filter rule, 6.1.10 (veraPDF 6.1.10-2), as it is
+	// a stream's.
+	lzwRule := rule
+	if level.Part() == 1 {
+		lzwRule = "6.1.10"
 	}
 
 	for num, f := range contentBytesFactsOf(doc) {
@@ -931,9 +937,9 @@ func checkInlineImageFilters(doc core.View, level Level) []Violation {
 			for _, name := range filters {
 				switch {
 				case inlineLZWNames[name]:
-					add("LZW compression is used in an inline image", num)
+					add(lzwRule, "LZW compression is used in an inline image", num)
 				case !inlineFilterNames[name]:
-					add(fmt.Sprintf("the inline image /F filter %q is not a permitted filter name", name), num)
+					add(rule, fmt.Sprintf("the inline image /F filter %q is not a permitted filter name", name), num)
 				}
 			}
 		}

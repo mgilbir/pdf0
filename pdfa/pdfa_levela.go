@@ -148,9 +148,10 @@ func checkLevelAActualText(doc core.View, level Level) []Violation {
 // checkLevelAStructTypes enforces the structure-type rules (ISO 19005-1 6.8.3.4,
 // -2/-3 6.7.3.4): a structure element whose type is not one of the standard ones
 // shall be mapped, through the structure tree's /RoleMap, to a standard type,
-// and that mapping shall not be circular.
+// and that mapping shall not be circular; and from ISO 19005-2 on, a standard
+// type shall not be remapped to a non-standard one (remappedAway).
 //
-// Both rules are scoped to the non-standard types the document actually uses,
+// The rules are scoped to the non-standard types the document actually uses,
 // which is what the veraPDF profile scopes them to as well (its object is the
 // non-standard structure element, not the role map). The distinction is not
 // academic: a role map that maps a standard type to itself is a cycle in the
@@ -183,10 +184,20 @@ func checkLevelAStructTypes(doc core.View, level Level) []Violation {
 	decided := map[object.Name]bool{}
 	for _, n := range core.StructTree(doc, cat) {
 		st := n.RawS
-		if st == "" || core.StandardStructTypes[st] || decided[st] {
+		if st == "" || decided[st] {
 			continue
 		}
 		decided[st] = true
+		if core.StandardStructTypes[st] {
+			if level.Part() != 1 && remappedAway(doc, st, roleMap) {
+				errs = append(errs, Violation{
+					Rule:    rule,
+					Level:   level,
+					Message: fmt.Sprintf("/RoleMap remaps the standard structure type %s to a type that is not standard", st),
+				})
+			}
+			continue
+		}
 		// A budget trip leaves the mapping unknown, and unknown is not evidence
 		// of a violation — the rule the whole package follows for a walk that
 		// did not finish.
@@ -206,6 +217,25 @@ func checkLevelAStructTypes(doc core.View, level Level) []Violation {
 		}
 	}
 	return errs
+}
+
+// remappedAway reports whether the role map sends the standard type st, which
+// an element uses, to a type that resolves to no standard one: "Standard tags
+// shall not be remapped to a non-standard type" (ISO 19005-2/-3 6.7.3.4;
+// veraPDF 6.7.3.4-3, which ISO 19005-1's profile does not have). It is
+// veraPDF's reading: a standard type remapped to another standard one is an
+// element of that type to it, and not judged by this rule. A walk the budget
+// stopped is no evidence.
+func remappedAway(doc core.View, st object.Name, roleMap *object.Dictionary) bool {
+	if roleMap == nil {
+		return false
+	}
+	next, ok := doc.Resolve(roleMap.Get(st)).(object.Name)
+	if !ok || next == "" || next == st {
+		return false
+	}
+	r := core.ResolveStructType(doc, object.NewDictionary(object.Entry{Key: "S", Value: next}), roleMap)
+	return !r.Mapped && r.Complete
 }
 
 // checkLevelALanguage verifies the syntax of every natural-language identifier

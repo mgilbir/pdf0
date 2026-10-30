@@ -3,6 +3,7 @@ package pdfa
 import (
 	"github.com/mgilbir/forme/fonttest"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/fontcheck"
 	"testing"
 
 	"github.com/mgilbir/forme/font"
@@ -34,7 +35,7 @@ func TestCmapEmptySubtableDoesNotDisplace(t *testing.T) {
 	if fp.Cmap[0x41] != 100 {
 		t.Errorf("empty (3,10): cmap[U+0041] = %d, want the (3,1) mapping 100", fp.Cmap[0x41])
 	}
-	if isNotdefGlyph(fp, "TrueType", false, 'A', "A") {
+	if fontcheck.IsNotdef(fp, "TrueType", false, 'A', "A") {
 		t.Errorf("an empty preferred subtable made every code read as .notdef")
 	}
 }

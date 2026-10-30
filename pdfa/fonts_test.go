@@ -594,7 +594,7 @@ func TestDifferencesNeedCmap31(t *testing.T) {
 			var cm []Violation
 			for _, v := range checkTrueTypeEncoding(doc, lv, "", font, u) {
 				// The cmap rule a font without Differences fails as well
-				// (nonSymbolicCmapProblem) names (3,1) too; this is the
+				// (fontcheck.NonSymbolicCmapProblem) names (3,1) too; this is the
 				// Differences one.
 				if strings.Contains(v.Message, "(3,1)") && strings.Contains(v.Message, "Differences") {
 					cm = append(cm, v)

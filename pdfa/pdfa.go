@@ -5236,27 +5236,34 @@ func checkJPXImages(doc core.View, level Level) []Violation {
 		if info.nc != 1 && info.nc != 3 && info.nc != 4 {
 			bad("JPEG2000 image has %d colour channels; only 1, 3 or 4 are permitted", info.nc)
 		}
-		if info.bpcRaw != 0xFF {
-			depth := int(info.bpcRaw&0x7F) + 1
-			if depth < 1 || depth > 38 {
-				bad("JPEG2000 image bit depth %d outside the permitted 1-38 range", depth)
-			}
+		// "All colour channels in the JPEG2000 data shall have the same
+		// bit-depth": the image header says 0xFF, and a bpcc box gives
+		// each channel its own, only where they differ (veraPDF 6.2.8.3-5).
+		if info.bpcRaw == 0xFF {
+			bad("JPEG2000 image's colour channels have different bit depths (a bpcc box)")
+		} else if depth := int(info.bpcRaw&0x7F) + 1; depth < 1 || depth > 38 {
+			bad("JPEG2000 image bit depth %d outside the permitted 1-38 range", depth)
 		}
+		// The colour specification rules are the JPEG2000 data's own colour
+		// space's: an image dictionary with /ColorSpace overrides it, and they
+		// do not apply (veraPDF 6.2.8.3-2 to -4).
+		hasColorSpace := stream.Dict.Get("ColorSpace") != nil
 		for i, meth := range info.colrMETH {
+			if hasColorSpace {
+				break
+			}
 			if meth != 1 && meth != 2 && meth != 3 {
 				bad("JPEG2000 colour specification METH %d is not 1, 2 or 3", meth)
 			}
-			if meth == 1 {
-				switch info.colrEnumCS[i] {
-				case 12, 16, 17, 18: // CMYK, sRGB, greyscale, sYCC
-				default:
-					bad("JPEG2000 enumerated colour space %d is not permitted", info.colrEnumCS[i])
-				}
+			// "JPEG2000 enumerated colour space 19 (CIEJab) shall not be
+			// used" — that one alone.
+			if meth == 1 && info.colrEnumCS[i] == 19 {
+				bad("JPEG2000 enumerated colour space 19 (CIEJab) is not permitted")
 			}
 		}
 		// When several colour specifications exist, exactly one shall be
 		// the authoritative one (APPROX 0x01).
-		if len(info.colrMETH) > 1 && stream.Dict.Get("ColorSpace") == nil {
+		if len(info.colrMETH) > 1 && !hasColorSpace {
 			approxOnes := 0
 			for _, a := range info.colrAPPROX {
 				if a == 1 {
