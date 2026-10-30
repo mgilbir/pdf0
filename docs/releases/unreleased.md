@@ -29,6 +29,18 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.6.0
 
 ### Validation
 
+- **`ValidatePDFUA2` checks the structure tree against ISO/TS 32005 Table
+  5**, the containment rules ISO 14289-2 requires: a child the parent's
+  type does not permit, marked content where the type allows none, more
+  occurrences than allowed, and a root without exactly one `Document`.
+  Findings are named as veraPDF names the rules (`Table 5. Parent-Child`).
+  Where the published table forbids what veraPDF permits — a `Code`
+  holding `Sub` lines, a `Reference` holding block content — nothing is
+  reported. PDF/UA-1's nesting and container rules (7.2) no longer run at
+  part 2. Also new at part 2: an `LI` with real content outside `Lbl` and
+  `LBody` (8.2.5.25), and an `FENote`'s `NoteType` and its `/Ref` pairing
+  with the elements that cite it (8.2.5.14).
+
 - **PDF/UA rules the corpus does not test, checked against veraPDF on
   single-defect files** (#396): fifty-six PDF/UA fixtures at both parts, and what
   pdf0 changed to agree on every one:

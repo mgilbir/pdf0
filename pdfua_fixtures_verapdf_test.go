@@ -16,23 +16,9 @@ import (
 // at each part — a heading and a paragraph in an embedded font, under a
 // Document element — given one thing wrong, or one thing that only looks
 // wrong. Each records the clauses veraPDF fails it on at PDF/UA-1 and PDF/UA-2,
-// and ValidatePDFUA and ValidatePDFUA2 must report exactly those. They pin
-// what the PDF/UA corpus does not test.
-
-// veraPDF's PDF/UA-2 profile also holds the structure tree to ISO/TS 32005's
-// containment tables, rules it names "Table 5. Parent-Child". That is a
-// standard of its own, which pdf0 does not implement (pdfua2_struct.go), and
-// those verdicts are left out of the comparison: only ISO 14289 clauses are
-// recorded and compared.
-func iso14289Clauses(clauses []string) []string {
-	var out []string
-	for _, c := range clauses {
-		if c != "" && c[0] >= '0' && c[0] <= '9' {
-			out = append(out, c)
-		}
-	}
-	return out
-}
+// and ValidatePDFUA and ValidatePDFUA2 must report exactly those — at part 2
+// ISO/TS 32005's containment rules among them, named as veraPDF names them
+// ("Table 5. Parent-Child"). They pin what the PDF/UA corpus does not test.
 
 // uaFixture is one file: what is wrong with it, and veraPDF's clauses at
 // PDF/UA-1 and PDF/UA-2 — none for a file it passes.
@@ -109,6 +95,32 @@ func (u *uaDoc) elem(parent *object.Dictionary, parentRef object.IndirectRef, ta
 		parent.Set("K", append(slices.Clone(k), ref))
 	}
 	return e, ref
+}
+
+// ns20 puts e in the PDF 2.0 namespace, the Document element's, where the
+// part has one: for the types only PDF 2.0 defines.
+func (u *uaDoc) ns20(e *object.Dictionary) {
+	if ns := u.docElem.Get("NS"); ns != nil {
+		e.Set("NS", ns)
+	}
+}
+
+// fenote adds an FENote, in the PDF 2.0 namespace, and a Span that may
+// refer to it; refer and back say which /Ref entries are written.
+func (u *uaDoc) fenote(refer, back bool, attrs *object.Dictionary) {
+	note, noteRef := u.elem(nil, object.IndirectRef{}, "FENote")
+	u.ns20(note)
+	if attrs != nil {
+		note.Set("A", attrs)
+	}
+	p, pRef := u.elem(nil, object.IndirectRef{}, "P")
+	span, spanRef := u.elem(p, pRef, "Span")
+	if refer {
+		span.Set("Ref", object.Array{noteRef})
+	}
+	if back {
+		note.Set("Ref", object.Array{spanRef})
+	}
 }
 
 // annot puts a on the page, 100pt square and printable, with /Contents,
@@ -288,11 +300,11 @@ var uaFixtures = []uaFixture{
 	{name: "ruby-without-rt", build: func(u *uaDoc) {
 		r, rRef := u.elem(nil, object.IndirectRef{}, "Ruby")
 		u.elem(r, rRef, "RB")
-	}, want: [2][]string{nil, {"8.2.5.23"}}},
+	}, want: [2][]string{nil, {"8.2.5.23", "Table 5. Document-Ruby"}}},
 	{name: "warichu-without-wp", build: func(u *uaDoc) {
 		w, wRef := u.elem(nil, object.IndirectRef{}, "Warichu")
 		u.elem(w, wRef, "WT")
-	}, want: [2][]string{nil, {"8.2.5.24"}}},
+	}, want: [2][]string{nil, {"8.2.5.24", "Table 5. Document-Warichu"}}},
 	{name: "caption-in-the-middle", build: func(u *uaDoc) {
 		f, fRef := u.elem(nil, object.IndirectRef{}, "Sect")
 		u.elem(f, fRef, "Div")
@@ -303,7 +315,7 @@ var uaFixtures = []uaFixture{
 		l, lRef := u.elem(nil, object.IndirectRef{}, "L")
 		li, liRef := u.elem(l, lRef, "LI")
 		u.elem(li, liRef, "P")
-	}, want: [2][]string{{"7.2"}, nil}},
+	}, want: [2][]string{{"7.2"}, {"Table 5. LI-P"}}},
 	{name: "table-columns-differ", build: func(u *uaDoc) {
 		tb, tbRef := u.elem(nil, object.IndirectRef{}, "Table")
 		r1, r1Ref := u.elem(tb, tbRef, "TR")
@@ -326,13 +338,13 @@ var uaFixtures = []uaFixture{
 		r, rRef := u.elem(nil, object.IndirectRef{}, "Ruby")
 		u.elem(r, rRef, "RB")
 		u.elem(r, rRef, "RT")
-	}, want: [2][]string{nil, nil}},
+	}, want: [2][]string{nil, {"Table 5. Document-Ruby"}}},
 	{name: "warichu-wp-wt-wp", build: func(u *uaDoc) {
 		w, wRef := u.elem(nil, object.IndirectRef{}, "Warichu")
 		u.elem(w, wRef, "WP")
 		u.elem(w, wRef, "WT")
 		u.elem(w, wRef, "WP")
-	}, want: [2][]string{nil, nil}},
+	}, want: [2][]string{nil, {"Table 5. Document-Warichu"}}},
 	{name: "toci-with-ref", build: func(u *uaDoc) {
 		toc, tocRef := u.elem(nil, object.IndirectRef{}, "TOC")
 		toci, _ := u.elem(toc, tocRef, "TOCI")
@@ -382,14 +394,79 @@ var uaFixtures = []uaFixture{
 		u.ResolveDict(pr).Set("Rect", object.Array{fxInt(595), fxInt(500), fxInt(800), fxInt(600)})
 		u.ResolveDict(sq).Set("Popup", pr)
 	}, want: [2][]string{nil, nil}},
+	{name: "link-holding-p-without-content", build: func(u *uaDoc) {
+		l, lRef := u.elem(nil, object.IndirectRef{}, "Link")
+		u.elem(l, lRef, "P")
+	}, want: [2][]string{nil, nil}},
+	{name: "link-holding-p-and-content", build: func(u *uaDoc) {
+		k := u.Resolve(u.docElem.Get("K")).(object.Array)
+		para := u.ResolveDict(k[1])
+		para.Set("S", object.Name("Link"))
+		u.elem(para, k[1].(object.IndirectRef), "P")
+	}, want: [2][]string{nil, {"Table 5. Link-P"}}},
+	{name: "table-with-two-captions", build: func(u *uaDoc) {
+		tb, tbRef := u.elem(nil, object.IndirectRef{}, "Table")
+		u.elem(tb, tbRef, "Caption")
+		r, rRef := u.elem(tb, tbRef, "TR")
+		u.elem(r, rRef, "TD")
+		u.elem(tb, tbRef, "Caption")
+	}, want: [2][]string{{"7.2"}, {"Table 5. Table-Caption"}}},
+	{name: "table-with-content", build: func(u *uaDoc) {
+		k := u.Resolve(u.docElem.Get("K")).(object.Array)
+		u.ResolveDict(k[1]).Set("S", object.Name("Table"))
+	}, want: [2][]string{nil, {"Table 5. Table-content"}}},
+	{name: "p-in-tr", build: func(u *uaDoc) {
+		tb, tbRef := u.elem(nil, object.IndirectRef{}, "Table")
+		r, rRef := u.elem(tb, tbRef, "TR")
+		u.elem(r, rRef, "P")
+	}, want: [2][]string{{"7.2"}, {"Table 5. TR-P"}}},
+	{name: "code-holding-sub", build: func(u *uaDoc) {
+		// Sub is a PDF 2.0 type: in the PDF 2.0 namespace, as the
+		// Document element is, where the part has one.
+		c, cRef := u.elem(nil, object.IndirectRef{}, "Code")
+		sub, _ := u.elem(c, cRef, "Sub")
+		if ns := u.docElem.Get("NS"); ns != nil {
+			sub.Set("NS", ns)
+		}
+	}, want: [2][]string{{"7.1"}, nil}},
+	{name: "heading-holding-two-arts", build: func(u *uaDoc) {
+		h, hRef := u.elem(nil, object.IndirectRef{}, "H1")
+		u.elem(h, hRef, "Art")
+		u.elem(h, hRef, "Art")
+	}, want: [2][]string{nil, {"Table 5. Hn-Art"}}},
+	{name: "div-in-table-holding-p", build: func(u *uaDoc) {
+		tb, tbRef := u.elem(nil, object.IndirectRef{}, "Table")
+		dv, dvRef := u.elem(tb, tbRef, "Div")
+		u.elem(dv, dvRef, "P")
+	}, want: [2][]string{{"7.2"}, {"Table 5. Table-Div", "Table 5. Table-P"}}},
+	{name: "li-with-content", build: func(u *uaDoc) {
+		// The paragraph and its marked content become a list item.
+		k := slices.Clone(u.Resolve(u.docElem.Get("K")).(object.Array))
+		liRef := k[1].(object.IndirectRef)
+		lRef := u.Add(uaDict("Type", object.Name("StructElem"), "S", object.Name("L"), "P", u.docElemRef, "Pg", u.pageRef, "K", object.Array{liRef}))
+		li := u.ResolveDict(liRef)
+		li.Set("S", object.Name("LI"))
+		li.Set("P", lRef)
+		k[1] = lRef
+		u.docElem.Set("K", k)
+	}, want: [2][]string{nil, {"8.2.5.25"}}},
+	{name: "fenote-notetype-sidenote", build: func(u *uaDoc) {
+		u.fenote(true, true, uaDict("O", object.Name("FENote"), "NoteType", object.Name("Sidenote")))
+	}, want: [2][]string{{"7.1"}, {"8.2.5.14"}}},
+	{name: "fenote-notetype-footnote", build: func(u *uaDoc) {
+		u.fenote(true, true, uaDict("O", object.Name("FENote"), "NoteType", object.Name("Footnote")))
+	}, want: [2][]string{{"7.1"}, nil}},
+	{name: "fenote-refs-paired", build: func(u *uaDoc) { u.fenote(true, true, nil) }, want: [2][]string{{"7.1"}, nil}},
+	{name: "fenote-referrer-not-named", build: func(u *uaDoc) { u.fenote(true, false, nil) }, want: [2][]string{{"7.1"}, {"8.2.5.14"}}},
+	{name: "fenote-names-a-non-referrer", build: func(u *uaDoc) { u.fenote(false, true, nil) }, want: [2][]string{{"7.1"}, {"8.2.5.14"}}},
 	{name: "alt-with-pua", build: func(u *uaDoc) {
 		f, _ := u.elem(nil, object.IndirectRef{}, "Span")
 		f.Set("Alt", uaText(""))
-	}, want: [2][]string{nil, {"8.4.3"}}},
+	}, want: [2][]string{nil, {"8.4.3", "Table 5. Document-Span"}}},
 	{name: "actualtext-with-pua", build: func(u *uaDoc) {
 		f, _ := u.elem(nil, object.IndirectRef{}, "Span")
 		f.Set("ActualText", uaText(""))
-	}, want: [2][]string{nil, {"8.4.3"}}},
+	}, want: [2][]string{nil, {"8.4.3", "Table 5. Document-Span"}}},
 	{name: "optional-content-config-as", build: func(u *uaDoc) {
 		g := u.Add(uaDict("Type", object.Name("OCG"), "Name", uaStr("layer")))
 		u.cat.Set("OCProperties", uaDict("OCGs", object.Array{g}, "D", uaDict("Name", uaStr("default"), "Order", object.Array{g},
@@ -439,7 +516,6 @@ func TestSingleDefectFilesAgreeWithVeraPDFOnPDFUA(t *testing.T) {
 				t.Errorf("%s at %s: veraPDF gave no verdict", f.name, flavour)
 				continue
 			}
-			got = iso14289Clauses(got)
 			if !slices.Equal(got, want) {
 				t.Errorf("%s at %s: veraPDF fails it on %v, and the fixture records %v", f.name, flavour, got, want)
 			}

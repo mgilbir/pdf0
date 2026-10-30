@@ -390,7 +390,8 @@ and each check reads the same:
 | 8.4.3, 8.6 | `checkUA2TextStringPUA` | a Unicode text string meant for a reader using the Private Use Area: `/Alt` and `/ActualText` under 8.4.3, the others under 8.6 |
 | 8.2.5.20, 8.9.2.2–8.9.2.4.19, 8.9.4.2, 8.10.1 | `checkUA2Annotations` | per annotation, "enclosed" meaning a structure element holds an object reference to it and is not, nor sits inside, an `Artifact`: an enclosed link not in `Link`/`Reference`, markup annotation not in `Annot`, watermark not in `Annot`, field widget not in `Form`; an enclosed annotation with NoView and not ToggleNoView, widget of zero size or printer's mark; a markup annotation whose `/RC` (the character data of its XHTML) is not its `/Contents`; a stamp with neither `/Name` nor `/Contents`; ink, screen, 3D and rich media annotations with no `/Contents`; a `Popup` in the structure tree; any `Sound`, `Movie` or `TrapNet`; an annotation whose `/Contents` is not its enclosing element's `/Alt` |
 | 8.10.1, 8.10.3.3 | `checkUA2Forms` | an `/XFA` in the interactive form; a text field (its `/FT` inherited down the field tree) with `/RV` and no `/V`, or whose `/RV` text is not its `/V` |
-| 8.2.5.8, 8.2.5.14, 8.2.5.23, 8.2.5.24 | `checkUA2StructureTypes` | a `TOCI` with no `/Ref` on itself or inside it; any `Note`; a `Ruby` whose children are not `RB`, `RT` (with `RP` around the `RT`); a `Warichu` whose are not `WP`, `WT`, `WP` |
+| 8.2.5.8, 8.2.5.14, 8.2.5.23, 8.2.5.24, 8.2.5.25 | `checkUA2StructureTypes` | a `TOCI` with no `/Ref` on itself or inside it; any `Note`; an `FENote` whose `NoteType` (in an attribute object owned by `FENote`, `/A` or its classes) is not `Footnote`, `Endnote` or `None`, or whose `/Ref` does not name exactly the structure elements whose `/Ref` names it; a `Ruby` whose children are not `RB`, `RT` (with `RP` around the `RT`); a `Warichu` whose are not `WP`, `WT`, `WP`; an `LI` with marked content of its own, outside `Lbl` and `LBody` |
+| ISO/TS 32005 Table 5 | `checkUA2Containment` | an element of the PDF 1.7 or PDF 2.0 namespace whose child that namespace's table does not permit (`Table 5. Parent-Child`), marked content where the row lists none (`Table 5. Parent-content`), more of a child than the row allows, or a structure tree root without exactly one `Document`. See [Containment](#containment-isots-32005) |
 
 Two walks here follow what the file says without a bound of their own, and are
 made safe instead: an action's `/Next` chain is followed iteratively, each
@@ -411,10 +412,35 @@ has a second widget that only its `/ParentTree` entry places in a `Form`.
 Structure types are resolved in the element's namespace (above), so a `/Title`
 in the PDF 2.0 namespace is a standard type. Rules no corpus file fails are held to
 veraPDF by the single-defect files of `TestSingleDefectFilesAgreeWithVeraPDFOnPDFUA`
-(`pdfua_fixtures_verapdf_test.go`), at both parts. What is not done:
-8.2.5.25-t02 (real content directly in an `LI`), FENote's references and
-`NoteType` (8.2.5.14-t02 to -t04), and ISO/TS 32005's containment tables,
-which veraPDF's PDF/UA-2 profile also checks. The fourteen WTPDF examples, real PDF/UA-2 documents that veraPDF
+(`pdfua_fixtures_verapdf_test.go`), at both parts.
+
+#### Containment (ISO/TS 32005)
+
+ISO 14289-2 holds a PDF/UA-2 structure tree to ISO/TS 32005, whose Table 5
+lists, for each standard type of the PDF 1.7 and PDF 2.0 namespaces, the
+children it may have and how many. `pdfua/iso32005_table.go` is pdf0's
+encoding of that table's Children column, written from the published
+Technical Specification (2023); `checkUA2Containment` holds the tree to it.
+Elements are judged by their resolved standard type, `H1`, `H2` and so on
+as `Hn`; the grouping elements `Part`, `Div` and `NonStruct`, whose rows
+defer to their descriptions, are looked through, so an element's parent is
+its nearest ancestor that is not one; a child the table permits only under
+a grouping element (`ø*`) is reported where the parent has marked content of
+its own; and each finding is named as veraPDF names the rule.
+
+veraPDF's PDF/UA-2 profile states the same table as 1636 rules, and
+`TestISO32005TableAgreesWithVeraPDF` compares them with the ones pdf0's
+encoding implies. They differ in two directions. The published table omits
+relationships veraPDF permits and conforming documents use — a `Code`
+holding its lines as `Sub` elements (the WTPDF examples do), a `Reference`
+holding block-level content — and pdf0 does not report those
+(`iso32005Unenforced`), so that it never fails a file veraPDF passes. And
+veraPDF states 21 rules the published table does not (a `Caption` at most
+once in an `Art`, `Code`, `Index` or `Note`, or in a `Reference` used as a
+grouping element; an `Art` nowhere in a heading; a `Title` nowhere in a
+`BlockQuote`; no `Div` in a `Quote`, and no block-level content in a
+`Reference`, used as non-grouping elements); pdf0 does not implement them,
+as they are not in the text it was written from. The fourteen WTPDF examples, real PDF/UA-2 documents that veraPDF
 1.30.3 passes, are held to `ValidatePDFUA2` by `TestWTPDFValidatePDFUA2`:
 thirteen are clean, and `tb139mitt-deims24` has the one finding veraPDF does
 not make. Its XMP packet holds a U+0001, which XML 1.0 does not allow, so the

@@ -135,14 +135,15 @@ func validateView(doc core.View, part string) []Violation {
 
 	// 7.2 — structure-element nesting (tables, lists, TOC) per the UA profile;
 	// 7.5 — in a regular table, every data cell's headers determinable.
-	// The nesting table is PDF/UA-1's (7.2). PDF/UA-2 leaves containment
-	// to ISO/TS 32005, which pdf0 does not implement; reported under 7.2,
-	// which PDF/UA-2 does not have, it would name a rule the part has not
-	// got (single-defect fixture list-item-without-lbody).
+	// The nesting and container rules are PDF/UA-1's (7.2). PDF/UA-2
+	// leaves containment to ISO/TS 32005 (checkUA2Containment); reported
+	// under 7.2, which PDF/UA-2 does not have, they would name a rule the
+	// part has not got (single-defect fixtures list-item-without-lbody,
+	// table-with-two-captions).
 	if part == "1" {
 		runCat(checkUAStructNesting)
+		runCat(checkUATableListStructure)
 	}
-	runCat(checkUATableListStructure)
 	runCatAs(ua2Map{"7.2": "8.2.5.26", "7.5": "8.2.5.26"}.number, func(d core.View, cat *object.Dictionary) []Violation { return checkUATableGrid(d, cat, part) })
 
 	// 7.4.2 — heading levels must not be skipped, and start at H1; 7.4.4 —
@@ -225,6 +226,7 @@ func validateView(doc core.View, part string) []Violation {
 		runCat(checkUA2Annotations)
 		runCat(checkUA2Forms)
 		runCat(checkUA2StructureTypes)
+		runCat(checkUA2Containment)
 	}
 
 	// 7.1 — Suspects must not be true; 7.9 Note IDs, PDF/UA-1 only: PDF/UA-2

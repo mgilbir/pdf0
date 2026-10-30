@@ -149,7 +149,7 @@ list the tests resolve data sets through) and from the tests themselves:
 | veraPDF's verdicts on the corpus | The rule-coverage ratchet judged by what veraPDF reports for each corpus file rather than what its name says, and false positives against veraPDF's own verdicts | Generated here by veraPDF from the veraPDF corpus (`testdata/verapdf-verdicts/generate.sh`); never committed | `testdata/verapdf-verdicts` | `VERAPDF_VERDICTS` | `make verapdf-verdicts` | `TestPDFUARuleCoverageByVeraPDF`, `TestRuleCoverageByVeraPDF` |
 | PDF 2.0 reference PDFs | Read→Write→Read round trips over real PDF 2.0 files; also seeds the fuzzers | [pdf-association/pdf20examples](https://github.com/pdf-association/pdf20examples) | `testdata/pdf20examples` | — | `make refpdfs` | `TestArlingtonParserFaithful`, `TestExtractAndMergePages`, `TestExtractText`, `TestOffsetsMatchObjects`, `TestReadSimplePDF`, `TestRoundTripReferencePDFs`, `TestValidateConcurrentSameDoc`, `TestWorkMeterHeadroom`, `TestWriteIsIdempotent`, `TestWriteObjectNumberMatchesKey` |
 | Arlington PDF model | External grammar oracle: the parser and serializer represent objects faithfully (right types, keys, structure) | [pdf-association/arlington-pdf-model](https://github.com/pdf-association/arlington-pdf-model), Apache-2.0 | `testdata/arlington-pdf-model/tsv/2.0` | `ARLINGTON_MODEL` | `make arlington` | `TestArlingtonCorpusParserFaithful`, `TestArlingtonModelDeviationsStillDeviate`, `TestArlingtonOracleHasTeeth`, `TestArlingtonOracleReachesWhatItUsedToMiss`, `TestArlingtonParserFaithful` |
-| veraPDF validation profiles | Per-rule detection coverage against the reference validator's own rule inventory (with the corpus) | [veraPDF/veraPDF-validation-profiles](https://github.com/veraPDF/veraPDF-validation-profiles), CC BY 4.0 | `spec/verapdf-profiles` | `VERAPDF_PROFILES` | `make profiles` | `TestPDFUARuleCoverageByVeraPDF`, `TestRuleCoverage`, `TestRuleCoverageByVeraPDF`, `pdfa: TestClausesAreTheProfilesNumbers` |
+| veraPDF validation profiles | Per-rule detection coverage against the reference validator's own rule inventory (with the corpus) | [veraPDF/veraPDF-validation-profiles](https://github.com/veraPDF/veraPDF-validation-profiles), CC BY 4.0 | `spec/verapdf-profiles` | `VERAPDF_PROFILES` | `make profiles` | `TestPDFUARuleCoverageByVeraPDF`, `TestRuleCoverage`, `TestRuleCoverageByVeraPDF`, `pdfa: TestClausesAreTheProfilesNumbers`, `pdfua: TestISO32005TableAgreesWithVeraPDF` |
 | WTPDF / PDF/UA-2 examples | Round trips and robustness over complex real tagged PDF 2.0 (structure trees, associated files, MathML, role maps) | LaTeX Project, [tagging-project discussion 72](https://github.com/latex3/tagging-project/discussions/72), fetched from Google Drive; licences vary per file (see `testdata/wtpdf/sources.tsv`) | `testdata/wtpdf` | — | `make wtpdf` | `TestWTPDFExamples`, `TestWTPDFValidatePDFUA2`, `TestWorkMeterHeadroom` |
 | Factur-X corpus | FP=0 oracle for the Factur-X **container** checks; the invoice rule engine's findings are ratcheted, not forbidden, because which business rules fire is formalis' scope decision | ZUGFeRD/corpus and ZUGFeRD/mustangproject, Apache-2.0 | `testdata/facturx` | — | `make facturx` | `TestCorpusFacturXSetDocumentInfoKeepsFindings`, `TestCorpusXMPRoundTrip`, `TestValidateFacturXCorpus`, `TestValidateFacturXInvoiceCorpus`, `TestValidateFacturXMutations`, `TestWorkMeterHeadroom` |
 | CCITT samples | Decode oracle for the Group 3/4 fax decoder (the veraPDF corpus has no CCITT images) | pdf.js (Apache-2.0), PyPDF4 (BSD) | `testdata/ccitt` | — | `make ccitt` | `TestCCITTRealFiles` |
@@ -591,9 +591,10 @@ veraPDF says, and watch pdf0 disagree before you change it.
 `TestSingleDefectFilesAgreeWithVeraPDFOnPDFUA` (`pdfua_fixtures_verapdf_test.go`)
 does the same for PDF/UA: a tagged, declared document veraPDF passes at both
 parts, given one defect, held to the clauses veraPDF fails it on with `--flavour
-ua1` and `ua2`. veraPDF's PDF/UA-2 profile also checks ISO/TS 32005's
-containment tables (rules named `Table 5. Parent-Child`); pdf0 does not
-implement that standard, and those verdicts are left out of the comparison.
+ua1` and `ua2`, ISO/TS 32005's containment rules among them (named as
+veraPDF names them, `Table 5. Parent-Child`). `TestISO32005TableAgreesWithVeraPDF`
+compares the rules pdf0's encoding of that table implies with veraPDF's
+profile, and lists where the two differ.
 
 ## CI
 

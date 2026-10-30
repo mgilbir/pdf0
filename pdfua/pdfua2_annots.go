@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/xml"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/mgilbir/pdf0/internal/core"
@@ -185,9 +186,49 @@ const maxFieldDepth = 64
 // checkUA2StructureTypes is PDF/UA-2's rules on particular structure types:
 // no Note (8.2.5.14: PDF 2.0 has FENote); a TOCI, or an element inside it,
 // carries /Ref (8.2.5.8); a Ruby's children are RB and RT, with or without
-// RP around the RT (8.2.5.23); a Warichu's are WP, WT and WP (8.2.5.24).
+// RP around the RT (8.2.5.23); a Warichu's are WP, WT and WP (8.2.5.24); an
+// LI holds its real content in Lbl or LBody, none of its own (8.2.5.25,
+// veraPDF 8.2.5.25-t02); and an FENote's NoteType, when it has one, is
+// Footnote, Endnote or None, and its /Ref names exactly the elements whose
+// /Ref names it (8.2.5.14, -t02 to -t04).
 func checkUA2StructureTypes(d core.View, cat *object.Dictionary) []Violation {
 	nodes := structTree(d, cat)
+	var classMap *object.Dictionary
+	if root := d.ResolveDict(cat.Get("StructTreeRoot")); root != nil {
+		classMap = d.ResolveDict(root.Get("ClassMap"))
+	}
+	// index finds a structure element's node; referrers[i] are the
+	// elements whose /Ref names element i.
+	index := map[*object.Dictionary]int{}
+	for i, n := range nodes {
+		if n.HasS {
+			if _, dup := index[n.Elem]; !dup {
+				index[n.Elem] = i
+			}
+		}
+	}
+	refsOf := func(n structNode) []int {
+		var out []int
+		refs, _ := d.Resolve(n.Elem.Get("Ref")).(object.Array)
+		for _, r := range refs {
+			d.Charge(1)
+			if j, ok := index[d.ResolveDict(r)]; ok && !slices.Contains(out, j) {
+				out = append(out, j)
+			}
+		}
+		return out
+	}
+	referrers := map[int][]int{}
+	for i, n := range nodes {
+		if !n.HasS {
+			continue
+		}
+		for _, j := range refsOf(n) {
+			if isStdType(nodes[j], "FENote") && !slices.Contains(referrers[j], i) {
+				referrers[j] = append(referrers[j], i)
+			}
+		}
+	}
 	hasRef := make([]bool, len(nodes)) // the node or a descendant carries /Ref
 	for i := len(nodes) - 1; i >= 0; i-- {
 		d.Charge(1)
@@ -220,6 +261,33 @@ func checkUA2StructureTypes(d core.View, cat *object.Dictionary) []Violation {
 		case isStdType(n, "Warichu"):
 			if k := kidTypes(n); k != "WP&WT&WP" {
 				report("8.2.5.24", "a Warichu structure element's children are "+k+", not WP, WT and WP")
+			}
+		case isStdType(n, "LI"):
+			if hasContentItems(d, n.Elem) {
+				report("8.2.5.25", "an LI structure element holds real content of its own, not in an Lbl or LBody")
+			}
+		case isStdType(n, "FENote"):
+			for _, a := range ownedAttrs(d, n.Elem, classMap, "FENote") {
+				if a.Get("NoteType") == nil {
+					continue
+				}
+				if t, _ := d.ResolveName(a.Get("NoteType")); t != "Footnote" && t != "Endnote" && t != "None" {
+					report("8.2.5.14", "an FENote's NoteType is not Footnote, Endnote or None")
+				}
+				break
+			}
+			own := refsOf(n)
+			for _, r := range referrers[i] {
+				if !slices.Contains(own, r) {
+					report("8.2.5.14", "an element refers to this FENote, and the FENote's /Ref does not name it")
+					break
+				}
+			}
+			for _, r := range own {
+				if !slices.Contains(refsOf(nodes[r]), i) {
+					report("8.2.5.14", "this FENote's /Ref names an element that does not refer to it")
+					break
+				}
 			}
 		}
 	}
