@@ -78,6 +78,10 @@ type Face struct {
 	// picks a bitmap face's strike; 0 is a size in points. See
 	// SetPixelsPerUnit.
 	pxPerUnit float64
+
+	// simpleGlyphs is a simple face's glyph index for each code, built on
+	// the first CheckGlyph that needs it; see simpleGlyph.
+	simpleGlyphs []int
 }
 
 // Adopt wraps a shaping face so it can be drawn and embedded.

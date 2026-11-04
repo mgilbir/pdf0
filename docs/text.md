@@ -147,6 +147,23 @@ default. htmlpdf's text is shaped inside forme's layout, and is bounded the
 same way by `htmlpdf.RenderContext` (see
 [htmlpdf](htmlpdf.md#documents-you-do-not-control)).
 
+Embedding is the other cost a font can run up: the subset forme writes walks
+every glyph used, its components and its subroutines. `Face.EmbedFormsContext`
+is `EmbedForms` under a context and `fonts.SubsetLimits` (the work the subset
+may do and the bytes it may write), and fails with the context's error or one
+wrapping `fonts.ErrSubsetLimit`. A face written as Type 3 fonts asks the
+context before each glyph it paints. `Document.AddPage` embeds without a
+context.
+
+A glyph the font cannot carry — its own record malformed, or one it is built
+from — is refused by the subset rather than copied as it stands, and `Embed`
+fails with a `*shape.GlyphError` naming every such glyph the face used.
+`Face.CheckGlyph` asks it of one glyph before it is drawn, with the number
+drawing hands out (a simple face's WinAnsi code included), so a run that needs
+such a glyph can be drawn another way — as outlines, say — and the rest of the
+text stays text. A face embedded whole, because its licence forbids
+subsetting, carries every glyph as the file states it.
+
 ## Licences
 
 A font says what its licence lets a document do with it, in the `fsType` field

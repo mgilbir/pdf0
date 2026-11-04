@@ -1149,6 +1149,14 @@ var drawnFields = map[string]map[string]string{
 		"Key":       "one image XObject per key",
 		"Clip":      "clipTo",
 	},
+	"Component": {
+		"Name": "not read: a Component paints nothing, it marks the region of an element layout.Options.Reported " +
+			"names for a host to draw over, and this backend, which writes a document no host draws over, " +
+			"names none (layoutOptions states Reported empty); were one to arrive, the canvas draws nothing for it " +
+			"and the element's own paint follows as always",
+		"Rect": "not read: see Name",
+		"Clip": "not read: see Name",
+	},
 	"Link": {
 		"PaintedBy": "on a tagged page (Options.Tagged), whose content the operation is, or that it is an artifact: tagged.go",
 		"Rects":     "one link annotation per area, through the page transform",

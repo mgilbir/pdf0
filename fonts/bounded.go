@@ -2,6 +2,7 @@ package fonts
 
 import (
 	"context"
+	"errors"
 
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/pdf0/content"
@@ -93,3 +94,44 @@ func (f *Face) DrawShapedContext(ctx context.Context, b *content.Builder, s stri
 	f.draw(b, glyphs, s, size)
 	return missing, nil
 }
+
+// Embedding a face under a context and limits.
+//
+// The costly part of an embedding is the subset: forme decides each glyph the
+// face used, walks the closure of composites and subroutines, and writes the
+// program, and a hostile font can make that cost what the caller cannot
+// afford. EmbedForms subsets under forme's defaults and no context.
+// EmbedFormsContext subsets under the caller's context and SubsetLimits
+// (forme's SubsetGlyphsContext), and asks the context before each glyph a
+// face written as Type 3 fonts paints, which is that kind's costly part; what
+// is written around the program — /W, the ToUnicode CMap, the descriptor — is
+// linear in the glyphs used. It fails with the context's error, or one
+// wrapping ErrSubsetLimit, and Embedded is then the zero value. As with an
+// embedding refused for any other reason, objects already added to doc stay
+// there: a caller that must not keep them adds to an allocator of its own
+// first, as Document.AddPage stages its faces.
+
+// SubsetLimits bounds the subset one embedding makes: the work it may do and
+// the bytes it may write. A zero field is forme's default, the allowance Load
+// reads a font under and the larger of twice the font program and 64 MiB.
+type SubsetLimits = shape.SubsetLimits
+
+// ErrSubsetLimit is what a subset that went past its SubsetLimits fails with,
+// wrapped.
+var ErrSubsetLimit = shape.ErrSubsetLimit
+
+// embedRun is the context and limits one embedding runs under.
+type embedRun struct {
+	ctx    context.Context
+	limits SubsetLimits
+}
+
+// EmbedFormsContext is EmbedForms under ctx and limits: see above.
+func (f *Face) EmbedFormsContext(ctx context.Context, doc Allocator, forms Forms, limits SubsetLimits) (Embedded, error) {
+	if ctx == nil {
+		return Embedded{}, errNilContext
+	}
+	return f.embedFormsRun(doc, forms, embedRun{ctx: ctx, limits: limits})
+}
+
+var errNilContext = errors.New("fonts: EmbedFormsContext was given a nil context")

@@ -154,6 +154,7 @@ Every one, generated from the exported API:
 | `Document.WriteContext` | `Document.Write` | `error` |
 | `facturx.Result.ValidateInvoiceXML` | — | `(formalis.Report, error)` |
 | `fonts.Face.DrawShapedContext` | `fonts.Face.DrawShaped` | `(int, error)` |
+| `fonts.Face.EmbedFormsContext` | `fonts.Face.EmbedForms` | `(fonts.Embedded, error)` |
 | `fonts.Face.ShapeContext` | `fonts.Face.Shape` | `([]content.TextSpan, int, error)` |
 | `fonts.Face.ShapeWithContext` | `fonts.Face.ShapeWith` | `([]content.TextSpan, int, error)` |
 | `htmlpdf.RenderContext` | `htmlpdf.Render` | `(htmlpdf.Result, error)` |

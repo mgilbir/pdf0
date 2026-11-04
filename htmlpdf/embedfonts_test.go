@@ -24,7 +24,7 @@ import (
 // and it fails here rather than reaching forme as a zero value nobody chose.
 func TestEveryLayoutOptionIsDecided(t *testing.T) {
 	callers := map[string]bool{"Page": true, "MinScale": true, "MinFontSizePt": true, "AllowScaleUp": true}
-	backend := map[string]any{"TransformGroups": true}
+	backend := map[string]any{"TransformGroups": true, "Reported": ""}
 
 	// Every caller field set to something other than its zero value, so a
 	// field layoutOptions drops shows up as one that did not arrive.

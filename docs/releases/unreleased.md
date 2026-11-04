@@ -22,6 +22,17 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.7.0
 
 ### fonts
 
+- **forme v0.14.0** (#421). A subset decides each glyph the face used before
+  it carries it: a glyph whose record is malformed — an instruction length past
+  its record, a cut-off or self-referencing composite, a component past the
+  end of the font, a CFF glyph whose charstring does not run — is refused,
+  where it used to be copied as it stood, and `Embed` fails with a
+  `*shape.GlyphError` naming every such glyph used. A face embedded whole (its
+  licence forbids subsetting) is unaffected. Each subset also runs under
+  forme's default limits on work and bytes (`fonts.ErrSubsetLimit`).
+
+### fonts
+
 - **A document declaring a version before PDF 1.6 carries a CFF program
   bare** (#418), as `/FontFile3 /CIDFontType0C`, not in the OpenType wrapper
   PDF 1.6 added; one declaring a version before 1.4 writes bitmap and colour
@@ -30,6 +41,15 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.7.0
   claim.
 
 ## Added
+
+### fonts
+
+- **`Face.CheckGlyph`** (#421) says, before a glyph is drawn, whether `Embed`
+  can carry it — forme's decision for a subsetted face, taking the number
+  drawing hands out — so a run needing a glyph that cannot be kept can be drawn
+  another way. **`Face.EmbedFormsContext`** embeds under a context and
+  **`fonts.SubsetLimits`**, failing with the context's error or one wrapping
+  **`fonts.ErrSubsetLimit`**.
 
 ### fonts
 
