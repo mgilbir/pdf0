@@ -87,6 +87,30 @@ still subset with the glyph in it, and the glyph is in the program, `/W`,
 `/CIDSet` and the ToUnicode CMap. A simple or standard face, whose codes are
 characters, cannot draw a glyph by index.
 
+### A content stream you write yourself
+
+A caller that writes its own content stream — its own `BT`/`ET`, font
+selection and positioning — still needs what `Draw` decides on the way: what
+each glyph stands for, which the ToUnicode CMap says, and which stretches need
+an `/ActualText`. Marking glyphs used through forme's `Use` is not enough: the
+CMap then knows each glyph only by the character the font's cmap names it by,
+so a ligature or a conjunct extracts as nothing. Three calls give a caller
+`Draw`'s decisions without its emitter:
+
+- `Face.Record(text, glyphs)` does to the face what `Draw` does — marks the
+  glyphs used and records what each was drawn for — and returns the run's
+  stretches (`fonts.Segment`), each with whether it is wrapped in an
+  `/ActualText` and with what text. It is the same function `Draw` calls.
+- `Face.AppendCode(dst, gid)` appends the code a glyph is shown with: the one
+  function every drawing call writes codes with.
+- `Face.NominalAdvance(glyph)` is how far the font dictionary moves the pen
+  for it; what shaping placed differently is the caller's displacement.
+
+Runs are recorded in the order they are written, and the face is embedded
+after the last, as after the last `Draw`. A face written as Type 3 fonts gives
+out its codes as it draws, by size and colour, and is refused
+(`fonts.ErrDrawnAsType3`): draw it with `Draw`.
+
 ## Embed after drawing, or let the page do it
 
 Embedding subsets a face to the glyphs it has drawn so far. That fixes the

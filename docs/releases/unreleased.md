@@ -22,6 +22,16 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.7.0
 
 ## Added
 
+### fonts
+
+- **Drawing a face into a content stream of one's own** (#417):
+  `Face.Record` does to a face what `Draw` does — marks the glyphs used and
+  records what each was drawn for, which the ToUnicode CMap says — and returns
+  the run's stretches (`fonts.Segment`) and which need an `/ActualText`.
+  `Face.AppendCode` writes a glyph's code and `Face.NominalAdvance` gives the
+  width the font dictionary states for it. A face written as Type 3 fonts is
+  refused (`fonts.ErrDrawnAsType3`).
+
 ## Fixed
 
 ### Validation
