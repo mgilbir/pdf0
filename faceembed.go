@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/mgilbir/pdf0/fonts"
+	"github.com/mgilbir/pdf0/internal/core"
 	"github.com/mgilbir/pdf0/object"
 )
 
@@ -72,9 +73,17 @@ func (d *Document) embedFaces(faces map[object.Name]*fonts.Face) (map[object.Nam
 	// 6.4), and a bitmap face's anti-aliased and colour glyphs are soft
 	// masks unless they are written without (fonts.Forms.Opaque); and it is
 	// based on PDF 1.4, which carries a CFF program bare (fonts.Forms.PDFA1).
-	// The claim is read as each page is added, so a font embedded before it
-	// was made is rewritten with the next page that names it.
+	// A document that declares a version before 1.4 has no transparency
+	// either, and one before 1.6 no OpenType font file (fonts.Forms.BareCFF).
+	// The claim and the version are read as each page is added, so a font
+	// embedded before either was set is rewritten with the next page that
+	// names it.
 	pdfa1 := d.existingPDFAIdentification().part == "1"
+	opaque, bareCFF := pdfa1, pdfa1
+	if maj, minor, ok := core.ParsePDFVersion(d.declaredVersion()); ok && maj == 1 {
+		opaque = opaque || minor < 4
+		bareCFF = bareCFF || minor < 6
+	}
 	refs := make(map[object.Name]object.IndirectRef, len(faces))
 	var rewrites []rewrite
 	// The two forms of one face are one embedding, keyed by the face they
@@ -117,8 +126,9 @@ func (d *Document) embedFaces(faces map[object.Name]*fonts.Face) (map[object.Nam
 			}
 		}
 		want := named[face]
-		want.Opaque = pdfa1
+		want.Opaque = opaque
 		want.PDFA1 = pdfa1
+		want.BareCFF = bareCFF
 		if have {
 			want.Horizontal = want.Horizontal || prev.forms.Horizontal
 			want.Vertical = want.Vertical || prev.forms.Vertical
