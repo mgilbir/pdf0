@@ -30,9 +30,6 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.7.0
   `*shape.GlyphError` naming every such glyph used. A face embedded whole (its
   licence forbids subsetting) is unaffected. Each subset also runs under
   forme's default limits on work and bytes (`fonts.ErrSubsetLimit`).
-
-### fonts
-
 - **A document declaring a version before PDF 1.6 carries a CFF program
   bare** (#418), as `/FontFile3 /CIDFontType0C`, not in the OpenType wrapper
   PDF 1.6 added; one declaring a version before 1.4 writes bitmap and colour
@@ -50,9 +47,6 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.7.0
   another way. **`Face.EmbedFormsContext`** embeds under a context and
   **`fonts.SubsetLimits`**, failing with the context's error or one wrapping
   **`fonts.ErrSubsetLimit`**.
-
-### fonts
-
 - **Drawing a face into a content stream of one's own** (#417):
   `Face.Record` does to a face what `Draw` does — marks the glyphs used and
   records what each was drawn for, which the ToUnicode CMap says — and returns
@@ -68,6 +62,14 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.7.0
   under its PostScript name, for a pipeline that embeds each font once at a
   later assembly step: the font is complete once the program the face draws
   is added to its descriptor. Not standalone, and not PDF/A on its own.
+
+### pdf0
+
+- **`Document.AddPageContext`, `AddFormContext` and
+  `AddTilingPatternContext`** (#422) embed the faces they name under a context
+  and `fonts.SubsetLimits`; a done context or a limit fails the call adding
+  nothing. `htmlpdf.RenderContext` and `RenderIntoContext` now embed the
+  page's fonts under their context too, with forme's default subset limits.
 
 ## Fixed
 
