@@ -44,6 +44,10 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.7.0
   of what `Forms.PDFA1` changes, and **`fonts.Embedded.Version`** says the
   earliest PDF version whose features cover every object an embedding wrote,
   for a caller that writes its own header.
+- **`fonts.Forms.Named`** (#419) writes a composite face without its program,
+  under its PostScript name, for a pipeline that embeds each font once at a
+  later assembly step: the font is complete once the program the face draws
+  is added to its descriptor. Not standalone, and not PDF/A on its own.
 
 ## Fixed
 
