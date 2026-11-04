@@ -232,3 +232,14 @@ func (c *doneAfter) Err() error {
 	}
 	return nil
 }
+
+// TestFaceStaysComparable: Face was comparable through v0.7.0, and a field
+// added for a cache must not take that away (gorelease reported a slice field
+// doing so). A Face value is compared here, which does not compile if it is
+// not comparable.
+func TestFaceStaysComparable(t *testing.T) {
+	a, b := Face{}, Face{}
+	if a != b {
+		t.Error("two zero Faces differ")
+	}
+}
