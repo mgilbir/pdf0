@@ -177,6 +177,10 @@ func (o Options) layoutOptions() layout.Options {
 		MinFontSizePt:   o.MinFontSizePt,
 		AllowScaleUp:    o.AllowScaleUp,
 		TransformGroups: true,
+		// No reported regions: a Component marks where a host draws over
+		// the page at its own cadence, and a written PDF has no host. See
+		// drawnFields' Component.
+		Reported: "",
 	}
 }
 
