@@ -2,6 +2,7 @@ package fonts
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"math"
 	"slices"
@@ -187,8 +188,17 @@ var errNoForm = errors.New("fonts: EmbedForms was asked for neither form of the 
 // A simple or standard face has no vertical form, and asking for one is an
 // error.
 func (f *Face) EmbedForms(doc Allocator, forms Forms) (Embedded, error) {
+	return f.embedFormsRun(doc, forms, embedRun{ctx: context.Background()})
+}
+
+// embedFormsRun is EmbedForms and EmbedFormsContext: the embedding under run's
+// context and subset limits.
+func (f *Face) embedFormsRun(doc Allocator, forms Forms, run embedRun) (Embedded, error) {
+	if err := run.ctx.Err(); err != nil {
+		return Embedded{}, err
+	}
 	va := &versionAllocator{doc: doc}
-	out, err := f.embedForms(va, forms)
+	out, err := f.embedForms(va, forms, run)
 	if err != nil {
 		return Embedded{}, err
 	}
@@ -198,7 +208,7 @@ func (f *Face) EmbedForms(doc Allocator, forms Forms) (Embedded, error) {
 
 // embedForms is EmbedForms, writing through the allocator that records the
 // version.
-func (f *Face) embedForms(doc Allocator, forms Forms) (Embedded, error) {
+func (f *Face) embedForms(doc Allocator, forms Forms, run embedRun) (Embedded, error) {
 	if forms.PDFA1 {
 		forms.BareCFF = true
 	}
@@ -229,16 +239,16 @@ func (f *Face) embedForms(doc Allocator, forms Forms) (Embedded, error) {
 		if len(f.Used()) == 0 {
 			return Embedded{}, errEmbedBeforeUse
 		}
-		ref, err := f.embedSimple(doc)
+		ref, err := f.embedSimple(doc, run)
 		return Embedded{Horizontal: ref}, err
 	}
 	if f.isType3() {
 		if forms.Named {
 			return Embedded{}, errNamedType3
 		}
-		return f.embedType3(doc, forms)
+		return f.embedType3(doc, forms, run)
 	}
-	return f.embedComposite(doc, forms)
+	return f.embedComposite(doc, forms, run)
 }
 
 var (
@@ -255,7 +265,7 @@ var (
 // embedComposite writes a composite face: the program, /CIDSet, the
 // descriptor, the CIDFont, the ToUnicode CMap, and the Identity-H and
 // Identity-V Type 0 fonts forms asks for, in that order.
-func (f *Face) embedComposite(doc Allocator, forms Forms) (Embedded, error) {
+func (f *Face) embedComposite(doc Allocator, forms Forms, run embedRun) (Embedded, error) {
 	if f.NumGlyphs() == 0 {
 		return Embedded{}, errNoGlyphs
 	}
@@ -293,7 +303,7 @@ func (f *Face) embedComposite(doc Allocator, forms Forms) (Embedded, error) {
 		})
 	}
 
-	program, kept, subset, err := f.programToEmbed()
+	program, kept, subset, err := f.programToEmbed(run)
 	if err != nil {
 		return Embedded{}, err
 	}
@@ -498,8 +508,8 @@ func (f *Face) EmbedRevision() int {
 // the difference that matters: the same numbers as a composite font's /W, keyed
 // by the other of the two numberings. Both are written from the program's own
 // metrics, because the validator checks them against it.
-func (f *Face) embedSimple(doc Allocator) (object.IndirectRef, error) {
-	program, kept, subset, err := f.programToEmbed()
+func (f *Face) embedSimple(doc Allocator, run embedRun) (object.IndirectRef, error) {
+	program, kept, subset, err := f.programToEmbed(run)
 	if err != nil {
 		return object.IndirectRef{}, err
 	}

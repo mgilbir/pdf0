@@ -109,7 +109,7 @@ var errNoType3Vertical = errors.New("fonts: a face whose glyphs are only bitmaps
 // embedType3 writes every sub-font the face has drawn with: the home font as
 // Embedded.Horizontal and the others in Embedded.Subfonts, in the order
 // SubfontName numbers them.
-func (f *Face) embedType3(doc Allocator, forms Forms) (Embedded, error) {
+func (f *Face) embedType3(doc Allocator, forms Forms, run embedRun) (Embedded, error) {
 	if forms.Vertical {
 		return Embedded{}, errNoType3Vertical
 	}
@@ -121,7 +121,7 @@ func (f *Face) embedType3(doc Allocator, forms Forms) (Embedded, error) {
 	}
 	var out Embedded
 	for _, sub := range f.t3.subs {
-		ref, err := f.embedSubfont(doc, sub, forms.Opaque)
+		ref, err := f.embedSubfont(doc, sub, forms.Opaque, run)
 		if err != nil {
 			return Embedded{}, err
 		}
@@ -137,7 +137,7 @@ func (f *Face) embedType3(doc Allocator, forms Forms) (Embedded, error) {
 // embedSubfont writes one sub-font: its glyph procedures and their images,
 // the ToUnicode CMap, a descriptor and the font dictionary, which is the
 // reference returned. opaque writes it without transparency (Forms.Opaque).
-func (f *Face) embedSubfont(doc Allocator, sub *subFont, opaque bool) (object.IndirectRef, error) {
+func (f *Face) embedSubfont(doc Allocator, sub *subFont, opaque bool, run embedRun) (object.IndirectRef, error) {
 	t := f.t3
 	toGlyph := 1000 / float64(f.UnitsPerEm())
 	charProcs := &object.Dictionary{}
@@ -149,6 +149,12 @@ func (f *Face) embedSubfont(doc Allocator, sub *subFont, opaque bool) (object.In
 	bbox := [4]float64{}
 	haveBox := false
 	for code, gid := range sub.gids {
+		// A glyph is painted once per sub-font, and a colour glyph's paint
+		// graph or a strike's image is the costly part of an embedding with
+		// no program to subset: the context is asked before each.
+		if err := run.ctx.Err(); err != nil {
+			return object.IndirectRef{}, err
+		}
 		var g bitmapGlyph
 		if !f.vectorGlyph(gid) {
 			var err error

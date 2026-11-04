@@ -114,7 +114,7 @@ func embeddingAllowed(fsType shape.FSType, stated bool) (whole bool, err error) 
 // listing them all, and subset false. For a face loaded from a WOFF that is
 // the sfnt the container held, which is what a font file stream carries.
 // Every other face is subsetted to the glyphs it drew.
-func (f *Face) programToEmbed() (program []byte, kept []int, subset bool, err error) {
+func (f *Face) programToEmbed(run embedRun) (program []byte, kept []int, subset bool, err error) {
 	whole, err := embeddingAllowed(f.EmbeddingPermissions())
 	if err != nil {
 		return nil, nil, false, err
@@ -130,9 +130,67 @@ func (f *Face) programToEmbed() (program []byte, kept []int, subset bool, err er
 		}
 		return program, kept, false, nil
 	}
-	program, kept, err = f.SubsetGlyphs()
+	program, kept, err = f.SubsetGlyphsContext(run.ctx, run.limits)
 	if err != nil {
 		return nil, nil, false, err
 	}
 	return program, kept, true, nil
+}
+
+// CheckGlyph reports whether Embed can carry glyph gid in the font it writes:
+// nil when it can, and otherwise why not. It is the question to ask as a
+// glyph is first drawn, so that a run needing a glyph the font cannot carry
+// can be drawn some other way — as outlines, say — while the rest of the text
+// stays text, rather than the whole face being refused at Embed.
+//
+// gid is the number drawing hands out, a Glyph's GID: the glyph index for a
+// composite face, the WinAnsi code for a simple one, whose glyph is the one
+// the font's cmap maps the code's character to (.notdef for none).
+//
+// For a face that is subsetted it is forme's decision (shape.Face.CheckGlyph),
+// the one the subset makes for every glyph the face used: a fault in the
+// glyph's own data, or in one it is built from, is a *shape.GlyphError, and a
+// reason that would refuse every glyph of the face is a plain error. A face
+// that used only glyphs CheckGlyph accepts is not refused by Embed with a
+// GlyphError; one that used others is, with one naming every such glyph by its
+// index in the font — which for a simple face is not the code.
+//
+// A face whose licence forbids subsetting is embedded whole, as the font
+// file states it, and carries every glyph: nil. So does a face written as
+// Type 3 fonts, which carries no font program; a glyph it cannot paint fails
+// the drawing (Draw), not this. A standard face embeds nothing: nil.
+func (f *Face) CheckGlyph(gid int) error {
+	f = f.Horizontal()
+	if f.IsStandard() || f.isType3() {
+		return nil
+	}
+	whole, err := embeddingAllowed(f.EmbeddingPermissions())
+	if err != nil {
+		return err
+	}
+	if whole {
+		return nil
+	}
+	if f.IsSimple() {
+		gid = f.simpleGlyph(gid)
+	}
+	return f.Face.CheckGlyph(gid)
+}
+
+// simpleGlyph is the glyph index a simple face shows for a WinAnsi code: the
+// one the font's cmap maps the code's character to, or 0, .notdef.
+func (f *Face) simpleGlyph(code int) int {
+	if f.simpleGlyphs == nil {
+		f.simpleGlyphs = make([]int, 256)
+		cmap := f.Cmap()
+		for c := range f.simpleGlyphs {
+			if r, ok := winAnsiRune(c); ok {
+				f.simpleGlyphs[c] = cmap[r]
+			}
+		}
+	}
+	if code < 0 || code >= len(f.simpleGlyphs) {
+		return 0
+	}
+	return f.simpleGlyphs[code]
 }
