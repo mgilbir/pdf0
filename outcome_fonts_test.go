@@ -70,7 +70,7 @@ func TestCIDSetOverALimitIsNotEmpty(t *testing.T) {
 		msg   string
 	}{
 		{pdfa.PDFA1b, "contains an empty CIDSet stream"},
-		{pdfa.PDFA2b, "CIDSet does not list all CIDs used for rendering"},
+		{pdfa.PDFA2b, "the CIDSet does not list CID 1, which the embedded font program has"},
 	}
 	for _, c := range checks {
 		if vs := ValidatePDFA(readRaw(t, file), c.level); !hasFinding(vs, "", c.msg) {
