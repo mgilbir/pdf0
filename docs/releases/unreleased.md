@@ -23,3 +23,12 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.7.0
 ## Added
 
 ## Fixed
+
+### Validation
+
+- **A CIDSet is held to the CIDs shown as veraPDF holds it** (#416). At
+  PDF/A-1 a CID shown has to be in the `/CIDSet` only when the embedded
+  program has it, and only for a subset; at PDF/A-2 and -3 the set is held to
+  the program alone. A `CIDFontType0` whose CFF is not CID-keyed, whose program
+  has no CIDs, used to fail every set at PDF/A-2 and -3, and a set of CID 0
+  alone, which veraPDF passes at every part, at all of them.
