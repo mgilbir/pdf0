@@ -125,6 +125,33 @@ comes to use whose version has not been decided, and
 Association's Arlington model (which dates `FontFile2` in a `CIDFontType2`
 descriptor to 1.2 where ISO 32000-2 says 1.3; the version follows ISO).
 
+## A font written by name, embedded later
+
+A pipeline that writes many documents for one later step to assemble — charts
+placed into a report, say — can embed each font once for all of them rather
+than once per document. `Forms.Named` writes a composite face without its
+program: the `Type0` font, its CIDFont with `/W`, `/DW` and (for TrueType
+outlines) `/CIDToGIDMap /Identity`, the ToUnicode CMap, and a descriptor with
+no font file and no `/CIDSet`, all under the face's PostScript name with no
+subset tag. The codes are the face's own glyph indices (CIDs, for a CID-keyed
+CFF), so the assembler adds to the descriptor, under the same name, the
+program the face draws (`shape.Face.Program`) or a subset of it that keeps that
+numbering, and the font is complete.
+
+Until then it is not standalone: a reader substitutes a font whose glyph
+indices are another font's, and no PDF/A level permits a font that is not
+embedded, so `Forms.PDFA1` with `Named` is refused and the validators report
+the font as not embedded (and nothing else). The text extracts already, since
+the ToUnicode CMap is there. Only a composite face drawn from outlines can be
+named: a simple or standard face, and one written as Type 3 fonts, are
+refused. The licence is not asked, since nothing of the font is carried; the
+step that embeds the program has to ask it.
+
+`TestANamedFontIsTheFontOnceTheProgramIsAdded` plays the assembler for a
+TrueType, a CID-keyed CFF and a name-keyed CFF face: with the program added,
+the file passes PDF/A-2b in pdf0 and veraPDF, extracts as the text, and renders
+pixel for pixel as the same page with the font embedded the usual way.
+
 ## CID-keyed CFF
 
 A CID-keyed CFF numbers its glyphs by CID and reaches them through its charset,

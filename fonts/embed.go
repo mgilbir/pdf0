@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 
@@ -119,6 +120,26 @@ type Forms struct {
 	// outlines alone, which is all a reader draws from. PDFA1 implies it.
 	// It changes nothing else, and nothing for a face that is not CFF.
 	BareCFF bool
+	// Named writes a composite face without its program: the Type 0 font,
+	// its CIDFont, /W, the ToUnicode CMap and a descriptor with no font
+	// file and no /CIDSet, under the face's PostScript name with no subset
+	// tag. It is for a document that is assembled later, by something that
+	// embeds the program once for many such fonts: under the same name it
+	// adds /FontFile2 (or /FontFile3) to the descriptor, with the program
+	// the face draws (shape.Face.Program — for a face from LoadInstance the
+	// instance it cut, for a CFF2 face the CFF it draws) or a subset of it
+	// that keeps the face's numbering, its glyph indices or, for a CID-keyed
+	// CFF, its CIDs. Until then the font is not standalone: a reader draws
+	// the text in a font it substitutes, whose glyph indices are some other
+	// font's, and no PDF/A level permits a font that is not embedded, so
+	// PDFA1 with Named is refused, and a validator reports the font.
+	//
+	// Only a composite face drawn with outlines can be named: a simple or
+	// standard face, and one written as Type 3 fonts, which carries its
+	// glyphs in its own dictionaries, are refused. The face's licence is not
+	// asked, since nothing of the font is carried; the step that embeds the
+	// program has to ask it.
+	Named bool
 	// Opaque writes a face that is written as Type 3 fonts without
 	// transparency, for a document that may not use it (PDF/A-1, ISO
 	// 19005-1 6.4): a greyscale glyph is a stencil of its coverage, in the
@@ -188,6 +209,16 @@ func (f *Face) embedForms(doc Allocator, forms Forms) (Embedded, error) {
 	if forms.Vertical && !f.composite() {
 		return Embedded{}, errNoVerticalForm
 	}
+	if forms.Named {
+		switch {
+		case !f.composite():
+			return Embedded{}, errNamedNotComposite
+		case forms.PDFA1:
+			return Embedded{}, errNamedPDFA
+		case f.Name() == "":
+			return Embedded{}, errNamedNoName
+		}
+	}
 	if f.IsStandard() {
 		// A standard face embeds nothing: the reader has it, and naming it is
 		// the whole mechanism.
@@ -202,10 +233,24 @@ func (f *Face) embedForms(doc Allocator, forms Forms) (Embedded, error) {
 		return Embedded{Horizontal: ref}, err
 	}
 	if f.isType3() {
+		if forms.Named {
+			return Embedded{}, errNamedType3
+		}
 		return f.embedType3(doc, forms)
 	}
 	return f.embedComposite(doc, forms)
 }
+
+var (
+	errNamedNotComposite = errors.New("fonts: only a composite face can be written by name " +
+		"(Forms.Named); a simple face's codes are characters in its own program's encoding")
+	errNamedType3 = errors.New("fonts: a face written as Type 3 fonts carries its glyphs in " +
+		"the font itself and cannot be written by name (Forms.Named)")
+	errNamedPDFA = errors.New("fonts: a font written by name (Forms.Named) embeds no program, " +
+		"which no PDF/A level permits (Forms.PDFA1)")
+	errNamedNoName = errors.New("fonts: the face has no PostScript name to be written by " +
+		"(Forms.Named), and a font named nothing cannot be found by name")
+)
 
 // embedComposite writes a composite face: the program, /CIDSet, the
 // descriptor, the CIDFont, the ToUnicode CMap, and the Identity-H and
@@ -234,6 +279,18 @@ func (f *Face) embedComposite(doc Allocator, forms Forms) (Embedded, error) {
 	registry, ordering, supplement, err := f.collection()
 	if err != nil {
 		return Embedded{}, err
+	}
+
+	if forms.Named {
+		// No program: the glyphs drawn are the ones /W describes, under the
+		// face's own name, for a program embedded later.
+		kept := append([]int{0}, f.Used()...)
+		slices.Sort(kept)
+		kept = slices.Compact(kept)
+		return f.writeComposite(doc, forms, compositeParts{
+			baseFont: object.Name(f.Name()), kept: kept,
+			registry: registry, ordering: ordering, supplement: supplement,
+		})
 	}
 
 	program, kept, subset, err := f.programToEmbed()
@@ -282,7 +339,28 @@ func (f *Face) embedComposite(doc Allocator, forms Forms) (Embedded, error) {
 	if withCIDSet {
 		cidSetRef = doc.Add(flateStream(cidSet))
 	}
+	return f.writeComposite(doc, forms, compositeParts{
+		baseFont: baseFont, kept: kept, program: programRef, cidSet: cidSetRef,
+		registry: registry, ordering: ordering, supplement: supplement,
+	})
+}
 
+// compositeParts are what writeComposite writes a composite face from: the
+// name, the glyphs /W describes, the collection, and the program and /CIDSet
+// already added, or the zero reference for none (Forms.Named).
+type compositeParts struct {
+	baseFont           object.Name
+	kept               []int
+	program, cidSet    object.IndirectRef
+	registry, ordering string
+	supplement         int
+}
+
+// writeComposite writes the descriptor, the CIDFont, the ToUnicode CMap and
+// the Type 0 fonts forms asks for, over the program and /CIDSet parts names.
+func (f *Face) writeComposite(doc Allocator, forms Forms, p compositeParts) (Embedded, error) {
+	baseFont, kept := p.baseFont, p.kept
+	registry, ordering, supplement := p.registry, p.ordering, p.supplement
 	d := f.Descriptor()
 	descriptor := &object.Dictionary{}
 	descriptor.Set("Type", object.Name("FontDescriptor"))
@@ -298,13 +376,16 @@ func (f *Face) embedComposite(doc Allocator, forms Forms) (Embedded, error) {
 	// acceptable. It is not scaled: the estimate is already in the thousandths
 	// PDF states it in.
 	descriptor.Set("StemV", object.Integer(d.StemV))
-	if f.IsCFF() {
-		descriptor.Set("FontFile3", programRef)
-	} else {
-		descriptor.Set("FontFile2", programRef)
+	switch {
+	case p.program.Number == 0:
+		// Named: the program is embedded later, under this name.
+	case f.IsCFF():
+		descriptor.Set("FontFile3", p.program)
+	default:
+		descriptor.Set("FontFile2", p.program)
 	}
-	if withCIDSet {
-		descriptor.Set("CIDSet", cidSetRef)
+	if p.cidSet.Number != 0 {
+		descriptor.Set("CIDSet", p.cidSet)
 	}
 	descriptorRef := doc.Add(descriptor)
 

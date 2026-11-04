@@ -69,9 +69,13 @@ var keyVersions = map[object.Name]pdfVersion{
 // subtypeVersions are the /Subtype values that need a later version than
 // 1.1: the font file formats (Table 124) and the font kinds (9.7).
 var subtypeVersions = map[object.Name]pdfVersion{
-	"Type0":         12, // a composite font, 9.7.1
-	"CIDFontType0":  12,
-	"CIDFontType2":  13, // FontFile2 for a CIDFontType2 is PDF 1.3 (Table 124)
+	"Type0":        12, // a composite font, 9.7.1
+	"CIDFontType0": 12,
+	// FontFile2 for a CIDFontType2 is PDF 1.3 (Table 124). The descriptor
+	// that carries it cannot tell it is a CIDFont's, so the CIDFont's own
+	// subtype carries the version; one written by name (Forms.Named), with
+	// no FontFile2, states 1.3 where 1.2 would do.
+	"CIDFontType2":  13,
 	"Type1C":        12,
 	"CIDFontType0C": 13,
 	"OpenType":      16,
