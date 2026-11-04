@@ -181,7 +181,7 @@ func (f *Face) CheckGlyph(gid int) error {
 // one the font's cmap maps the code's character to, or 0, .notdef.
 func (f *Face) simpleGlyph(code int) int {
 	if f.simpleGlyphs == nil {
-		f.simpleGlyphs = make([]int, 256)
+		f.simpleGlyphs = new([256]int)
 		cmap := f.Cmap()
 		for c := range f.simpleGlyphs {
 			if r, ok := winAnsiRune(c); ok {

@@ -80,8 +80,10 @@ type Face struct {
 	pxPerUnit float64
 
 	// simpleGlyphs is a simple face's glyph index for each code, built on
-	// the first CheckGlyph that needs it; see simpleGlyph.
-	simpleGlyphs []int
+	// the first CheckGlyph that needs it; see simpleGlyph. A pointer to an
+	// array rather than a slice: Face is comparable, and a slice field would
+	// make it not (gorelease reported it, before v0.8.0).
+	simpleGlyphs *[256]int
 }
 
 // Adopt wraps a shaping face so it can be drawn and embedded.
