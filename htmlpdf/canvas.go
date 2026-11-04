@@ -1,6 +1,7 @@
 package htmlpdf
 
 import (
+	"context"
 	"fmt"
 	"image"
 
@@ -27,7 +28,7 @@ import (
 // checkDrawable before this runs; drawnFields lists which, and a test holds
 // that list against the operations layout declares.
 func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Document, error) {
-	return writePageTo(pdf0.NewDocument(), ops, page, scale, nil)
+	return writePageTo(context.Background(), pdf0.NewDocument(), ops, page, scale, nil)
 }
 
 // writePageTo is writePage into a document of the caller's: the page is added
@@ -38,7 +39,7 @@ func writePage(ops []layout.Op, page layout.PageSize, scale float64) (*pdf0.Docu
 // tags, when not nil, makes the page a tagged one: what it draws is marked as
 // it is drawn, and tags records the spans for the structure tree (tagged.go),
 // which is set on the document that ends up holding the page.
-func writePageTo(doc *pdf0.Document, ops []layout.Op, page layout.PageSize, scale float64, tags *tagger) (*pdf0.Document, error) {
+func writePageTo(ctx context.Context, doc *pdf0.Document, ops []layout.Op, page layout.PageSize, scale float64, tags *tagger) (*pdf0.Document, error) {
 	// The one transform. Reading it right to left: layout units become points,
 	// the y axis is inverted, the whole thing is scaled to fit, and the result
 	// is placed inside the page's margin.
@@ -51,6 +52,7 @@ func writePageTo(doc *pdf0.Document, ops []layout.Op, page layout.PageSize, scal
 	tx := page.Margin.Left.Pt()
 	ty := page.Height.Pt() - page.Margin.Top.Pt()
 	w := &pageWriter{
+		ctx:    ctx,
 		doc:    doc,
 		toPage: pageTransform{k: k, tx: tx, ty: ty},
 		faces:  map[*shape.Face]*fonts.Face{},
@@ -68,7 +70,7 @@ func writePageTo(doc *pdf0.Document, ops []layout.Op, page layout.PageSize, scal
 	}
 	c.b.Restore()
 
-	if _, err := w.doc.AddPage(pdf0.Page{
+	if _, err := w.doc.AddPageContext(w.ctx, pdf0.Page{
 		Width:       page.Width.Pt(),
 		Height:      page.Height.Pt(),
 		Content:     c.b,
@@ -82,7 +84,7 @@ func writePageTo(doc *pdf0.Document, ops []layout.Op, page layout.PageSize, scal
 		// A translucent mark composites against whatever is behind it, and
 		// without a page group what that is is left to the reader.
 		Group: w.transparent,
-	}); err != nil {
+	}, fonts.SubsetLimits{}); err != nil {
 		return nil, err
 	}
 	return w.doc, nil
@@ -92,6 +94,10 @@ func writePageTo(doc *pdf0.Document, ops []layout.Op, page layout.PageSize, scal
 // embedding per face and one XObject per image however many streams draw them,
 // and the page's links.
 type pageWriter struct {
+	// ctx is the render's, which the faces the page and its forms name are
+	// embedded under (pdf0.Document.AddPageContext), with forme's default
+	// subset limits: context.Background() for a render without one.
+	ctx context.Context
 	doc *pdf0.Document
 	// toPage is the page transform, for what is written in the page's own
 	// coordinates rather than drawn: a link annotation's /Rect.

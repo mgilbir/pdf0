@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/mgilbir/forme/layout"
 )
 
 // RenderContext renders a document a caller does not control under a context
@@ -96,5 +98,57 @@ func TestRenderContextRefusesAsRenderDoes(t *testing.T) {
 	}
 	if len(a.Findings) != len(b.Findings) || out.Document != nil {
 		t.Errorf("Render refused with %d findings, RenderContext with %d", len(a.Findings), len(b.Findings))
+	}
+}
+
+// errCounter is a live context that counts its Err calls and reports itself
+// cancelled from the done-th on (never, for done 0).
+type errCounter struct {
+	context.Context
+	done, calls int
+}
+
+func (c *errCounter) Err() error {
+	c.calls++
+	if c.done > 0 && c.calls >= c.done {
+		return context.Canceled
+	}
+	return nil
+}
+
+// TestRenderContextReachesEmbedding (#420): the context RenderContext is given
+// is the one the page's fonts are embedded under, not only the one layout
+// composes under. Composition asks its context a number of times the same
+// input always comes to; a context that turns done on the next ask after
+// those — the page's, as AddPageContext embeds its faces — stops the render
+// with its error and no document, where one that composition alone saw would
+// have let the page be written.
+func TestRenderContextReachesEmbedding(t *testing.T) {
+	in := Input{HTML: "<p>office affluent</p>", Fonts: notoSansSet(t)}
+	opts := Options{Page: A4}
+	composeAsks := func() int {
+		c := &errCounter{Context: context.Background()}
+		if _, err := layout.ComposeContext(c, opts.layoutInput(in), opts.layoutOptions(), RunLimits{}); err != nil {
+			t.Fatal(err)
+		}
+		return c.calls
+	}
+	n := composeAsks()
+	if again := composeAsks(); again != n {
+		t.Fatalf("composition asked its context %d times, then %d: the count is not the input's", n, again)
+	}
+	all := &errCounter{Context: context.Background()}
+	if _, err := RenderContext(all, in, opts, RunLimits{}); err != nil {
+		t.Fatal(err)
+	}
+	if all.calls <= n {
+		t.Fatalf("the render asked its context %d times, composition alone %d: nothing after composition asks it", all.calls, n)
+	}
+	out, err := RenderContext(&errCounter{Context: context.Background(), done: n + 1}, in, opts, RunLimits{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("a context done after composition: err = %v, want context.Canceled", err)
+	}
+	if out.Document != nil {
+		t.Error("a render stopped while embedding returned a document")
 	}
 }

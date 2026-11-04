@@ -232,12 +232,12 @@ func Render(in Input, opts Options) (Result, error) {
 		return Result{}, err
 	}
 	if isPDFA {
-		return renderPDFA(in, opts, func(in Input, o layout.Options) (layout.Composed, error) {
+		return renderPDFA(context.Background(), in, opts, func(in Input, o layout.Options) (layout.Composed, error) {
 			return layout.Compose(in, o), nil
 		})
 	}
 	composed := layout.Compose(opts.layoutInput(in), opts.layoutOptions())
-	out, err := finish(composed, in, opts, nil)
+	out, err := finish(context.Background(), composed, in, opts, nil)
 	out, err = taggedInfo(out, err, in, opts, composed.Document)
 	return readingDirection(out, err, composed.Document)
 }
@@ -325,7 +325,7 @@ func (o Options) pdfaRequested() (bool, error) {
 // skeleton that is thrown away, so a profile or a title of theirs that cannot
 // be written fails before any layout is done, as it did when the document came
 // first. The page is then added as RenderInto adds one.
-func renderPDFA(in Input, opts Options, compose func(Input, layout.Options) (layout.Composed, error)) (Result, error) {
+func renderPDFA(ctx context.Context, in Input, opts Options, compose func(Input, layout.Options) (layout.Composed, error)) (Result, error) {
 	level := opts.PDFA.Level
 	if !writesPagesFor(level, opts.Tagged) {
 		return Result{}, fmt.Errorf("%w: %s", ErrUnsupportedLevel, level)
@@ -347,7 +347,7 @@ func renderPDFA(in Input, opts Options, compose func(Input, layout.Options) (lay
 	if err != nil {
 		return Result{}, err
 	}
-	out, err := finish(composed, in, opts, target)
+	out, err := finish(ctx, composed, in, opts, target)
 	out.ShapingWork = composed.ShapingWork
 	return readingDirection(out, err, composed.Document)
 }
@@ -447,7 +447,7 @@ func RenderContext(ctx context.Context, in Input, opts Options, limits RunLimits
 		return Result{}, err
 	}
 	if isPDFA {
-		return renderPDFA(in, opts, func(in Input, o layout.Options) (layout.Composed, error) {
+		return renderPDFA(ctx, in, opts, func(in Input, o layout.Options) (layout.Composed, error) {
 			return layout.ComposeContext(ctx, in, o, limits)
 		})
 	}
@@ -455,7 +455,7 @@ func RenderContext(ctx context.Context, in Input, opts Options, limits RunLimits
 	if err != nil {
 		return Result{}, err
 	}
-	out, err := finish(composed, in, opts, nil)
+	out, err := finish(ctx, composed, in, opts, nil)
 	out.ShapingWork = composed.ShapingWork
 	out, err = taggedInfo(out, err, in, opts, composed.Document)
 	return readingDirection(out, err, composed.Document)
@@ -511,7 +511,7 @@ func renderInto(doc *pdf0.Document, in Input, opts Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	return finish(layout.Compose(opts.layoutInput(in), opts.layoutOptions()), in, opts, doc)
+	return finish(context.Background(), layout.Compose(opts.layoutInput(in), opts.layoutOptions()), in, opts, doc)
 }
 
 // RenderIntoContext is RenderInto under a context and a shaping budget, as
@@ -532,7 +532,7 @@ func renderIntoContext(ctx context.Context, doc *pdf0.Document, in Input, opts O
 	if err != nil {
 		return Result{}, err
 	}
-	out, err := finish(composed, in, opts, doc)
+	out, err := finish(ctx, composed, in, opts, doc)
 	out.ShapingWork = composed.ShapingWork
 	return out, err
 }
@@ -695,7 +695,7 @@ func atLeastPDF14(v string) string {
 // into a scratch document either way (scratchFor), so a write that fails part
 // way leaves target as it was, and for Render the scratch document is the
 // result.
-func finish(composed layout.Composed, in Input, opts Options, target *pdf0.Document) (Result, error) {
+func finish(ctx context.Context, composed layout.Composed, in Input, opts Options, target *pdf0.Document) (Result, error) {
 	out := Result{
 		Scale:       composed.Scale,
 		NaturalSize: composed.NaturalSize,
@@ -723,7 +723,7 @@ func finish(composed layout.Composed, in Input, opts Options, target *pdf0.Docum
 	if opts.Tagged {
 		tags = &tagger{}
 	}
-	doc, err := writePageTo(scratch, composed.Ops, composed.Page, composed.Scale, tags)
+	doc, err := writePageTo(ctx, scratch, composed.Ops, composed.Page, composed.Scale, tags)
 	if err != nil {
 		return out, err
 	}

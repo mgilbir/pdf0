@@ -115,6 +115,13 @@ the context is done or the budget runs out, the result is zero: no document,
 and no findings from a composition that stopped part way. Otherwise it is
 `Render`'s, byte for byte, with `Result.ShapingWork` saying what was charged.
 
+The fonts the page uses are embedded under the same context
+(`pdf0.Document.AddPageContext`): the subset a user-supplied font makes, the
+costly step of writing it, stops when the context does. It runs under forme's
+default subset limits (`fonts.SubsetLimits`: the work Load reads a font under,
+and the larger of twice the font program and 64 MiB written), whichever
+`RunLimits` are given.
+
 ## Supplying fonts and images
 
 A render reads nothing the caller has not handed it. `Input.Fonts` is the
