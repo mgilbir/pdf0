@@ -129,7 +129,9 @@ order: draw, then embed. Two ways to get it right:
 
 `Face.EmbedForms` is `Embed` with the choices spelled out (`fonts.Forms`):
 which of a face's fonts to write, and whether the document claims PDF/A-1.
-`Page.Faces` sets those for you.
+`Page.Faces` sets those for you. `Forms.Named` writes a composite face without
+its program, for a pipeline that embeds each font once at a later assembly
+step ([font-embedding.md](font-embedding.md#a-font-written-by-name-embedded-later)).
 
 ## Text you do not control
 
