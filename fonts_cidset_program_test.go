@@ -294,3 +294,134 @@ func TestTheValidatorHoldsTheCIDSetToTheProgram(t *testing.T) {
 		}
 	}
 }
+
+// TestTheCIDsShownAreHeldToTheSetAsVeraPDFHoldsThem writes /CIDSets the
+// writer never does, and holds pdf0's verdict on each to veraPDF's (#410).
+//
+// veraPDF asks the CIDs shown of a set at PDF/A-1 only (6.3.5), and only the
+// ones the program has; PDF/A-2 and -3 hold the set to the program alone. A
+// CFF that is not CID-keyed has no CIDs, so a set of CID 0 alone passes every
+// part, where pdf0 used to fail it at all of them, and the CIDs shown pass
+// PDF/A-1 and fail later parts, which list CIDs the program lacks. The
+// TrueType set that leaves out a CID shown is the control: the program has
+// that CID, so every part fails it, and the filter on what the program has
+// does not excuse a set that really is short.
+//
+// The expected clauses are veraPDF 1.30.3's, run over these files; with
+// PDF0_VERAPDF set, veraPDF is run again and held to them.
+func TestTheCIDsShownAreHeldToTheSetAsVeraPDFHoldsThem(t *testing.T) {
+	const kindTrueType, kindNameCFF = 0, 2
+	withSet := func(cids func(f *fonts.Face, doc *Document) []int) func(*testing.T, *fonts.Face, *Document) {
+		return func(t *testing.T, f *fonts.Face, doc *Document) {
+			fd := cidFontDescriptor(t, doc)
+			set := cids(f, doc)
+			highest := 0
+			for _, c := range set {
+				highest = max(highest, c)
+			}
+			bits := make([]byte, highest/8+1)
+			for _, c := range set {
+				bits[c/8] |= 0x80 >> (c % 8)
+			}
+			fd.Set("CIDSet", doc.Add(object.NewStream(nil, bits)))
+		}
+	}
+	cases := []struct {
+		name  string
+		kind  int
+		set   func(*testing.T, *fonts.Face, *Document)
+		fails map[string]string // flavour → clause; absent passes
+	}{
+		{"namecff-cid0", kindNameCFF, withSet(func(*fonts.Face, *Document) []int { return []int{0} }),
+			nil},
+		{"namecff-shown", kindNameCFF, withSet(func(f *fonts.Face, _ *Document) []int { return f.Used() }),
+			map[string]string{"2b": "6.2.11.4.2", "2u": "6.2.11.4.2", "3b": "6.2.11.4.2"}},
+		{"namecff-none", kindNameCFF, func(t *testing.T, _ *fonts.Face, doc *Document) {
+			cidFontDescriptor(t, doc).Delete("CIDSet")
+		}, map[string]string{"1b": "6.3.5"}},
+		{"truetype-short", kindTrueType, withSet(func(f *fonts.Face, doc *Document) []int {
+			// Every glyph slot but the first glyph shown.
+			shown := 0
+			for _, g := range f.Used() {
+				if g != 0 {
+					shown = g
+					break
+				}
+			}
+			fd := doc.Resolve(cidFontDescriptor(t, doc).Get("FontFile2")).(*object.Stream)
+			program, _ := doc.StreamData(fd)
+			n := int(binary.BigEndian.Uint16(font.SFNTTables(program)["maxp"][4:]))
+			var cids []int
+			for c := 0; c < n; c++ {
+				if c != shown {
+					cids = append(cids, c)
+				}
+			}
+			return cids
+		}), map[string]string{"1b": "6.3.5", "2b": "6.2.11.4.2", "2u": "6.2.11.4.2", "3b": "6.2.11.4.2"}},
+	}
+	flavours := []struct {
+		name  string
+		level pdfa.Level
+	}{{"1b", pdfa.PDFA1b}, {"2b", pdfa.PDFA2b}, {"2u", pdfa.PDFA2u}, {"3b", pdfa.PDFA3b}}
+	out := t.TempDir()
+	for _, fl := range flavours {
+		dir := filepath.Join(out, fl.name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range cases {
+			t.Run(c.name+"@"+fl.name, func(t *testing.T) {
+				kind := textFontKinds[c.kind]
+				face := kind.face(t)
+				back, _ := writeAndRead(t, textDocument(t, face, kind.text(face), fl.level))
+				c.set(t, face, back)
+				back, data := writeAndRead(t, back)
+				var got []string
+				for _, v := range ValidatePDFA(back, fl.level) {
+					got = append(got, v.Rule+": "+v.Message)
+				}
+				want := c.fails[fl.name]
+				switch {
+				case want == "" && len(got) > 0:
+					t.Errorf("pdf0 fails it on %v; veraPDF passes it", got)
+				case want != "" && (len(got) == 0 || !allUnder(got, want)):
+					t.Errorf("pdf0 fails it on %v; veraPDF fails it on %s alone", got, want)
+				}
+				if err := os.WriteFile(filepath.Join(dir, c.name+".pdf"), data, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	}
+	vera := os.Getenv("PDF0_VERAPDF")
+	if vera == "" {
+		t.Log("PDF0_VERAPDF is not set: pdf0 was held to the clauses veraPDF gave, not to veraPDF run now")
+		return
+	}
+	for _, fl := range flavours {
+		verdicts := veraPDFClauses(t, vera, fl.name, filepath.Join(out, fl.name))
+		for _, c := range cases {
+			var want []string
+			if cl := c.fails[fl.name]; cl != "" {
+				want = []string{cl}
+			}
+			got, ok := verdicts[c.name+".pdf"]
+			if !ok {
+				t.Errorf("%s at %s: veraPDF gave no verdict", c.name, fl.name)
+			} else if strings.Join(got, ",") != strings.Join(want, ",") {
+				t.Errorf("%s at %s: veraPDF fails it on %v; the test records %v", c.name, fl.name, got, want)
+			}
+		}
+	}
+}
+
+// allUnder reports whether every "rule: message" finding is under clause.
+func allUnder(findings []string, clause string) bool {
+	for _, f := range findings {
+		if !strings.HasPrefix(f, clause+": ") {
+			return false
+		}
+	}
+	return true
+}

@@ -866,6 +866,16 @@ func subsetRule(level Level) string {
 // CID actually used for rendering (ISO 19005-1 6.3.5, -2/-3 6.2.11.4.2).
 // An empty or partial set omitting a shown glyph is a violation. PDF/A-4 does
 // not regulate either set (see subsetRule).
+//
+// A CIDSet is held to the CIDs shown at PDF/A-1 only, and only for the CIDs
+// the embedded program has, as veraPDF reads 6.3.5: its CIDFont rule walks
+// the glyphs shown and asks the program whether it contains each one's CID,
+// which is the test programCIDs' has mirrors. A CID the program does not
+// have is a missing glyph, which 6.3.4's checks report; asking the set to list
+// it as well is what made a CFF that is not CID-keyed, whose program has no
+// CIDs, fail here for the very set checkCIDSetMatchesProgram requires (#410).
+// PDF/A-2 and -3 hold the set to the program instead
+// (checkCIDSetMatchesProgram); veraPDF asks nothing of the CIDs shown there.
 func checkFontSubsetCompleteness(doc core.View, level Level) []Violation {
 	if level.Part() == 4 {
 		return nil
@@ -897,8 +907,16 @@ func checkFontSubsetCompleteness(doc core.View, level Level) []Violation {
 				})
 			}
 		case "Type0":
+			if level.Part() != 1 {
+				continue // see above: PDF/A-2/-3 hold the CIDSet to the program
+			}
 			desc := core.Type0Descendant(doc, fontDict)
 			if desc == nil {
+				continue
+			}
+			// veraPDF's 6.3.5 test 3 is for a subset: a CIDFont whose name
+			// carries no subset tag passes it whatever its set says.
+			if name, _ := doc.ResolveName(desc.Get("BaseFont")); !subsetTagged(string(name)) {
 				continue
 			}
 			fd := doc.ResolveDict(desc.Get("FontDescriptor"))
@@ -906,6 +924,13 @@ func checkFontSubsetCompleteness(doc core.View, level Level) []Violation {
 				continue
 			}
 			cidSetStream, ok := doc.Resolve(fd.Get("CIDSet")).(*object.Stream)
+			if !ok {
+				continue
+			}
+			// A program this cannot read names no CID it has, so none is
+			// required here; what is wrong with it is reported where the
+			// program is checked.
+			_, has, ok := programCIDs(doc, desc, fd)
 			if !ok {
 				continue
 			}
@@ -923,7 +948,7 @@ func checkFontSubsetCompleteness(doc core.View, level Level) []Violation {
 			missing := false
 			for _, s := range u.Strings {
 				for _, code := range cmap.Decode([]byte(s)) {
-					if code.Mapped && code.CID != 0 && !present.Has(code.CID) {
+					if code.Mapped && code.CID != 0 && has(code.CID) && !present.Has(code.CID) {
 						missing = true
 					}
 				}
@@ -1181,8 +1206,8 @@ func programCIDs(doc core.View, desc, fd *object.Dictionary) (cids []int, has fu
 // checkCIDSetProgramComplete enforces the stricter PDF/A-1 subset rule
 // (ISO 19005-1 6.3.5): a CIDFont subset's CIDSet must be present, non-empty,
 // and enumerate every CID whose glyph is present in the embedded font
-// program. (PDF/A-2/-3 only require the CIDSet to cover the CIDs actually
-// used for rendering, handled by checkFontSubsetCompleteness.)
+// program. (The CIDs shown are checkFontSubsetCompleteness's, at PDF/A-1
+// only; PDF/A-2/-3 hold the set to the program, checkCIDSetMatchesProgram.)
 func checkCIDSetProgramComplete(doc core.View, level Level) []Violation {
 	if level.Part() != 1 {
 		return nil
