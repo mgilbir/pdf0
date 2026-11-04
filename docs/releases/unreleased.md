@@ -20,6 +20,15 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.7.0
 
 ## Behaviour changes
 
+### fonts
+
+- **A document declaring a version before PDF 1.6 carries a CFF program
+  bare** (#418), as `/FontFile3 /CIDFontType0C`, not in the OpenType wrapper
+  PDF 1.6 added; one declaring a version before 1.4 writes bitmap and colour
+  glyphs without transparency. `AddPage`, `AddForm` and `AddTilingPattern` set
+  both from the version the document declares, as they did from a PDF/A-1
+  claim.
+
 ## Added
 
 ### fonts
@@ -31,6 +40,10 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.7.0
   `Face.AppendCode` writes a glyph's code and `Face.NominalAdvance` gives the
   width the font dictionary states for it. A face written as Type 3 fonts is
   refused (`fonts.ErrDrawnAsType3`).
+- **`fonts.Forms.BareCFF`** (#418) writes a CFF program bare without the rest
+  of what `Forms.PDFA1` changes, and **`fonts.Embedded.Version`** says the
+  earliest PDF version whose features cover every object an embedding wrote,
+  for a caller that writes its own header.
 
 ## Fixed
 
