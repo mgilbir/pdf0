@@ -146,6 +146,9 @@ Every one, generated from the exported API:
 | `ValidatePDFVT2Context` | `ValidatePDFVT2` | `[]pdfvt.Violation` |
 | `ValidatePDFVTContext` | `ValidatePDFVT` | `[]pdfvt.Violation` |
 | `ValidatePDFXContext` | `ValidatePDFX` | `[]pdfx.Violation` |
+| `Document.AddFormContext` | `Document.AddForm` | `(object.IndirectRef, error)` |
+| `Document.AddPageContext` | `Document.AddPage` | `(object.IndirectRef, error)` |
+| `Document.AddTilingPatternContext` | `Document.AddTilingPattern` | `(object.IndirectRef, error)` |
 | `Document.ExtractImagesContext` | `Document.ExtractImages` | `([]images.ExtractedImage, error)` |
 | `Document.ExtractTextContext` | `Document.ExtractText` | `(string, error)` |
 | `Document.ImagesContext` | `Document.Images` | `iter.Seq2[images.ExtractedImage, error]` |

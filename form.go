@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/mgilbir/pdf0/fonts"
@@ -62,6 +63,22 @@ type Form struct {
 // As with AddPage, a name the drawing used and no resource map defines is an
 // error rather than a form that paints with something missing.
 func (d *Document) AddForm(f Form) (object.IndirectRef, error) {
+	return d.addForm(context.Background(), f, fonts.SubsetLimits{})
+}
+
+// AddFormContext is AddForm with the faces the form names embedded under ctx
+// and limits, as AddPageContext embeds a page's.
+func (d *Document) AddFormContext(ctx context.Context, f Form, limits fonts.SubsetLimits) (object.IndirectRef, error) {
+	if ctx == nil {
+		ctx = context.Background() // as every Context entry point here: nil never cancels
+	}
+	return d.addForm(ctx, f, limits)
+}
+
+func (d *Document) addForm(ctx context.Context, f Form, limits fonts.SubsetLimits) (object.IndirectRef, error) {
+	if err := ctx.Err(); err != nil {
+		return object.IndirectRef{}, err
+	}
 	if d == nil {
 		return object.IndirectRef{}, errNilDocument
 	}
@@ -87,7 +104,7 @@ func (d *Document) AddForm(f Form) (object.IndirectRef, error) {
 	if err := res.check(f.Content.Resources()); err != nil {
 		return object.IndirectRef{}, err
 	}
-	faceRefs, err := d.embedFaces(f.Faces)
+	faceRefs, err := d.embedFaces(ctx, limits, f.Faces)
 	if err != nil {
 		return object.IndirectRef{}, err
 	}

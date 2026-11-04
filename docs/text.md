@@ -152,8 +152,10 @@ every glyph used, its components and its subroutines. `Face.EmbedFormsContext`
 is `EmbedForms` under a context and `fonts.SubsetLimits` (the work the subset
 may do and the bytes it may write), and fails with the context's error or one
 wrapping `fonts.ErrSubsetLimit`. A face written as Type 3 fonts asks the
-context before each glyph it paints. `Document.AddPage` embeds without a
-context.
+context before each glyph it paints. `Document.AddPageContext`,
+`AddFormContext` and `AddTilingPatternContext` embed the faces they name the
+same way, and refuse adding nothing, as for any other reason; the plain calls
+embed under forme's default limits and no context.
 
 A glyph the font cannot carry — its own record malformed, or one it is built
 from — is refused by the subset rather than copied as it stands, and `Embed`

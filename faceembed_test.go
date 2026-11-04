@@ -2,6 +2,7 @@ package pdf0
 
 import (
 	"bytes"
+	"context"
 	"slices"
 	"strings"
 	"testing"
@@ -349,16 +350,18 @@ func TestSwapRefs(t *testing.T) {
 // back to the number the pages naming the vertical form hold.
 func TestARewriteOfADifferentSizeKeepsTheVerticalFontNumber(t *testing.T) {
 	calls := 0
-	defer func(orig func(*fonts.Face, fonts.Allocator, fonts.Forms) (fonts.Embedded, error)) { embedFace = orig }(embedFace)
+	defer func(orig func(context.Context, fonts.SubsetLimits, *fonts.Face, fonts.Allocator, fonts.Forms) (fonts.Embedded, error)) {
+		embedFace = orig
+	}(embedFace)
 	orig := embedFace
-	embedFace = func(f *fonts.Face, a fonts.Allocator, forms fonts.Forms) (fonts.Embedded, error) {
+	embedFace = func(ctx context.Context, limits fonts.SubsetLimits, f *fonts.Face, a fonts.Allocator, forms fonts.Forms) (fonts.Embedded, error) {
 		calls++
 		if calls != 2 {
-			return orig(f, a, forms)
+			return orig(ctx, limits, f, a, forms)
 		}
 		extra := a.Add(object.Integer(1))
 		rec := &recordingAllocator{Allocator: a, values: map[int]object.Object{}}
-		top, err := orig(f, rec, forms)
+		top, err := orig(ctx, limits, f, rec, forms)
 		if err == nil {
 			rec.values[top.Vertical.Number].(*object.Dictionary).Set("PieceInfoForTest", extra)
 		}
@@ -413,18 +416,20 @@ func TestARewriteOfADifferentSizeKeepsTheVerticalFontNumber(t *testing.T) {
 // is left dangling, and the numbers only the larger embedding used are gone.
 func TestARewriteOfADifferentSizeKeepsTheFontNumber(t *testing.T) {
 	calls := 0
-	defer func(orig func(*fonts.Face, fonts.Allocator, fonts.Forms) (fonts.Embedded, error)) { embedFace = orig }(embedFace)
+	defer func(orig func(context.Context, fonts.SubsetLimits, *fonts.Face, fonts.Allocator, fonts.Forms) (fonts.Embedded, error)) {
+		embedFace = orig
+	}(embedFace)
 	orig := embedFace
-	embedFace = func(f *fonts.Face, a fonts.Allocator, forms fonts.Forms) (fonts.Embedded, error) {
+	embedFace = func(ctx context.Context, limits fonts.SubsetLimits, f *fonts.Face, a fonts.Allocator, forms fonts.Forms) (fonts.Embedded, error) {
 		calls++
 		if calls != 2 {
-			return orig(f, a, forms)
+			return orig(ctx, limits, f, a, forms)
 		}
 		// One object more, written first, and named by the font dictionary
 		// so that it belongs to the embedding.
 		extra := a.Add(object.Integer(1))
 		rec := &recordingAllocator{Allocator: a, values: map[int]object.Object{}}
-		top, err := orig(f, rec, forms)
+		top, err := orig(ctx, limits, f, rec, forms)
 		if err == nil {
 			rec.values[top.Horizontal.Number].(*object.Dictionary).Set("PieceInfoForTest", extra)
 		}

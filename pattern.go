@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/mgilbir/pdf0/content"
@@ -108,6 +109,22 @@ const (
 // As with AddPage, a name the drawing used and no resource map defines is an
 // error rather than a pattern that paints with something missing.
 func (d *Document) AddTilingPattern(p TilingPattern) (object.IndirectRef, error) {
+	return d.addTilingPattern(context.Background(), p, fonts.SubsetLimits{})
+}
+
+// AddTilingPatternContext is AddTilingPattern with the faces the pattern names
+// embedded under ctx and limits, as AddPageContext embeds a page's.
+func (d *Document) AddTilingPatternContext(ctx context.Context, p TilingPattern, limits fonts.SubsetLimits) (object.IndirectRef, error) {
+	if ctx == nil {
+		ctx = context.Background() // as every Context entry point here: nil never cancels
+	}
+	return d.addTilingPattern(ctx, p, limits)
+}
+
+func (d *Document) addTilingPattern(ctx context.Context, p TilingPattern, limits fonts.SubsetLimits) (object.IndirectRef, error) {
+	if err := ctx.Err(); err != nil {
+		return object.IndirectRef{}, err
+	}
 	if d == nil {
 		return object.IndirectRef{}, errNilDocument
 	}
@@ -161,7 +178,7 @@ func (d *Document) AddTilingPattern(p TilingPattern) (object.IndirectRef, error)
 	if err := res.check(p.Content.Resources()); err != nil {
 		return object.IndirectRef{}, err
 	}
-	faceRefs, err := d.embedFaces(p.Faces)
+	faceRefs, err := d.embedFaces(ctx, limits, p.Faces)
 	if err != nil {
 		return object.IndirectRef{}, err
 	}

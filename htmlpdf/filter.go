@@ -6,6 +6,7 @@ import (
 
 	"github.com/mgilbir/forme/layout"
 	pdf0 "github.com/mgilbir/pdf0"
+	"github.com/mgilbir/pdf0/fonts"
 	"github.com/mgilbir/pdf0/object"
 )
 
@@ -178,7 +179,7 @@ func (c *canvas) group(draw func(fc *canvas) error) (object.IndirectRef, error) 
 		return object.IndirectRef{}, err
 	}
 	c.w.transparent = true
-	ref, err := c.w.doc.AddForm(pdf0.Form{
+	ref, err := c.w.doc.AddFormContext(c.w.ctx, pdf0.Form{
 		BBox:       c.sheet(),
 		Content:    fc.b,
 		Group:      true,
@@ -187,7 +188,7 @@ func (c *canvas) group(draw func(fc *canvas) error) (object.IndirectRef, error) 
 		Patterns:   fc.patterns,
 		Shadings:   fc.shadings,
 		ExtGStates: fc.states,
-	})
+	}, fonts.SubsetLimits{})
 	if err != nil {
 		return object.IndirectRef{}, fmt.Errorf("writing a filter group: %w", err)
 	}

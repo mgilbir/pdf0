@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/mgilbir/pdf0/content"
@@ -120,6 +121,26 @@ func (d *Document) PageAnnotations(page object.IndirectRef) ([]object.IndirectRe
 }
 
 func (d *Document) AddPage(p Page) (object.IndirectRef, error) {
+	return d.addPage(context.Background(), p, fonts.SubsetLimits{})
+}
+
+// AddPageContext is AddPage with the faces the page names embedded under ctx
+// and limits (fonts.Face.EmbedFormsContext): a subset that would spend more
+// than limits allow fails with an error wrapping fonts.ErrSubsetLimit, and a
+// done context with its error. Zero limits are forme's defaults. It fails,
+// adding nothing, as AddPage fails for any other reason: the faces are staged
+// and committed together.
+func (d *Document) AddPageContext(ctx context.Context, p Page, limits fonts.SubsetLimits) (object.IndirectRef, error) {
+	if ctx == nil {
+		ctx = context.Background() // as every Context entry point here: nil never cancels
+	}
+	return d.addPage(ctx, p, limits)
+}
+
+func (d *Document) addPage(ctx context.Context, p Page, limits fonts.SubsetLimits) (object.IndirectRef, error) {
+	if err := ctx.Err(); err != nil {
+		return object.IndirectRef{}, err
+	}
 	if d == nil {
 		return object.IndirectRef{}, errNilDocument
 	}
@@ -169,7 +190,7 @@ func (d *Document) AddPage(p Page) (object.IndirectRef, error) {
 	// After the content is final, which is what makes subsetting correct. It
 	// is the one step past this point that can fail, and it adds nothing to
 	// the document when it does.
-	faceRefs, err := d.embedFaces(p.Faces)
+	faceRefs, err := d.embedFaces(ctx, limits, p.Faces)
 	if err != nil {
 		return object.IndirectRef{}, err
 	}

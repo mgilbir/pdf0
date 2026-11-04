@@ -1,6 +1,7 @@
 package pdf0
 
 import (
+	"context"
 	"fmt"
 	"slices"
 
@@ -59,7 +60,7 @@ type faceEmbedding struct {
 // contains nothing the page uses. All the faces are staged and committed
 // together, so a face that cannot be embedded changes nothing — not the other
 // faces, and not a face's earlier embedding.
-func (d *Document) embedFaces(faces map[object.Name]*fonts.Face) (map[object.Name]object.IndirectRef, error) {
+func (d *Document) embedFaces(ctx context.Context, limits fonts.SubsetLimits, faces map[object.Name]*fonts.Face) (map[object.Name]object.IndirectRef, error) {
 	if len(faces) == 0 {
 		return nil, nil
 	}
@@ -146,7 +147,7 @@ func (d *Document) embedFaces(faces map[object.Name]*fonts.Face) (map[object.Nam
 		if have {
 			stage.reuse = append([]int(nil), prev.nums...)
 		}
-		e, err := embedFace(face, stage, want)
+		e, err := embedFace(ctx, limits, face, stage, want)
 		stage.reuse = nil
 		if err != nil {
 			stage.abort()
@@ -228,12 +229,12 @@ func subfontRefs(refs map[object.Name]object.IndirectRef, name object.Name, e fo
 	}
 }
 
-// embedFace is Face.EmbedForms, as embedFaces calls it. It is a variable only
+// embedFace is Face.EmbedFormsContext, as embedFaces calls it. It is a variable only
 // so a test can make a rewrite write a different number of objects than the
 // embedding it replaces anywhere among them, which a face does only by gaining
 // a form and embedFaces handles in general.
-var embedFace = func(f *fonts.Face, a fonts.Allocator, forms fonts.Forms) (fonts.Embedded, error) {
-	return f.EmbedForms(a, forms)
+var embedFace = func(ctx context.Context, limits fonts.SubsetLimits, f *fonts.Face, a fonts.Allocator, forms fonts.Forms) (fonts.Embedded, error) {
+	return f.EmbedFormsContext(ctx, a, forms, limits)
 }
 
 // swapRefs exchanges object numbers a and b in every reference the objects
