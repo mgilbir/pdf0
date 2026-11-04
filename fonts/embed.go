@@ -82,8 +82,11 @@ var errEmbedBeforeUse = errors.New(
 // A vertical form (see Vertical) embeds as its Identity-V font. A caller
 // naming both forms of a face uses EmbedForms, which writes them over one
 // descendant: Embed on each writes the font twice. So does a caller writing a
-// document that claims PDF/A-1, which Embed cannot know: Forms.PDFA1 and
-// Forms.Opaque say so (Document.AddPage sets both from the claim).
+// document that claims PDF/A-1 or declares a version before PDF 1.6, which
+// Embed cannot know: Forms.PDFA1, Forms.BareCFF and Forms.Opaque say so
+// (Document.AddPage sets them from the claim and the version). A caller
+// writing its own header reads the version the font needs from
+// Embedded.Version.
 func (f *Face) Embed(doc Allocator) (object.IndirectRef, error) {
 	e, err := f.EmbedForms(doc, Forms{Horizontal: !f.IsVertical(), Vertical: f.IsVertical()})
 	if err != nil {
@@ -103,12 +106,19 @@ type Forms struct {
 	// which only a composite face has.
 	Vertical bool
 	// PDFA1 writes a face for a document that claims PDF/A-1, whose base is
-	// PDF 1.4 (ISO 19005-1 6.3.2): a CFF program — CFF2 included, which is
-	// embedded as the CFF it draws — is written bare, as /CIDFontType0C,
-	// rather than in the OpenType wrapper PDF 1.6 added, and a CFF that is
-	// not CID-keyed carries a /CIDSet listing every glyph of its program,
-	// which a subset must have there and which it carries at no other level.
+	// PDF 1.4 (ISO 19005-1 6.3.2): its CFF program is written bare, as
+	// BareCFF says, and a CFF that is not CID-keyed carries a /CIDSet
+	// listing every glyph of its program, which a subset must have there and
+	// which it carries at no other level.
 	PDFA1 bool
+	// BareCFF writes a CFF program — CFF2 included, which is embedded as the
+	// CFF it draws — bare, as a /FontFile3 of /Subtype /CIDFontType0C
+	// (PDF 1.3), rather than in the OpenType wrapper PDF 1.6 added, for a
+	// document that declares a version before 1.6. The wrapper keeps the
+	// tables a reader may want beside the outlines; the bare program is the
+	// outlines alone, which is all a reader draws from. PDFA1 implies it.
+	// It changes nothing else, and nothing for a face that is not CFF.
+	BareCFF bool
 	// Opaque writes a face that is written as Type 3 fonts without
 	// transparency, for a document that may not use it (PDF/A-1, ISO
 	// 19005-1 6.4): a greyscale glyph is a stencil of its coverage, in the
@@ -134,6 +144,14 @@ type Embedded struct {
 	// the font selected as SubfontName(name, k), where Horizontal is the one
 	// selected as name. Nil for every other face.
 	Subfonts []object.IndirectRef
+	// Version is the earliest PDF version whose features cover every object
+	// the embedding wrote, "1.1" to "1.6": the least a document carrying them
+	// can declare in its header. It is read from the objects themselves (see
+	// version.go). A composite face is 1.6 in the OpenType wrapper and 1.3
+	// bare (Forms.BareCFF) or as TrueType; a face written as Type 3 fonts is
+	// 1.4 where a glyph is painted through a soft mask or a group, which
+	// Forms.Opaque avoids.
+	Version string
 }
 
 // errNoForm is EmbedForms asked for no font at all.
@@ -148,6 +166,21 @@ var errNoForm = errors.New("fonts: EmbedForms was asked for neither form of the 
 // A simple or standard face has no vertical form, and asking for one is an
 // error.
 func (f *Face) EmbedForms(doc Allocator, forms Forms) (Embedded, error) {
+	va := &versionAllocator{doc: doc}
+	out, err := f.embedForms(va, forms)
+	if err != nil {
+		return Embedded{}, err
+	}
+	out.Version = va.version.String()
+	return out, nil
+}
+
+// embedForms is EmbedForms, writing through the allocator that records the
+// version.
+func (f *Face) embedForms(doc Allocator, forms Forms) (Embedded, error) {
+	if forms.PDFA1 {
+		forms.BareCFF = true
+	}
 	f = f.Horizontal()
 	if !forms.Horizontal && !forms.Vertical {
 		return Embedded{}, errNoForm
@@ -209,9 +242,9 @@ func (f *Face) embedComposite(doc Allocator, forms Forms) (Embedded, error) {
 	}
 	baseFont := f.baseFontName(kept, subset)
 	cidSet, withCIDSet := f.cidSet(program, kept, forms.PDFA1)
-	if f.IsCFF() && forms.PDFA1 {
-		// PDF 1.4 has no OpenType font file; it has the CFF itself, which
-		// is the program's CFF table.
+	if f.IsCFF() && forms.BareCFF {
+		// PDF before 1.6 has no OpenType font file; it has the CFF itself,
+		// which is the program's CFF table.
 		cff := font.SFNTTables(program)["CFF "]
 		if cff == nil {
 			return Embedded{}, errNoBareCFF
@@ -232,7 +265,7 @@ func (f *Face) embedComposite(doc Allocator, forms Forms) (Embedded, error) {
 		// ISO 32000-1 9.7.4.2: a CIDFontType0C whose CFF is not CID-keyed
 		// is read with the CIDs as glyph indices, which is what they are.
 		subtype := object.Name("OpenType")
-		if forms.PDFA1 {
+		if forms.BareCFF {
 			subtype = "CIDFontType0C"
 		}
 		programStream.Dict.Set("Subtype", subtype)
@@ -523,12 +556,12 @@ func (f *Face) collection() (registry, ordering string, supplement int, err erro
 	return r, o, sup, nil
 }
 
-// errNoBareCFF is a CFF face for a PDF/A-1 document whose program has no CFF
-// table to write bare, which PDF 1.4 has no way to carry. It is a guard: forme
-// gives a CFF2 face a CFF program, whole (shape.Face.Program) or subset, so a
-// face it loaded does not reach it.
-var errNoBareCFF = errors.New("fonts: the face's program has no CFF table, which a PDF/A-1 " +
-	"document, based on PDF 1.4, needs: PDF 1.4 cannot carry an OpenType or CFF2 program")
+// errNoBareCFF is a CFF face asked for bare (Forms.BareCFF) whose program has
+// no CFF table to write so, which a version before PDF 1.6 has no other way
+// to carry. It is a guard: forme gives a CFF2 face a CFF program, whole
+// (shape.Face.Program) or subset, so a face it loaded does not reach it.
+var errNoBareCFF = errors.New("fonts: the face's program has no CFF table to write bare, " +
+	"and a PDF before 1.6 cannot carry an OpenType or CFF2 program")
 
 // errNoCollection is a CID-keyed face that cannot say which collection its CIDs
 // belong to: a ROS naming strings the font does not carry, or a supplement

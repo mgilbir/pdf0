@@ -198,7 +198,7 @@ the file back and refuses to write one that fails the level it claims. With
   or `Page.Faces`.
 
 What each of those changes in the file is in
-[font-embedding.md](font-embedding.md#pdfa-1).
+[font-embedding.md](font-embedding.md#pdfa-1-and-documents-before-pdf-16).
 
 ## Upright text down the page
 

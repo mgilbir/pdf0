@@ -19,7 +19,7 @@ output too (`TestType3DocumentsAreValidForVeraPDF`).
 | face | font dictionary | descendant | program | `/CIDSet` |
 |---|---|---|---|---|
 | composite, `glyf` outlines | `Type0`, `Identity-H` (and `Identity-V` for the vertical form) | `CIDFontType2`, `/CIDToGIDMap /Identity` | `/FontFile2` | every glyph slot of the program |
-| composite, CID-keyed CFF (CFF2 is one) | `Type0` | `CIDFontType0` | `/FontFile3 /OpenType`; under PDF/A-1 `/FontFile3 /CIDFontType0C` | the CIDs of the glyphs kept |
+| composite, CID-keyed CFF (CFF2 is one) | `Type0` | `CIDFontType0` | `/FontFile3 /OpenType`; bare (`Forms.BareCFF`, PDF/A-1, a document before PDF 1.6) `/FontFile3 /CIDFontType0C` | the CIDs of the glyphs kept |
 | composite, CFF that is not CID-keyed | `Type0` | `CIDFontType0` | as above | none; under PDF/A-1, every glyph slot |
 | simple | `TrueType`, `WinAnsiEncoding`, `/Widths` for codes 32–255 | — | `/FontFile2` | — |
 | standard | `Type1`, `WinAnsiEncoding` except for Symbol and ZapfDingbats | — | none: no descriptor, no program | — |
@@ -85,29 +85,45 @@ every level, and `TestTheValidatorHoldsTheCIDSetToTheProgram` holds pdf0's
 validator to veraPDF's reading. The validator's side is
 [fonts.md](fonts.md#cidset-and-charset).
 
-## PDF/A-1
+## PDF/A-1, and documents before PDF 1.6
 
 A document claiming PDF/A-1 is based on PDF 1.4, which predates the OpenType
-font file and transparency. Two fields of `fonts.Forms` say so, and
-`Document.AddPage` (and `AddForm`, `AddTilingPattern`) sets both from the
-document's claim:
+font file and transparency. A document that declares a version before 1.6 has
+no OpenType font file either, and one before 1.4 no transparency. Three fields
+of `fonts.Forms` say so, and `Document.AddPage` (and `AddForm`,
+`AddTilingPattern`) sets them from the document's claim and from the version
+it declares:
 
-- **`Forms.PDFA1`**: a CFF program is written bare, as the program's `CFF `
-  table in a `/FontFile3 /CIDFontType0C` stream, rather than in the OpenType
-  wrapper PDF 1.6 added (ISO 19005-1 6.3.2, which the validator checks). A CFF2
-  face's program is the CFF forme converts it to, whole or subset, so it is
-  written bare like any other. A CFF face whose program had no `CFF ` table
-  would be refused, but forme produces no such program. And a CFF that is not
-  CID-keyed carries the `/CIDSet` a PDF/A-1 subset must have (see
-  [/CIDSet](#cidset)).
+- **`Forms.BareCFF`**: a CFF program is written bare, as the program's `CFF `
+  table in a `/FontFile3 /CIDFontType0C` stream (PDF 1.3), rather than in the
+  OpenType wrapper PDF 1.6 added. A CFF2 face's program is the CFF forme
+  converts it to, whole or subset, so it is written bare like any other. A CFF
+  face whose program had no `CFF ` table would be refused, but forme produces
+  no such program. Set for a document before PDF 1.6, and by `Forms.PDFA1`.
+- **`Forms.PDFA1`**: everything `BareCFF` does (ISO 19005-1 6.3.2, which the
+  validator checks), and a CFF that is not CID-keyed carries the `/CIDSet` a
+  PDF/A-1 subset must have (see [/CIDSet](#cidset)).
 - **`Forms.Opaque`**: a face written as Type 3 fonts uses no transparency
   (ISO 19005-1 6.4). A greyscale glyph is a stencil of its coverage, a colour
   bitmap is painted through a 1-bit `/Mask` cut from its alpha, and a COLR
   colour glyph is its outline in the text colour — refused when it has no
   outline of its own, as Noto Color Emoji's have not. Colours are kept;
-  anti-aliased edges are not.
+  anti-aliased edges are not. Set under PDF/A-1 and for a document before
+  PDF 1.4.
 
-`Face.Embed` cannot see a document's claim and sets neither.
+`Face.Embed` cannot see a document's claim or version and sets none of them.
+
+A caller that writes its own document, and its own header, reads
+`Embedded.Version`: the earliest PDF version whose features cover every object
+the embedding wrote, read from the objects themselves (ISO 32000-2's versions,
+`fonts/version.go`). A TrueType composite face is 1.3, a CFF one 1.6 in the
+wrapper and 1.3 bare, a simple face 1.2; a face written as Type 3 fonts is 1.4
+where a glyph is painted through a soft mask or a group, and 1.2 or 1.3
+opaque. `TestEveryFeatureTheWriterUsesHasAVersion` fails on any key the writer
+comes to use whose version has not been decided, and
+`TestEmbeddedVersionAgreesWithArlington` holds the versions to the PDF
+Association's Arlington model (which dates `FontFile2` in a `CIDFontType2`
+descriptor to 1.2 where ISO 32000-2 says 1.3; the version follows ISO).
 
 ## CID-keyed CFF
 
@@ -218,7 +234,7 @@ embedding only its bitmaps, from its strikes; the rule is in
   for its alpha.
 
 Under PDF/A-1 the last two are painted without transparency (see
-[PDF/A-1](#pdfa-1)).
+[PDF/A-1](#pdfa-1-and-documents-before-pdf-16)).
 
 The strike is the one the text size picks in CSS pixels — points × 4/3 by
 default, or the size itself for a stream drawn in CSS pixels, as htmlpdf's is
@@ -273,7 +289,7 @@ the colour the text is shown in. So one font serves every text colour, and
 only a gradient with a stop in the foreground colour, whose shading has to
 state it, is keyed by the text colour. A glyph that sets no colour of its own
 is a `d1` procedure. Under PDF/A-1 a colour glyph is its outline in the text
-colour (see [PDF/A-1](#pdfa-1)).
+colour (see [PDF/A-1](#pdfa-1-and-documents-before-pdf-16)).
 
 `fonts_colr_test.go` holds every glyph of Google's COLRv1 conformance font
 (`testdata/colrv1`) to Skia, the renderer COLRv1 was specified against,
