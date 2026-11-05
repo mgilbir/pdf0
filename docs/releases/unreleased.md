@@ -31,3 +31,10 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.8.0
   correspondingly cheaper. The glyph numbering, `/W`, `/CIDSet` and the
   ToUnicode CMap are unchanged, and the result passes veraPDF at every PDF/A
   level (#425).
+
+- Recording or drawing text no longer copies and inverts the font's whole
+  cmap for every document: the reverse map a glyph's ToUnicode entry falls
+  back on is built once per font and shared by every wrapper and clone of it
+  (keyed by forme's `Face.ID`), and released when none uses it. Recording a
+  label through a fresh `Adopt(face.Clone())` falls from 243 µs and 153 KB to
+  32 µs and 5 KB (#427).

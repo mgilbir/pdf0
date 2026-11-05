@@ -105,8 +105,9 @@ func winAnsiRune(code int) (rune, bool) {
 type textRecord struct {
 	byGID map[int]string
 	// canon is the character the font's own cmap assigns each glyph, where it
-	// assigns one, built once on first use. See canonical.
-	canon map[int]rune
+	// assigns one: the font's, shared with every wrapper of it, and held here
+	// so that it lives while this record does. See canonical.
+	canon *canonicalMap
 }
 
 func (f *Face) record() *textRecord {
@@ -126,22 +127,9 @@ func (f *Face) record() *textRecord {
 func (f *Face) canonical(gid int) (rune, bool) {
 	rec := f.record()
 	if rec.canon == nil {
-		cmap := f.Cmap()
-		rec.canon = make(map[int]rune, len(cmap))
-		for r, g := range cmap {
-			if g == 0 || forbiddenInToUnicode(r) {
-				// U+0000, U+FEFF and U+FFFE are not text: mapping a glyph to
-				// one says the character it represents is a byte-order mark or
-				// nothing at all, and PDF/A reports it.
-				continue
-			}
-			if prev, ok := rec.canon[g]; !ok || betterForToUnicode(r, prev) {
-				rec.canon[g] = r
-			}
-		}
+		rec.canon = canonicalMapFor(f.Face)
 	}
-	r, ok := rec.canon[gid]
-	return r, ok
+	return rec.canon.lookup(f.Face, gid)
 }
 
 // maxToUnicodeUnits bounds a ToUnicode destination: a bfchar destination is at
