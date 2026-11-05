@@ -23,3 +23,11 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.8.0
 ## Added
 
 ## Fixed
+
+- An embedded TrueType program carries only what its glyphs need (forme
+  v0.14.1): `post` without glyph names, `hmtx` ending at the last glyph kept,
+  and a `cmap` of the characters kept. For a 20-character label in Noto Sans
+  the `/FontFile2` falls from 42,754 bytes to 3,459, and writing it is
+  correspondingly cheaper. The glyph numbering, `/W`, `/CIDSet` and the
+  ToUnicode CMap are unchanged, and the result passes veraPDF at every PDF/A
+  level (#425).

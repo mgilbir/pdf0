@@ -147,7 +147,15 @@ func TestTheCIDSetIsWhatTheProgramHas(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					slots = int(binary.BigEndian.Uint16(font.SFNTTables(program)["maxp"][4:]))
+					tables := font.SFNTTables(program)
+					slots = int(binary.BigEndian.Uint16(tables["maxp"][4:]))
+					// The case veraPDF reads apart: a program whose hmtx long
+					// metrics end before its last glyph slot, as forme's
+					// subset writes it (v0.14.1). Without it this would not
+					// test that the slots past them may be listed.
+					if long := int(binary.BigEndian.Uint16(tables["hhea"][34:])); long >= slots {
+						t.Fatalf("the program has %d long metrics for %d glyphs; this test needs fewer", long, slots)
+					}
 				case "namecff":
 					if hasSet != pdfa1 {
 						t.Fatalf("a CFF that is not CID-keyed carries a /CIDSet: %v; want %v", hasSet, pdfa1)
