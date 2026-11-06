@@ -105,8 +105,9 @@ func winAnsiRune(code int) (rune, bool) {
 type textRecord struct {
 	byGID map[int]string
 	// canon is the character the font's own cmap assigns each glyph, where it
-	// assigns one, built once on first use. See canonical.
-	canon map[int]rune
+	// assigns one: the font's, shared with every wrapper of it, and held here
+	// so that it lives while this record does. See canonical.
+	canon *canonicalMap
 }
 
 func (f *Face) record() *textRecord {
@@ -126,22 +127,9 @@ func (f *Face) record() *textRecord {
 func (f *Face) canonical(gid int) (rune, bool) {
 	rec := f.record()
 	if rec.canon == nil {
-		cmap := f.Cmap()
-		rec.canon = make(map[int]rune, len(cmap))
-		for r, g := range cmap {
-			if g == 0 || forbiddenInToUnicode(r) {
-				// U+0000, U+FEFF and U+FFFE are not text: mapping a glyph to
-				// one says the character it represents is a byte-order mark or
-				// nothing at all, and PDF/A reports it.
-				continue
-			}
-			if prev, ok := rec.canon[g]; !ok || betterForToUnicode(r, prev) {
-				rec.canon[g] = r
-			}
-		}
+		rec.canon = canonicalMapFor(f.Face)
 	}
-	r, ok := rec.canon[gid]
-	return r, ok
+	return rec.canon.lookup(f.Face, gid)
 }
 
 // maxToUnicodeUnits bounds a ToUnicode destination: a bfchar destination is at
@@ -387,12 +375,14 @@ type segment struct {
 // character a ligature in a neighbouring run swallowed — still belongs to the
 // cluster beside it and is still extracted.
 //
-// A run whose clusters are in increasing order as drawn is checked cluster by
-// cluster, and only a cluster whose glyphs do not spell it is marked. A run
-// that is not — right to left, or mixed, or reordered across clusters — is one
-// marked stretch with the whole text, because the glyphs are in the order they
-// are drawn and a reader reads them in that order: without the /ActualText an
-// Arabic word comes back reversed.
+// Text drawn in its own order is checked cluster by cluster, and only a
+// cluster whose glyphs do not spell it is marked. A stretch drawn in another
+// order — a right-to-left word, or glyphs reordered across clusters — is one
+// marked stretch with its text, because the glyphs are in
+// the order they are drawn and a reader reads them in that order: without the
+// /ActualText an Arabic word comes back reversed. Only that stretch is marked,
+// not the run around it, and not at all where the caller leaves the order to
+// the reader (SetMarkReordered).
 func (f *Face) plan(glyphs []Glyph, text string) []segment {
 	// Every glyph drawn goes into forme's record of use, which is what the
 	// subset keeps and /CIDSet lists. Shaping records what it returns; a glyph
@@ -426,18 +416,13 @@ func (f *Face) plan(glyphs []Glyph, text string) []segment {
 			break
 		}
 	}
-	// Group consecutive glyphs of one cluster, and see whether the groups
-	// come in the order the text does.
+	// Group consecutive glyphs of one cluster.
 	type group struct{ lo, hi, cluster int }
 	var groups []group
-	ascending := valid
 	for i, g := range glyphs {
 		if n := len(groups); n > 0 && groups[n-1].cluster == g.Cluster {
 			groups[n-1].hi = i + 1
 			continue
-		}
-		if n := len(groups); n > 0 && g.Cluster <= groups[n-1].cluster {
-			ascending = false
 		}
 		groups = append(groups, group{lo: i, hi: i + 1, cluster: g.Cluster})
 	}
@@ -465,39 +450,132 @@ func (f *Face) plan(glyphs []Glyph, text string) []segment {
 		}
 		return visible(text[lo:hi])
 	}
-	if !ascending {
-		// A cluster that appears in more than one group is not a cluster
-		// this can name; record the ones that are whole and mark the run.
-		seen := map[int]int{}
-		for _, gr := range groups {
-			seen[gr.cluster]++
+	// Divide the groups into blocks: the shortest stretches of the run, in
+	// drawing order, each of which draws a stretch of the text whole — clusters
+	// next to each other in the text, every group of each of them, following
+	// the stretch the block before drew. Text drawn in its own order is a block
+	// a cluster. A stretch drawn in another order — a right-to-left word in a
+	// left-to-right line — is one block, and only it is marked, so the text
+	// around it extracts as it reads, word breaks and all (#426). A run with no
+	// smaller block is one, the whole run, as every non-ascending run was.
+	nc := len(sortedUnique)
+	idx := make([]int, len(groups)) // each group's cluster, as its index in sortedUnique
+	last := make([]int, nc)         // each cluster's last group
+	count := make([]int, nc)        // how many groups each cluster is drawn in
+	for i, gr := range groups {
+		c := indexOf(sortedUnique, gr.cluster)
+		idx[i], last[c] = c, i
+		count[c]++
+	}
+	out := make([]segment, 0, 1)
+	add := func(s segment) {
+		// Adjacent unmarked stretches are one: a stretch is only a boundary
+		// the emitter has to respect, and fewer is smaller output.
+		if n := len(out); n > 0 && !s.marked && !out[n-1].marked {
+			out[n-1].hi = s.hi
+			return
 		}
+		out = append(out, s)
+	}
+	// byCluster checks groups one cluster at a time: only a cluster whose
+	// glyphs, read in drawing order, do not spell it is marked.
+	byCluster := func(groups []group) {
 		for _, gr := range groups {
-			if seen[gr.cluster] == 1 {
+			ct := clusterText(gr.cluster)
+			f.recordCluster(glyphs[gr.lo:gr.hi], ct)
+			var got strings.Builder
+			for _, g := range glyphs[gr.lo:gr.hi] {
+				got.WriteString(f.extracted(g))
+			}
+			add(segment{lo: gr.lo, hi: gr.hi, marked: got.String() != ct, actual: ct})
+		}
+	}
+	unmarkReordered := f.Horizontal().unmarkReordered
+	stamp := make([]int, nc) // the block, counted from 1, a cluster was last counted in
+	next, first, block := 0, 0, 0
+	var lo, hi, reach, distinct int
+	for i := range groups {
+		c := idx[i]
+		if i == first {
+			block++
+			lo, hi, reach, distinct = c, c, last[c], 0
+		}
+		if stamp[c] != block {
+			stamp[c] = block
+			distinct++
+		}
+		lo, hi, reach = min(lo, c), max(hi, c), max(reach, last[c])
+		if i < reach || lo != next || hi-lo+1 != distinct {
+			continue
+		}
+		b0, bg := first, groups[first:i+1]
+		next, first = hi+1, i+1
+		if len(bg) == 1 {
+			byCluster(bg)
+			continue
+		}
+		// Reordered. A cluster drawn in more than one group is not a cluster
+		// this can name; record the ones that are whole.
+		whole := true
+		for j, gr := range bg {
+			if count[idx[b0+j]] > 1 {
+				whole = false
+			} else {
 				f.recordCluster(glyphs[gr.lo:gr.hi], clusterText(gr.cluster))
 			}
 		}
-		return f.wholeRun(glyphs, visible(text))
-	}
-
-	out := make([]segment, 0, 1)
-	for _, gr := range groups {
-		ct := clusterText(gr.cluster)
-		f.recordCluster(glyphs[gr.lo:gr.hi], ct)
-		var got strings.Builder
-		for _, g := range glyphs[gr.lo:gr.hi] {
-			got.WriteString(f.extracted(g))
-		}
-		marked := got.String() != ct
-		// Adjacent unmarked clusters are one stretch: a stretch is only a
-		// boundary the emitter has to respect, and fewer is smaller output.
-		if n := len(out); n > 0 && !marked && !out[n-1].marked {
-			out[n-1].hi = gr.hi
+		if unmarkReordered && whole {
+			// The caller leaves the order to the reader (SetMarkReordered):
+			// each cluster is still checked, as text in its own order is.
+			byCluster(bg)
 			continue
 		}
-		out = append(out, segment{lo: gr.lo, hi: gr.hi, marked: marked, actual: ct})
+		from, to := 0, len(text)
+		if lo > 0 {
+			from = sortedUnique[lo]
+		}
+		if hi+1 < nc {
+			to = sortedUnique[hi+1]
+		}
+		blockText := visible(text[from:to])
+		var got strings.Builder
+		for _, g := range glyphs[bg[0].lo:bg[len(bg)-1].hi] {
+			got.WriteString(f.extracted(g))
+		}
+		s := segment{lo: bg[0].lo, hi: bg[len(bg)-1].hi}
+		if got.String() != blockText {
+			s.marked, s.actual = true, blockText
+		}
+		add(s)
 	}
 	return out
+}
+
+// SetMarkReordered says whether a stretch of a run drawn in an order other
+// than its text's — a right-to-left word, or a right-to-left line — is wrapped
+// in an /ActualText with its text in reading order. It is, by default.
+//
+// The glyphs of right-to-left text are drawn in the order they stand on the
+// line, which is the reverse of the order they are read in, and a reader
+// that extracts text in drawing order — Document.ExtractText among them —
+// gets the word backwards without the /ActualText. A tagged PDF needs it:
+// content inside a marked-content sequence is in logical order (ISO 32000-2
+// 14.8.2.5.1).
+//
+// A reader that orders text itself, by the Unicode bidirectional algorithm,
+// does not need it, and some do worse with it: poppler (pdftotext) reorders
+// the /ActualText as if it were in drawing order too, and returns the word
+// reversed (#426). SetMarkReordered(false) is for a caller writing an
+// untagged document for such readers. A stretch is then left unmarked where
+// each cluster's glyphs, read in drawing order, spell the cluster, as text
+// in its own order is; a cluster they do not spell is still marked, and a
+// cluster drawn in pieces apart still marks its stretch, since no per-glyph
+// mapping can say what it was.
+//
+// It applies to runs recorded or drawn after it, and to the face's vertical
+// form as well. A face's ToUnicode CMap is the same either way.
+func (f *Face) SetMarkReordered(mark bool) {
+	f.Horizontal().unmarkReordered = !mark
 }
 
 // wholeRun is the plan for a run that cannot be checked cluster by cluster:

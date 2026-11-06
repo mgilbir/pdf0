@@ -266,9 +266,21 @@ was drawn from:
   ⽇);
 - a cluster whose glyphs, read in drawing order, do not spell it — a vowel sign
   drawn before its consonant, a glyph already mapped to other text — is wrapped
-  in an `/ActualText` (ISO 32000-2 14.9.4), and so is every run drawn in an
-  order other than the order it is read, which is every right-to-left run;
+  in an `/ActualText` (ISO 32000-2 14.9.4), and so is every stretch drawn in
+  an order other than the order it is read: a right-to-left word in a
+  left-to-right line is marked alone, and a right-to-left line whole. A
+  reader that applies the bidirectional algorithm itself — poppler's
+  `pdftotext` — gets such a word backwards through its `/ActualText`;
+  `Face.SetMarkReordered(false)` leaves the order to the reader instead,
+  for an untagged document meant for one (a tagged PDF needs logical order
+  inside marked content, ISO 32000-2 14.8.2.5.1);
 - the CMap covers the glyphs drawn and nothing else.
+
+`ExtractText` also reads a `/ReversedChars` sequence as ISO 32000-2
+14.8.2.5.3 defines it: the characters of each string shown inside it, code by
+code, in reverse, which is how some producers write right-to-left text. It
+does not reorder text otherwise: it has no layout model, and cannot tell
+right-to-left text drawn in visual order from text drawn in logical order.
 
 `Shape` and `ShapeWith` decide the same entries and wrap the same stretches,
 as `ActualTextStart` and `ActualTextEnd` spans. `Encode` cannot wrap anything.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/mgilbir/forme/font"
@@ -36,7 +37,9 @@ import (
 //     Uni…-UTF16-…); otherwise the code is dropped.
 //
 // A marked-content sequence carrying /ActualText contributes that text in
-// place of everything shown inside it.
+// place of everything shown inside it. Inside one tagged /ReversedChars, the
+// characters of each string shown are reversed, as ISO 32000-2 14.8.2.5.3
+// requires: such a string holds right-to-left text in the order it is drawn.
 //
 // The error is nil exactly when every page's text is in the result. Otherwise
 // it reports each page that is not, as a *PageTextError, and the result holds
@@ -423,12 +426,19 @@ func (d *Document) extractContentText(run *textRun, res *object.Dictionary, cont
 	var cur fontText
 	var operands []core.ContentToken
 
-	// marked is the stack of open marked-content sequences, true for one
-	// carrying an /ActualText, and replaced counts those. Inside one, what
-	// the glyphs map to is not the text: the /ActualText is (ISO 32000-2
-	// 14.9.4), and it has already been written when the sequence opened.
-	var marked []bool
-	replaced := 0
+	// marked is the stack of open marked-content sequences, and replaced
+	// counts the ones carrying an /ActualText. Inside one, what the glyphs
+	// map to is not the text: the /ActualText is (ISO 32000-2 14.9.4), and it
+	// has already been written when the sequence opened. reversed counts the
+	// ones tagged /ReversedChars, whose show strings hold their characters in
+	// reverse order (14.8.2.5.3): each string is read backwards, and the
+	// strings in the order they come.
+	type sequence struct{ actual, reversed bool }
+	var marked []sequence
+	replaced, reversed := 0, 0
+	isReversed := func() bool {
+		return len(operands) >= 1 && operands[0].Kind == core.KindName && operands[0].Name == "ReversedChars"
+	}
 
 	show := func(raw []byte) {
 		if replaced > 0 {
@@ -437,7 +447,7 @@ func (d *Document) extractContentText(run *textRun, res *object.Dictionary, cont
 		if cur.declined != nil && len(raw) > 0 {
 			run.decline(cur.declined.reason, cur.declined.what, cur.declined.stream)
 		}
-		for _, r := range cur.decode(raw) {
+		for _, r := range cur.decode(raw, reversed > 0) {
 			out.WriteRune(r)
 		}
 	}
@@ -460,21 +470,32 @@ func (d *Document) extractContentText(run *textRun, res *object.Dictionary, cont
 		}
 		switch tk.Op {
 		case "BMC":
-			marked = append(marked, false)
+			seq := sequence{reversed: isReversed()}
+			if seq.reversed {
+				reversed++
+			}
+			marked = append(marked, seq)
 		case "BDC":
 			actual, ok := d.actualText(res, operands)
 			if ok && replaced == 0 {
 				out.WriteString(actual)
 			}
-			marked = append(marked, ok)
+			seq := sequence{actual: ok, reversed: isReversed()}
 			if ok {
 				replaced++
 			}
+			if seq.reversed {
+				reversed++
+			}
+			marked = append(marked, seq)
 		case "EMC":
 			// An EMC with nothing open is malformed and changes nothing.
 			if n := len(marked); n > 0 {
-				if marked[n-1] {
+				if marked[n-1].actual {
 					replaced--
+				}
+				if marked[n-1].reversed {
+					reversed--
 				}
 				marked = marked[:n-1]
 			}
@@ -699,33 +720,52 @@ func baseEncoding(n object.Name, current simplefont.Encoding) simplefont.Encodin
 // for is Unicode only when the CMap is one of the predefined Uni* CMaps, whose
 // codes are UTF-16 (9.10.2). Otherwise it is dropped: the CID-to-Unicode data
 // for the other predefined CMaps is not carried.
-func (f fontText) decode(raw []byte) []rune {
+func (f fontText) decode(raw []byte, reversed bool) []rune {
+	// codes holds where each code's characters begin in runes, for reversing
+	// the codes of a /ReversedChars string: a code that maps to several
+	// characters — a ligature's "ffi" — keeps them in their order.
 	var runes []rune
+	var codes []int
+	add := func(rs ...rune) {
+		if reversed {
+			codes = append(codes, len(runes))
+		}
+		runes = append(runes, rs...)
+	}
 	if f.composite {
 		for _, c := range f.codes.Codes(raw) {
 			if rs, ok := f.toUnicode.Runes(int(c.Value)); ok {
-				runes = append(runes, rs...)
+				add(rs...)
 			} else if rs, ok := f.codes.Unicode(c); ok {
-				runes = append(runes, rs...)
+				add(rs...)
 			}
 		}
+	} else {
+		for _, b := range raw {
+			code := int(b)
+			if rs, ok := f.toUnicode.Runes(code); ok {
+				add(rs...)
+				continue
+			}
+			if r, ok := f.encoding[code]; ok {
+				add(r)
+				continue
+			}
+			if code >= 32 {
+				add(rune(code))
+			}
+		}
+	}
+	if !reversed || len(codes) < 2 {
 		return runes
 	}
-	for _, b := range raw {
-		code := int(b)
-		if rs, ok := f.toUnicode.Runes(code); ok {
-			runes = append(runes, rs...)
-			continue
-		}
-		if r, ok := f.encoding[code]; ok {
-			runes = append(runes, r)
-			continue
-		}
-		if code >= 32 {
-			runes = append(runes, rune(code))
-		}
+	out := make([]rune, 0, len(runes))
+	end := len(runes)
+	for _, start := range slices.Backward(codes) {
+		out = append(out, runes[start:end]...)
+		end = start
 	}
-	return runes
+	return out
 }
 
 // --- content-stream tokenizer ---

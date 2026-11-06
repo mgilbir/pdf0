@@ -826,7 +826,11 @@ func subsetTag(kept []int) string {
 //     CID for every glyph slot it declares, empty or not: the subset keeps
 //     the face's numbering and empties the slots it drops, so the set is
 //     every slot of the program, not the glyphs kept. Listing only those is
-//     what veraPDF reported on every page htmlpdf wrote;
+//     what veraPDF reported on every page htmlpdf wrote. veraPDF counts a
+//     program's CIDs by its hmtx long metrics and holds a set's CIDs to
+//     maxp, and forme's subset (v0.14.1) ends the long metrics at the last
+//     glyph kept, so the slots past them are ones the program declares and
+//     the set may list but need not; listing every slot satisfies both;
 //   - a CID-keyed CFF has the CIDs its charset names. A subset holds only the
 //     kept glyphs, renumbered, with a charset giving each the CID it had
 //     (forme 462f3b5), so those are the kept glyphs' codes;
