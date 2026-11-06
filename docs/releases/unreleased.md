@@ -28,6 +28,11 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.8.0
 
 ## Added
 
+- `Document.ExtractText` honours `/ReversedChars` marked content (ISO 32000-2
+  14.8.2.5.3): each string shown inside it is read code by code in reverse,
+  so a producer's right-to-left text written that way extracts in reading
+  order.
+
 - `fonts.Face.SetMarkReordered(false)` leaves a reordered stretch whose
   clusters each map whole without an `/ActualText`, for an untagged document
   read by a bidi-aware extractor such as poppler, which reverses right-to-left

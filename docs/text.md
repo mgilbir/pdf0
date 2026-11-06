@@ -276,6 +276,12 @@ was drawn from:
   inside marked content, ISO 32000-2 14.8.2.5.1);
 - the CMap covers the glyphs drawn and nothing else.
 
+`ExtractText` also reads a `/ReversedChars` sequence as ISO 32000-2
+14.8.2.5.3 defines it: the characters of each string shown inside it, code by
+code, in reverse, which is how some producers write right-to-left text. It
+does not reorder text otherwise: it has no layout model, and cannot tell
+right-to-left text drawn in visual order from text drawn in logical order.
+
 `Shape` and `ShapeWith` decide the same entries and wrap the same stretches,
 as `ActualTextStart` and `ActualTextEnd` spans. `Encode` cannot wrap anything.
 
