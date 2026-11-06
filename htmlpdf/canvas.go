@@ -188,6 +188,11 @@ func (c *canvas) face(f *shape.Face, vertical bool) (object.Name, *fonts.Face) {
 	face, ok := c.w.faces[f]
 	if !ok {
 		face = fonts.Adopt(f)
+		if c.w.tags != nil {
+			// A tagged page's marked content is in logical order (ISO
+			// 32000-2 14.8.2.5.1), so its right-to-left text says so.
+			face.SetMarkReordered(true)
+		}
 		c.w.faces[f] = face
 	}
 	// This stream is in CSS pixels, which is what picks a bitmap face's

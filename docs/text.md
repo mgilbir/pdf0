@@ -266,21 +266,31 @@ was drawn from:
   ⽇);
 - a cluster whose glyphs, read in drawing order, do not spell it — a vowel sign
   drawn before its consonant, a glyph already mapped to other text — is wrapped
-  in an `/ActualText` (ISO 32000-2 14.9.4), and so is every stretch drawn in
-  an order other than the order it is read: a right-to-left word in a
-  left-to-right line is marked alone, and a right-to-left line whole. A
-  reader that applies the bidirectional algorithm itself — poppler's
-  `pdftotext` — gets such a word backwards through its `/ActualText`;
-  `Face.SetMarkReordered(false)` leaves the order to the reader instead,
-  for an untagged document meant for one (a tagged PDF needs logical order
-  inside marked content, ISO 32000-2 14.8.2.5.1);
+  in an `/ActualText` (ISO 32000-2 14.9.4);
+- right-to-left text is drawn as a shaper lays it out, its glyphs in the order
+  they stand on the line, and by default it is left to the reader to put back
+  in reading order by the Unicode bidirectional algorithm, which PDFium
+  (Chrome, Edge), poppler and `ExtractText` all do. Both PDFium and poppler
+  apply it to an `/ActualText` too, and return a marked word backwards. A
+  stretch the algorithm cannot read right — Latin drawn backwards under a
+  bidi override, glyphs reordered across clusters — is still wrapped in an
+  `/ActualText`;
+- `Face.SetMarkReordered(true)` wraps every reordered stretch instead, alone
+  (a right-to-left word in a left-to-right line) or whole (a right-to-left
+  line). A tagged PDF needs it — marked content is in logical order, ISO
+  32000-2 14.8.2.5.1 — and `htmlpdf` sets it on the faces of a tagged page;
 - the CMap covers the glyphs drawn and nothing else.
 
-`ExtractText` also reads a `/ReversedChars` sequence as ISO 32000-2
-14.8.2.5.3 defines it: the characters of each string shown inside it, code by
-code, in reverse, which is how some producers write right-to-left text. It
-does not reorder text otherwise: it has no layout model, and cannot tell
-right-to-left text drawn in visual order from text drawn in logical order.
+`ExtractText` puts each line it reads in reading order as PDFium and poppler
+do: the line as drawn, taken as visual, reordered by the bidirectional
+algorithm (rule L2), with each glyph's text and the marks drawn on it moved
+whole and each `/ActualText` placed as it stands. A line with no
+right-to-left text is read as drawn. With no layout model it cannot tell a
+page that draws right-to-left text in its written order — `Encode` does,
+unshaped — from one that draws it as it stands on the line; it reads what
+the page shows, as those readers do. It also reads a `/ReversedChars`
+sequence as ISO 32000-2 14.8.2.5.3 defines it: the characters of each string
+shown inside it, code by code, in reverse.
 
 `Shape` and `ShapeWith` decide the same entries and wrap the same stretches,
 as `ActualTextStart` and `ActualTextEnd` spans. `Encode` cannot wrap anything.

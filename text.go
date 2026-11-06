@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
+	"unicode/utf8"
 
+	"github.com/mgilbir/forme/bidi"
 	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/pdf0/internal/core"
+	"github.com/mgilbir/pdf0/internal/textorder"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/simplefont"
 )
@@ -40,6 +42,12 @@ import (
 // place of everything shown inside it. Inside one tagged /ReversedChars, the
 // characters of each string shown are reversed, as ISO 32000-2 14.8.2.5.3
 // requires: such a string holds right-to-left text in the order it is drawn.
+//
+// Each line is put in reading order as PDFium and poppler put it: the text
+// as drawn, taken to be in visual order, reordered by the Unicode
+// bidirectional algorithm (UAX #9 rule L2), each code's text and the marks
+// drawn on it moved whole, and each /ActualText placed as it stands. A line
+// with no right-to-left text is read as drawn.
 //
 // The error is nil exactly when every page's text is in the result. Otherwise
 // it reports each page that is not, as a *PageTextError, and the result holds
@@ -289,15 +297,16 @@ func (d *Document) pageText(run *textRun, page *object.Dictionary) (text string,
 			return t, nil
 		}
 	}
-	var out strings.Builder
+	var out pageWriter
 	d.extractContentText(run, res, content, &out, map[*object.Stream]bool{}, 0)
+	text = out.String()
 	if run.declined != nil {
 		return "", d.declinedError(run.declined)
 	}
 	if key != nil {
-		run.pages.Put(key, res, out.String())
+		run.pages.Put(key, res, text)
 	}
-	return out.String(), nil
+	return text, nil
 }
 
 // declinedPart is the stream a page's /Contents names that pdf0 declined to
@@ -411,7 +420,7 @@ const minContentCharge = 64
 // stops only a form that draws itself, directly or through others; depth
 // bounds nesting; and the run's content budget bounds the total, which a
 // fan-out of forms drawing forms would otherwise make exponential.
-func (d *Document) extractContentText(run *textRun, res *object.Dictionary, content []byte, out *strings.Builder, onPath map[*object.Stream]bool, depth int) {
+func (d *Document) extractContentText(run *textRun, res *object.Dictionary, content []byte, out *pageWriter, onPath map[*object.Stream]bool, depth int) {
 	if len(content) == 0 || depth > maxTextFormDepth {
 		return
 	}
@@ -447,8 +456,21 @@ func (d *Document) extractContentText(run *textRun, res *object.Dictionary, cont
 		if cur.declined != nil && len(raw) > 0 {
 			run.decline(cur.declined.reason, cur.declined.what, cur.declined.stream)
 		}
-		for _, r := range cur.decode(raw, reversed > 0) {
-			out.WriteRune(r)
+		// Each code's text is one unit: in a /ReversedChars string the codes
+		// are read last to first, and a code's own characters (a ligature's
+		// "ffi") stay in their order.
+		runes, starts := cur.decode(raw, out.decodeRunes, out.decodeStarts)
+		out.decodeRunes, out.decodeStarts = runes, starts
+		for k := range starts {
+			i := k
+			if reversed > 0 {
+				i = len(starts) - 1 - k
+			}
+			end := len(runes)
+			if i+1 < len(starts) {
+				end = starts[i+1]
+			}
+			out.code(runes[starts[i]:end])
 		}
 	}
 	for tk := range core.TokenizeContent(v.Cancel, content) {
@@ -478,7 +500,7 @@ func (d *Document) extractContentText(run *textRun, res *object.Dictionary, cont
 		case "BDC":
 			actual, ok := d.actualText(res, operands)
 			if ok && replaced == 0 {
-				out.WriteString(actual)
+				out.fixed(actual)
 			}
 			seq := sequence{actual: ok, reversed: isReversed()}
 			if ok {
@@ -505,7 +527,7 @@ func (d *Document) extractContentText(run *textRun, res *object.Dictionary, cont
 			}
 		case "Tj", "'", "\"":
 			if tk.Op != "Tj" {
-				out.WriteByte('\n')
+				out.newline()
 			}
 			if len(operands) >= 1 {
 				show(operands[len(operands)-1].Str)
@@ -522,12 +544,12 @@ func (d *Document) extractContentText(run *textRun, res *object.Dictionary, cont
 					// and down it, where the pen moves to lower y, a
 					// positive one.
 					if gap := el.Number(); (cur.vertical && gap > 100) || (!cur.vertical && gap < -100) {
-						out.WriteByte(' ')
+						out.space()
 					}
 				}
 			}
 		case "Td", "TD", "T*":
-			out.WriteByte('\n')
+			out.newline()
 		case "Do":
 			if xobjs != nil && len(operands) >= 1 {
 				if st, ok := d.Resolve(xobjs.Get(object.Name(operands[len(operands)-1].Name))).(*object.Stream); ok {
@@ -720,16 +742,14 @@ func baseEncoding(n object.Name, current simplefont.Encoding) simplefont.Encodin
 // for is Unicode only when the CMap is one of the predefined Uni* CMaps, whose
 // codes are UTF-16 (9.10.2). Otherwise it is dropped: the CID-to-Unicode data
 // for the other predefined CMaps is not carried.
-func (f fontText) decode(raw []byte, reversed bool) []rune {
-	// codes holds where each code's characters begin in runes, for reversing
-	// the codes of a /ReversedChars string: a code that maps to several
-	// characters — a ligature's "ffi" — keeps them in their order.
-	var runes []rune
-	var codes []int
+func (f fontText) decode(raw []byte, runes []rune, starts []int) ([]rune, []int) {
+	// starts is where each code's characters begin in runes: a code's text is
+	// one piece, whether it is read in order, backwards in a /ReversedChars
+	// string, or moved whole when a line is put in reading order. Both are
+	// appended to the slices passed in, which the caller reuses.
+	runes, starts = runes[:0], starts[:0]
 	add := func(rs ...rune) {
-		if reversed {
-			codes = append(codes, len(runes))
-		}
+		starts = append(starts, len(runes))
 		runes = append(runes, rs...)
 	}
 	if f.composite {
@@ -740,32 +760,115 @@ func (f fontText) decode(raw []byte, reversed bool) []rune {
 				add(rs...)
 			}
 		}
-	} else {
-		for _, b := range raw {
-			code := int(b)
-			if rs, ok := f.toUnicode.Runes(code); ok {
-				add(rs...)
+		return runes, starts
+	}
+	for _, b := range raw {
+		code := int(b)
+		if rs, ok := f.toUnicode.Runes(code); ok {
+			add(rs...)
+			continue
+		}
+		if r, ok := f.encoding[code]; ok {
+			add(r)
+			continue
+		}
+		if code >= 32 {
+			add(rune(code))
+		}
+	}
+	return runes, starts
+}
+
+// pageWriter collects a page's text line by line, and puts each line in
+// reading order as it ends (textorder.Reorder).
+//
+// A line's text is kept as units: each code's text, each space a gap
+// became, and each /ActualText, which is fixed — already in reading order,
+// placed whole and not looked into. A line with no right-to-left text
+// outside its /ActualTexts is written as drawn, so left-to-right text comes
+// out exactly as it did before lines were reordered.
+type pageWriter struct {
+	b    strings.Builder
+	line []rune
+	// ends is where each unit of the line ends in line, and fixedUnit
+	// whether it is an /ActualText.
+	ends      []int
+	fixedUnit []bool
+	rtl       bool // the line has a unit that may need reordering
+	// decodeRunes and decodeStarts are fontText.decode's buffers, reused
+	// from one string shown to the next.
+	decodeRunes  []rune
+	decodeStarts []int
+}
+
+func (w *pageWriter) unit(rs []rune, fixed bool) {
+	if len(rs) == 0 {
+		return
+	}
+	if !fixed && !w.rtl {
+		for _, r := range rs {
+			if r < utf8.RuneSelf {
 				continue
 			}
-			if r, ok := f.encoding[code]; ok {
-				add(r)
-				continue
-			}
-			if code >= 32 {
-				add(rune(code))
+			// What bidi.NeedsAlgorithm looks for, a character at a time.
+			switch bidi.ClassOf(r) {
+			case bidi.R, bidi.AL, bidi.AN, bidi.LRE, bidi.RLE, bidi.LRO, bidi.RLO,
+				bidi.PDF, bidi.LRI, bidi.RLI, bidi.FSI, bidi.PDI:
+				w.rtl = true
 			}
 		}
 	}
-	if !reversed || len(codes) < 2 {
-		return runes
+	w.line = append(w.line, rs...)
+	w.ends = append(w.ends, len(w.line))
+	w.fixedUnit = append(w.fixedUnit, fixed)
+}
+
+// code is the text of one code shown.
+func (w *pageWriter) code(rs []rune) { w.unit(rs, false) }
+
+// space is a gap read as a space.
+func (w *pageWriter) space() { w.unit([]rune{' '}, false) }
+
+// fixed is an /ActualText.
+func (w *pageWriter) fixed(s string) { w.unit([]rune(s), true) }
+
+// newline ends the line.
+func (w *pageWriter) newline() {
+	w.flush()
+	w.b.WriteByte('\n')
+}
+
+func (w *pageWriter) flush() {
+	if len(w.ends) == 0 {
+		return
 	}
-	out := make([]rune, 0, len(runes))
-	end := len(runes)
-	for _, start := range slices.Backward(codes) {
-		out = append(out, runes[start:end]...)
-		end = start
+	var order []int
+	var units []string
+	if w.rtl {
+		units = make([]string, 0, len(w.ends))
+		start := 0
+		for _, end := range w.ends {
+			units = append(units, string(w.line[start:end]))
+			start = end
+		}
+		order = textorder.Reorder(units, w.fixedUnit)
 	}
-	return out
+	if order == nil {
+		for _, r := range w.line {
+			w.b.WriteRune(r)
+		}
+	} else {
+		for _, i := range order {
+			w.b.WriteString(units[i])
+		}
+	}
+	w.line, w.ends, w.fixedUnit, w.rtl = w.line[:0], w.ends[:0], w.fixedUnit[:0], false
+}
+
+// String is the page's text, its last line ended.
+func (w *pageWriter) String() string {
+	w.flush()
+	return w.b.String()
 }
 
 // --- content-stream tokenizer ---
