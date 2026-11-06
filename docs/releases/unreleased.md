@@ -41,6 +41,13 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.8.0
 
 ## Fixed
 
+- `fonts.Face.Record`, `Draw` and the other drawing paths plan a run without
+  allocating scratch: what the planner works in is kept on the face between
+  runs, a run in its text's order is read straight off its glyphs, and a
+  cluster is compared with its text without building a string. Recording a
+  22-glyph label again allocates once (the result), not 36 times, and takes
+  1.2 µs, not 4 µs (#434).
+
 - forme v0.15.0. An embedded font's `name` table keeps the copyright,
   trademark and licence notices and the names the font goes by, and drops
   the rest: the Noto Sans label below falls further, to 2,741 bytes. The
