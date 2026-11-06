@@ -1202,11 +1202,11 @@ func TestSimpleFontIsSubsetted(t *testing.T) {
 	if parsed == nil {
 		t.Fatal("the subset did not parse")
 	}
-	kept, _ := face.GlyphIDForTest('A')
+	kept, _ := face.CmapGlyph('A')
 	if !parsed.GlyphNonEmpty[kept] {
 		t.Error("the glyph that was shown lost its outline")
 	}
-	dropped, _ := face.GlyphIDForTest('Z')
+	dropped, _ := face.CmapGlyph('Z')
 	if parsed.GlyphNonEmpty[dropped] {
 		t.Error("a glyph that was never shown kept its outline")
 	}

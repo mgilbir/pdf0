@@ -75,8 +75,9 @@ func TestEmbeddedTrueTypeCarriesOnlyWhatItDraws(t *testing.T) {
 		t.Errorf("cmap is %d bytes; a map of the %d characters drawn is far less", n, len(kept))
 	}
 
-	// What reaches the file, compressed. Measured at forme v0.14.1: 3,459
-	// bytes (32,516 decoded). At v0.14.0 the same text was 42,754 (109,562).
+	// What reaches the file, compressed. Measured at forme v0.15.0, whose
+	// name table keeps only the notices and names: 2,741 bytes (30,676
+	// decoded); at v0.14.1, 3,459 (32,516); at v0.14.0, 42,754 (109,562).
 	const fixed, perGlyph = 3000, 120
 	if limit := fixed + perGlyph*len(kept); len(file.Data) > limit {
 		t.Errorf("the /FontFile2 of %d glyphs is %d bytes in the file (%d decoded); want at most %d",

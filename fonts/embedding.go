@@ -182,10 +182,9 @@ func (f *Face) CheckGlyph(gid int) error {
 func (f *Face) simpleGlyph(code int) int {
 	if f.simpleGlyphs == nil {
 		f.simpleGlyphs = new([256]int)
-		cmap := f.Cmap()
 		for c := range f.simpleGlyphs {
 			if r, ok := winAnsiRune(c); ok {
-				f.simpleGlyphs[c] = cmap[r]
+				f.simpleGlyphs[c], _ = f.CmapGlyph(r)
 			}
 		}
 	}

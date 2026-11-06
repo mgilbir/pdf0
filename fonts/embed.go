@@ -747,14 +747,15 @@ func mostCommonWidth(advances []float64) float64 {
 // that is correct only by accident. It is 224 numbers.
 func (f *Face) simpleWidths() (first, last int, widths object.Array) {
 	first, last = 32, 255
-	cmap := f.Cmap()
 	advances := f.GlyphAdvances()
 	widths = make(object.Array, 0, last-first+1)
 	for code := first; code <= last; code++ {
 		name, _ := simplefont.WinAnsiEncoding.GlyphName(byte(code))
 		w := 0.0
 		if r, ok := font.GlyphNameToRune(name, byte(code)); ok {
-			if gid, mapped := cmap[r]; mapped && gid < len(advances) {
+			// A character the font lacks, or sends to .notdef, is one no
+			// code of this face is drawn for (GlyphID refuses it): 0.
+			if gid, mapped := f.CmapGlyph(r); mapped && gid < len(advances) {
 				w = advances[gid]
 			}
 		}
@@ -771,7 +772,6 @@ func (f *Face) simpleWidths() (first, last int, widths object.Array) {
 // says it outright, which is what makes the text extractable by everything, and
 // what PDF/A-2u and later require.
 func (f *Face) simpleToUnicode(first, last int) []byte {
-	cmap := f.Cmap()
 	entries := make([]toUnicodeEntry, 0, last-first+1)
 	for code := first; code <= last; code++ {
 		name, _ := simplefont.WinAnsiEncoding.GlyphName(byte(code))
@@ -779,7 +779,7 @@ func (f *Face) simpleToUnicode(first, last int) []byte {
 		if !ok || forbiddenInToUnicode(r) {
 			continue
 		}
-		if gid, mapped := cmap[r]; !mapped || gid == 0 {
+		if _, mapped := f.CmapGlyph(r); !mapped {
 			continue // no glyph: nothing will ever show this code
 		}
 		entries = append(entries, toUnicodeEntry{code: code, runes: []rune{r}})
