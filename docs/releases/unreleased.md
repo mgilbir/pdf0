@@ -20,11 +20,26 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.8.0
 
 ## Behaviour changes
 
-- A run drawn partly out of its text's order — a right-to-left word in a
-  left-to-right line — has only the reordered stretch wrapped in an
-  `/ActualText`, not the whole run. The text extracted is the same; readers
-  keep the word breaks either side of the stretch, which poppler lost
-  (#426).
+- Right-to-left text is no longer wrapped in an `/ActualText` by default:
+  PDFium (Chrome, Edge) and poppler both reorder an `/ActualText` as if it
+  were in drawing order and returned a marked word backwards (#435). A
+  reordered stretch is marked only where a reader applying the bidirectional
+  algorithm would not read it right (Latin drawn backwards under an
+  override). `fonts.Face.SetMarkReordered(true)` restores the marking, and
+  `htmlpdf` sets it for a tagged page, whose marked content must be in
+  logical order.
+- `Document.ExtractText` puts each line in reading order by the Unicode
+  bidirectional algorithm, as PDFium and poppler do, so right-to-left text
+  drawn in visual order extracts in the order it is read. Lines with no
+  right-to-left text extract exactly as before (byte for byte over 2,958
+  corpus files). Text drawn in its written order, as `fonts.Face.Encode`
+  draws it unshaped, now extracts as the page shows it — reversed — as it
+  does in those readers.
+
+- Where a reordered stretch is marked (`SetMarkReordered(true)`, or text a
+  bidirectional reader cannot read right), only that stretch is wrapped in
+  an `/ActualText`, not the whole run, so the words either side of it keep
+  their breaks (#426).
 
 ## Added
 
@@ -33,11 +48,9 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.8.0
   so a producer's right-to-left text written that way extracts in reading
   order.
 
-- `fonts.Face.SetMarkReordered(false)` leaves a reordered stretch whose
-  clusters each map whole without an `/ActualText`, for an untagged document
-  read by a bidi-aware extractor such as poppler, which reverses right-to-left
-  text inside an `/ActualText`. pdf0's own `Document.ExtractText` then reads
-  such text in drawing order (#426).
+- `fonts.Face.SetMarkReordered(true)` wraps each stretch of a run drawn out
+  of its text's order in an `/ActualText` with its text in reading order, as
+  a tagged PDF needs (#426, #435).
 
 ## Fixed
 

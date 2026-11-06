@@ -79,8 +79,8 @@ type Face struct {
 	// SetPixelsPerUnit.
 	pxPerUnit float64
 
-	// unmarkReordered is SetMarkReordered(false). The horizontal form's.
-	unmarkReordered bool
+	// markReordered is SetMarkReordered(true). The horizontal form's.
+	markReordered bool
 
 	// simpleGlyphs is a simple face's glyph index for each code, built on
 	// the first CheckGlyph that needs it; see simpleGlyph. A pointer to an

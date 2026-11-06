@@ -8,8 +8,9 @@ import (
 )
 
 // Which stretches of a run drawn out of its text's order are marked with an
-// /ActualText (#426): by default only the reordered stretch, and with
-// SetMarkReordered(false) only what no per-glyph mapping can say.
+// /ActualText: by default only what a reader putting the line in reading
+// order cannot read right (#435), and with SetMarkReordered(true) the
+// reordered stretch, and only it (#426).
 
 // bidiFace has the Latin and Hebrew letters the runs below are drawn in.
 func bidiFace(t *testing.T) *Face {
@@ -57,7 +58,9 @@ func describe(segs []Segment) string {
 	return s
 }
 
-func TestOnlyTheReorderedStretchIsMarked(t *testing.T) {
+// TestMarkedOnlyTheReorderedStretchIsMarked is SetMarkReordered(true), as a
+// tagged page has it.
+func TestMarkedOnlyTheReorderedStretchIsMarked(t *testing.T) {
 	for _, tc := range []struct {
 		name, text string
 		order      []int
@@ -76,6 +79,7 @@ func TestOnlyTheReorderedStretchIsMarked(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := bidiFace(t)
+			f.SetMarkReordered(true)
 			segs, err := f.Record(tc.text, visualRun(t, f, tc.text, tc.order...))
 			if err != nil {
 				t.Fatal(err)
@@ -87,10 +91,11 @@ func TestOnlyTheReorderedStretchIsMarked(t *testing.T) {
 	}
 }
 
-func TestSetMarkReorderedLeavesOrderToTheReader(t *testing.T) {
+// TestByDefaultTheReaderOrdersReorderedText: with no SetMarkReordered, a
+// reordered stretch a bidirectional reader reads right is left to it.
+func TestByDefaultTheReaderOrdersReorderedText(t *testing.T) {
 	t.Run("whole clusters", func(t *testing.T) {
 		f := bidiFace(t)
-		f.SetMarkReordered(false)
 		segs, err := f.Record(mixed, mixedRun(t, f))
 		if err != nil {
 			t.Fatal(err)
@@ -106,7 +111,6 @@ func TestSetMarkReorderedLeavesOrderToTheReader(t *testing.T) {
 	})
 	t.Run("a cluster its glyph does not spell", func(t *testing.T) {
 		f := bidiFace(t)
-		f.SetMarkReordered(false)
 		// The glyph of ל was drawn first for other text, which fixed its
 		// ToUnicode entry: in the Hebrew word it cannot say ל, and that
 		// cluster alone is marked.
@@ -124,7 +128,6 @@ func TestSetMarkReorderedLeavesOrderToTheReader(t *testing.T) {
 	})
 	t.Run("a cluster drawn in pieces apart", func(t *testing.T) {
 		f := bidiFace(t)
-		f.SetMarkReordered(false)
 		// The cluster at 3 is drawn twice, apart: no glyph's entry can say
 		// what it was, so its stretch is still marked.
 		segs, err := f.Record(mixed, visualRun(t, f, mixed, 0, 1, 2, 3, 9, 7, 5, 3, 11, 12, 13))
@@ -135,12 +138,25 @@ func TestSetMarkReorderedLeavesOrderToTheReader(t *testing.T) {
 			t.Errorf("segments %s; want %s", got, want)
 		}
 	})
-	t.Run("set back", func(t *testing.T) {
+	t.Run("an order the algorithm cannot see", func(t *testing.T) {
+		// Latin drawn backwards, as under a bidi override: a reader that
+		// reorders by the algorithm leaves it as drawn, so it is marked.
 		f := bidiFace(t)
-		f.SetMarkReordered(false)
-		if !f.Horizontal().unmarkReordered {
+		segs, err := f.Record("abc", visualRun(t, f, "abc", 2, 1, 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := describe(segs), `[0,3)"abc"`; got != want {
+			t.Errorf("segments %s; want %s", got, want)
+		}
+	})
+	t.Run("set and unset", func(t *testing.T) {
+		f := bidiFace(t)
+		f.SetMarkReordered(true)
+		if !f.Horizontal().markReordered {
 			t.Fatal("the setting is not the horizontal form's")
 		}
+		f.SetMarkReordered(false)
 		f.SetMarkReordered(true)
 		segs, err := f.Record(mixed, mixedRun(t, f))
 		if err != nil {

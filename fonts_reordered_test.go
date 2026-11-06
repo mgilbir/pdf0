@@ -13,27 +13,23 @@ import (
 	"github.com/mgilbir/pdf0/object"
 )
 
-// TestAReorderedStretchExtracts writes "ab שלום cd" as a left-to-right line
-// with its Hebrew word in visual order, as shaping returns it, and reads the
-// text back through pdf0 and poppler (#426).
+// TestAReorderedStretchExtracts writes right-to-left text as a shaper draws
+// it — its glyphs in visual order — and reads it back through pdf0 and
+// poppler (#426, #435).
 //
-// By default the Hebrew word alone is wrapped in an /ActualText: pdf0's
-// extractor, which reads in drawing order, gets the line as written, and
-// poppler keeps the word breaks either side of the word, which it lost when
-// the whole run was one /ActualText. Poppler still returns the word itself
-// reversed — it reorders an /ActualText as if it were in drawing order — and
-// with SetMarkReordered(false), which leaves the order to it, it returns the
-// line as written.
+// By default a reordered stretch is left to the reader, which puts each line
+// in reading order by the bidirectional algorithm: pdf0's ExtractText does,
+// and so does poppler. With SetMarkReordered(true), as on a tagged page, the
+// stretch is an /ActualText, which pdf0 reads as it stands; poppler reorders
+// it again and gets the word backwards, but keeps the words apart.
 func TestAReorderedStretchExtracts(t *testing.T) {
-	const text = "ab שלום cd"
-	order := []int{0, 1, 2, 9, 7, 5, 3, 11, 12, 13} // visual order, HarfBuzz clusters
 	var glyphs []fonttest.Glyph
-	for _, r := range "abcd שלום" {
+	for _, r := range "abcd שלוםע" {
 		glyphs = append(glyphs, fonttest.Glyph{Rune: r, Advance: 500, HasShape: r != ' '})
 	}
 	program := fonttest.SFNT(fonttest.SFNTOptions{Name: "Bidi", Glyphs: glyphs})
 
-	write := func(t *testing.T, mark bool) (*Document, []byte) {
+	write := func(t *testing.T, text string, order []int, mark bool) (*Document, []byte) {
 		t.Helper()
 		face, err := fonts.Load(program)
 		if err != nil {
@@ -50,59 +46,56 @@ func TestAReorderedStretchExtracts(t *testing.T) {
 		face.Draw(&b, text, run, 12)
 		b.EndText()
 		doc := NewDocument()
-		if _, err := doc.AddPage(Page{Width: 200, Height: 100, Content: &b,
+		if _, err := doc.AddPage(Page{Width: 300, Height: 100, Content: &b,
 			Faces: map[object.Name]*fonts.Face{"F1": face}}); err != nil {
 			t.Fatal(err)
 		}
 		return writeAndRead(t, doc)
 	}
 
-	t.Run("marked", func(t *testing.T) {
-		back, data := write(t, true)
-		if got, err := back.ExtractText(); err != nil || strings.TrimSpace(got) != text {
-			t.Errorf("pdf0 extracts %q (%v); want %q", got, err, text)
-		}
-		words, ok := popplerRawWords(t, data)
-		if !ok {
-			return
-		}
-		if len(words) != 3 || words[0] != "ab" || words[2] != "cd" {
-			t.Errorf("poppler extracts the words %q; want ab, the Hebrew word, cd", words)
-		}
-	})
-	t.Run("unmarked", func(t *testing.T) {
-		back, data := write(t, false)
-		// Nothing says the order but the glyphs', which pdf0's extractor
-		// reads as drawn: that is the cost of the setting, and what shows
-		// no /ActualText was written.
-		if got, err := back.ExtractText(); err != nil || strings.TrimSpace(got) != "ab םולש cd" {
-			t.Errorf("pdf0 extracts %q (%v); want the Hebrew in drawing order, %q", got, err, "ab םולש cd")
-		}
-		words, ok := popplerRawWords(t, data)
-		if !ok {
-			return
-		}
-		if got := strings.Join(words, " "); got != text {
-			t.Errorf("poppler extracts %q; want %q", got, text)
-		}
-	})
+	for _, tc := range []struct {
+		name, text string
+		order      []int // visual order, HarfBuzz clusters
+	}{
+		{"a Hebrew word in a Latin line", "ab שלום cd", []int{0, 1, 2, 9, 7, 5, 3, 11, 12, 13}},
+		{"a Hebrew line", "שלום עולם", []int{15, 13, 11, 9, 8, 6, 4, 2, 0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, mark := range []bool{false, true} {
+				back, data := write(t, tc.text, tc.order, mark)
+				if got, err := back.ExtractText(); err != nil || strings.TrimSpace(got) != tc.text {
+					t.Errorf("marked %v: pdf0 extracts %q (%v); want %q", mark, got, err, tc.text)
+				}
+				if mark {
+					continue
+				}
+				// Without its spaces: poppler's own layout puts the space
+				// beside a right-to-left word inside the word's embedding,
+				// mark or no mark, and that is not what this checks.
+				nospace := func(s string) string { return strings.ReplaceAll(s, " ", "") }
+				if got, ok := popplerText(t, data); ok && nospace(got) != nospace(tc.text) {
+					t.Errorf("poppler extracts %q; want %q", got, tc.text)
+				}
+			}
+		})
+	}
 }
 
-// popplerRawWords is the words pdftotext -raw reads from a one-page PDF, the
-// directional embedding marks it puts around right-to-left text dropped; ok
-// is false when pdftotext is not installed.
-func popplerRawWords(t *testing.T, pdf []byte) (words []string, ok bool) {
+// popplerText is what pdftotext reads from a one-page PDF, its words joined
+// by single spaces and the directional embedding marks it puts around
+// right-to-left text dropped; ok is false when pdftotext is not installed.
+func popplerText(t *testing.T, pdf []byte) (string, bool) {
 	t.Helper()
 	bin, err := exec.LookPath("pdftotext")
 	if err != nil {
 		t.Log("pdftotext is not installed; poppler's reading is not checked")
-		return nil, false
+		return "", false
 	}
 	path := filepath.Join(t.TempDir(), "in.pdf")
 	if err := os.WriteFile(path, pdf, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	out, err := exec.Command(bin, "-q", "-raw", path, "-").Output()
+	out, err := exec.Command(bin, "-q", path, "-").Output()
 	if err != nil {
 		t.Fatalf("pdftotext: %v", err)
 	}
@@ -112,5 +105,5 @@ func popplerRawWords(t *testing.T, pdf []byte) (words []string, ok bool) {
 		}
 		return r
 	}, string(out))
-	return strings.Fields(s), true
+	return strings.Join(strings.Fields(s), " "), true
 }

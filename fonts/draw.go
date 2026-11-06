@@ -9,6 +9,7 @@ import (
 	"github.com/mgilbir/forme/font"
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/pdf0/content"
+	"github.com/mgilbir/pdf0/internal/textorder"
 	"github.com/mgilbir/pdf0/simplefont"
 )
 
@@ -379,12 +380,11 @@ type segment struct {
 //
 // Text drawn in its own order is checked cluster by cluster, and only a
 // cluster whose glyphs do not spell it is marked. A stretch drawn in another
-// order — a right-to-left word, or glyphs reordered across clusters — is one
-// marked stretch with its text, because the glyphs are in
-// the order they are drawn and a reader reads them in that order: without the
-// /ActualText an Arabic word comes back reversed. Only that stretch is marked,
-// not the run around it, and not at all where the caller leaves the order to
-// the reader (SetMarkReordered).
+// order — a right-to-left word, or glyphs reordered across clusters — is
+// checked the same way, leaving its order to the reader's bidirectional
+// algorithm, unless the face marks such stretches (SetMarkReordered): then it
+// is one marked stretch with its text, and only it, not the run around it. A
+// cluster drawn in pieces apart always marks its stretch.
 func (f *Face) plan(glyphs []Glyph, text string) []segment {
 	rec := f.record()
 	sc := &rec.scratch
@@ -497,7 +497,7 @@ func (f *Face) plan(glyphs []Glyph, text string) []segment {
 		idx[i], last[c] = c, i
 		count[c]++
 	}
-	unmarkReordered := f.Horizontal().unmarkReordered
+	markReordered := f.Horizontal().markReordered
 	next, first, block := 0, 0, 0
 	var lo, hi, reach, distinct int
 	for i := range groups {
@@ -530,14 +530,6 @@ func (f *Face) plan(glyphs []Glyph, text string) []segment {
 				f.recordCluster(glyphs[gr.lo:gr.hi], clusterText(gr.cluster))
 			}
 		}
-		if unmarkReordered && whole {
-			// The caller leaves the order to the reader (SetMarkReordered):
-			// each cluster is still checked, as text in its own order is.
-			for _, gr := range bg {
-				out = f.planCluster(out, glyphs, gr, clusterText(gr.cluster))
-			}
-			continue
-		}
 		from, to := 0, len(text)
 		if lo > 0 {
 			from = sortedUnique[lo]
@@ -546,6 +538,15 @@ func (f *Face) plan(glyphs []Glyph, text string) []segment {
 			to = sortedUnique[hi+1]
 		}
 		blockText := visible(text[from:to])
+		if !markReordered && whole && f.readsInOrder(glyphs, bg, clusterText, blockText) {
+			// The order is left to the reader (SetMarkReordered), which
+			// reads it right: each cluster is checked as text in its own
+			// order is, and only one its glyphs do not spell is marked.
+			for _, gr := range bg {
+				out = f.planCluster(out, glyphs, gr, clusterText(gr.cluster))
+			}
+			continue
+		}
 		s := segment{lo: bg[0].lo, hi: bg[len(bg)-1].hi}
 		if !f.spells(glyphs[s.lo:s.hi], blockText) {
 			s.marked, s.actual = true, blockText
@@ -553,6 +554,33 @@ func (f *Face) plan(glyphs []Glyph, text string) []segment {
 		out = appendSegment(out, s)
 	}
 	return out
+}
+
+// readsInOrder reports whether a reader that puts a line in reading order by
+// the bidirectional algorithm, as PDFium, poppler and Document.ExtractText do
+// (internal/textorder), reads a reordered block of groups as text with no
+// /ActualText over it. It reads what each glyph's ToUnicode entry says, except
+// for a cluster its glyphs do not spell, which planCluster will mark: that is
+// its /ActualText, read whole.
+//
+// A right-to-left word drawn as a shaper draws it reads right. Text whose
+// order the bidirectional algorithm cannot see does not — Latin drawn
+// backwards under an override, glyphs reordered across clusters — and stays
+// marked whole.
+func (f *Face) readsInOrder(glyphs []Glyph, groups []group, clusterText func(int) string, text string) bool {
+	var units []string
+	var fixed []bool
+	for _, gr := range groups {
+		ct := clusterText(gr.cluster)
+		if !f.spells(glyphs[gr.lo:gr.hi], ct) {
+			units, fixed = append(units, ct), append(fixed, true)
+			continue
+		}
+		for _, g := range glyphs[gr.lo:gr.hi] {
+			units, fixed = append(units, f.extracted(g)), append(fixed, false)
+		}
+	}
+	return textorder.Line(units, fixed) == text
 }
 
 // ascendingFastPath lets plan read a run in its text's order straight off
@@ -622,29 +650,30 @@ func (f *Face) spells(glyphs []Glyph, text string) bool {
 
 // SetMarkReordered says whether a stretch of a run drawn in an order other
 // than its text's — a right-to-left word, or a right-to-left line — is wrapped
-// in an /ActualText with its text in reading order. It is, by default.
+// in an /ActualText with its text in reading order. It is not, by default.
 //
 // The glyphs of right-to-left text are drawn in the order they stand on the
-// line, which is the reverse of the order they are read in, and a reader
-// that extracts text in drawing order — Document.ExtractText among them —
-// gets the word backwards without the /ActualText. A tagged PDF needs it:
-// content inside a marked-content sequence is in logical order (ISO 32000-2
-// 14.8.2.5.1).
+// line, the reverse of the order they are read in. The readers text is most
+// often copied and searched with — PDFium (Chrome, Edge) and poppler —
+// put such text back in reading order themselves, by the Unicode
+// bidirectional algorithm, and both apply it to an /ActualText as well,
+// which they take to be in drawing order too: they return a marked word
+// reversed (#426, #435). Document.ExtractText orders a line the same way.
+// So by default a stretch is left unmarked where each cluster's glyphs, read
+// in drawing order, spell the cluster, as text in its own order is; a
+// cluster they do not spell is still marked, and a cluster drawn in pieces
+// apart still marks its stretch, since no per-glyph mapping can say what it
+// was.
 //
-// A reader that orders text itself, by the Unicode bidirectional algorithm,
-// does not need it, and some do worse with it: poppler (pdftotext) reorders
-// the /ActualText as if it were in drawing order too, and returns the word
-// reversed (#426). SetMarkReordered(false) is for a caller writing an
-// untagged document for such readers. A stretch is then left unmarked where
-// each cluster's glyphs, read in drawing order, spell the cluster, as text
-// in its own order is; a cluster they do not spell is still marked, and a
-// cluster drawn in pieces apart still marks its stretch, since no per-glyph
-// mapping can say what it was.
+// SetMarkReordered(true) is for a tagged PDF, whose marked content is in
+// logical order (ISO 32000-2 14.8.2.5.1), and for a reader that extracts in
+// drawing order with no bidirectional algorithm of its own; htmlpdf sets it
+// on the faces of a tagged page.
 //
 // It applies to runs recorded or drawn after it, and to the face's vertical
 // form as well. A face's ToUnicode CMap is the same either way.
 func (f *Face) SetMarkReordered(mark bool) {
-	f.Horizontal().unmarkReordered = !mark
+	f.Horizontal().markReordered = mark
 }
 
 // wholeRun is the plan for a run that cannot be checked cluster by cluster:

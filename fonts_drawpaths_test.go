@@ -12,6 +12,7 @@ import (
 	"github.com/mgilbir/forme/shape"
 	"github.com/mgilbir/pdf0/content"
 	"github.com/mgilbir/pdf0/fonts"
+	"github.com/mgilbir/pdf0/internal/textorder"
 	"github.com/mgilbir/pdf0/object"
 	"github.com/mgilbir/pdf0/pdfa"
 )
@@ -331,8 +332,17 @@ func TestEveryDrawingPathRoundTripsInEveryFaceKind(t *testing.T) {
 							continue // a simple or standard face is written horizontally
 						}
 						back, _ := drawnDocument(t, face, path, text, pdfa.PDFA4, fc.embedded)
-						if got := strings.TrimSpace(mustExtractText(t, back)); got != text {
-							t.Errorf("%q extracted as %q", text, got)
+						want := text
+						if path.name == "Encode" {
+							// Encode does not shape: it writes the codes in
+							// the order the text is written, so right-to-left
+							// text stands backwards on the page, and a reader
+							// putting the line in reading order — pdf0's, as
+							// poppler's — reads what the page shows.
+							want = drawnInLogicalOrder(text)
+						}
+						if got := strings.TrimSpace(mustExtractText(t, back)); got != want {
+							t.Errorf("%q extracted as %q; want %q", text, got, want)
 						}
 						res := back.ResolveDict(back.PageList()[0].Get("Resources"))
 						font := back.ResolveDict(back.ResolveDict(res.Get("Font")).Get("F1"))
@@ -374,4 +384,15 @@ func TestEveryDrawingPathValidatesAtEveryLevel(t *testing.T) {
 			}
 		})
 	}
+}
+
+// drawnInLogicalOrder is what a reader that puts a line in reading order
+// reads from text drawn left to right in the order it is written, one
+// character a code.
+func drawnInLogicalOrder(text string) string {
+	var units []string
+	for _, r := range text {
+		units = append(units, string(r))
+	}
+	return textorder.Line(units, nil)
 }
