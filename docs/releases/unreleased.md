@@ -41,6 +41,15 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.8.0
 
 ## Fixed
 
+- forme v0.15.0. An embedded font's `name` table keeps the copyright,
+  trademark and licence notices and the names the font goes by, and drops
+  the rest: the Noto Sans label below falls further, to 2,741 bytes. The
+  simple-font `/Widths` and ToUnicode CMap, and the reverse map a glyph's
+  ToUnicode entry falls back on, read the font's cmap through forme's
+  `CmapGlyph` and `CmapAll` instead of copying it: a simple face's tables
+  are written in 35 µs and 45 KB, from 184 µs and 193 KB, and the reverse
+  map is built in 120 µs, from 200 µs.
+
 - An embedded TrueType program carries only what its glyphs need (forme
   v0.14.1): `post` without glyph names, `hmtx` ending at the last glyph kept,
   and a `cmap` of the characters kept. For a 20-character label in Noto Sans

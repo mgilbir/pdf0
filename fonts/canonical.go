@@ -80,9 +80,9 @@ func canonicalMapFor(f *shape.Face) *canonicalMap {
 // f's cmap the first time any sharer asks.
 func (m *canonicalMap) lookup(f *shape.Face, gid int) (rune, bool) {
 	m.once.Do(func() {
-		cmap := f.Cmap()
-		m.byGID = make(map[int]rune, len(cmap))
-		for r, g := range cmap {
+		// Keyed by glyph, so it holds at most one entry a glyph.
+		m.byGID = make(map[int]rune, f.NumGlyphs())
+		for r, g := range f.CmapAll() {
 			if g == 0 || forbiddenInToUnicode(r) {
 				// U+0000, U+FEFF and U+FFFE are not text: mapping a glyph to
 				// one says the character it represents is a byte-order mark or
