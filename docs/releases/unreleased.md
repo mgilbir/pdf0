@@ -20,7 +20,19 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.8.0
 
 ## Behaviour changes
 
+- A run drawn partly out of its text's order — a right-to-left word in a
+  left-to-right line — has only the reordered stretch wrapped in an
+  `/ActualText`, not the whole run. The text extracted is the same; readers
+  keep the word breaks either side of the stretch, which poppler lost
+  (#426).
+
 ## Added
+
+- `fonts.Face.SetMarkReordered(false)` leaves a reordered stretch whose
+  clusters each map whole without an `/ActualText`, for an untagged document
+  read by a bidi-aware extractor such as poppler, which reverses right-to-left
+  text inside an `/ActualText`. pdf0's own `Document.ExtractText` then reads
+  such text in drawing order (#426).
 
 ## Fixed
 
