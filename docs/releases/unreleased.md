@@ -43,6 +43,11 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.8.0
 
 ## Added
 
+- `fonts.Face.RecordAppend(dst, text, glyphs)` is `Record` appending the
+  run's segments to `dst`, as `AppendCode` appends codes: recording into a
+  reused slice allocates nothing once the face has seen the run's glyphs
+  (#440).
+
 - `Document.ExtractText` honours `/ReversedChars` marked content (ISO 32000-2
   14.8.2.5.3): each string shown inside it is read code by code in reverse,
   so a producer's right-to-left text written that way extracts in reading
