@@ -1,6 +1,9 @@
 package fonts
 
-import "errors"
+import (
+	"errors"
+	"slices"
+)
 
 // Drawing a face into a content stream this package does not write.
 //
@@ -71,18 +74,34 @@ var ErrDrawnAsType3 = errors.New("fonts: a face written as Type 3 fonts gives it
 //
 // A face written as Type 3 fonts is refused with ErrDrawnAsType3.
 func (f *Face) Record(text string, glyphs []Glyph) ([]Segment, error) {
+	segs, err := f.RecordAppend(nil, text, glyphs)
+	if err == nil && segs == nil {
+		segs = []Segment{} // empty, not nil, as Record has always returned
+	}
+	return segs, err
+}
+
+// RecordAppend is Record, appending the run's segments to dst and returning
+// the extended slice, as AppendCode appends codes. A caller recording many
+// runs, each used before the next, can hand back the slice it was given last
+// time, emptied, and record with no allocation at all once the face has seen
+// the run's glyphs (#440).
+//
+// On an error, dst is returned unchanged.
+func (f *Face) RecordAppend(dst []Segment, text string, glyphs []Glyph) ([]Segment, error) {
 	if f.isType3() {
-		return nil, ErrDrawnAsType3
+		return dst, ErrDrawnAsType3
 	}
-	segs := f.plan(glyphs, text)
-	out := make([]Segment, len(segs))
-	for i, s := range segs {
-		out[i] = Segment{Start: s.lo, End: s.hi, Marked: s.marked}
+	planned := f.plan(glyphs, text)
+	dst = slices.Grow(dst, len(planned)) // one allocation at most, however many
+	for _, s := range planned {
+		seg := Segment{Start: s.lo, End: s.hi, Marked: s.marked}
 		if s.marked {
-			out[i].ActualText = s.actual
+			seg.ActualText = s.actual
 		}
+		dst = append(dst, seg)
 	}
-	return out, nil
+	return dst, nil
 }
 
 // AppendCode appends to dst the character code a glyph is shown with in this

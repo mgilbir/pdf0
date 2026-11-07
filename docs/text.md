@@ -101,6 +101,8 @@ so a ligature or a conjunct extracts as nothing. Three calls give a caller
   glyphs used and records what each was drawn for — and returns the run's
   stretches (`fonts.Segment`), each with whether it is wrapped in an
   `/ActualText` and with what text. It is the same function `Draw` calls.
+  `Face.RecordAppend(dst, text, glyphs)` appends the stretches to `dst`
+  instead, so a caller recording many runs can reuse one slice.
 - `Face.AppendCode(dst, gid)` appends the code a glyph is shown with: the one
   function every drawing call writes codes with.
 - `Face.NominalAdvance(glyph)` is how far the font dictionary moves the pen
