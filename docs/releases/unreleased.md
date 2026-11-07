@@ -59,6 +59,11 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.8.0
 
 ## Fixed
 
+- forme v0.15.1: a subset allocates its program once and a CFF face reads
+  its CFF table once for all its subsets. Embedding a label in Noto Sans
+  through a fresh `Adopt(face.Clone())` allocates about 143 KB, from 225 KB.
+  The fonts written are byte for byte the same.
+
 - Embedding a font no longer copies and counts the whole font's widths for
   every document: the advance most glyphs share (`/DW`) and the width table's
   length are worked out once per font and shared, like the reverse cmap, and
