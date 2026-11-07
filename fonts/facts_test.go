@@ -55,13 +55,13 @@ func TestTheReverseCmapIsTheFonts(t *testing.T) {
 	const text = "Measurement 0123456789"
 	recordLabel(t, a, text)
 	recordLabel(t, b, text)
-	if a.rec.canon == nil || a.rec.canon != b.rec.canon {
-		t.Fatalf("two wrappers of one font hold reverse maps %p and %p; want one, shared", a.rec.canon, b.rec.canon)
+	if a.rec.facts == nil || a.rec.facts != b.rec.facts {
+		t.Fatalf("two wrappers of one font hold reverse maps %p and %p; want one, shared", a.rec.facts, b.rec.facts)
 	}
 
 	other := loadTestFace(t, alphabet()...)
 	recordLabel(t, other, "abc")
-	if other.rec.canon == a.rec.canon {
+	if other.rec.facts == a.rec.facts {
 		t.Fatal("a different font shares Noto Sans's reverse map")
 	}
 
@@ -94,7 +94,7 @@ func TestTheReverseCmapIsLetGo(t *testing.T) {
 	id := func() shape.FaceID {
 		f := loadTestFace(t, glyphs...)
 		recordLabel(t, f, "letgoΩ")
-		if _, ok := canonicalMaps.Load(f.ID()); !ok {
+		if _, ok := allFacts.Load(f.ID()); !ok {
 			t.Fatal("recording a run made no reverse map for the font")
 		}
 		return f.ID()
@@ -102,7 +102,7 @@ func TestTheReverseCmapIsLetGo(t *testing.T) {
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		runtime.GC()
-		if _, ok := canonicalMaps.Load(id); !ok {
+		if _, ok := allFacts.Load(id); !ok {
 			return
 		}
 		if time.Now().After(deadline) {
@@ -160,4 +160,37 @@ func BenchmarkRecordPerDocument(b *testing.B) {
 		}
 	}
 	runtime.KeepAlive(keep)
+}
+
+// TestEmbeddingReadsTheSharedWidths: the widths /DW and /W are written from
+// are the font's, worked out once and shared by every document's wrapper
+// (#439), and they are forme's width table glyph for glyph — the copy
+// embedding used to make of it for every document.
+func TestEmbeddingReadsTheSharedWidths(t *testing.T) {
+	s := notoShapingFace(t)
+	const text = "Measurement 0123456789"
+	var facts []*fontFacts
+	for range 2 {
+		f := Adopt(s.Clone())
+		recordLabel(t, f, text)
+		if _, err := f.EmbedForms(&discard{}, Forms{Horizontal: true}); err != nil {
+			t.Fatal(err)
+		}
+		facts = append(facts, f.rec.facts)
+	}
+	if facts[0] == nil || facts[0] != facts[1] {
+		t.Fatalf("two documents' wrappers embedded from facts %p and %p; want one, shared", facts[0], facts[1])
+	}
+	w := facts[0].widthsOf(s)
+	all := s.GlyphAdvances()
+	if w.n != len(all) || w.common != mostCommonWidth(all) {
+		t.Fatalf("the shared table says %d glyphs, common %v; forme's has %d, common %v", w.n, w.common, len(all), mostCommonWidth(all))
+	}
+	for gid := -1; gid <= len(all); gid++ {
+		got, ok := w.advance(gid)
+		inRange := gid >= 0 && gid < len(all)
+		if ok != inRange || (inRange && got != all[gid]) {
+			t.Fatalf("glyph %d: the shared table says %v (%v); forme's copy has it in range %v", gid, got, ok, inRange)
+		}
+	}
 }

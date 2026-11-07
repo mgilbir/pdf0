@@ -165,15 +165,16 @@ func (f *Face) drawPlannedVertical(b *content.Builder, glyphs []Glyph, segs []se
 // no /W2 entry gets, needs no entry. The width is the one /W states for it,
 // which is the program's advance. Every other kept glyph has one, in the
 // consecutive-CID form /W uses.
-func (f *Face) verticalMetrics(advances []float64, kept []int) (dw2, w2 object.Array) {
+func (f *Face) verticalMetrics(advances widthTable, kept []int) (dw2, w2 object.Array) {
 	type metric struct{ w1y, vx, vy, w0 float64 }
 	byCID := map[int]metric{}
 	for _, gid := range kept {
-		if gid < 0 || gid >= len(advances) {
+		w0, ok := advances.advance(gid)
+		if !ok {
 			continue
 		}
 		a, vx, vy := f.GlyphVerticalMetrics(gid)
-		byCID[f.GlyphCode(gid)] = metric{w1y: a, vx: vx, vy: vy, w0: advances[gid]}
+		byCID[f.GlyphCode(gid)] = metric{w1y: a, vx: vx, vy: vy, w0: w0}
 	}
 	type pair struct{ vy, w1y float64 }
 	counts := map[pair]int{}

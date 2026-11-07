@@ -399,7 +399,7 @@ func (f *Face) writeComposite(doc Allocator, forms Forms, p compositeParts) (Emb
 	}
 	descriptorRef := doc.Add(descriptor)
 
-	advances := f.GlyphAdvances()
+	advances := f.facts().widthsOf(f.Face)
 	// /DW is an integer (ISO 32000-2 9.7.4.3 types it so), and the shared advance
 	// is not one on any program whose em is not a thousand units: 1139 of 2048 is
 	// 556.15234375. poppler takes /DW only when it is an integer and otherwise
@@ -407,7 +407,7 @@ func (f *Face) writeComposite(doc Allocator, forms Forms, p compositeParts) (Emb
 	// So the default is rounded here; widthsArray compares exact advances against
 	// it, so every glyph the rounding moved is listed in /W with its exact width,
 	// which is what PDF/A compares against the program.
-	defaultWidth := math.Round(mostCommonWidth(advances))
+	defaultWidth := math.Round(advances.common)
 	cidFont := &object.Dictionary{}
 	cidFont.Set("Type", object.Name("Font"))
 	if f.IsCFF() {
@@ -673,7 +673,7 @@ var errNoCollection = errors.New("fonts: cannot embed a CID-keyed font that " +
 // anything the caller supplies, because PDF/A checks the two against each
 // other: a /W that disagrees with the program is a finding, and the only way to
 // be sure they agree is to have one source.
-func (f *Face) widthsArray(advances []float64, defaultWidth float64, kept []int) object.Array {
+func (f *Face) widthsArray(advances widthTable, defaultWidth float64, kept []int) object.Array {
 	// Keyed by CID, which is what the code in the content stream is. For every
 	// font but a CID-keyed CFF the CID is the glyph index and this is the array
 	// it always was; for one of those the two are different numberings, and
@@ -681,8 +681,8 @@ func (f *Face) widthsArray(advances []float64, defaultWidth float64, kept []int)
 	// whatever glyph happened to carry it.
 	widths := map[int]float64{}
 	for _, gid := range kept {
-		if gid >= 0 && gid < len(advances) {
-			widths[f.GlyphCode(gid)] = advances[gid]
+		if w, ok := advances.advance(gid); ok {
+			widths[f.GlyphCode(gid)] = w
 		}
 	}
 	// Only the glyphs the subset kept, rather than every slot in the program.
@@ -747,7 +747,7 @@ func mostCommonWidth(advances []float64) float64 {
 // that is correct only by accident. It is 224 numbers.
 func (f *Face) simpleWidths() (first, last int, widths object.Array) {
 	first, last = 32, 255
-	advances := f.GlyphAdvances()
+	advances := f.facts().widthsOf(f.Face)
 	widths = make(object.Array, 0, last-first+1)
 	for code := first; code <= last; code++ {
 		name, _ := simplefont.WinAnsiEncoding.GlyphName(byte(code))
@@ -755,8 +755,10 @@ func (f *Face) simpleWidths() (first, last int, widths object.Array) {
 		if r, ok := font.GlyphNameToRune(name, byte(code)); ok {
 			// A character the font lacks, or sends to .notdef, is one no
 			// code of this face is drawn for (GlyphID refuses it): 0.
-			if gid, mapped := f.CmapGlyph(r); mapped && gid < len(advances) {
-				w = advances[gid]
+			if gid, mapped := f.CmapGlyph(r); mapped {
+				if a, ok := advances.advance(gid); ok {
+					w = a
+				}
 			}
 		}
 		widths = append(widths, widthNumber(w))

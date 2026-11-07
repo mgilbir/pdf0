@@ -54,6 +54,14 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.8.0
 
 ## Fixed
 
+- Embedding a font no longer copies and counts the whole font's widths for
+  every document: the advance most glyphs share (`/DW`) and the width table's
+  length are worked out once per font and shared, like the reverse cmap, and
+  `/W`, `/W2` and `/Widths` read the kept glyphs' advances without a copy.
+  Embedding a label in Noto Sans through a fresh `Adopt(face.Clone())`
+  allocates about 225 KB, from 350 KB. The fonts written are unchanged
+  (#439).
+
 - `fonts.Face.Record`, `Draw` and the other drawing paths plan a run without
   allocating scratch: what the planner works in is kept on the face between
   runs, a run in its text's order is read straight off its glyphs, and a

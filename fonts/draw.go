@@ -107,10 +107,10 @@ type textRecord struct {
 	byGID map[int]string
 	// scratch is what plan works in; see planScratch.
 	scratch planScratch
-	// canon is the character the font's own cmap assigns each glyph, where it
-	// assigns one: the font's, shared with every wrapper of it, and held here
-	// so that it lives while this record does. See canonical.
-	canon *canonicalMap
+	// facts is what the font says whatever the document — its cmap read
+	// backwards, its widths — shared with every wrapper of it, and held here
+	// so that it lives while this record does. See fontFacts.
+	facts *fontFacts
 }
 
 func (f *Face) record() *textRecord {
@@ -127,12 +127,18 @@ func (f *Face) record() *textRecord {
 // and it is the whole of what it can say for one reached some other way than
 // through this package's drawing — an adopted face's other wrapper, or a caller
 // using the shaping face directly.
-func (f *Face) canonical(gid int) (rune, bool) {
+// facts is the font's fontFacts, held by this wrapper's record so that they
+// live while it does.
+func (f *Face) facts() *fontFacts {
 	rec := f.record()
-	if rec.canon == nil {
-		rec.canon = canonicalMapFor(f.Face)
+	if rec.facts == nil {
+		rec.facts = factsFor(f.Face)
 	}
-	return rec.canon.lookup(f.Face, gid)
+	return rec.facts
+}
+
+func (f *Face) canonical(gid int) (rune, bool) {
+	return f.facts().canonical(f.Face, gid)
 }
 
 // maxToUnicodeUnits bounds a ToUnicode destination: a bfchar destination is at
