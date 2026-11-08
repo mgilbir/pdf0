@@ -23,3 +23,9 @@ go run golang.org/x/exp/cmd/gorelease@latest -base=v0.9.0
 ## Added
 
 ## Fixed
+
+- forme v0.16.0: loading a TrueType face no longer decodes every glyph name in
+  its `post` table, which nothing in shaping or embedding reads — about half
+  the time and memory of `fonts.Load` for Noto Sans — and a font can no longer
+  crash forme where `int` is 32 bits. The fonts written are byte for byte the
+  same.
